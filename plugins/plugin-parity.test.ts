@@ -36,6 +36,8 @@ describe("Codex and Claude Code plugin parity", () => {
       "runtime tests",
       "dist/semctx.js",
       "plugin-bundled CLI",
+      'bun "$CLAUDE_PLUGIN_ROOT/dist/semctx.js"',
+      "bun ./dist/semctx.js",
     ]) {
       expect(codex).toContain(required);
     }
