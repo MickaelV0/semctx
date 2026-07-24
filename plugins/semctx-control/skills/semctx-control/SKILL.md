@@ -51,11 +51,20 @@ Report the framed objective, authority sources, freshness verdict, seal hash and
 
 ## Local equivalents when MCP is unavailable
 
-Prefer the **plugin-bundled CLI** at `dist/semctx.js` (same release as the MCP runtime). Do not
-depend on a global `semctx` from agent sessions — it may lag the plugin.
+Prefer MCP tools when they are connected. For shell fallbacks, resolve the CLI in this order
+(stop at the first that works):
+
+1. **Claude Code plugin CLI** when `CLAUDE_PLUGIN_ROOT` is set (same release as the MCP bundle):
+   `bun "$CLAUDE_PLUGIN_ROOT/dist/semctx.js" …`
+2. **Codex plugin CLI** when the shell cwd is the installed plugin package root:
+   `bun ./dist/semctx.js …`
+3. **Global `semctx` on PATH** (`bun install -g semctx` / `bunx semctx`) — keep it on the **same
+   version** as the plugin (`semctx --version` should match the marketplace plugin version).
+4. If none are available, say so and continue with MCP-only or ask the user to update the plugin /
+   install the CLI — do not invent results.
 
 ```text
-# Claude Code (CLAUDE_PLUGIN_ROOT is set in plugin contexts)
+# Claude Code (when CLAUDE_PLUGIN_ROOT is set in the shell)
 bun "$CLAUDE_PLUGIN_ROOT/dist/semctx.js" status --json
 bun "$CLAUDE_PLUGIN_ROOT/dist/semctx.js" semantic check --json
 bun "$CLAUDE_PLUGIN_ROOT/dist/semctx.js" semantic slice --change change.<slug> --format agent
@@ -69,7 +78,8 @@ bun "$CLAUDE_PLUGIN_ROOT/dist/semctx.js" semantic resume
 # Codex (plugin package root as cwd)
 bun ./dist/semctx.js status --json
 # …same subcommands as above with ./dist/semctx.js
-```
 
-A global `semctx` on PATH remains optional for CI, GitHub Actions, and non-plugin shells
-(`bun install -g semctx`).
+# Global / CI fallback
+semctx --version
+semctx status --json
+```

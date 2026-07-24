@@ -18,6 +18,10 @@ Marketplace. The published CLI lags this repository — see
   optional for CI and non-plugin shells (#35). Guard block messages use deferred
   `"$CLAUDE_PLUGIN_ROOT/…"` expansion (no JS path interpolation); packaged CLI smoke covers
   `setup` / `doctor` / `verify diff --dry-run` outside the checkout.
+- **Release version SSOT**: npm CLI (`apps/cli`) aligned to the plugin/MCP release (`0.1.10`);
+  `plugin-parity` asserts CLI package version matches marketplace plugins; `semctx --version` and
+  `doctor` report the CLI version; skills document a shell CLI resolution ladder when
+  `CLAUDE_PLUGIN_ROOT` is unset (#35 residual).
 
 - **Explicit control freshness verdict**: read-only CLI `semctx status` and MCP
   `semctx_control_status` report `FRESH`, `DIRTY_KNOWN`, `STALE`, or `UNSEALED` from the persisted

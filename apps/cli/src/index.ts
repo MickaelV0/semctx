@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { isSemctxError } from "@semantic-context/core";
+import packageJson from "../package.json";
 import { parseArgs, flagString, flagBool, type ParsedArgs } from "./args";
 import { fail, info, c } from "./output";
 import { runSetup } from "./commands/setup";
@@ -16,7 +17,7 @@ import { runChange } from "./commands/change";
 import { runControl } from "./commands/control";
 import { runStatus } from "./commands/status";
 
-const HELP = `semctx — repository change-impact analyzer
+const HELP = `semctx — repository change-impact analyzer (v${packageJson.version})
 
 Usage: semctx <command> [options]
 
@@ -60,6 +61,7 @@ Experimental (task -> ContextPack retriever; not a code-search replacement, see 
 Global options:
   --root <path>   repository root (default: current directory)
   --json          machine-readable output
+  --version       print the CLI version and exit
 `;
 
 function resolveRoot(args: ParsedArgs): string {
@@ -69,6 +71,11 @@ function resolveRoot(args: ParsedArgs): string {
 async function dispatch(args: ParsedArgs): Promise<number> {
   const command = args.positionals[0];
   const root = resolveRoot(args);
+
+  if (flagBool(args, "version") || command === "version") {
+    info(packageJson.version);
+    return 0;
+  }
 
   if (command === undefined) {
     info(HELP);

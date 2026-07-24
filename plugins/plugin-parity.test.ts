@@ -35,9 +35,11 @@ describe("Codex and Claude Code plugin parity", () => {
       "PARTIAL",
       "runtime tests",
       "dist/semctx.js",
-      "plugin-bundled CLI",
+      "plugin CLI",
+      "Global `semctx` on PATH",
       'bun "$CLAUDE_PLUGIN_ROOT/dist/semctx.js"',
       "bun ./dist/semctx.js",
+      "semctx --version",
     ]) {
       expect(codex).toContain(required);
     }
@@ -111,6 +113,8 @@ describe("Codex and Claude Code plugin parity", () => {
     );
     expect(json<{ version: string }>("packages/mcp-server/package.json").version).toBe(claudeManifest.version);
     expect(json<{ version: string }>("packages/app-services/package.json").version).toBe(claudeManifest.version);
+    // Release SSOT: npm CLI package must ship the same release as the marketplace plugins/MCP.
+    expect(json<{ version: string }>("apps/cli/package.json").version).toBe(claudeManifest.version);
     const serverSource = read("packages/mcp-server/src/server.ts");
     expect(serverSource).toContain('import packageJson from "../package.json"');
     expect(serverSource).toContain("version: packageJson.version");
