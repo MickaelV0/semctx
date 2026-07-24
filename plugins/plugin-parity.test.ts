@@ -34,6 +34,8 @@ describe("Codex and Claude Code plugin parity", () => {
       "BLOCKED",
       "PARTIAL",
       "runtime tests",
+      "dist/semctx.js",
+      "plugin-bundled CLI",
     ]) {
       expect(codex).toContain(required);
     }
@@ -85,6 +87,9 @@ describe("Codex and Claude Code plugin parity", () => {
     });
     expect(existsSync(resolve(repoRoot, "plugins/claude-code/bin/semctx-mcp-launcher.ts"))).toBe(false);
     expect(read("plugins/claude-code/dist/semctx-mcp.js")).toBe(read("plugins/semctx-control/dist/semctx-mcp.js"));
+    expect(existsSync(resolve(repoRoot, "plugins/claude-code/dist/semctx.js"))).toBe(true);
+    expect(existsSync(resolve(repoRoot, "plugins/semctx-control/dist/semctx.js"))).toBe(true);
+    expect(read("plugins/claude-code/dist/semctx.js")).toBe(read("plugins/semctx-control/dist/semctx.js"));
     const codexLibs = typescriptLibs("semctx-control");
     const claudeLibs = typescriptLibs("claude-code");
     expect(codexLibs.length).toBeGreaterThan(90);

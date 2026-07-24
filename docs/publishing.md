@@ -57,19 +57,28 @@ repository. See [#38](https://github.com/hoklims/semctx/issues/38) and
 
 ## Plugin runtime
 
-The Claude Code and Codex plugins now ship byte-identical committed Bun bundles built from
-`packages/mcp-server/src/index.ts`. Each `dist/` also carries the TypeScript standard-library
-declarations used by the analyzer, and the generated runtime resolves them relative to its own
-installed directory rather than the build checkout:
+The Claude Code and Codex plugins ship byte-identical committed Bun bundles:
+
+| artifact | entrypoint | role |
+| --- | --- | --- |
+| `dist/semctx-mcp.js` | `packages/mcp-server/src/index.ts` | MCP server (agent tools) |
+| `dist/semctx.js` | `apps/cli/src/index.ts` | CLI for setup / verify / shell fallbacks |
+
+Each `dist/` also carries the TypeScript standard-library declarations used by the analyzer, and
+the generated runtimes resolve them relative to the installed plugin directory rather than the
+build checkout:
 
 ```bash
-bun run plugin:build   # refresh both tracked dist/semctx-mcp.js files
-bun run plugin:check   # fail if either tracked artifact is missing or stale
+bun run plugin:build   # refresh tracked dist/semctx-mcp.js + dist/semctx.js on both plugins
+bun run plugin:check   # fail if any tracked artifact is missing or stale
 ```
 
+Agent sessions should prefer the plugin-bundled CLI so a marketplace update keeps MCP and CLI in
+lockstep. The npm `semctx` package remains the channel for CI, GitHub Actions, and non-plugin shells.
+
 Plugin, marketplace, MCP package and runtime versions move together. CI runs the freshness check,
-rejects build-machine paths, and performs a real stdio handshake from a copied plugin directory on
-Windows and Ubuntu before the plugin snapshot is publishable.
+rejects build-machine paths, and performs a real stdio handshake (MCP) plus a CLI `--help` smoke
+from a copied plugin directory on Windows and Ubuntu before the plugin snapshot is publishable.
 
 ## Deliberately out of scope (this pass)
 

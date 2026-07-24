@@ -8,6 +8,7 @@ import {
   guardEnabled,
   guardDecision,
   resolveGitCwd,
+  verifyRecordCommand,
 } from "../hooks/semctx-guard.mjs";
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -101,6 +102,21 @@ describe("guardDecision — diff-hash gate (ADR 0007)", () => {
     const d = guardDecision({ enabled: true, terminalVerb: "commit", state: null, currentState: CURRENT });
     expect(d.block).toBe(true);
     expect(d.reason).toContain("verify diff --record");
+  });
+
+  it("prefers the plugin-bundled CLI when CLAUDE_PLUGIN_ROOT is set", () => {
+    expect(verifyRecordCommand({})).toBe("semctx verify diff --record");
+    expect(verifyRecordCommand({ CLAUDE_PLUGIN_ROOT: "/plugins/semctx" })).toBe(
+      'bun "/plugins/semctx/dist/semctx.js" verify diff --record',
+    );
+    const d = guardDecision({
+      enabled: true,
+      terminalVerb: "commit",
+      state: null,
+      currentState: CURRENT,
+      verifyCommand: verifyRecordCommand({ CLAUDE_PLUGIN_ROOT: "/plugins/semctx" }),
+    });
+    expect(d.reason).toContain('bun "/plugins/semctx/dist/semctx.js" verify diff --record');
   });
   it("blocks a compound terminal command before consulting a valid baseline", () => {
     const d = guardDecision({
