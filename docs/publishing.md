@@ -77,8 +77,9 @@ Agent sessions should prefer the plugin-bundled CLI so a marketplace update keep
 lockstep. The npm `semctx` package remains the channel for CI, GitHub Actions, and non-plugin shells.
 
 Plugin, marketplace, MCP package and runtime versions move together. CI runs the freshness check,
-rejects build-machine paths, and performs a real stdio handshake (MCP) plus a CLI `--help` smoke
-from a copied plugin directory on Windows and Ubuntu before the plugin snapshot is publishable.
+rejects build-machine paths, and performs a real stdio handshake (MCP) plus a packaged CLI smoke
+(`setup`, `doctor --json`, `verify diff --dry-run` on a foreign sample repo) from a copied plugin
+directory on Windows and Ubuntu before the plugin snapshot is publishable.
 
 ## Deliberately out of scope (this pass)
 
