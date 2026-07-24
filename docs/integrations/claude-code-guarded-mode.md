@@ -6,7 +6,8 @@ current commit-bound working state has been verified. It is **opt-in**; advisory
 ## How it works (ADR 0007)
 
 ```
-you run:   semctx verify diff --record
+you run:   bun "$CLAUDE_PLUGIN_ROOT/dist/semctx.js" verify diff --record
+           (or global: semctx verify diff --record)
              → analyses the diff, records { HEAD, hash(tracked + untracked state), verdict } to
                .semctx/verification-state.json  (git-ignored, written atomically)
 
@@ -14,8 +15,8 @@ hook on `git commit` / `git push`:
    recapture HEAD + tracked diff + non-ignored untracked paths/modes/bytes
    ALLOW  if the v2 baseline matches AND recorded verdict != BLOCK
    BLOCK  otherwise, printing the exact command to re-verify
+           (plugin form when CLAUDE_PLUGIN_ROOT is set)
 ```
-
 The hook does a **hash comparison, not an analysis** — it is fast and never re-runs the engine.
 It parses the Bash command **structurally** (segments + tokens, never a shell eval) and gates
 **only** the two terminal git verbs. It never blocks file edits, tests, exploration, or
