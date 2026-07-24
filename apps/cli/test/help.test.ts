@@ -39,4 +39,10 @@ describe("help / usage exit codes", () => {
       expect(r.out.trim()).toMatch(/^\d+\.\d+\.\d+/);
     }
   });
+
+  it("`--version` never short-circuits a real command (no silent exit-0 gate bypass)", () => {
+    const r = run(["definitely-not-a-command", "--version"]);
+    expect(r.code).toBe(2);
+    expect(r.out.trim()).not.toMatch(/^\d+\.\d+\.\d+$/);
+  });
 });

@@ -14,11 +14,9 @@ interface Check {
 export function runDoctor(root: string, args: ParsedArgs): number {
   const checks: Check[] = [];
 
-  checks.push({
-    name: "cli",
-    ok: true,
-    detail: `semctx ${packageJson.version} (keep plugin + npm CLI on the same release)`,
-  });
+  // Informational row, like `runtime` below: reports the version, never fails. Detecting a
+  // plugin/CLI version mismatch is the separate `doctor` work tracked on #35.
+  checks.push({ name: "cli", ok: true, detail: `semctx ${packageJson.version}` });
 
   const initialized = isInitialized(root);
   checks.push({ name: "workspace", ok: initialized, detail: initialized ? ".semctx/ present" : "run 'semctx init'" });
@@ -56,7 +54,7 @@ export function runDoctor(root: string, args: ParsedArgs): number {
   const healthy = checks.every((chk) => chk.ok);
 
   if (flagBool(args, "json")) {
-    json({ healthy, checks });
+    json({ healthy, version: packageJson.version, checks });
     return healthy ? 0 : 1;
   }
 
