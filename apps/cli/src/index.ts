@@ -72,7 +72,10 @@ async function dispatch(args: ParsedArgs): Promise<number> {
   const command = args.positionals[0];
   const root = resolveRoot(args);
 
-  if (flagBool(args, "version") || command === "version") {
+  // `--version` short-circuits only when it stands alone. Honouring it after a real command would
+  // make `semctx verify diff --record --version` exit 0 without verifying anything — a fail-open in
+  // a tool whose whole job is to gate.
+  if (command === "version" || (command === undefined && flagBool(args, "version"))) {
     info(packageJson.version);
     return 0;
   }

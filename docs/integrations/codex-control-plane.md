@@ -39,14 +39,18 @@ shared skill passes the absolute `repositoryRoot` on every tool call. The server
 repository instead of the plugin cache. Read-only Plane C tools are auto-approved from their MCP
 annotations; authored-state writes retain Codex's approval prompt.
 
-Shell fallbacks should use the plugin-bundled CLI so MCP and CLI stay on the same release:
+The plugin ships `dist/semctx.js` (the full CLI) next to the MCP bundle, but Codex does not
+substitute a plugin-root placeholder into skill content and the agent's shell runs in the user's
+repository, not in the plugin package root — so a Codex session has no reliable way to address the
+bundled binary. Shell fallbacks there use a global install:
 
 ```text
-bun ./dist/semctx.js setup
-bun ./dist/semctx.js verify diff --base origin/main
+semctx setup
+semctx verify diff --base origin/main
 ```
 
-(from the installed plugin package root). A global `semctx` remains optional for CI and non-plugin shells.
+The bundled CLI is still worth running by absolute path when you know it (`bun
+/path/to/plugin/dist/semctx.js …`), since it is guaranteed to match the MCP runtime's release.
 
 If semctx was previously registered directly in `~/.codex/config.toml`, remove that legacy entry
 after the plugin is installed to avoid duplicate server definitions:
@@ -84,8 +88,7 @@ Typical tool sequence:
 9. Call `semctx_handoff` before context compaction and `semctx_resume` in the next task.
 
 Every call includes the absolute `repositoryRoot`. Each target repository must first be prepared
-once with the plugin CLI (`bun ./dist/semctx.js setup`) or a global `semctx setup`; inspect and
-verify fail closed and never initialize or index implicitly.
+once with `semctx setup`; inspect and verify fail closed and never initialize or index implicitly.
 
 For a read-only request, the skill forbids the mutating change-contract and handoff tools. For a
 write request, those tools may version authored intent under `.semctx/semantic/`; they never modify

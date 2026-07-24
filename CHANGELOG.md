@@ -12,16 +12,31 @@ Marketplace. The published CLI lags this repository — see
 ### Added
 
 - **Plugin-bundled CLI** (`dist/semctx.js`): Claude Code and Codex plugins now ship a portable Bun
-  CLI next to `dist/semctx-mcp.js`, built from the same `plugin:build` pipeline. Agent skills and
-  the Claude guard prefer `bun "$CLAUDE_PLUGIN_ROOT/dist/semctx.js"` (or `bun ./dist/semctx.js` on
-  Codex) so a marketplace/plugin update keeps MCP and CLI in lockstep. Global `semctx` remains
-  optional for CI and non-plugin shells (#35). Guard block messages use deferred
-  `"$CLAUDE_PLUGIN_ROOT/…"` expansion (no JS path interpolation); packaged CLI smoke covers
-  `setup` / `doctor` / `verify diff --dry-run` outside the checkout.
+  CLI next to `dist/semctx-mcp.js`, built from the same `plugin:build` pipeline, so a
+  marketplace/plugin update keeps MCP and CLI in lockstep. Global `semctx` remains optional for CI
+  and non-plugin shells (#35). Packaged CLI smoke covers `setup` / `doctor` /
+  `verify diff --dry-run` outside the checkout.
+- **Correct plugin-root resolution**: skills use the `${CLAUDE_PLUGIN_ROOT}` **placeholder**, which
+  Claude Code substitutes into skill content at load time (regex `/\$\{CLAUDE_PLUGIN_ROOT\}/g` — the
+  braces are part of the syntax). The guard hook resolves and shell-quotes the bundle path itself
+  instead of emitting a deferred `"$CLAUDE_PLUGIN_ROOT/…"`: the variable is exported to hook and MCP
+  processes only, never to the agent's shell, where an unexpanded reference silently collapses to
+  `bun "/dist/semctx.js"`. `guardDecision` is pure again (no env read, no filesystem access);
+  `plugin-parity` fails on any bare `$CLAUDE_PLUGIN_ROOT` in a shipped file; the guard end-to-end
+  test replays the printed command in a shell stripped of the variable.
 - **Release version SSOT**: npm CLI (`apps/cli`) aligned to the plugin/MCP release (`0.1.10`);
   `plugin-parity` asserts CLI package version matches marketplace plugins; `semctx --version` and
-  `doctor` report the CLI version; skills document a shell CLI resolution ladder when
-  `CLAUDE_PLUGIN_ROOT` is unset (#35 residual).
+  `doctor` report the CLI version (`doctor --json` gains a top-level `version`); skills document a
+  shell CLI resolution ladder for hosts that do not substitute the placeholder (#35 residual).
+  `--version` no longer short-circuits a real command, which previously let
+  `verify diff --record --version` exit 0 without verifying.
+- **Honest Codex fallback**: the shared skill dropped the `bun ./dist/semctx.js` rung. Codex
+  substitutes no plugin-root placeholder and the agent's shell runs in the user's repository, not
+  the plugin package root, so that rung could never resolve; Codex shell fallbacks use a global
+  `semctx`. The ladder is now host-neutral, so the byte-identical shared contract no longer carries
+  one host's instructions into the other.
+- **CI runs the full suite**: `plugin-runtime` now runs `bun run test` instead of a three-file
+  selection that skipped the guard-hook and CLI tests gating plugin packaging.
 
 - **Explicit control freshness verdict**: read-only CLI `semctx status` and MCP
   `semctx_control_status` report `FRESH`, `DIRTY_KNOWN`, `STALE`, or `UNSEALED` from the persisted
