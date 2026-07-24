@@ -134,9 +134,8 @@ opt-in **guarded mode** blocks `git commit`/`git push` until the diff is verifie
 the default.
 
 The plugin ships a portable CLI (`dist/semctx.js`) next to the MCP runtime so agent shell fallbacks
-and guard messages stay on the same release as the tools — prefer
-`bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" …` after install. A global `semctx` remains optional for
-CI and non-plugin shells. See
+and guard messages stay on the same release as the tools; the skills and the guard hand the agent
+its resolved absolute path. A global `semctx` remains optional for CI and non-plugin shells. See
 [`docs/integrations/claude-code.md`](docs/integrations/claude-code.md).
 
 ### Codex
@@ -146,9 +145,9 @@ surface plus the same proof-honest workflow shipped for Claude Code. It uses
 `semctx_control_status`, `semctx_control_trace`, `semctx_control_plan`,
 `semctx_control_plan_change` and `semctx_control_reconcile_diff`, maintains proof-carrying change
 contracts on write-scoped tasks, and verifies the resulting diff. It never treats a planning or
-reconciliation verdict as execution authority and Plane C remains read-only. It also ships the same
-portable `dist/semctx.js` CLI; Codex shell fallbacks use a global `semctx` (no plugin-root
-substitution). Install and usage guide:
+reconciliation verdict as execution authority and Plane C remains read-only. It ships the same
+portable `dist/semctx.js` CLI, though Codex has no placeholder substitution to hand the agent its
+path — shell fallbacks there use a global `semctx`. Install and usage guide:
 [`docs/integrations/codex-control-plane.md`](docs/integrations/codex-control-plane.md).
 
 ### GitHub Actions

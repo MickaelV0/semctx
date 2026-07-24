@@ -35,13 +35,42 @@ describe("Codex and Claude Code plugin parity", () => {
       "PARTIAL",
       "runtime tests",
       "dist/semctx.js",
-      "plugin CLI",
+      "Plugin-bundled CLI",
       "Global `semctx` on PATH",
-      'bun "$CLAUDE_PLUGIN_ROOT/dist/semctx.js"',
-      "bun ./dist/semctx.js",
+      'bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js"',
       "semctx --version",
     ]) {
       expect(codex).toContain(required);
+    }
+  });
+
+  // Claude Code substitutes ${CLAUDE_PLUGIN_ROOT} into skill/agent content, hook and monitor
+  // commands, and MCP/LSP server fields — the placeholder form only, via /\$\{CLAUDE_PLUGIN_ROOT\}/g.
+  // A bare $CLAUDE_PLUGIN_ROOT is never substituted; it survives into the agent's shell, which does
+  // not receive the variable, and expands to nothing. The failure is silent: `bun "/dist/semctx.js"`.
+  test("never ships a bare $CLAUDE_PLUGIN_ROOT — only the ${…} placeholder is substituted", () => {
+    const shipped = [
+      "plugins/claude-code/skills/semctx-control/SKILL.md",
+      "plugins/claude-code/skills/semctx-semantic/SKILL.md",
+      "plugins/claude-code/skills/semctx-verify/SKILL.md",
+      "plugins/semctx-control/skills/semctx-control/SKILL.md",
+      "plugins/claude-code/hooks/hooks.json",
+      "plugins/claude-code/.mcp.json",
+      "plugins/claude-code/README.md",
+      "plugins/claude-code/examples/guard.json",
+      "README.md",
+      "docs/integrations/claude-code.md",
+      "docs/integrations/claude-code-guarded-mode.md",
+      "docs/integrations/codex-control-plane.md",
+    ];
+    // Matches $CLAUDE_PLUGIN_ROOT only when it is NOT the ${…} form.
+    const bare = /\$CLAUDE_PLUGIN_ROOT/;
+    for (const path of shipped) {
+      const offenders = read(path)
+        .split("\n")
+        .map((line, index) => ({ line, number: index + 1 }))
+        .filter(({ line }) => bare.test(line));
+      expect({ path, offenders }).toEqual({ path, offenders: [] });
     }
   });
 

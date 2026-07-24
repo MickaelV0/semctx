@@ -15,16 +15,18 @@ runtime behaviour. The analysis is local and deterministic; semctx itself needs 
   `semctx_control_plan` for freshness preflight, bounded L0-L6 reconstruction, and fail-closed
   migration planning (Plane C).
 - **Bundled CLI** (`dist/semctx.js`): the full Bun CLI committed next to `dist/semctx-mcp.js` so a
-  plugin update keeps agent MCP and CLI in lockstep. Prefer
-  `bun "$CLAUDE_PLUGIN_ROOT/dist/semctx.js" …` from agent sessions. A global `semctx`
-  (`bun install -g semctx`) remains optional for CI and non-plugin shells.
+  plugin update keeps agent MCP and CLI in lockstep. Agent sessions get its absolute path for free:
+  Claude Code substitutes the `${CLAUDE_PLUGIN_ROOT}` placeholder into the skills at load time, and
+  the guard hook prints a resolved path. The variable is exported to hooks and MCP servers, **not**
+  to the agent's shell. A global `semctx` (`bun install -g semctx`) remains optional for CI and
+  non-plugin shells.
 - **Shared skill**: `skills/semctx-control`, byte-identical to the Codex workflow contract.
 - **Focused skills**: `skills/semctx-verify` for Plane A and `skills/semctx-semantic` for Plane B.
 - **Guard hook** (`hooks/`): a `PreToolUse` guard that is **inert by default** (advisory) and, when
   the project opts into guarded mode, blocks non-isolated `git commit` / `git push` commands or an
-  unverified working state. Block messages point at the plugin-bundled CLI when
-  `CLAUDE_PLUGIN_ROOT` is set. The semantic and control tools do not change this host-specific
-  behaviour.
+  unverified working state. Block messages point at the plugin-bundled CLI by absolute path when
+  the bundle is in reach, and at a global `semctx` otherwise. The semantic and control tools do not
+  change this host-specific behaviour.
 
 ## Shared Codex/Claude contract
 
@@ -71,15 +73,15 @@ non-terminal git commands. It compares a hash of the working diff to the last ve
 - **Bun** on PATH (the bundled MCP server and CLI run under Bun; no global `semctx` / `semctx-mcp`
   link is required for agent use).
 - **Node** on PATH (the guard hook runs under Node, so it works even where Bun is absent).
-- The project should be initialised and indexed once. From a Claude Code session after plugin
-  install:
+- The project should be initialised and indexed once:
 
 ```text
-bun "$CLAUDE_PLUGIN_ROOT/dist/semctx.js" setup
+semctx setup                                # global install
+bun "<plugin-root>/dist/semctx.js" setup    # plugin bundle; the skills carry the resolved path
 ```
 
-  Or with a global install: `semctx setup`. The legacy equivalent is `semctx init && semctx index`;
-  `setup --preset github-claude` also installs the preset integration files.
+  The legacy equivalent is `semctx init && semctx index`; `setup --preset github-claude` also
+  installs the preset integration files.
 
 Install from this clone:
 

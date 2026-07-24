@@ -6,8 +6,7 @@ current commit-bound working state has been verified. It is **opt-in**; advisory
 ## How it works (ADR 0007)
 
 ```
-you run:   bun "$CLAUDE_PLUGIN_ROOT/dist/semctx.js" verify diff --record
-           (or global: semctx verify diff --record)
+you run:   semctx verify diff --record
              → analyses the diff, records { HEAD, hash(tracked + untracked state), verdict } to
                .semctx/verification-state.json  (git-ignored, written atomically)
 
@@ -15,8 +14,10 @@ hook on `git commit` / `git push`:
    recapture HEAD + tracked diff + non-ignored untracked paths/modes/bytes
    ALLOW  if the v2 baseline matches AND recorded verdict != BLOCK
    BLOCK  otherwise, printing the exact command to re-verify
-           (plugin form when CLAUDE_PLUGIN_ROOT is set)
+           (an absolute `bun /…/dist/semctx.js …` when the plugin bundle is in reach,
+            resolved by the hook — never a shell variable the agent would have to expand)
 ```
+
 The hook does a **hash comparison, not an analysis** — it is fast and never re-runs the engine.
 It parses the Bash command **structurally** (segments + tokens, never a shell eval) and gates
 **only** the two terminal git verbs. It never blocks file edits, tests, exploration, or
@@ -32,20 +33,22 @@ Create `.semctx/guard.json` in the project (see `plugins/claude-code/examples/gu
 
 ## The loop
 
-Prefer the plugin-bundled CLI (same release as MCP). A global `semctx` remains optional for
-non-plugin shells.
-
 ```bash
 # ... make changes ...
-# Claude Code (plugin context):
-bun "$CLAUDE_PLUGIN_ROOT/dist/semctx.js" verify diff --record
-# or global: semctx verify diff --record
-# PASS/WARN → commit allowed; BLOCK → resolve first
+semctx verify diff --record     # PASS/WARN → commit allowed; BLOCK → resolve first
 git commit -m "..."             # allowed only if the diff is unchanged since --record
 ```
 
-If HEAD moves or any tracked/untracked source input changes, the baseline no longer matches and the commit is blocked until you
-re-run `bun "$CLAUDE_PLUGIN_ROOT/dist/semctx.js" verify diff --record` (or `semctx verify diff --record`).
+Inside a Claude Code session the agent should prefer the plugin-bundled CLI (same release as MCP)
+rather than a global install. It gets the absolute path two ways, both already resolved for it: the
+`${CLAUDE_PLUGIN_ROOT}` placeholder that Claude Code substitutes into the skills at load time, and
+the path the guard prints when it blocks. `CLAUDE_PLUGIN_ROOT` itself is exported to hook and MCP
+processes only — it is **not** set in the agent's shell, so it must never appear unexpanded in a
+command.
+
+If HEAD moves or any tracked/untracked source input changes, the baseline no longer matches and the
+commit is blocked until you re-run `semctx verify diff --record` (or the plugin-CLI equivalent the
+guard prints).
 Run `git commit` and `git push` as isolated commands in guarded mode. Compound commands,
 redirections, and shell substitutions are rejected because they could mutate repository bytes
 after the hook's pre-check.
