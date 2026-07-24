@@ -72,6 +72,12 @@ const GIT_ENV = {
 let parent: string;
 let root: string;
 
+const SETUP_TIMEOUT_MS = 120_000;
+
+// Copies the sample repo, commits it, and indexes it — ~0.5s on Linux, but on a Windows runner the
+// same work regularly crosses the default hook budget (2 of these 4 tests timed out at 15-26s while
+// the other 2 passed: variance around the threshold, not a hang). Budget for the slow platform
+// rather than weaken what the tests assert.
 beforeEach(() => {
   parent = mkdtempSync(join(tmpdir(), "semctx-public-roundtrip-"));
   root = join(parent, "semctx");
@@ -89,11 +95,11 @@ beforeEach(() => {
   expect(git("status", "--porcelain")).toBe("");
   expect(controlRepositoryIdentity(root)).toBe("repo:semctx");
   indexRepository(root, "2026-07-23T12:00:00.000Z");
-});
+}, SETUP_TIMEOUT_MS);
 
 afterEach(() => {
   rmSync(parent, { recursive: true, force: true });
-});
+}, SETUP_TIMEOUT_MS);
 
 describe("public indexed L6-to-L0 round trip", () => {
   it("resolves real evidence and round-trips through public graph and coverage services", () => {
