@@ -1,4 +1,5 @@
 import { isInitialized, loadConfig, openStore } from "@semantic-context/repository-store";
+import packageJson from "../../package.json";
 import type { ParsedArgs } from "../args";
 import { flagBool } from "../args";
 import { info, heading, json, c, success, fail } from "../output";
@@ -12,6 +13,12 @@ interface Check {
 /** `semctx doctor` — verify the workspace is healthy and indexed. */
 export function runDoctor(root: string, args: ParsedArgs): number {
   const checks: Check[] = [];
+
+  checks.push({
+    name: "cli",
+    ok: true,
+    detail: `semctx ${packageJson.version} (keep plugin + npm CLI on the same release)`,
+  });
 
   const initialized = isInitialized(root);
   checks.push({ name: "workspace", ok: initialized, detail: initialized ? ".semctx/ present" : "run 'semctx init'" });

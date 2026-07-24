@@ -76,6 +76,24 @@ bun run plugin:check   # fail if any tracked artifact is missing or stale
 Agent sessions should prefer the plugin-bundled CLI so a marketplace update keeps MCP and CLI in
 lockstep. The npm `semctx` package remains the channel for CI, GitHub Actions, and non-plugin shells.
 
+### Version SSOT (release lockstep)
+
+These surfaces must share the same `x.y.z` on every plugin/CLI release:
+
+| Surface | Path |
+| --- | --- |
+| Claude plugin | `plugins/claude-code/.claude-plugin/plugin.json` |
+| Codex plugin | `plugins/semctx-control/.codex-plugin/plugin.json` |
+| Marketplace | `.claude-plugin/marketplace.json` |
+| MCP package | `packages/mcp-server/package.json` (also `McpServer({ version })`) |
+| App services | `packages/app-services/package.json` |
+| npm CLI | `apps/cli/package.json` (`semctx --version` / `doctor`) |
+
+`plugins/plugin-parity.test.ts` fails CI when plugins, marketplace, MCP, app-services, or the npm
+CLI package diverge. Plugin MCP/CLI **bundles** are rebuilt together via `plugin:build` (same
+entrypoint sources). The npm CLI uses a separate `apps/cli` prepublish bundle for CI/global
+installs — same version number, two packagers by design.
+
 Plugin, marketplace, MCP package and runtime versions move together. CI runs the freshness check,
 rejects build-machine paths, and performs a real stdio handshake (MCP) plus a packaged CLI smoke
 (`setup`, `doctor --json`, `verify diff --dry-run` on a foreign sample repo) from a copied plugin

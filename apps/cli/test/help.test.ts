@@ -31,4 +31,12 @@ describe("help / usage exit codes", () => {
     const r = run(["definitely-not-a-command"]);
     expect(r.code).toBe(2);
   });
+
+  it("`--version` and `version` print the package version and exit 0", () => {
+    for (const args of [["--version"], ["version"]] as const) {
+      const r = run([...args]);
+      expect(r.code).toBe(0);
+      expect(r.out.trim()).toMatch(/^\d+\.\d+\.\d+/);
+    }
+  });
 });

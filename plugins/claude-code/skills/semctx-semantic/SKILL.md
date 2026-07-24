@@ -83,7 +83,7 @@ short, stable capsule. These are explicit tools — do not rely on any implicit 
 
 ## Local equivalents (no MCP)
 
-Prefer the plugin-bundled CLI (`dist/semctx.js`, same version as MCP). Global `semctx` is optional for CI/shell only.
+Prefer the plugin-bundled CLI when `$CLAUDE_PLUGIN_ROOT` is set (`dist/semctx.js`, same version as MCP). Else fall back to global `semctx` on PATH (same version: `semctx --version`), or report that shell CLI is unavailable.
 
 ```
 bun "$CLAUDE_PLUGIN_ROOT/dist/semctx.js" semantic init                         # scaffold .semctx/semantic/ (versioned)
