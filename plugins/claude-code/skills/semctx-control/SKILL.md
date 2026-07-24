@@ -51,14 +51,25 @@ Report the framed objective, authority sources, freshness verdict, seal hash and
 
 ## Local equivalents when MCP is unavailable
 
+Prefer the **plugin-bundled CLI** at `dist/semctx.js` (same release as the MCP runtime). Do not
+depend on a global `semctx` from agent sessions — it may lag the plugin.
+
 ```text
-semctx status --json
-semctx semantic check --json
-semctx semantic slice --change change.<slug> --format agent
-semctx control trace repo:<graph-id> --direction lift --to 6 --json
-semctx control plan change.<slug> --target target-architecture.json --json
-semctx verify diff --base origin/main
-semctx change verify change.<slug> --base origin/main
-semctx semantic handoff
-semctx semantic resume
+# Claude Code (CLAUDE_PLUGIN_ROOT is set in plugin contexts)
+bun "$CLAUDE_PLUGIN_ROOT/dist/semctx.js" status --json
+bun "$CLAUDE_PLUGIN_ROOT/dist/semctx.js" semantic check --json
+bun "$CLAUDE_PLUGIN_ROOT/dist/semctx.js" semantic slice --change change.<slug> --format agent
+bun "$CLAUDE_PLUGIN_ROOT/dist/semctx.js" control trace repo:<graph-id> --direction lift --to 6 --json
+bun "$CLAUDE_PLUGIN_ROOT/dist/semctx.js" control plan change.<slug> --target target-architecture.json --json
+bun "$CLAUDE_PLUGIN_ROOT/dist/semctx.js" verify diff --base origin/main
+bun "$CLAUDE_PLUGIN_ROOT/dist/semctx.js" change verify change.<slug> --base origin/main
+bun "$CLAUDE_PLUGIN_ROOT/dist/semctx.js" semantic handoff
+bun "$CLAUDE_PLUGIN_ROOT/dist/semctx.js" semantic resume
+
+# Codex (plugin package root as cwd)
+bun ./dist/semctx.js status --json
+# …same subcommands as above with ./dist/semctx.js
 ```
+
+A global `semctx` on PATH remains optional for CI, GitHub Actions, and non-plugin shells
+(`bun install -g semctx`).

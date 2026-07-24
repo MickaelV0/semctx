@@ -30,11 +30,18 @@ It never reaches back into the source checkout and does not depend on a globally
 `semctx-mcp`. Every tool call carries the absolute `${CLAUDE_PROJECT_DIR}` as `repositoryRoot`;
 missing or relative roots are rejected.
 
-Restart Claude Code after installation. Then initialise each target repository once:
+The same plugin snapshot ships `dist/semctx.js` (the full CLI). Prefer that binary for agent shell
+fallbacks and guarded-mode verify so CLI and MCP stay on the same release:
 
 ```text
-semctx setup
+bun "$CLAUDE_PLUGIN_ROOT/dist/semctx.js" setup
+bun "$CLAUDE_PLUGIN_ROOT/dist/semctx.js" verify diff --record
 ```
+
+A global `semctx` (`bun install -g semctx`) remains optional for CI and non-plugin shells.
+
+Restart Claude Code after installation. Then initialise each target repository once with the
+plugin CLI (or a global install) as above.
 
 Inspect and verify tools fail closed with `CONFIG_NOT_FOUND` or `REPO_NOT_INDEXED`; they never run
 setup or mutate readiness implicitly.

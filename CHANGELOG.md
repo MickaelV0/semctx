@@ -11,6 +11,12 @@ Marketplace. The published CLI lags this repository — see
 
 ### Added
 
+- **Plugin-bundled CLI** (`dist/semctx.js`): Claude Code and Codex plugins now ship a portable Bun
+  CLI next to `dist/semctx-mcp.js`, built from the same `plugin:build` pipeline. Agent skills and
+  the Claude guard prefer `bun "$CLAUDE_PLUGIN_ROOT/dist/semctx.js"` (or `bun ./dist/semctx.js` on
+  Codex) so a marketplace/plugin update keeps MCP and CLI in lockstep. Global `semctx` remains
+  optional for CI and non-plugin shells (#35).
+
 - **Explicit control freshness verdict**: read-only CLI `semctx status` and MCP
   `semctx_control_status` report `FRESH`, `DIRTY_KNOWN`, `STALE`, or `UNSEALED` from the persisted
   index snapshot. Trace rejects stale/unsealed inputs and migration planning returns a structured

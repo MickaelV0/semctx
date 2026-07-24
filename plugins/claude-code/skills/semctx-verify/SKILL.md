@@ -50,7 +50,7 @@ pre-commit/push hook will **block** `git commit` / `git push` until the current 
 verified. Record a verification with:
 
 ```
-semctx verify diff --record
+bun "$CLAUDE_PLUGIN_ROOT/dist/semctx.js" verify diff --record
 ```
 
 after which an unchanged, non-BLOCK diff is allowed to commit. Any further edit invalidates it —
@@ -59,8 +59,10 @@ strictly disabled with `SEMCTX_GUARD=off`.
 
 ## Local commands (equivalent to the MCP tool)
 
+Prefer the plugin-bundled CLI (`dist/semctx.js`, same version as MCP). Global `semctx` is optional for CI/shell only.
+
 ```
-semctx verify diff                       # analyse working tree vs HEAD
-semctx verify diff --base origin/main     # analyse a range (merge-base)
-semctx verify diff --record               # analyse and record state for guarded mode
+bun "$CLAUDE_PLUGIN_ROOT/dist/semctx.js" verify diff                       # working tree vs HEAD
+bun "$CLAUDE_PLUGIN_ROOT/dist/semctx.js" verify diff --base origin/main     # range (merge-base)
+bun "$CLAUDE_PLUGIN_ROOT/dist/semctx.js" verify diff --record               # record state for guarded mode
 ```

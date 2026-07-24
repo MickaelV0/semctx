@@ -158,9 +158,20 @@ export function guardEnabled(env, guardJson) {
   return guardJson?.enabled === true;
 }
 
-/** Pure decision. ctx: { enabled, terminalVerb, commandIsolated?, state|null, currentState|null }. */
+/**
+ * Prefer the plugin-bundled CLI (same version as MCP) when Claude sets CLAUDE_PLUGIN_ROOT.
+ * Fall back to a global `semctx` for non-plugin shells.
+ */
+export function verifyRecordCommand(env = process.env) {
+  const root = String(env?.CLAUDE_PLUGIN_ROOT ?? "").trim();
+  if (root) return `bun "${root}/dist/semctx.js" verify diff --record`;
+  return "semctx verify diff --record";
+}
+
+/** Pure decision. ctx: { enabled, terminalVerb, commandIsolated?, state|null, currentState|null, verifyCommand? }. */
 export function guardDecision(ctx) {
   if (!ctx.enabled || !ctx.terminalVerb) return { block: false };
+  const verifyCmd = ctx.verifyCommand ?? verifyRecordCommand();
   const retry = `then retry the ${ctx.terminalVerb}. (strictly disable: SEMCTX_GUARD=off)`;
   if (ctx.commandIsolated === false) {
     return {
@@ -169,7 +180,7 @@ export function guardDecision(ctx) {
     };
   }
   if (!ctx.state) {
-    return { block: true, reason: `semctx guarded mode: no verification on record. Run:\n  semctx verify diff --record\n${retry}` };
+    return { block: true, reason: `semctx guarded mode: no verification on record. Run:\n  ${verifyCmd}\n${retry}` };
   }
   if (
     ctx.state.version !== 2
@@ -177,16 +188,16 @@ export function guardDecision(ctx) {
     || !ctx.state.workingStateHash
     || !ctx.currentState
   ) {
-    return { block: true, reason: `semctx guarded mode: the verification baseline is legacy, invalid, or unavailable. Re-run:\n  semctx verify diff --record\n${retry}` };
+    return { block: true, reason: `semctx guarded mode: the verification baseline is legacy, invalid, or unavailable. Re-run:\n  ${verifyCmd}\n${retry}` };
   }
   if (ctx.state.verdict === "BLOCK") {
-    return { block: true, reason: `semctx guarded mode: the last verification was BLOCK. Resolve the findings, then re-run:\n  semctx verify diff --record` };
+    return { block: true, reason: `semctx guarded mode: the last verification was BLOCK. Resolve the findings, then re-run:\n  ${verifyCmd}` };
   }
   if (
     ctx.state.headCommit !== ctx.currentState.headCommit
     || ctx.state.workingStateHash !== ctx.currentState.workingStateHash
   ) {
-    return { block: true, reason: `semctx guarded mode: the commit or working state changed since the last verification. Re-run:\n  semctx verify diff --record\n${retry}` };
+    return { block: true, reason: `semctx guarded mode: the commit or working state changed since the last verification. Re-run:\n  ${verifyCmd}\n${retry}` };
   }
   return { block: false };
 }
@@ -268,6 +279,7 @@ function main() {
     commandIsolated: isIsolatedTerminalGitCommand(command),
     state,
     currentState,
+    verifyCommand: verifyRecordCommand(process.env),
   });
   if (decision.block) {
     process.stderr.write(decision.reason + "\n");
