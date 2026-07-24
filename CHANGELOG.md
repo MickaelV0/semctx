@@ -15,7 +15,9 @@ Marketplace. The published CLI lags this repository — see
   CLI next to `dist/semctx-mcp.js`, built from the same `plugin:build` pipeline. Agent skills and
   the Claude guard prefer `bun "$CLAUDE_PLUGIN_ROOT/dist/semctx.js"` (or `bun ./dist/semctx.js` on
   Codex) so a marketplace/plugin update keeps MCP and CLI in lockstep. Global `semctx` remains
-  optional for CI and non-plugin shells (#35).
+  optional for CI and non-plugin shells (#35). Guard block messages use deferred
+  `"$CLAUDE_PLUGIN_ROOT/…"` expansion (no JS path interpolation); packaged CLI smoke covers
+  `setup` / `doctor` / `verify diff --dry-run` outside the checkout.
 
 - **Explicit control freshness verdict**: read-only CLI `semctx status` and MCP
   `semctx_control_status` report `FRESH`, `DIRTY_KNOWN`, `STALE`, or `UNSEALED` from the persisted

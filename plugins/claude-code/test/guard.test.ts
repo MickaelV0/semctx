@@ -106,8 +106,14 @@ describe("guardDecision — diff-hash gate (ADR 0007)", () => {
 
   it("prefers the plugin-bundled CLI when CLAUDE_PLUGIN_ROOT is set", () => {
     expect(verifyRecordCommand({})).toBe("semctx verify diff --record");
+    expect(verifyRecordCommand({ CLAUDE_PLUGIN_ROOT: "" })).toBe("semctx verify diff --record");
+    expect(verifyRecordCommand({ CLAUDE_PLUGIN_ROOT: "   " })).toBe("semctx verify diff --record");
+    // Deferred shell expansion — path is not interpolated into the message string.
     expect(verifyRecordCommand({ CLAUDE_PLUGIN_ROOT: "/plugins/semctx" })).toBe(
-      'bun "/plugins/semctx/dist/semctx.js" verify diff --record',
+      'bun "$CLAUDE_PLUGIN_ROOT/dist/semctx.js" verify diff --record',
+    );
+    expect(verifyRecordCommand({ CLAUDE_PLUGIN_ROOT: "/plugins/My Plugin/semctx" })).toBe(
+      'bun "$CLAUDE_PLUGIN_ROOT/dist/semctx.js" verify diff --record',
     );
     const d = guardDecision({
       enabled: true,
@@ -116,7 +122,7 @@ describe("guardDecision — diff-hash gate (ADR 0007)", () => {
       currentState: CURRENT,
       verifyCommand: verifyRecordCommand({ CLAUDE_PLUGIN_ROOT: "/plugins/semctx" }),
     });
-    expect(d.reason).toContain('bun "/plugins/semctx/dist/semctx.js" verify diff --record');
+    expect(d.reason).toContain('bun "$CLAUDE_PLUGIN_ROOT/dist/semctx.js" verify diff --record');
   });
   it("blocks a compound terminal command before consulting a valid baseline", () => {
     const d = guardDecision({
@@ -192,6 +198,40 @@ describe("guard runtime — large working diffs", () => {
         expect(result.status).toBe(2);
         expect(result.stderr).toContain("must be an isolated command");
       }
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("main() surfaces the plugin-bundled verify command when CLAUDE_PLUGIN_ROOT is set", () => {
+    const repo = mkdtempSync(join(tmpdir(), "semctx-guard-plugin-cli-"));
+    try {
+      execFileSync("git", ["init"], { cwd: repo, stdio: "ignore" });
+      writeFileSync(join(repo, "tracked.ts"), "export const value = 1;\n");
+      writeFileSync(join(repo, ".gitignore"), ".semctx/\n");
+      execFileSync("git", ["add", "tracked.ts", ".gitignore"], { cwd: repo, stdio: "ignore" });
+      execFileSync(
+        "git",
+        ["-c", "user.name=Semctx Test", "-c", "user.email=semctx@example.invalid", "commit", "-m", "baseline"],
+        { cwd: repo, stdio: "ignore" },
+      );
+      mkdirSync(join(repo, ".semctx"));
+      writeFileSync(join(repo, ".semctx", "guard.json"), JSON.stringify({ enabled: true }));
+      // No verification-state.json → block with "Run: <verify command>"
+      const guard = resolve(import.meta.dir, "../hooks/semctx-guard.mjs");
+      const result = spawnSync("node", [guard], {
+        cwd: repo,
+        env: { ...process.env, CLAUDE_PLUGIN_ROOT: "/plugins/My Plugin/semctx" },
+        input: JSON.stringify({
+          tool_name: "Bash",
+          tool_input: { command: "git commit -m x" },
+          cwd: repo,
+        }),
+        encoding: "utf8",
+      });
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain('bun "$CLAUDE_PLUGIN_ROOT/dist/semctx.js" verify diff --record');
+      expect(result.stderr).not.toContain("/plugins/My Plugin/semctx");
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }

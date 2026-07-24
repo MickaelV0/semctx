@@ -30,7 +30,8 @@ describe("packaged MCP runtime", () => {
     expect(runtime).not.toMatch(/typescript@[^"']+node_modules[^"']+typescript[^"']+lib/);
 
     const cache = mkdtempSync(resolve(tmpdir(), "semctx-plugin-cli-cache-"));
-    temporary.push(cache);
+    const target = mkdtempSync(resolve(tmpdir(), "semctx-plugin-cli-target-"));
+    temporary.push(cache, target);
     const packagedDist = resolve(cache, "dist");
     cpSync(pluginDist, packagedDist, { recursive: true });
     const packagedCli = resolve(packagedDist, "semctx.js");
@@ -43,6 +44,34 @@ describe("packaged MCP runtime", () => {
     const helpText = new TextDecoder().decode(help.stdout);
     expect(helpText).toContain("semctx — repository change-impact analyzer");
     expect(helpText).toContain("verify diff");
+
+    // Behavioural smoke beyond --help: portable CLI must index/status a foreign repo.
+    cpSync(SAMPLE_REPO, target, {
+      recursive: true,
+      filter: (src) => !src.includes(".semctx") && !src.includes("node_modules"),
+    });
+    git(target, "init");
+    git(target, "add", ".");
+    git(target, "-c", "user.name=Semctx Test", "-c", "user.email=semctx@example.test", "commit", "-m", "fixture");
+    const setup = Bun.spawnSync(["bun", packagedCli, "setup", "--root", target], {
+      cwd: cache,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(setup.exitCode).toBe(0);
+    const doctor = Bun.spawnSync(["bun", packagedCli, "doctor", "--root", target, "--json"], {
+      cwd: cache,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(doctor.exitCode).toBe(0);
+    const doctorPayload = JSON.parse(new TextDecoder().decode(doctor.stdout));
+    expect(doctorPayload.healthy).toBe(true);
+    const dryRun = Bun.spawnSync(
+      ["bun", packagedCli, "verify", "diff", "--root", target, "--dry-run"],
+      { cwd: cache, stdout: "pipe", stderr: "pipe" },
+    );
+    expect(dryRun.exitCode).toBe(0);
   });
 
   test("starts outside the checkout and targets an explicit Codex repository root", async () => {

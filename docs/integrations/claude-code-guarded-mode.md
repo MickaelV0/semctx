@@ -31,14 +31,20 @@ Create `.semctx/guard.json` in the project (see `plugins/claude-code/examples/gu
 
 ## The loop
 
+Prefer the plugin-bundled CLI (same release as MCP). A global `semctx` remains optional for
+non-plugin shells.
+
 ```bash
 # ... make changes ...
-semctx verify diff --record     # PASS/WARN → commit allowed; BLOCK → resolve first
+# Claude Code (plugin context):
+bun "$CLAUDE_PLUGIN_ROOT/dist/semctx.js" verify diff --record
+# or global: semctx verify diff --record
+# PASS/WARN → commit allowed; BLOCK → resolve first
 git commit -m "..."             # allowed only if the diff is unchanged since --record
 ```
 
 If HEAD moves or any tracked/untracked source input changes, the baseline no longer matches and the commit is blocked until you
-re-run `semctx verify diff --record`.
+re-run `bun "$CLAUDE_PLUGIN_ROOT/dist/semctx.js" verify diff --record` (or `semctx verify diff --record`).
 Run `git commit` and `git push` as isolated commands in guarded mode. Compound commands,
 redirections, and shell substitutions are rejected because they could mutate repository bytes
 after the hook's pre-check.

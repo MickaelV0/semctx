@@ -160,11 +160,13 @@ export function guardEnabled(env, guardJson) {
 
 /**
  * Prefer the plugin-bundled CLI (same version as MCP) when Claude sets CLAUDE_PLUGIN_ROOT.
+ * Emit a deferred `"$CLAUDE_PLUGIN_ROOT/…"` form (shell expands the var) so the reason string
+ * never interpolates the path in JS — avoids quote-breakage if the env value is odd.
  * Fall back to a global `semctx` for non-plugin shells.
  */
 export function verifyRecordCommand(env = process.env) {
   const root = String(env?.CLAUDE_PLUGIN_ROOT ?? "").trim();
-  if (root) return `bun "${root}/dist/semctx.js" verify diff --record`;
+  if (root) return 'bun "$CLAUDE_PLUGIN_ROOT/dist/semctx.js" verify diff --record';
   return "semctx verify diff --record";
 }
 
