@@ -21,20 +21,22 @@ Marketplace. The published CLI lags this repository — see
   braces are part of the syntax). The guard hook resolves and shell-quotes the bundle path itself
   instead of emitting a deferred `"$CLAUDE_PLUGIN_ROOT/…"`: the variable is exported to hook and MCP
   processes only, never to the agent's shell, where an unexpanded reference silently collapses to
-  `bun "/dist/semctx.js"`. `guardDecision` is pure again (no env read, no filesystem access);
-  `plugin-parity` fails on any bare `$CLAUDE_PLUGIN_ROOT` in a shipped file; the guard end-to-end
-  test replays the printed command in a shell stripped of the variable.
+  `bun "/dist/semctx.js"`. `guardDecision` is pure (no env read, no filesystem access); command
+  resolution lives in `verifyRecordCommand`. `plugin-parity` fails on any bare `$CLAUDE_PLUGIN_ROOT`
+  in a shipped file; the guard end-to-end test replays the printed command in a shell stripped of
+  the variable.
 - **Release version SSOT**: npm CLI (`apps/cli`) aligned to the plugin/MCP release (`0.1.10`);
   `plugin-parity` asserts CLI package version matches marketplace plugins; `semctx --version` and
   `doctor` report the CLI version (`doctor --json` gains a top-level `version`); skills document a
   shell CLI resolution ladder for hosts that do not substitute the placeholder (#35 residual).
-  `--version` no longer short-circuits a real command, which previously let
-  `verify diff --record --version` exit 0 without verifying.
-- **Honest Codex fallback**: the shared skill dropped the `bun ./dist/semctx.js` rung. Codex
-  substitutes no plugin-root placeholder and the agent's shell runs in the user's repository, not
-  the plugin package root, so that rung could never resolve; Codex shell fallbacks use a global
-  `semctx`. The ladder is now host-neutral, so the byte-identical shared contract no longer carries
-  one host's instructions into the other.
+  `--version` / `version` print the package version and exit 0 only when that is the command —
+  they do not short-circuit a real subcommand such as `verify`.
+- **Codex shell fallback**: the shared skill dropped the `bun ./dist/semctx.js` rung. That path
+  assumed the agent's cwd was the plugin package root; on Codex the shell runs in the user's
+  repository, so the rung could never resolve. Global `semctx` remains the Codex shell fallback.
+  The shared skill still lists Claude's `${CLAUDE_PLUGIN_ROOT}` rung (substituted only by Claude
+  Code; Codex agents must skip the unsubstituted placeholder — see #40 for a host-generated
+  contract).
 - **CI runs the full suite**: `plugin-runtime` now runs `bun run test` instead of a three-file
   selection that skipped the guard-hook and CLI tests gating plugin packaging.
 

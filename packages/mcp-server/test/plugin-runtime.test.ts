@@ -7,10 +7,16 @@ import { resolve } from "node:path";
 import { initWorkspace } from "@semantic-context/repository-store";
 import { indexRepository } from "@semantic-context/app-services";
 import { SAMPLE_REPO } from "@semantic-context/test-fixtures";
+import packageJson from "../../../apps/cli/package.json";
 
 const repoRoot = resolve(import.meta.dir, "../../..");
 const pluginDist = resolve(repoRoot, "plugins/semctx-control/dist");
 const temporary: string[] = [];
+
+// Copy ~8 MB of bundles + typescript-lib, git-init a fixture, then spawn several 4 MB bun processes
+// including full `setup` indexing. ~0.5s on Linux; 15-26s on a Windows runner (same class as the
+// L6-L0 fixture). Budget for the slow platform rather than the 5s bun default.
+const PACKAGED_SMOKE_TIMEOUT_MS = 120_000;
 
 function git(cwd: string, ...args: string[]): void {
   const result = Bun.spawnSync(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
@@ -22,7 +28,9 @@ afterEach(() => {
 });
 
 describe("packaged MCP runtime", () => {
-  test("ships a portable plugin CLI next to the MCP runtime", () => {
+  test(
+    "ships a portable plugin CLI next to the MCP runtime",
+    () => {
     const bundle = resolve(pluginDist, "semctx.js");
     expect(existsSync(bundle)).toBe(true);
     const runtime = readFileSync(bundle, "utf8");
@@ -67,14 +75,19 @@ describe("packaged MCP runtime", () => {
     expect(doctor.exitCode).toBe(0);
     const doctorPayload = JSON.parse(new TextDecoder().decode(doctor.stdout));
     expect(doctorPayload.healthy).toBe(true);
+    expect(doctorPayload.version).toBe(packageJson.version);
     const dryRun = Bun.spawnSync(
       ["bun", packagedCli, "verify", "diff", "--root", target, "--dry-run"],
       { cwd: cache, stdout: "pipe", stderr: "pipe" },
     );
     expect(dryRun.exitCode).toBe(0);
-  });
+  },
+    PACKAGED_SMOKE_TIMEOUT_MS,
+  );
 
-  test("starts outside the checkout and targets an explicit Codex repository root", async () => {
+  test(
+    "starts outside the checkout and targets an explicit Codex repository root",
+    async () => {
     const cache = mkdtempSync(resolve(tmpdir(), "semctx-plugin-cache-"));
     const target = mkdtempSync(resolve(tmpdir(), "semctx-plugin-target-"));
     temporary.push(cache, target);
@@ -143,5 +156,7 @@ describe("packaged MCP runtime", () => {
     } finally {
       await client.close();
     }
-  });
+  },
+    PACKAGED_SMOKE_TIMEOUT_MS,
+  );
 });

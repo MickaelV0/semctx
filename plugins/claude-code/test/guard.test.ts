@@ -18,6 +18,17 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { captureVerificationGitState as captureApplicationVerificationGitState } from "@semantic-context/app-services";
 
+// POSIX shell is required only for shellQuote round-trip and command-replay e2e. Default
+// Git-for-Windows puts Git\cmd on PATH (git.exe) but not Git\bin (bash.exe); skip rather than ENOENT.
+const hasBash = (() => {
+  try {
+    execFileSync("bash", ["-c", "true"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
 describe("isTerminalGitCommand — structural detection (no shell eval)", () => {
   it("detects commit and push, including global options and env assignments", () => {
     expect(isTerminalGitCommand("git commit -m 'x'")).toBe("commit");
@@ -148,6 +159,8 @@ describe("guardDecision — diff-hash gate (ADR 0007)", () => {
           `bun ${shellQuote(bundle)} verify diff --record`,
         );
         // Round-trip through a real shell: the quoted path must reach the program verbatim.
+        // Skip the shell half when bash is absent (Windows Git\cmd-only PATH).
+        if (!hasBash) continue;
         const echoed = execFileSync("bash", ["-c", `printf '%s' ${shellQuote(bundle)}`], {
           encoding: "utf8",
         });
@@ -271,7 +284,9 @@ describe("guard runtime — large working diffs", () => {
     }
   });
 
-  it("main() prints a verify command that a shell without CLAUDE_PLUGIN_ROOT can actually run", () => {
+  it.skipIf(!hasBash)(
+    "main() prints a verify command that a shell without CLAUDE_PLUGIN_ROOT can actually run",
+    () => {
     const repo = mkdtempSync(join(tmpdir(), "semctx-guard-plugin-cli-"));
     const pluginParent = mkdtempSync(join(tmpdir(), "semctx-guard-plugin-home-"));
     // A space in the root is the realistic hostile case for quoting.
@@ -326,7 +341,8 @@ describe("guard runtime — large working diffs", () => {
       rmSync(repo, { recursive: true, force: true });
       rmSync(pluginParent, { recursive: true, force: true });
     }
-  });
+  },
+  );
 
   it("preserves the verification hash for a multi-megabyte diff", () => {
     const repo = mkdtempSync(join(tmpdir(), "semctx-guard-large-diff-"));
