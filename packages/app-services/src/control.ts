@@ -23,7 +23,7 @@ import {
   lower,
   snapshotArchitecture,
 } from "@semantic-context/control-engine";
-import { loadSemanticModel } from "@semantic-context/semantic-engine";
+import { loadSemanticModel, type SemanticLifecycleFinding } from "@semantic-context/semantic-engine";
 import { PROVEN_STATUSES, type ChangeContract, type SemanticModel } from "@semantic-context/semantic-model";
 import { loadConfig } from "@semantic-context/repository-store";
 import { discoverFiles } from "@semantic-context/ts-analyzer";
@@ -37,6 +37,7 @@ import {
   fingerprintSemanticModel,
   parseIndexedControlSnapshot,
   unsealedControlStatus,
+  type UnsealedInputReason,
 } from "./freshness";
 import {
   CONTROL_OBSERVED_HUNK_INDEX_META_KEY,
@@ -111,6 +112,40 @@ function planningContext(model: SemanticModel, change: ChangeContract): ChangePl
   };
 }
 
+interface SemanticProjectionFailure {
+  diagnostics: ReturnType<typeof loadSemanticModel>["diagnostics"];
+  duplicateIds: string[];
+  lifecycleFindings: SemanticLifecycleFinding[];
+  freshnessReasons: UnsealedInputReason[];
+}
+
+/** Decide once whether authored Plane B can be projected into Plane C, and under which public reason it cannot.
+ * Plane C consumers refuse the projection; the preflight reports the same classification as a bounded verdict. */
+function classifySemanticProjection(
+  loaded: ReturnType<typeof loadSemanticModel>,
+  lifecycleFindings: readonly SemanticLifecycleFinding[],
+): SemanticProjectionFailure | null {
+  const diagnostics = loaded.diagnostics.filter((diagnostic) => diagnostic.severity === "error");
+  const duplicateIds = [...loaded.duplicateIds];
+  const lifecycleErrors = lifecycleFindings.filter((finding) => finding.severity === "error");
+  const freshnessReasons: UnsealedInputReason[] = [];
+  if (diagnostics.length > 0 || duplicateIds.length > 0) freshnessReasons.push("SEMANTIC_MODEL_INVALID");
+  if (lifecycleErrors.length > 0) freshnessReasons.push("SEMANTIC_LIFECYCLE_INVALID");
+  if (freshnessReasons.length === 0) return null;
+  return { diagnostics, duplicateIds, lifecycleFindings: lifecycleErrors, freshnessReasons };
+}
+
+/** Recover the public freshness reasons a projection failure carried, without matching on its message. */
+function semanticProjectionReasons(error: SemctxError): [UnsealedInputReason, ...UnsealedInputReason[]] | null {
+  const carried = error.details.freshnessReasons;
+  if (!Array.isArray(carried) || carried.length === 0) return null;
+  const allowed = new Set<string>(["SEMANTIC_MODEL_INVALID", "SEMANTIC_LIFECYCLE_INVALID"]);
+  if (!carried.every((reason): reason is UnsealedInputReason => typeof reason === "string" && allowed.has(reason))) {
+    return null;
+  }
+  return carried as [UnsealedInputReason, ...UnsealedInputReason[]];
+}
+
 /** Load Plane A+B through the read-only store without creating or mutating repository state. */
 export function loadControlState(root: string): CurrentControlState {
   const reader = openReadyRepository(root);
@@ -120,13 +155,13 @@ export function loadControlState(root: string): CurrentControlState {
     const analysisInputHash = fingerprintAnalysisInputs(configBefore, discoverFiles(configBefore));
     const semanticBefore = loadSemanticModel(root);
     const lifecycleBefore = inspectSemanticLifecycle(root, semanticBefore.model.changes);
-    const errors = semanticBefore.diagnostics.filter((diagnostic) => diagnostic.severity === "error");
-    const lifecycleErrors = lifecycleBefore.filter((finding) => finding.severity === "error");
-    if (errors.length > 0 || semanticBefore.duplicateIds.length > 0 || lifecycleErrors.length > 0) {
+    const projection = classifySemanticProjection(semanticBefore, lifecycleBefore);
+    if (projection !== null) {
       throw new SemctxError("CONFIG_INVALID", "semantic model cannot be projected into Plane C", {
-        diagnostics: errors,
-        duplicateIds: semanticBefore.duplicateIds,
-        lifecycleFindings: lifecycleErrors,
+        diagnostics: projection.diagnostics,
+        duplicateIds: projection.duplicateIds,
+        lifecycleFindings: projection.lifecycleFindings,
+        freshnessReasons: projection.freshnessReasons,
       });
     }
     const indexedEvidence = reader.loadEvidence();
@@ -299,6 +334,10 @@ function unavailableStatus(error: unknown): ControlFreshnessStatusReport | null 
   if (!isSemctxError(error)) return null;
   if (error.code === "CONFIG_NOT_FOUND") return unsealedControlStatus("REPOSITORY_NOT_INITIALIZED");
   if (error.code === "REPO_NOT_INDEXED") return unsealedControlStatus("REPOSITORY_NOT_INDEXED");
+  if (error.code === "CONFIG_INVALID") {
+    const reasons = semanticProjectionReasons(error);
+    if (reasons !== null) return unsealedControlStatus(...reasons);
+  }
   if (
     error.code === "STORE_ERROR"
     && (

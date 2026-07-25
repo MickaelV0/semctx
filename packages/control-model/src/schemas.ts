@@ -2,7 +2,7 @@
 
 import { z } from "zod";
 import { MIGRATION_STEP_PROFILES } from "./constants";
-import { classifyControlFreshnessSeal } from "./freshness";
+import { classifyControlFreshnessSeal, CONTROL_FRESHNESS_REASON_ORDER } from "./freshness";
 import { Sha256HashSchema } from "./primitive-schemas";
 import type { AuthoredSemanticLevel, ControlFreshnessSeal } from "./types";
 export { Sha256HashSchema } from "./primitive-schemas";
@@ -156,23 +156,7 @@ export const ControlFreshnessSealSchema = z.object({
 }).strict();
 
 export const ControlFreshnessVerdictSchema = z.enum(["FRESH", "DIRTY_KNOWN", "STALE", "UNSEALED"]);
-export const ControlFreshnessReasonSchema = z.enum([
-  "REPOSITORY_NOT_INITIALIZED",
-  "REPOSITORY_NOT_INDEXED",
-  "INDEX_SNAPSHOT_MISSING",
-  "INDEX_SNAPSHOT_INVALID",
-  "GIT_STATE_UNAVAILABLE",
-  "STORE_SCHEMA_UNAVAILABLE",
-  "REPOSITORY_ROOT_MISMATCH",
-  "HEAD_MISMATCH",
-  "REPOSITORY_GRAPH_MISMATCH",
-  "SEMANTIC_MODEL_MISMATCH",
-  "ANALYSIS_INPUT_MISMATCH",
-  "WORKING_DIFF_MISMATCH",
-  "STORE_SCHEMA_MISMATCH",
-  "TOOL_VERSION_MISMATCH",
-  "WORKING_TREE_DIRTY",
-]);
+export const ControlFreshnessReasonSchema = z.enum(CONTROL_FRESHNESS_REASON_ORDER);
 export const ControlFreshnessStatusReportSchema = z.object({
   schemaVersion: z.literal(1),
   kind: z.literal("control_freshness_status"),
@@ -206,6 +190,8 @@ export const ControlFreshnessStatusReportSchema = z.object({
     "REPOSITORY_NOT_INDEXED",
     "INDEX_SNAPSHOT_MISSING",
     "INDEX_SNAPSHOT_INVALID",
+    "SEMANTIC_MODEL_INVALID",
+    "SEMANTIC_LIFECYCLE_INVALID",
     "GIT_STATE_UNAVAILABLE",
     "STORE_SCHEMA_UNAVAILABLE",
   ]);

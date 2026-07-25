@@ -74,6 +74,11 @@ non-empty diff exactly matches the sealed diff, `STALE` on any current/indexed m
 `FRESH`/`DIRTY_KNOWN`; exit code 3 means `STALE`/`UNSEALED`; usage errors remain 2 and unexpected
 evaluation failures remain 1.
 
+An authored semantic model that no longer projects into Plane C is also reported as a verdict rather
+than an error: `SEMANTIC_MODEL_INVALID` for error-severity diagnostics or duplicate ids, and
+`SEMANTIC_LIFECYCLE_INVALID` for error-severity lifecycle findings. Both are `UNSEALED` and exit 3.
+Run `semctx semantic check` to see the individual findings behind the reason code.
+
 ## `control trace`
 
 Traverse the read-only Plane C coordinate graph from a plane-qualified id.
