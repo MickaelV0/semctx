@@ -1,12 +1,15 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Claim, EvidenceRecord, RepositoryGraph } from "@semantic-context/core";
+import { ControlFreshnessStatusReportSchema } from "@semantic-context/control-model";
 import type { ControlFreshnessSeal, ControlFreshnessStatusReport, Sha256Hash } from "@semantic-context/control-model";
 import type { SemanticModel } from "@semantic-context/semantic-model";
+import { initWorkspace } from "@semantic-context/repository-store";
+import { newChangeContract, writeActiveChange, writeChangeFile } from "@semantic-context/semantic-engine";
 import * as appServices from "../src";
-import { buildControlFreshnessSeal, captureGitState, type IndexedControlSnapshot } from "../src";
+import { buildControlFreshnessSeal, captureGitState, controlStatus, indexRepository, type IndexedControlSnapshot } from "../src";
 
 function git(root: string, ...args: string[]): void {
   const result = Bun.spawnSync(["git", ...args], { cwd: root, stdout: "pipe", stderr: "pipe" });
@@ -342,5 +345,102 @@ describe("explicit control freshness verdict", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("preflight verdict on an unprojectable semantic model", () => {
+  const roots: string[] = [];
+
+  afterEach(() => {
+    for (const dir of roots.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** An indexed repository whose authored model was still projectable at capture time. */
+  function indexedRoot(): string {
+    const dir = mkdtempSync(join(tmpdir(), "semctx-preflight-"));
+    roots.push(dir);
+    writeFileSync(join(dir, "README.md"), "fixture\n", "utf8");
+    writeFileSync(join(dir, ".gitignore"), ".semctx/\n", "utf8");
+    git(dir, "init", "-q");
+    git(dir, "add", "README.md", ".gitignore");
+    git(dir, "-c", "user.name=Semctx Test", "-c", "user.email=semctx@example.test", "commit", "-q", "-m", "fixture");
+    initWorkspace(dir);
+    indexRepository(dir, "2026-07-25T00:00:00.000Z");
+    return dir;
+  }
+
+  it("reports a bounded verdict when authored lifecycle drifts after indexing", () => {
+    const dir = indexedRoot();
+    expect(controlStatus(dir).verdict).not.toBe("UNSEALED");
+
+    // Two non-terminal contracts with a pointer on one: ACTIVE_CHANGE_OBSOLETE, severity error.
+    const selected = newChangeContract({ id: "change.selected", statement: "Selected", lifecycle: "active", provenance: "author" });
+    writeChangeFile(dir, selected);
+    writeChangeFile(dir, newChangeContract({ id: "change.orphan", statement: "Orphan", lifecycle: "active", provenance: "author" }));
+    writeActiveChange(dir, selected);
+
+    const status = controlStatus(dir);
+
+    expect(status.verdict).toBe("UNSEALED");
+    expect(status.reasons).toEqual(["SEMANTIC_LIFECYCLE_INVALID"]);
+    expect(status.canRunHighRiskControl).toBe(false);
+    expect(status.freshnessSeal).toBeNull();
+    expect(ControlFreshnessStatusReportSchema.safeParse(status).success).toBe(true);
+  });
+
+  it("reports a bounded verdict when the authored model stops parsing", () => {
+    const dir = indexedRoot();
+    mkdirSync(join(dir, ".semctx", "semantic"), { recursive: true });
+    writeFileSync(
+      join(dir, ".semctx", "semantic", "goals.sem"),
+      [
+        "goal goal.duplicated",
+        "  statement: First declaration.",
+        "  status: declared",
+        "",
+        "goal goal.duplicated",
+        "  statement: Second declaration of the same id.",
+        "  status: declared",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const status = controlStatus(dir);
+
+    expect(status.verdict).toBe("UNSEALED");
+    expect(status.reasons).toEqual(["SEMANTIC_MODEL_INVALID"]);
+    expect(status.canRunHighRiskControl).toBe(false);
+    expect(ControlFreshnessStatusReportSchema.safeParse(status).success).toBe(true);
+  });
+
+  it("reports both causes in canonical order when the model and its lifecycle are invalid", () => {
+    const dir = indexedRoot();
+    mkdirSync(join(dir, ".semctx", "semantic"), { recursive: true });
+    writeFileSync(
+      join(dir, ".semctx", "semantic", "goals.sem"),
+      [
+        "goal goal.duplicated",
+        "  statement: First declaration.",
+        "  status: declared",
+        "",
+        "goal goal.duplicated",
+        "  statement: Second declaration of the same id.",
+        "  status: declared",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const selected = newChangeContract({ id: "change.selected", statement: "Selected", lifecycle: "active", provenance: "author" });
+    writeChangeFile(dir, selected);
+    writeChangeFile(dir, newChangeContract({ id: "change.orphan", statement: "Orphan", lifecycle: "active", provenance: "author" }));
+    writeActiveChange(dir, selected);
+
+    const status = controlStatus(dir);
+
+    expect(status.verdict).toBe("UNSEALED");
+    expect(status.reasons).toEqual(["SEMANTIC_MODEL_INVALID", "SEMANTIC_LIFECYCLE_INVALID"]);
+    expect(status.canRunHighRiskControl).toBe(false);
+    expect(ControlFreshnessStatusReportSchema.safeParse(status).success).toBe(true);
   });
 });
