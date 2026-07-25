@@ -1,5 +1,6 @@
 import { describe, it, expect } from "bun:test";
 import { join } from "node:path";
+import packageJson from "../package.json";
 
 const CLI = join(import.meta.dir, "..", "src", "index.ts");
 
@@ -36,13 +37,13 @@ describe("help / usage exit codes", () => {
     for (const args of [["--version"], ["version"]] as const) {
       const r = run([...args]);
       expect(r.code).toBe(0);
-      expect(r.out.trim()).toMatch(/^\d+\.\d+\.\d+/);
+      expect(r.out.trim()).toBe(packageJson.version);
     }
   });
 
   it("`--version` never short-circuits a real command (no silent exit-0 gate bypass)", () => {
     const r = run(["definitely-not-a-command", "--version"]);
     expect(r.code).toBe(2);
-    expect(r.out.trim()).not.toMatch(/^\d+\.\d+\.\d+$/);
+    expect(r.out.trim()).not.toBe(packageJson.version);
   });
 });
