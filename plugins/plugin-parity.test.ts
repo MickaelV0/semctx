@@ -65,6 +65,9 @@ describe("Codex and Claude Code plugin parity", () => {
     ];
     // Matches $CLAUDE_PLUGIN_ROOT only when it is NOT the ${…} form.
     const bare = /\$CLAUDE_PLUGIN_ROOT/;
+    // Canary: a neutered pattern would leave this suite permanently green.
+    expect(bare.test("$CLAUDE_PLUGIN_ROOT/dist/semctx.js")).toBe(true);
+    expect(bare.test('bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js"')).toBe(false);
     for (const path of shipped) {
       const offenders = read(path)
         .split("\n")

@@ -155,12 +155,24 @@ describe("guardDecision — diff-hash gate (ADR 0007)", () => {
         const bundle = join(root, "dist", "semctx.js");
         mkdirSync(join(root, "dist"), { recursive: true });
         writeFileSync(bundle, "// bundle\n");
-        expect(verifyRecordCommand({ CLAUDE_PLUGIN_ROOT: root, PATH: process.env.PATH })).toBe(
-          `bun ${shellQuote(bundle)} verify diff --record`,
-        );
-        // Round-trip through a real shell: the quoted path must reach the program verbatim.
-        // Skip the shell half when bash is absent (Windows Git\cmd-only PATH).
-        if (!hasBash) continue;
+        // Independent expected form (POSIX single-quote rule) — not shellQuote() itself, so a
+        // degenerate identity transform would fail without needing bash.
+        const expected = `bun '${bundle.replaceAll("'", "'\\''")}' verify diff --record`;
+        expect(verifyRecordCommand({ CLAUDE_PLUGIN_ROOT: root, PATH: process.env.PATH })).toBe(expected);
+      } finally {
+        rmSync(parent, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it.skipIf(!hasBash)("shellQuote round-trips hostile paths through a real shell", () => {
+    for (const name of ["My Plugin", "it's", "a$b", "back`tick"]) {
+      const parent = mkdtempSync(join(tmpdir(), "semctx-guard-quote-roundtrip-"));
+      try {
+        const root = join(parent, name);
+        const bundle = join(root, "dist", "semctx.js");
+        mkdirSync(join(root, "dist"), { recursive: true });
+        writeFileSync(bundle, "// bundle\n");
         const echoed = execFileSync("bash", ["-c", `printf '%s' ${shellQuote(bundle)}`], {
           encoding: "utf8",
         });

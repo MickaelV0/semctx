@@ -42,8 +42,10 @@ describe("help / usage exit codes", () => {
   });
 
   it("`--version` never short-circuits a real command (no silent exit-0 gate bypass)", () => {
-    const r = run(["definitely-not-a-command", "--version"]);
-    expect(r.code).toBe(2);
+    // Gate-shaped argv: a short-circuit that honours --version after any position would exit 0
+    // and print only the version line, skipping verify entirely.
+    const r = run(["verify", "diff", "--record", "--version"]);
+    expect(r.code).not.toBe(0);
     expect(r.out.trim()).not.toBe(packageJson.version);
   });
 });
