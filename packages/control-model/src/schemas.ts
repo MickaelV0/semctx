@@ -2,8 +2,10 @@
 
 import { z } from "zod";
 import { MIGRATION_STEP_PROFILES } from "./constants";
-import { classifyControlFreshnessSeal } from "./freshness";
-import type { AuthoredSemanticLevel, ControlFreshnessSeal, Sha256Hash } from "./types";
+import { classifyControlFreshnessSeal, CONTROL_FRESHNESS_REASON_ORDER } from "./freshness";
+import { Sha256HashSchema } from "./primitive-schemas";
+import type { AuthoredSemanticLevel, ControlFreshnessSeal } from "./types";
+export { Sha256HashSchema } from "./primitive-schemas";
 
 export const SemanticLevelSchema = z.number().int().min(0).max(6);
 export const AuthoredSemanticLevelSchema = SemanticLevelSchema.refine(
@@ -129,9 +131,6 @@ export const CoordinateGraphReportSchema = z.object({
   danglingReferences: z.array(DanglingSemanticReferenceSchema).optional(),
 }).strict();
 
-export const Sha256HashSchema: z.ZodType<Sha256Hash> = z.string()
-  .regex(/^sha256:[0-9a-f]{64}$/, "expected sha256:<64 lowercase hex>") as z.ZodType<Sha256Hash>;
-
 export const ControlFreshnessSealSchema = z.object({
   sealSchemaVersion: z.literal(1),
   kind: z.literal("control_freshness_seal"),
@@ -157,25 +156,7 @@ export const ControlFreshnessSealSchema = z.object({
 }).strict();
 
 export const ControlFreshnessVerdictSchema = z.enum(["FRESH", "DIRTY_KNOWN", "STALE", "UNSEALED"]);
-export const ControlFreshnessReasonSchema = z.enum([
-  "REPOSITORY_NOT_INITIALIZED",
-  "REPOSITORY_NOT_INDEXED",
-  "INDEX_SNAPSHOT_MISSING",
-  "INDEX_SNAPSHOT_INVALID",
-  "SEMANTIC_MODEL_INVALID",
-  "SEMANTIC_LIFECYCLE_INVALID",
-  "GIT_STATE_UNAVAILABLE",
-  "STORE_SCHEMA_UNAVAILABLE",
-  "REPOSITORY_ROOT_MISMATCH",
-  "HEAD_MISMATCH",
-  "REPOSITORY_GRAPH_MISMATCH",
-  "SEMANTIC_MODEL_MISMATCH",
-  "ANALYSIS_INPUT_MISMATCH",
-  "WORKING_DIFF_MISMATCH",
-  "STORE_SCHEMA_MISMATCH",
-  "TOOL_VERSION_MISMATCH",
-  "WORKING_TREE_DIRTY",
-]);
+export const ControlFreshnessReasonSchema = z.enum(CONTROL_FRESHNESS_REASON_ORDER);
 export const ControlFreshnessStatusReportSchema = z.object({
   schemaVersion: z.literal(1),
   kind: z.literal("control_freshness_status"),

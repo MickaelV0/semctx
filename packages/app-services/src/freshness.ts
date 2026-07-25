@@ -12,15 +12,20 @@ import {
 } from "@semantic-context/core";
 import {
   classifyControlFreshnessSeal,
-  ControlFreshnessReasonSchema,
+  CONTROL_FRESHNESS_REASON_ORDER,
   serializeControlReport,
   sha256HashCanonicalJson,
   type ControlFreshnessSeal,
   type ControlFreshnessReason,
   type ControlFreshnessStatusReport,
   type Sha256Hash,
-} from "@semantic-context/control-model";
-import type { ChangeContract, RepositoryFacts, SemanticModel, SemanticNode } from "@semantic-context/semantic-model";
+} from "@semantic-context/control-model/reconciliation";
+import type {
+  ChangeContract,
+  RepositoryFacts,
+  SemanticModel,
+  SemanticNode,
+} from "@semantic-context/semantic-model/reconciliation-read";
 import type { DiscoveredFile } from "@semantic-context/ts-analyzer";
 import packageJson from "../package.json";
 
@@ -148,6 +153,7 @@ export function fingerprintSemanticNodeEvidence(node: SemanticNode): Sha256Hash 
 function normalizeChange(change: ChangeContract): ChangeContract {
   return {
     ...change,
+    ...(change.targetBinding === undefined ? {} : { targetBinding: { ...change.targetBinding } }),
     sourceRefs: [...change.sourceRefs]
       .map((ref) => ({ ...ref, file: ref.file.replace(/\\/g, "/") }))
       .sort((a, b) => compareIds(a.file, b.file) || a.line - b.line),
@@ -510,7 +516,7 @@ export function unsealedControlStatus(
   reason: UnsealedInputReason,
   ...rest: UnsealedInputReason[]
 ): ControlFreshnessStatusReport {
-  const order = ControlFreshnessReasonSchema.options;
+  const order = CONTROL_FRESHNESS_REASON_ORDER;
   const canonical = [...new Set([reason, ...rest])].sort((left, right) => order.indexOf(left) - order.indexOf(right));
   return status(null, "UNSEALED", canonical);
 }
