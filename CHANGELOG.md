@@ -66,7 +66,7 @@ Marketplace. The published CLI lags this repository — see
   - Codex and Claude Code now share one byte-identical `semctx-control` workflow contract across
     Planes A/B/C, including the generic project demo objective, verdict namespaces and
     `READY`-is-not-authority rule. The Claude plugin gains a validated local marketplace manifest
-    and uses the same `semctx-mcp` executable as Codex through a cache-safe launcher; its skills,
+    and loads the same committed `dist/semctx-mcp.js` as Codex (no separate launcher); its skills,
     hook and MCP server live in Claude Code's standard auto-discovery locations and validate as
     installable components.
 
