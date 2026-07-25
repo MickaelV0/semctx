@@ -1,11 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { SAMPLE_REPO } from "@semantic-context/test-fixtures";
 import { initSemanticScaffold, newChangeContract, writeChangeFile } from "@semantic-context/semantic-engine";
 import { initWorkspace } from "@semantic-context/repository-store";
-import { indexRepository, queryControlDeletionAuthorization, queryControlGraph } from "@semantic-context/app-services";
+import { controlStatus, indexRepository, queryControlDeletionAuthorization, queryControlGraph } from "@semantic-context/app-services";
 import { controlAuthorizeDeletionTool, controlGraphTool, controlPlanTool, controlStatusTool, controlTraceTool } from "../src/control-tools";
 
 let root: string;
@@ -121,5 +121,42 @@ describe("Plane C MCP handlers", () => {
     expect(report.plan.status).toBe("BLOCKED");
     expect(report.plan.blockedReason).toBe("open_unknowns");
     expect(report.plan.blockedDetails[0]?.subjectIds).toEqual(["unknown.runtime-consumer"]);
+  });
+});
+
+describe("MCP preflight on an unprojectable semantic model", () => {
+  let drifted: string;
+
+  beforeAll(() => {
+    drifted = mkdtempSync(join(tmpdir(), "semctx-control-mcp-drift-"));
+    cpSync(SAMPLE_REPO, drifted, { recursive: true, filter: (src) => !src.includes(".semctx") && !src.includes("node_modules") });
+    git(drifted, "init");
+    initWorkspace(drifted);
+    initSemanticScaffold(drifted);
+    git(drifted, "add", ".");
+    git(drifted, "-c", "user.name=Semctx Test", "-c", "user.email=semctx@example.test", "commit", "-m", "fixture");
+    indexRepository(drifted, "2026-07-25T00:00:00.000Z");
+  });
+
+  afterAll(() => rmSync(drifted, { recursive: true, force: true }));
+
+  it("returns the same bounded verdict as the CLI instead of raising a config error", () => {
+    expect(controlStatusTool(drifted).canRunHighRiskControl).toBe(true);
+
+    // Authored lifecycle drifts after the seal was captured: two non-terminal contracts, no pointer.
+    writeChangeFile(drifted, newChangeContract({ id: "change.drift.a", statement: "A", lifecycle: "active", provenance: "author" }));
+    writeChangeFile(drifted, newChangeContract({ id: "change.drift.b", statement: "B", lifecycle: "active", provenance: "author" }));
+    writeFileSync(join(drifted, ".semctx", "working", "active-change.sem"), "not a semantic block\n", "utf8");
+
+    const report = controlStatusTool(drifted);
+
+    expect(report).toMatchObject({
+      kind: "control_freshness_status",
+      verdict: "UNSEALED",
+      canRunHighRiskControl: false,
+      reasons: ["SEMANTIC_LIFECYCLE_INVALID"],
+      freshnessSeal: null,
+    });
+    expect(controlStatus(drifted)).toEqual(report);
   });
 });
