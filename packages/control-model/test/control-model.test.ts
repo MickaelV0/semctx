@@ -281,6 +281,29 @@ describe("external report schemas", () => {
       verdict: "DIRTY_KNOWN",
       reasons: ["WORKING_TREE_DIRTY"],
     }).success).toBe(false);
+
+    // An authored model that does not project is UNSEALED, never STALE, and keeps canonical order.
+    const unprojectable = { ...report, canRunHighRiskControl: false, freshnessSeal: null };
+    expect(PublicControlReportSchema.safeParse({
+      ...unprojectable,
+      verdict: "UNSEALED",
+      reasons: ["SEMANTIC_MODEL_INVALID", "SEMANTIC_LIFECYCLE_INVALID"],
+    }).success).toBe(true);
+    expect(PublicControlReportSchema.safeParse({
+      ...unprojectable,
+      verdict: "UNSEALED",
+      reasons: ["SEMANTIC_LIFECYCLE_INVALID", "SEMANTIC_MODEL_INVALID"],
+    }).success).toBe(false);
+    expect(PublicControlReportSchema.safeParse({
+      ...unprojectable,
+      verdict: "STALE",
+      reasons: ["SEMANTIC_MODEL_INVALID"],
+    }).success).toBe(false);
+    expect(PublicControlReportSchema.safeParse({
+      ...report,
+      verdict: "UNSEALED",
+      reasons: ["SEMANTIC_MODEL_INVALID"],
+    }).success).toBe(false);
   });
 
   it("validates a coordinate report with explicit L0-L6 coverage", () => {

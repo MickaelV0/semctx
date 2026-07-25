@@ -7,6 +7,28 @@ import type {
 export const CLEAN_CONTROL_WORKING_DIFF_HASH =
   "sha256:21dba70935f8f14f59199087ee440e16bec5dc567d8449b2cedf0c59c592abb1";
 
+/** Canonical order of public freshness reasons: unavailable inputs first, then mismatches, then dirt.
+ * Single source of truth for the status schema's enum, its ordering rule and every producer. */
+export const CONTROL_FRESHNESS_REASON_ORDER = [
+  "REPOSITORY_NOT_INITIALIZED",
+  "REPOSITORY_NOT_INDEXED",
+  "INDEX_SNAPSHOT_MISSING",
+  "INDEX_SNAPSHOT_INVALID",
+  "SEMANTIC_MODEL_INVALID",
+  "SEMANTIC_LIFECYCLE_INVALID",
+  "GIT_STATE_UNAVAILABLE",
+  "STORE_SCHEMA_UNAVAILABLE",
+  "REPOSITORY_ROOT_MISMATCH",
+  "HEAD_MISMATCH",
+  "REPOSITORY_GRAPH_MISMATCH",
+  "SEMANTIC_MODEL_MISMATCH",
+  "ANALYSIS_INPUT_MISMATCH",
+  "WORKING_DIFF_MISMATCH",
+  "STORE_SCHEMA_MISMATCH",
+  "TOOL_VERSION_MISMATCH",
+  "WORKING_TREE_DIRTY",
+] as const satisfies readonly ControlFreshnessReason[];
+
 export interface ControlFreshnessClassification {
   verdict: ControlFreshnessVerdict;
   reasons: ControlFreshnessReason[];

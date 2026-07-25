@@ -68,6 +68,19 @@ nothing has been published to a package registry (npm) or the GitHub Marketplace
 - `verify diff` internals: the report computation is extracted into a reusable `computeVerifyReport`
   so `change verify` composes it verbatim (no behaviour change to `verify diff`).
 
+### Fixed
+
+- **The freshness preflight always returns a verdict.** `semctx status` and `semctx_control_status`
+  raised `CONFIG_INVALID` ("semantic model cannot be projected into Plane C") instead of reporting a
+  verdict when the authored model carried error-severity diagnostics, duplicate ids, or
+  error-severity lifecycle findings. Callers received an untyped transport error, so a fail-closed
+  consumer could neither proceed nor prove it had to stop — and the same drift also blocks
+  `semctx index`, leaving no supported way to learn what needed repairing. Two `UNSEALED`-family
+  reason codes now carry the classification: `SEMANTIC_MODEL_INVALID` and
+  `SEMANTIC_LIFECYCLE_INVALID`. Other Plane C operations still refuse the projection; only the
+  preflight's answer changed. Existing verdicts, seals and reason ordering are unaffected, and
+  `canRunHighRiskControl` stays `false` for both new reasons.
+
 ## [0.1.0] - 2026-07-04
 
 First public release. The GitHub Action is referenced as

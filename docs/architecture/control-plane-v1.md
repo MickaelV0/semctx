@@ -70,13 +70,23 @@ commit.
 - `DIRTY_KNOWN`: every pair matches and the non-empty working diff exactly matches the sealed diff;
 - `STALE`: at least one current/indexed repository, Git, graph, semantic, analyzer, schema or tool
   input differs;
-- `UNSEALED`: initialization, index snapshot, Git state or store-schema evidence is absent or invalid.
+- `UNSEALED`: initialization, index snapshot, Git state, store-schema evidence or the authored
+  semantic model itself is absent or invalid.
 
 The versioned status report includes canonical machine reasons, the underlying seal when available,
 and `canRunHighRiskControl`. `FRESH` and `DIRTY_KNOWN` admit control operations; `STALE` and
 `UNSEALED` fail closed. Trace rejects unsafe input before traversal. Plan returns a normal `BLOCKED`
 report with `control_inputs_stale` or `control_inputs_unsealed` and no steps. Status itself never
 initializes, indexes or mutates the repository.
+
+The preflight always answers with one of the four verdicts. An authored model that cannot be
+projected into Plane C is a bounded verdict, not a transport error: error-severity diagnostics or
+duplicate ids report `SEMANTIC_MODEL_INVALID`, and error-severity lifecycle findings report
+`SEMANTIC_LIFECYCLE_INVALID`. Both are `UNSEALED` with no seal, because no seal can be built over
+inputs that do not project. Other Plane C operations still refuse the projection outright — the
+distinction is that refusing to act never becomes refusing to say why. A caller that received an
+untyped configuration error could neither proceed nor prove it had to stop, and the same drift also
+blocks `semctx index`, so the tool that names the repair must stay answerable.
 
 ## Semantic coordinates
 

@@ -29,6 +29,7 @@ export {
 export { Sha256HashSchema } from "./primitive-schemas";
 export {
   CLEAN_CONTROL_WORKING_DIFF_HASH,
+  CONTROL_FRESHNESS_REASON_ORDER,
   classifyControlFreshnessSeal,
 } from "./freshness";
 export {

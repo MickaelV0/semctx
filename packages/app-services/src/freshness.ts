@@ -12,6 +12,7 @@ import {
 } from "@semantic-context/core";
 import {
   classifyControlFreshnessSeal,
+  CONTROL_FRESHNESS_REASON_ORDER,
   serializeControlReport,
   sha256HashCanonicalJson,
   type ControlFreshnessSeal,
@@ -501,10 +502,23 @@ export function evaluateControlFreshness(seal: ControlFreshnessSeal): ControlFre
   return status(seal, classification.verdict, classification.reasons);
 }
 
+/** Reasons an input is unusable before any seal can be built, so no seal accompanies the verdict. */
+export type UnsealedInputReason = Extract<
+  ControlFreshnessReason,
+  | "REPOSITORY_NOT_INITIALIZED"
+  | "REPOSITORY_NOT_INDEXED"
+  | "INDEX_SNAPSHOT_INVALID"
+  | "SEMANTIC_MODEL_INVALID"
+  | "SEMANTIC_LIFECYCLE_INVALID"
+>;
+
 export function unsealedControlStatus(
-  reason: Extract<ControlFreshnessReason, "REPOSITORY_NOT_INITIALIZED" | "REPOSITORY_NOT_INDEXED" | "INDEX_SNAPSHOT_INVALID">,
+  reason: UnsealedInputReason,
+  ...rest: UnsealedInputReason[]
 ): ControlFreshnessStatusReport {
-  return status(null, "UNSEALED", [reason]);
+  const order = CONTROL_FRESHNESS_REASON_ORDER;
+  const canonical = [...new Set([reason, ...rest])].sort((left, right) => order.indexOf(left) - order.indexOf(right));
+  return status(null, "UNSEALED", canonical);
 }
 
 function status(
