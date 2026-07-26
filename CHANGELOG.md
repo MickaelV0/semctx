@@ -2,8 +2,10 @@
 
 All notable changes to `semctx` are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project aims to follow
-[Semantic Versioning](https://semver.org/spec/v2.0.0.html). `0.1.0` is the first tagged release;
-nothing has been published to a package registry (npm) or the GitHub Marketplace.
+[Semantic Versioning](https://semver.org/spec/v2.0.0.html). `0.1.0` is the first tagged release.
+`semctx` `0.1.0` and `0.1.1` are published on npm; nothing has been published to the GitHub
+Marketplace. The published CLI lags this repository — see
+[#38](https://github.com/hoklims/semctx/issues/38) for the release policy.
 
 ## [Unreleased]
 
