@@ -44,8 +44,12 @@ edit invalidates the baseline and requires re-verification.
 - Safe: only terminal git verbs are gated; a false positive can never block editing or testing.
   Guarded is opt-in, and any user can disable enforcement (config flag / remove the hook).
 - The hook parses the command string structurally without evaluating it. It permits only an isolated
-  terminal Git operation plus explicit cwd/environment/Git-global prefixes, closing the pre-check
-  TOCTOU created by mutating shell segments.
+  terminal Git operation plus explicit, literal cwd and non-retargeting environment/Git-global
+  prefixes, closing the pre-check TOCTOU created by mutating shell segments. Paths requiring shell
+  expansion (`$VAR`, `${VAR}`, `~`, or globs) and repository-state retargeting (`GIT_DIR`,
+  `GIT_WORK_TREE`, `--git-dir`, `--work-tree`, namespaces, alternate index/object state, or
+  equivalent config) are outside the isolated-command contract and fail closed when the target or
+  session repo enables guarded mode.
 - BLOCK is honoured: a recorded BLOCK verdict never satisfies the gate, even if the diff is
   unchanged.
 - Cross-platform: the state/hash logic is a plain script; the guard reads stdin JSON from Claude
