@@ -131,7 +131,11 @@ proof-carrying change contracts, and `semctx_verify_change`. The narrower `semct
 `semctx-verify` skills remain available for focused Plane B or Plane A work. Planning bundles carry
 `executionAuthority: "none"`; `READY` and `REALIZED` are verdicts, never execution authority. An
 opt-in **guarded mode** blocks `git commit`/`git push` until the diff is verified; advisory mode is
-the default. See
+the default.
+
+The plugin ships a portable CLI (`dist/semctx.js`) next to the MCP runtime so agent shell fallbacks
+and guard messages stay on the same release as the tools; the skills and the guard hand the agent
+its resolved absolute path. A global `semctx` remains optional for CI and non-plugin shells. See
 [`docs/integrations/claude-code.md`](docs/integrations/claude-code.md).
 
 ### Codex
@@ -141,7 +145,9 @@ surface plus the same proof-honest workflow shipped for Claude Code. It uses
 `semctx_control_status`, `semctx_control_trace`, `semctx_control_plan`,
 `semctx_control_plan_change` and `semctx_control_reconcile_diff`, maintains proof-carrying change
 contracts on write-scoped tasks, and verifies the resulting diff. It never treats a planning or
-reconciliation verdict as execution authority and Plane C remains read-only. Install and usage guide:
+reconciliation verdict as execution authority and Plane C remains read-only. It ships the same
+portable `dist/semctx.js` CLI, though Codex has no placeholder substitution to hand the agent its
+path — shell fallbacks there use a global `semctx`. Install and usage guide:
 [`docs/integrations/codex-control-plane.md`](docs/integrations/codex-control-plane.md).
 
 ### GitHub Actions
@@ -305,7 +311,7 @@ Monorepo (Bun workspaces, TypeScript strict):
 | `@semantic-context/mcp-server` | MCP server: Plane A verification, Plane B semantic tools and Plane C read-only control |
 | `@semantic-context/github-action` | composite GitHub Action + Node annotation/summary adapter |
 | `apps/cli` | the `semctx` CLI (zero-framework arg router) |
-| `plugins/claude-code` | Claude Code plugin: shared control skill + focused skills + guarded hook |
+| `plugins/claude-code` | Claude Code plugin: shared control skill + focused skills + guarded hook + bundled CLI |
 | `benchmarks/change-impact-eval` | the comparative retrieval benchmark behind ADR 0005 |
 
 `@semantic-context/cocoindex-adapter` and the `context prepare` command remain in the tree but

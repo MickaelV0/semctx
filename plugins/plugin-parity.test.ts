@@ -34,8 +34,46 @@ describe("Codex and Claude Code plugin parity", () => {
       "BLOCKED",
       "PARTIAL",
       "runtime tests",
+      "dist/semctx.js",
+      "Plugin-bundled CLI",
+      "Global `semctx` on PATH",
+      'bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js"',
+      "semctx --version",
     ]) {
       expect(codex).toContain(required);
+    }
+  });
+
+  // Claude Code substitutes ${CLAUDE_PLUGIN_ROOT} into skill/agent content, hook and monitor
+  // commands, and MCP/LSP server fields — the placeholder form only, via /\$\{CLAUDE_PLUGIN_ROOT\}/g.
+  // A bare $CLAUDE_PLUGIN_ROOT is never substituted; it survives into the agent's shell, which does
+  // not receive the variable, and expands to nothing. The failure is silent: `bun "/dist/semctx.js"`.
+  test("never ships a bare $CLAUDE_PLUGIN_ROOT — only the ${…} placeholder is substituted", () => {
+    const shipped = [
+      "plugins/claude-code/skills/semctx-control/SKILL.md",
+      "plugins/claude-code/skills/semctx-semantic/SKILL.md",
+      "plugins/claude-code/skills/semctx-verify/SKILL.md",
+      "plugins/semctx-control/skills/semctx-control/SKILL.md",
+      "plugins/claude-code/hooks/hooks.json",
+      "plugins/claude-code/.mcp.json",
+      "plugins/claude-code/README.md",
+      "plugins/claude-code/examples/guard.json",
+      "README.md",
+      "docs/integrations/claude-code.md",
+      "docs/integrations/claude-code-guarded-mode.md",
+      "docs/integrations/codex-control-plane.md",
+    ];
+    // Matches $CLAUDE_PLUGIN_ROOT only when it is NOT the ${…} form.
+    const bare = /\$CLAUDE_PLUGIN_ROOT/;
+    // Canary: a neutered pattern would leave this suite permanently green.
+    expect(bare.test("$CLAUDE_PLUGIN_ROOT/dist/semctx.js")).toBe(true);
+    expect(bare.test('bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js"')).toBe(false);
+    for (const path of shipped) {
+      const offenders = read(path)
+        .split("\n")
+        .map((line, index) => ({ line, number: index + 1 }))
+        .filter(({ line }) => bare.test(line));
+      expect({ path, offenders }).toEqual({ path, offenders: [] });
     }
   });
 
@@ -85,6 +123,9 @@ describe("Codex and Claude Code plugin parity", () => {
     });
     expect(existsSync(resolve(repoRoot, "plugins/claude-code/bin/semctx-mcp-launcher.ts"))).toBe(false);
     expect(read("plugins/claude-code/dist/semctx-mcp.js")).toBe(read("plugins/semctx-control/dist/semctx-mcp.js"));
+    expect(existsSync(resolve(repoRoot, "plugins/claude-code/dist/semctx.js"))).toBe(true);
+    expect(existsSync(resolve(repoRoot, "plugins/semctx-control/dist/semctx.js"))).toBe(true);
+    expect(read("plugins/claude-code/dist/semctx.js")).toBe(read("plugins/semctx-control/dist/semctx.js"));
     const codexLibs = typescriptLibs("semctx-control");
     const claudeLibs = typescriptLibs("claude-code");
     expect(codexLibs.length).toBeGreaterThan(90);
@@ -104,6 +145,8 @@ describe("Codex and Claude Code plugin parity", () => {
     );
     expect(json<{ version: string }>("packages/mcp-server/package.json").version).toBe(claudeManifest.version);
     expect(json<{ version: string }>("packages/app-services/package.json").version).toBe(claudeManifest.version);
+    // Release SSOT: npm CLI package must ship the same release as the marketplace plugins/MCP.
+    expect(json<{ version: string }>("apps/cli/package.json").version).toBe(claudeManifest.version);
     const serverSource = read("packages/mcp-server/src/server.ts");
     expect(serverSource).toContain('import packageJson from "../package.json"');
     expect(serverSource).toContain("version: packageJson.version");

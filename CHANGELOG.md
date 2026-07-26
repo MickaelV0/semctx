@@ -11,6 +11,35 @@ Marketplace. The published CLI lags this repository — see
 
 ### Added
 
+- **Plugin-bundled CLI** (`dist/semctx.js`): Claude Code and Codex plugins now ship a portable Bun
+  CLI next to `dist/semctx-mcp.js`, built from the same `plugin:build` pipeline, so a
+  marketplace/plugin update keeps MCP and CLI in lockstep. Global `semctx` remains optional for CI
+  and non-plugin shells (#35). Packaged CLI smoke covers `setup` / `doctor` /
+  `verify diff --dry-run` outside the checkout.
+- **Correct plugin-root resolution**: skills use the `${CLAUDE_PLUGIN_ROOT}` **placeholder**, which
+  Claude Code substitutes into skill content at load time (regex `/\$\{CLAUDE_PLUGIN_ROOT\}/g` — the
+  braces are part of the syntax). The guard hook resolves and shell-quotes the bundle path itself
+  instead of emitting a deferred `"$CLAUDE_PLUGIN_ROOT/…"`: the variable is exported to hook and MCP
+  processes only, never to the agent's shell, where an unexpanded reference silently collapses to
+  `bun "/dist/semctx.js"`. `guardDecision` is pure (no env read, no filesystem access); command
+  resolution lives in `verifyRecordCommand`. `plugin-parity` fails on any bare `$CLAUDE_PLUGIN_ROOT`
+  in a shipped file; the guard end-to-end test replays the printed command in a shell stripped of
+  the variable.
+- **Release version SSOT**: npm CLI (`apps/cli`) aligned to the plugin/MCP release (`0.1.10`);
+  `plugin-parity` asserts CLI package version matches marketplace plugins; `semctx --version` and
+  `doctor` report the CLI version (`doctor --json` gains a top-level `version`); skills document a
+  shell CLI resolution ladder for hosts that do not substitute the placeholder (#35 residual).
+  `--version` / `version` print the package version and exit 0 only when that is the command —
+  they do not short-circuit a real subcommand such as `verify`.
+- **Codex shell fallback**: the shared skill dropped the `bun ./dist/semctx.js` rung. That path
+  assumed the agent's cwd was the plugin package root; on Codex the shell runs in the user's
+  repository, so the rung could never resolve. Global `semctx` remains the Codex shell fallback.
+  The shared skill still lists Claude's `${CLAUDE_PLUGIN_ROOT}` rung (substituted only by Claude
+  Code; Codex agents must skip the unsubstituted placeholder — see #40 for a host-generated
+  contract).
+- **CI runs the full suite**: `plugin-runtime` now runs `bun run test` instead of a three-file
+  selection that skipped the guard-hook and CLI tests gating plugin packaging.
+
 - **Explicit control freshness verdict**: read-only CLI `semctx status` and MCP
   `semctx_control_status` report `FRESH`, `DIRTY_KNOWN`, `STALE`, or `UNSEALED` from the persisted
   index snapshot. Trace rejects stale/unsealed inputs and migration planning returns a structured
@@ -37,7 +66,7 @@ Marketplace. The published CLI lags this repository — see
   - Codex and Claude Code now share one byte-identical `semctx-control` workflow contract across
     Planes A/B/C, including the generic project demo objective, verdict namespaces and
     `READY`-is-not-authority rule. The Claude plugin gains a validated local marketplace manifest
-    and uses the same `semctx-mcp` executable as Codex through a cache-safe launcher; its skills,
+    and loads the same committed `dist/semctx-mcp.js` as Codex (no separate launcher); its skills,
     hook and MCP server live in Claude Code's standard auto-discovery locations and validate as
     installable components.
 

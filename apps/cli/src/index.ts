@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { isSemctxError } from "@semantic-context/core";
+import packageJson from "../package.json";
 import { parseArgs, flagString, flagBool, type ParsedArgs } from "./args";
 import { fail, info, c } from "./output";
 import { runSetup } from "./commands/setup";
@@ -16,7 +17,7 @@ import { runChange } from "./commands/change";
 import { runControl } from "./commands/control";
 import { runStatus } from "./commands/status";
 
-const HELP = `semctx — repository change-impact analyzer
+const HELP = `semctx — repository change-impact analyzer (v${packageJson.version})
 
 Usage: semctx <command> [options]
 
@@ -60,6 +61,7 @@ Experimental (task -> ContextPack retriever; not a code-search replacement, see 
 Global options:
   --root <path>   repository root (default: current directory)
   --json          machine-readable output
+  --version       print the CLI version and exit
 `;
 
 function resolveRoot(args: ParsedArgs): string {
@@ -69,6 +71,14 @@ function resolveRoot(args: ParsedArgs): string {
 async function dispatch(args: ParsedArgs): Promise<number> {
   const command = args.positionals[0];
   const root = resolveRoot(args);
+
+  // `--version` short-circuits only when it stands alone. Honouring it after a real command would
+  // make `semctx verify diff --record --version` exit 0 without verifying anything — a fail-open in
+  // a tool whose whole job is to gate.
+  if (command === "version" || (command === undefined && flagBool(args, "version"))) {
+    info(packageJson.version);
+    return 0;
+  }
 
   if (command === undefined) {
     info(HELP);

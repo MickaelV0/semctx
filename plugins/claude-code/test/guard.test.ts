@@ -8,12 +8,41 @@ import {
   guardEnabled,
   guardDecision,
   resolveGitCwd,
+  verifyRecordCommand,
+  shellQuote,
+  GLOBAL_VERIFY_COMMAND,
 } from "../hooks/semctx-guard.mjs";
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { captureVerificationGitState as captureApplicationVerificationGitState } from "@semantic-context/app-services";
+
+// A host-compatible POSIX shell is required only for shellQuote round-trip and command-replay e2e.
+// Default Git-for-Windows puts Git\cmd on PATH (git.exe) but not Git\bin (bash.exe). Windows may
+// also expose WSL's bash.exe, which cannot consume host paths or find the host Bun binary.
+const hostPathProbe = process.platform === "win32" ? String.raw`C:\semctx probe\a$b` : "/tmp/semctx probe/a$b";
+const quotedHostPathProbe = `'${hostPathProbe.replaceAll("'", "'\\''")}'`;
+const hasHostCompatibleBash = (() => {
+  try {
+    const echoed = execFileSync("bash", ["-c", `printf '%s' ${quotedHostPathProbe}`], {
+      encoding: "utf8",
+    });
+    return echoed === hostPathProbe;
+  } catch {
+    return false;
+  }
+})();
+const bashCanRunBun =
+  hasHostCompatibleBash &&
+  (() => {
+    try {
+      execFileSync("bash", ["-c", "command -v bun >/dev/null"], { stdio: "ignore" });
+      return true;
+    } catch {
+      return false;
+    }
+  })();
 
 describe("isTerminalGitCommand — structural detection (no shell eval)", () => {
   it("detects commit and push, including global options and env assignments", () => {
@@ -102,6 +131,107 @@ describe("guardDecision — diff-hash gate (ADR 0007)", () => {
     expect(d.block).toBe(true);
     expect(d.reason).toContain("verify diff --record");
   });
+
+  it("emits a resolved, shell-quoted plugin CLI path — never a deferred shell variable", () => {
+    // The reason string is executed by the agent's shell, which does NOT receive
+    // CLAUDE_PLUGIN_ROOT (Claude Code exports it to hook and MCP processes only). A deferred
+    // "$CLAUDE_PLUGIN_ROOT/…" would expand to "/dist/semctx.js".
+    const missing = () => false;
+    expect(verifyRecordCommand({}, missing)).toBe(GLOBAL_VERIFY_COMMAND);
+    expect(verifyRecordCommand({ CLAUDE_PLUGIN_ROOT: "" }, missing)).toBe(GLOBAL_VERIFY_COMMAND);
+    expect(verifyRecordCommand({ CLAUDE_PLUGIN_ROOT: "   " }, missing)).toBe(GLOBAL_VERIFY_COMMAND);
+
+    const root = mkdtempSync(join(tmpdir(), "semctx-guard-plugin-root-"));
+    try {
+      mkdirSync(join(root, "dist"));
+      writeFileSync(join(root, "dist", "semctx.js"), "// bundle\n");
+      const command = verifyRecordCommand({ CLAUDE_PLUGIN_ROOT: root, PATH: process.env.PATH });
+      expect(command).toBe(`bun '${join(root, "dist", "semctx.js")}' verify diff --record`);
+      expect(command).not.toContain("$CLAUDE_PLUGIN_ROOT");
+
+      const d = guardDecision({
+        enabled: true,
+        terminalVerb: "commit",
+        state: null,
+        currentState: CURRENT,
+        verifyCommand: command,
+      });
+      expect(d.reason).toContain(command);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("shell-quotes roots containing spaces, quotes, and dollar signs", () => {
+    for (const name of ["My Plugin", "it's", "a$b", "back`tick"]) {
+      const parent = mkdtempSync(join(tmpdir(), "semctx-guard-odd-root-"));
+      try {
+        const root = join(parent, name);
+        const bundle = join(root, "dist", "semctx.js");
+        mkdirSync(join(root, "dist"), { recursive: true });
+        writeFileSync(bundle, "// bundle\n");
+        // Independent expected form (POSIX single-quote rule) — not shellQuote() itself, so a
+        // degenerate identity transform would fail without needing bash.
+        const expected = `bun '${bundle.replaceAll("'", "'\\''")}' verify diff --record`;
+        expect(verifyRecordCommand({ CLAUDE_PLUGIN_ROOT: root, PATH: process.env.PATH })).toBe(expected);
+      } finally {
+        rmSync(parent, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it.skipIf(!hasHostCompatibleBash)("shellQuote round-trips hostile paths through a real shell", () => {
+    for (const name of ["My Plugin", "it's", "a$b", "back`tick"]) {
+      const parent = mkdtempSync(join(tmpdir(), "semctx-guard-quote-roundtrip-"));
+      try {
+        const root = join(parent, name);
+        const bundle = join(root, "dist", "semctx.js");
+        mkdirSync(join(root, "dist"), { recursive: true });
+        writeFileSync(bundle, "// bundle\n");
+        const echoed = execFileSync("bash", ["-c", `printf '%s' ${shellQuote(bundle)}`], {
+          encoding: "utf8",
+        });
+        expect(echoed).toBe(bundle);
+      } finally {
+        rmSync(parent, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("falls back to the global CLI when Bun is absent — the hook itself runs under Node", () => {
+    const root = mkdtempSync(join(tmpdir(), "semctx-guard-nobun-"));
+    try {
+      mkdirSync(join(root, "dist"));
+      writeFileSync(join(root, "dist", "semctx.js"), "// bundle\n");
+      // Bundle present, but no `bun` anywhere on PATH.
+      expect(verifyRecordCommand({ CLAUDE_PLUGIN_ROOT: root, PATH: join(root, "empty-bin") })).toBe(
+        GLOBAL_VERIFY_COMMAND,
+      );
+      expect(verifyRecordCommand({ CLAUDE_PLUGIN_ROOT: root, PATH: "" })).toBe(GLOBAL_VERIFY_COMMAND);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to this hook's own bundle location when CLAUDE_PLUGIN_ROOT is absent", () => {
+    // plugins/claude-code/hooks/../dist/semctx.js is a tracked artifact in this repo.
+    expect(verifyRecordCommand({ PATH: process.env.PATH })).toBe(
+      `bun '${resolve(import.meta.dir, "../dist/semctx.js")}' verify diff --record`,
+    );
+  });
+
+  it("guardDecision is pure — no env read, no filesystem access", () => {
+    const previous = process.env.CLAUDE_PLUGIN_ROOT;
+    process.env.CLAUDE_PLUGIN_ROOT = "/plugins/should-not-be-read";
+    try {
+      const d = guardDecision({ enabled: true, terminalVerb: "commit", state: null, currentState: CURRENT });
+      expect(d.reason).toContain(GLOBAL_VERIFY_COMMAND);
+      expect(d.reason).not.toContain("should-not-be-read");
+    } finally {
+      if (previous === undefined) delete process.env.CLAUDE_PLUGIN_ROOT;
+      else process.env.CLAUDE_PLUGIN_ROOT = previous;
+    }
+  });
   it("blocks a compound terminal command before consulting a valid baseline", () => {
     const d = guardDecision({
       enabled: true,
@@ -180,6 +310,66 @@ describe("guard runtime — large working diffs", () => {
       rmSync(repo, { recursive: true, force: true });
     }
   });
+
+  it.skipIf(!bashCanRunBun)(
+    "main() prints a verify command that a shell without CLAUDE_PLUGIN_ROOT can actually run",
+    () => {
+    const repo = mkdtempSync(join(tmpdir(), "semctx-guard-plugin-cli-"));
+    const pluginParent = mkdtempSync(join(tmpdir(), "semctx-guard-plugin-home-"));
+    // A space in the root is the realistic hostile case for quoting.
+    const pluginRoot = join(pluginParent, "My Plugin");
+    try {
+      execFileSync("git", ["init"], { cwd: repo, stdio: "ignore" });
+      writeFileSync(join(repo, "tracked.ts"), "export const value = 1;\n");
+      writeFileSync(join(repo, ".gitignore"), ".semctx/\n");
+      execFileSync("git", ["add", "tracked.ts", ".gitignore"], { cwd: repo, stdio: "ignore" });
+      execFileSync(
+        "git",
+        ["-c", "user.name=Semctx Test", "-c", "user.email=semctx@example.invalid", "commit", "-m", "baseline"],
+        { cwd: repo, stdio: "ignore" },
+      );
+      mkdirSync(join(repo, ".semctx"));
+      writeFileSync(join(repo, ".semctx", "guard.json"), JSON.stringify({ enabled: true }));
+      mkdirSync(join(pluginRoot, "dist"), { recursive: true });
+      writeFileSync(join(pluginRoot, "dist", "semctx.js"), 'process.stdout.write("bundle-ran");\n');
+
+      // No verification-state.json → block with "Run: <verify command>"
+      const guard = resolve(import.meta.dir, "../hooks/semctx-guard.mjs");
+      const result = spawnSync("node", [guard], {
+        cwd: repo,
+        env: { ...process.env, CLAUDE_PLUGIN_ROOT: pluginRoot },
+        input: JSON.stringify({
+          tool_name: "Bash",
+          tool_input: { command: "git commit -m x" },
+          cwd: repo,
+        }),
+        encoding: "utf8",
+      });
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain(join(pluginRoot, "dist", "semctx.js"));
+      expect(result.stderr).not.toContain("$CLAUDE_PLUGIN_ROOT");
+
+      // The decisive check: replay the printed command in a shell that has no CLAUDE_PLUGIN_ROOT,
+      // exactly like the agent's Bash tool. A deferred "$CLAUDE_PLUGIN_ROOT/…" fails here.
+      const printed = result.stderr
+        .split("\n")
+        .map((line) => line.trim())
+        .find((line) => line.startsWith("bun "));
+      expect(printed).toBeDefined();
+      const { CLAUDE_PLUGIN_ROOT: _dropped, ...agentEnv } = process.env;
+      const replay = spawnSync("bash", ["-c", printed!.replace(" verify diff --record", "")], {
+        cwd: repo,
+        env: agentEnv,
+        encoding: "utf8",
+      });
+      expect(replay.status).toBe(0);
+      expect(replay.stdout).toBe("bundle-ran");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+      rmSync(pluginParent, { recursive: true, force: true });
+    }
+  },
+  );
 
   it("preserves the verification hash for a multi-megabyte diff", () => {
     const repo = mkdtempSync(join(tmpdir(), "semctx-guard-large-diff-"));

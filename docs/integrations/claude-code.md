@@ -30,11 +30,28 @@ It never reaches back into the source checkout and does not depend on a globally
 `semctx-mcp`. Every tool call carries the absolute `${CLAUDE_PROJECT_DIR}` as `repositoryRoot`;
 missing or relative roots are rejected.
 
-Restart Claude Code after installation. Then initialise each target repository once:
+The same plugin snapshot ships `dist/semctx.js` (the full CLI). Agent sessions should prefer that
+binary for shell fallbacks and guarded-mode verify so CLI and MCP stay on the same release:
+
+```text
+bun "<plugin-root>/dist/semctx.js" setup
+bun "<plugin-root>/dist/semctx.js" verify diff --record
+```
+
+The agent never has to find `<plugin-root>` itself. Claude Code substitutes the
+`${CLAUDE_PLUGIN_ROOT}` placeholder into the plugin's skills when they are loaded, and the guard
+hook prints an already-resolved absolute path when it blocks. The variable is exported to hook and
+MCP processes only — it is **not** present in the agent's shell, so an unexpanded
+`CLAUDE_PLUGIN_ROOT` reference in a command silently resolves to nothing.
+
+A global `semctx` (`bun install -g semctx`) remains the channel for CI and non-plugin shells:
 
 ```text
 semctx setup
 ```
+
+Restart Claude Code after installation. Then initialise each target repository once with either
+form.
 
 Inspect and verify tools fail closed with `CONFIG_NOT_FOUND` or `REPO_NOT_INDEXED`; they never run
 setup or mutate readiness implicitly.

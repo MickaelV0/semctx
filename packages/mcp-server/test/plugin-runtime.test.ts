@@ -1,16 +1,22 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { cpSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { initWorkspace } from "@semantic-context/repository-store";
 import { indexRepository } from "@semantic-context/app-services";
 import { SAMPLE_REPO } from "@semantic-context/test-fixtures";
+import packageJson from "../../../apps/cli/package.json";
 
 const repoRoot = resolve(import.meta.dir, "../../..");
 const pluginDist = resolve(repoRoot, "plugins/semctx-control/dist");
 const temporary: string[] = [];
+
+// Copy ~8 MB of bundles + typescript-lib, git-init a fixture, then spawn several 4 MB bun processes
+// including full `setup` indexing. ~0.5s on Linux; 15-26s on a Windows runner (same class as the
+// L6-L0 fixture). Budget for the slow platform rather than the 5s bun default.
+const PACKAGED_SMOKE_TIMEOUT_MS = 120_000;
 
 function git(cwd: string, ...args: string[]): void {
   const result = Bun.spawnSync(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
@@ -22,7 +28,66 @@ afterEach(() => {
 });
 
 describe("packaged MCP runtime", () => {
-  test("starts outside the checkout and targets an explicit Codex repository root", async () => {
+  test(
+    "ships a portable plugin CLI next to the MCP runtime",
+    () => {
+    const bundle = resolve(pluginDist, "semctx.js");
+    expect(existsSync(bundle)).toBe(true);
+    const runtime = readFileSync(bundle, "utf8");
+    expect(runtime).not.toContain(JSON.stringify(repoRoot).slice(1, -1));
+    expect(runtime).not.toMatch(/typescript@[^"']+node_modules[^"']+typescript[^"']+lib/);
+
+    const cache = mkdtempSync(resolve(tmpdir(), "semctx-plugin-cli-cache-"));
+    const target = mkdtempSync(resolve(tmpdir(), "semctx-plugin-cli-target-"));
+    temporary.push(cache, target);
+    const packagedDist = resolve(cache, "dist");
+    cpSync(pluginDist, packagedDist, { recursive: true });
+    const packagedCli = resolve(packagedDist, "semctx.js");
+    const help = Bun.spawnSync(["bun", packagedCli, "--help"], {
+      cwd: cache,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(help.exitCode).toBe(0);
+    const helpText = new TextDecoder().decode(help.stdout);
+    expect(helpText).toContain("semctx — repository change-impact analyzer");
+    expect(helpText).toContain("verify diff");
+
+    // Behavioural smoke beyond --help: portable CLI must index/status a foreign repo.
+    cpSync(SAMPLE_REPO, target, {
+      recursive: true,
+      filter: (src) => !src.includes(".semctx") && !src.includes("node_modules"),
+    });
+    git(target, "init");
+    git(target, "add", ".");
+    git(target, "-c", "user.name=Semctx Test", "-c", "user.email=semctx@example.test", "commit", "-m", "fixture");
+    const setup = Bun.spawnSync(["bun", packagedCli, "setup", "--root", target], {
+      cwd: cache,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(setup.exitCode).toBe(0);
+    const doctor = Bun.spawnSync(["bun", packagedCli, "doctor", "--root", target, "--json"], {
+      cwd: cache,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(doctor.exitCode).toBe(0);
+    const doctorPayload = JSON.parse(new TextDecoder().decode(doctor.stdout));
+    expect(doctorPayload.healthy).toBe(true);
+    expect(doctorPayload.version).toBe(packageJson.version);
+    const dryRun = Bun.spawnSync(
+      ["bun", packagedCli, "verify", "diff", "--root", target, "--dry-run"],
+      { cwd: cache, stdout: "pipe", stderr: "pipe" },
+    );
+    expect(dryRun.exitCode).toBe(0);
+  },
+    PACKAGED_SMOKE_TIMEOUT_MS,
+  );
+
+  test(
+    "starts outside the checkout and targets an explicit Codex repository root",
+    async () => {
     const cache = mkdtempSync(resolve(tmpdir(), "semctx-plugin-cache-"));
     const target = mkdtempSync(resolve(tmpdir(), "semctx-plugin-target-"));
     temporary.push(cache, target);
@@ -91,5 +156,7 @@ describe("packaged MCP runtime", () => {
     } finally {
       await client.close();
     }
-  });
+  },
+    PACKAGED_SMOKE_TIMEOUT_MS,
+  );
 });

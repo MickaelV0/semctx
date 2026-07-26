@@ -26,7 +26,7 @@ user request
 ## Install from a clone
 
 Requirements: Codex CLI with plugin support and Bun 1.3 or newer. The plugin contains its own MCP
-runtime; no global package link is required.
+runtime and a bundled CLI (`dist/semctx.js`); no global package link is required for agent use.
 
 ```powershell
 codex plugin marketplace add .
@@ -38,6 +38,19 @@ Codex does not currently expose the active workspace root to a plugin-launched M
 shared skill passes the absolute `repositoryRoot` on every tool call. The server then targets that
 repository instead of the plugin cache. Read-only Plane C tools are auto-approved from their MCP
 annotations; authored-state writes retain Codex's approval prompt.
+
+The plugin ships `dist/semctx.js` (the full CLI) next to the MCP bundle, but Codex does not
+substitute a plugin-root placeholder into skill content and the agent's shell runs in the user's
+repository, not in the plugin package root — so a Codex session has no reliable way to address the
+bundled binary. Shell fallbacks there use a global install:
+
+```text
+semctx setup
+semctx verify diff --base origin/main
+```
+
+The bundled CLI is still worth running by absolute path when you know it (`bun
+/path/to/plugin/dist/semctx.js …`), since it is guaranteed to match the MCP runtime's release.
 
 If semctx was previously registered directly in `~/.codex/config.toml`, remove that legacy entry
 after the plugin is installed to avoid duplicate server definitions:

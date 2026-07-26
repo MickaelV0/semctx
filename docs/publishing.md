@@ -57,19 +57,47 @@ repository. See [#38](https://github.com/hoklims/semctx/issues/38) and
 
 ## Plugin runtime
 
-The Claude Code and Codex plugins now ship byte-identical committed Bun bundles built from
-`packages/mcp-server/src/index.ts`. Each `dist/` also carries the TypeScript standard-library
-declarations used by the analyzer, and the generated runtime resolves them relative to its own
-installed directory rather than the build checkout:
+The Claude Code and Codex plugins ship byte-identical committed Bun bundles:
+
+| artifact | entrypoint | role |
+| --- | --- | --- |
+| `dist/semctx-mcp.js` | `packages/mcp-server/src/index.ts` | MCP server (agent tools) |
+| `dist/semctx.js` | `apps/cli/src/index.ts` | CLI for setup / verify / shell fallbacks |
+
+Each `dist/` also carries the TypeScript standard-library declarations used by the analyzer, and
+the generated runtimes resolve them relative to the installed plugin directory rather than the
+build checkout:
 
 ```bash
-bun run plugin:build   # refresh both tracked dist/semctx-mcp.js files
-bun run plugin:check   # fail if either tracked artifact is missing or stale
+bun run plugin:build   # refresh tracked dist/semctx-mcp.js + dist/semctx.js on both plugins
+bun run plugin:check   # fail if any tracked artifact is missing or stale
 ```
 
+Agent sessions should prefer the plugin-bundled CLI so a marketplace update keeps MCP and CLI in
+lockstep. The npm `semctx` package remains the channel for CI, GitHub Actions, and non-plugin shells.
+
+### Version SSOT (release lockstep)
+
+These surfaces must share the same `x.y.z` on every plugin/CLI release:
+
+| Surface | Path |
+| --- | --- |
+| Claude plugin | `plugins/claude-code/.claude-plugin/plugin.json` |
+| Codex plugin | `plugins/semctx-control/.codex-plugin/plugin.json` |
+| Marketplace | `.claude-plugin/marketplace.json` |
+| MCP package | `packages/mcp-server/package.json` (also `McpServer({ version })`) |
+| App services | `packages/app-services/package.json` |
+| npm CLI | `apps/cli/package.json` (`semctx --version` / `doctor`) |
+
+`plugins/plugin-parity.test.ts` fails CI when plugins, marketplace, MCP, app-services, or the npm
+CLI package diverge. Plugin MCP/CLI **bundles** are rebuilt together via `plugin:build` (same
+entrypoint sources). The npm CLI uses a separate `apps/cli` prepublish bundle for CI/global
+installs — same version number, two packagers by design.
+
 Plugin, marketplace, MCP package and runtime versions move together. CI runs the freshness check,
-rejects build-machine paths, and performs a real stdio handshake from a copied plugin directory on
-Windows and Ubuntu before the plugin snapshot is publishable.
+rejects build-machine paths, and performs a real stdio handshake (MCP) plus a packaged CLI smoke
+(`setup`, `doctor --json`, `verify diff --dry-run` on a foreign sample repo) from a copied plugin
+directory on Windows and Ubuntu before the plugin snapshot is publishable.
 
 ## Deliberately out of scope (this pass)
 
