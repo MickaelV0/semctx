@@ -51,34 +51,24 @@ Report the framed objective, authority sources, freshness verdict, seal hash and
 
 ## Local equivalents when MCP is unavailable
 
-Prefer MCP tools when they are connected. For shell fallbacks, resolve the CLI in this order
-(stop at the first that works):
+<!-- BEGIN host-cli-ladder:semctx-control -->
+Prefer MCP tools when they are connected. For shell fallbacks, use a global `semctx` on
+PATH (`bun install -g semctx` / `bunx semctx`) — keep it on the **same version** as the plugin
+(`semctx --version` should match the marketplace plugin version).
 
-1. **Plugin-bundled CLI** (same release as the MCP bundle) — the `bun "…/dist/semctx.js"` path in
-   the block below. A host that supports plugin path substitution rewrites the plugin root into
-   this skill **when the skill is loaded**, so the path you read is already absolute. If it still
-   reads as a literal `${…}` placeholder, your host does not substitute it: skip to the next step.
-   Never expect `CLAUDE_PLUGIN_ROOT` to exist in the shell — where it is set at all, it is exported
-   to hooks and MCP servers, not to your terminal. Do not try to guess the plugin directory, and do
-   not assume the shell's cwd is the plugin package root: it is the user's repository.
-2. **Global `semctx` on PATH** (`bun install -g semctx` / `bunx semctx`) — keep it on the **same
-   version** as the plugin (`semctx --version` should match the marketplace plugin version).
-3. If neither is available, say so and continue with MCP-only or ask the user to update the plugin /
-   install the CLI — do not invent results.
+This host does **not** substitute a plugin-root path into skill content, and the agent's shell cwd
+is the user's repository (not the plugin package root), so the bundled `dist/semctx.js` is not
+addressable via a relative or placeholder path from this skill. The plugin still ships the CLI next
+to the MCP runtime for lockstep releases and for humans who know the absolute path.
+
+If `semctx` is not available, say so and continue with MCP-only or ask the user to install the CLI
+— do not invent results.
 
 ```text
-# Plugin CLI (path substituted at skill load; skip if it is still a literal placeholder)
-bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" status --json
-bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" semantic check --json
-bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" semantic slice --change change.<slug> --format agent
-bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" control trace repo:<graph-id> --direction lift --to 6 --json
-bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" control plan change.<slug> --target target-architecture.json --json
-bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" verify diff --base origin/main
-bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" change verify change.<slug> --base origin/main
-bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" semantic handoff
-bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" semantic resume
-
-# Global / CI fallback — same subcommands, no path
+# Global / CI CLI — same subcommands as the plugin MCP tools
 semctx --version
 semctx status --json
+semctx semantic check --json
+semctx verify diff --base origin/main
 ```
+<!-- END host-cli-ladder -->

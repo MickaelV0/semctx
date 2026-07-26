@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
+import {
+  HOST_CLI_STRIP,
+  hostCliLadder,
+  renderControlSkill,
+  type SkillHost,
+} from "../scripts/build-plugin-runtime.ts";
 
 const repoRoot = resolve(import.meta.dir, "..");
 
@@ -18,12 +24,35 @@ function typescriptLibs(plugin: "claude-code" | "semctx-control"): string[] {
     .sort();
 }
 
-describe("Codex and Claude Code plugin parity", () => {
-  test("ships one byte-identical semctx-control workflow contract", () => {
-    const codex = read("plugins/semctx-control/skills/semctx-control/SKILL.md");
-    const claude = read("plugins/claude-code/skills/semctx-control/SKILL.md");
+function skillPath(host: SkillHost): string {
+  return host === "claude-code"
+    ? "plugins/claude-code/skills/semctx-control/SKILL.md"
+    : "plugins/semctx-control/skills/semctx-control/SKILL.md";
+}
 
-    expect(claude).toBe(codex);
+/** Shared workflow contract = generated skill with the host CLI ladder region removed. */
+function sharedContractBody(skill: string): string {
+  const stripped = skill.replace(HOST_CLI_STRIP, "");
+  expect(stripped).not.toBe(skill); // host region must be present and strip-able
+  return stripped;
+}
+
+describe("Codex and Claude Code plugin parity", () => {
+  test("ships one shared semctx-control workflow contract with host-generated CLI ladders", () => {
+    const template = read("plugins/shared/skills/semctx-control/SKILL.md");
+    expect(template).toContain("{{HOST_CLI_LADDER}}");
+    expect(template).not.toContain("CLAUDE_PLUGIN_ROOT");
+
+    const codex = read(skillPath("semctx-control"));
+    const claude = read(skillPath("claude-code"));
+
+    // Generated artifacts match the build (deterministic).
+    expect(claude).toBe(renderControlSkill("claude-code", template));
+    expect(codex).toBe(renderControlSkill("semctx-control", template));
+
+    // Host-neutral body is still byte-identical across hosts.
+    expect(sharedContractBody(claude)).toBe(sharedContractBody(codex));
+
     for (const required of [
       "semctx_control_status",
       "semctx_control_trace",
@@ -34,14 +63,24 @@ describe("Codex and Claude Code plugin parity", () => {
       "BLOCKED",
       "PARTIAL",
       "runtime tests",
-      "dist/semctx.js",
-      "Plugin-bundled CLI",
-      "Global `semctx` on PATH",
-      'bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js"',
-      "semctx --version",
+      "Local equivalents when MCP is unavailable",
     ]) {
-      expect(codex).toContain(required);
+      expect(sharedContractBody(codex)).toContain(required);
     }
+
+    // Claude keeps the plugin-bundled placeholder rung.
+    expect(claude).toContain("Plugin-bundled CLI");
+    expect(claude).toContain('bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js"');
+    expect(claude).toContain("semctx --version");
+    expect(claude).toContain(hostCliLadder("claude-code").trim().slice(0, 40));
+
+    // Codex ships only host-working instructions — no Claude placeholder in any form.
+    expect(codex).toContain("Global / CI CLI");
+    expect(codex).toContain("semctx --version");
+    expect(codex).toContain("semctx status --json");
+    expect(codex).not.toContain("CLAUDE_PLUGIN_ROOT");
+    expect(codex).not.toContain("Plugin-bundled CLI");
+    expect(codex).toContain("does **not** substitute a plugin-root path");
   });
 
   // Claude Code substitutes ${CLAUDE_PLUGIN_ROOT} into skill/agent content, hook and monitor
@@ -54,6 +93,7 @@ describe("Codex and Claude Code plugin parity", () => {
       "plugins/claude-code/skills/semctx-semantic/SKILL.md",
       "plugins/claude-code/skills/semctx-verify/SKILL.md",
       "plugins/semctx-control/skills/semctx-control/SKILL.md",
+      "plugins/shared/skills/semctx-control/SKILL.md",
       "plugins/claude-code/hooks/hooks.json",
       "plugins/claude-code/.mcp.json",
       "plugins/claude-code/README.md",
@@ -73,6 +113,25 @@ describe("Codex and Claude Code plugin parity", () => {
         .split("\n")
         .map((line, index) => ({ line, number: index + 1 }))
         .filter(({ line }) => bare.test(line));
+      expect({ path, offenders }).toEqual({ path, offenders: [] });
+    }
+  });
+
+  test("Codex plugin never ships CLAUDE_PLUGIN_ROOT in any form", () => {
+    const anyForm = /CLAUDE_PLUGIN_ROOT/;
+    expect(anyForm.test("${CLAUDE_PLUGIN_ROOT}")).toBe(true);
+    expect(anyForm.test("$CLAUDE_PLUGIN_ROOT")).toBe(true);
+
+    const codexTree = [
+      "plugins/semctx-control/skills/semctx-control/SKILL.md",
+      "plugins/semctx-control/.mcp.json",
+      "plugins/semctx-control/.codex-plugin/plugin.json",
+    ];
+    for (const path of codexTree) {
+      const offenders = read(path)
+        .split("\n")
+        .map((line, index) => ({ line, number: index + 1 }))
+        .filter(({ line }) => anyForm.test(line));
       expect({ path, offenders }).toEqual({ path, offenders: [] });
     }
   });
