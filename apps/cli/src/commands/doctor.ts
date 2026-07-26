@@ -1,4 +1,5 @@
 import { isInitialized, loadConfig, openStore } from "@semantic-context/repository-store";
+import packageJson from "../../package.json";
 import type { ParsedArgs } from "../args";
 import { flagBool } from "../args";
 import { info, heading, json, c, success, fail } from "../output";
@@ -12,6 +13,10 @@ interface Check {
 /** `semctx doctor` — verify the workspace is healthy and indexed. */
 export function runDoctor(root: string, args: ParsedArgs): number {
   const checks: Check[] = [];
+
+  // Informational row, like `runtime` below: reports the version, never fails. Detecting a
+  // plugin/CLI version mismatch is the separate `doctor` work tracked on #35.
+  checks.push({ name: "cli", ok: true, detail: `semctx ${packageJson.version}` });
 
   const initialized = isInitialized(root);
   checks.push({ name: "workspace", ok: initialized, detail: initialized ? ".semctx/ present" : "run 'semctx init'" });
@@ -49,7 +54,7 @@ export function runDoctor(root: string, args: ParsedArgs): number {
   const healthy = checks.every((chk) => chk.ok);
 
   if (flagBool(args, "json")) {
-    json({ healthy, checks });
+    json({ healthy, version: packageJson.version, checks });
     return healthy ? 0 : 1;
   }
 

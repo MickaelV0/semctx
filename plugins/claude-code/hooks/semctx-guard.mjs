@@ -5,10 +5,11 @@
 //
 // It parses the Bash command STRUCTURALLY (segments + tokens, never a shell eval) and never
 // executes PR/agent content. It gates on a diff hash — no analysis runs here.
-import { lstatSync, readFileSync, readlinkSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readlinkSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { join, resolve, isAbsolute } from "node:path";
+import { dirname, join, resolve, isAbsolute } from "node:path";
+import { fileURLToPath } from "node:url";
 
 function unwrapShellBody(text) {
   const body = text.trim();
@@ -158,9 +159,78 @@ export function guardEnabled(env, guardJson) {
   return guardJson?.enabled === true;
 }
 
-/** Pure decision. ctx: { enabled, terminalVerb, commandIsolated?, state|null, currentState|null }. */
+/** Verify command for a shell that has no plugin bundle in reach. */
+export const GLOBAL_VERIFY_COMMAND = "semctx verify diff --record";
+
+/** POSIX single-quote: safe for spaces, `$`, backticks, and embedded quotes. */
+export function shellQuote(value) {
+  return `'${String(value).replaceAll("'", "'\\''")}'`;
+}
+
+/**
+ * Absolute path of the plugin-bundled CLI, or null when no bundle is in reach.
+ *
+ * Claude Code exports CLAUDE_PLUGIN_ROOT to *hook processes* (and to MCP/LSP subprocesses) — it is
+ * NOT exported to the agent's shell, and `${CLAUDE_PLUGIN_ROOT}` is a load-time placeholder for
+ * skill/hook/MCP fields only. A guard reason string is neither, so the path must be resolved here.
+ * Falls back to this hook's own location so a plugin copy without the env var still works.
+ */
+export function pluginCliPath(env = process.env, exists = existsSync) {
+  const candidates = [];
+  const declared = String(env?.CLAUDE_PLUGIN_ROOT ?? "").trim();
+  if (declared) candidates.push(join(declared, "dist", "semctx.js"));
+  candidates.push(resolve(dirname(fileURLToPath(import.meta.url)), "..", "dist", "semctx.js"));
+  for (const candidate of candidates) {
+    try {
+      if (exists(candidate)) return candidate;
+    } catch {
+      // unreadable candidate: fall through to the next one
+    }
+  }
+  return null;
+}
+
+/**
+ * Whether a `bun` executable is on PATH. Directory probe only — the guard must stay fast and
+ * side-effect free, so it never spawns a process to answer this.
+ */
+export function bunOnPath(env = process.env, exists = existsSync) {
+  const entries = String(env?.PATH ?? "").split(process.platform === "win32" ? ";" : ":");
+  const names = process.platform === "win32" ? ["bun.exe", "bun.cmd", "bun"] : ["bun"];
+  for (const entry of entries) {
+    if (!entry) continue;
+    for (const name of names) {
+      try {
+        if (exists(join(entry, name))) return true;
+      } catch {
+        // unreadable PATH entry: keep probing
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Prefer the plugin-bundled CLI (same release as the MCP runtime) and emit it as an ALREADY
+ * RESOLVED, shell-quoted absolute path — the agent runs this string in a shell that does not
+ * receive CLAUDE_PLUGIN_ROOT, so a deferred `"$CLAUDE_PLUGIN_ROOT/…"` would expand to `/dist/…`.
+ * Fall back to a global `semctx` when no bundle is in reach, or when Bun is absent: this hook runs
+ * under Node precisely so guarded mode works on Bun-less machines, and a block message must never
+ * name a runtime the user does not have.
+ */
+export function verifyRecordCommand(env = process.env, exists = existsSync) {
+  const cli = pluginCliPath(env, exists);
+  if (!cli || !bunOnPath(env, exists)) return GLOBAL_VERIFY_COMMAND;
+  return `bun ${shellQuote(cli)} verify diff --record`;
+}
+
+/**
+ * Pure decision — reads no environment and touches no filesystem.
+ * ctx: { enabled, terminalVerb, commandIsolated?, state|null, currentState|null, verifyCommand? }.
+ */
 export function guardDecision(ctx) {
   if (!ctx.enabled || !ctx.terminalVerb) return { block: false };
+  const verifyCmd = ctx.verifyCommand ?? GLOBAL_VERIFY_COMMAND;
   const retry = `then retry the ${ctx.terminalVerb}. (strictly disable: SEMCTX_GUARD=off)`;
   if (ctx.commandIsolated === false) {
     return {
@@ -169,7 +239,7 @@ export function guardDecision(ctx) {
     };
   }
   if (!ctx.state) {
-    return { block: true, reason: `semctx guarded mode: no verification on record. Run:\n  semctx verify diff --record\n${retry}` };
+    return { block: true, reason: `semctx guarded mode: no verification on record. Run:\n  ${verifyCmd}\n${retry}` };
   }
   if (
     ctx.state.version !== 2
@@ -177,16 +247,16 @@ export function guardDecision(ctx) {
     || !ctx.state.workingStateHash
     || !ctx.currentState
   ) {
-    return { block: true, reason: `semctx guarded mode: the verification baseline is legacy, invalid, or unavailable. Re-run:\n  semctx verify diff --record\n${retry}` };
+    return { block: true, reason: `semctx guarded mode: the verification baseline is legacy, invalid, or unavailable. Re-run:\n  ${verifyCmd}\n${retry}` };
   }
   if (ctx.state.verdict === "BLOCK") {
-    return { block: true, reason: `semctx guarded mode: the last verification was BLOCK. Resolve the findings, then re-run:\n  semctx verify diff --record` };
+    return { block: true, reason: `semctx guarded mode: the last verification was BLOCK. Resolve the findings, then re-run:\n  ${verifyCmd}` };
   }
   if (
     ctx.state.headCommit !== ctx.currentState.headCommit
     || ctx.state.workingStateHash !== ctx.currentState.workingStateHash
   ) {
-    return { block: true, reason: `semctx guarded mode: the commit or working state changed since the last verification. Re-run:\n  semctx verify diff --record\n${retry}` };
+    return { block: true, reason: `semctx guarded mode: the commit or working state changed since the last verification. Re-run:\n  ${verifyCmd}\n${retry}` };
   }
   return { block: false };
 }
@@ -268,6 +338,7 @@ function main() {
     commandIsolated: isIsolatedTerminalGitCommand(command),
     state,
     currentState,
+    verifyCommand: verifyRecordCommand(process.env),
   });
   if (decision.block) {
     process.stderr.write(decision.reason + "\n");

@@ -50,7 +50,7 @@ pre-commit/push hook will **block** `git commit` / `git push` until the current 
 verified. Record a verification with:
 
 ```
-semctx verify diff --record
+bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" verify diff --record   # or: semctx verify diff --record
 ```
 
 after which an unchanged, non-BLOCK diff is allowed to commit. Any further edit invalidates it —
@@ -59,8 +59,16 @@ strictly disabled with `SEMCTX_GUARD=off`.
 
 ## Local commands (equivalent to the MCP tool)
 
+Prefer the plugin-bundled CLI (`dist/semctx.js`, same release as MCP). Claude Code substitutes the
+plugin root into this skill at load time, so the path below is already absolute; if it still reads
+as a literal `${…}` placeholder, use the global `semctx` line instead (same version: `semctx
+--version`), or report that no shell CLI is available. `CLAUDE_PLUGIN_ROOT` is never exported to
+your terminal — do not rely on the shell to expand it.
+
 ```
-semctx verify diff                       # analyse working tree vs HEAD
-semctx verify diff --base origin/main     # analyse a range (merge-base)
-semctx verify diff --record               # analyse and record state for guarded mode
+bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" verify diff                       # working tree vs HEAD
+bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" verify diff --base origin/main     # range (merge-base)
+bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" verify diff --record               # record state for guarded mode
+
+semctx verify diff --record                                                  # global fallback
 ```
