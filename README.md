@@ -67,11 +67,12 @@ and derived from `severity` when absent. `BLOCK` exits non-zero — usable as a 
 ## Get started in ~5 minutes
 
 Requires [Bun](https://bun.sh) ≥ 1.3. `semctx` publishes as a single self-contained bundle
-(`bunx semctx`); until the first npm release you can run it from source (see
-[`docs/publishing.md`](docs/publishing.md) for the release state).
+(`bunx semctx`). The published release lags this repository, so run from source to get the current
+CLI (see [`docs/publishing.md`](docs/publishing.md) for the release state and
+[#38](https://github.com/hoklims/semctx/issues/38) for the release policy).
 
 ```bash
-bunx semctx --help                            # once published to npm
+bunx semctx --help                            # published release, currently behind main
 
 # …or from source in this repo (dev / pre-release):
 bun install

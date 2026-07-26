@@ -4,8 +4,8 @@ Prep for the "publish" move (competitive-scan 2026-07: publishing is the stronge
 lever against commoditisation — visibility).
 
 **Decided 2026-07-05** (owner ratified): the CLI publishes as **`semctx`** (unscoped — the name is
-free on npm), **bun-only**, as a **single self-contained bundle**. Everything below is done except
-the final `npm publish`, which needs `npm login` (credentials) and is the owner's to run.
+free on npm), **bun-only**, as a **single self-contained bundle**. This shipped: `0.1.0` and `0.1.1`
+are published. Subsequent releases remain the owner's to run and need `npm login` (credentials).
 
 ## Decisions (ratified)
 
@@ -47,8 +47,13 @@ npm publish --access public       # 'semctx' is unscoped → public by default;
 
 Then tag the release: `git tag v0.1.0 && git push --tags` (and optionally announce).
 
-`npm whoami` returned 401 in the prep session — that is the only remaining gate. Nothing about the
-package is unresolved.
+**Published.** `semctx` `0.1.0` and `0.1.1` are live on npm (`0.1.1` since 2026-07-05). The
+publishing mechanics above are proven, not pending.
+
+What is unresolved is the *release policy*, not the ability to release: `apps/cli/package.json`
+still reads `0.1.1` while the plugins ship `0.1.10`, so `bunx semctx` serves a CLI well behind this
+repository. See [#38](https://github.com/hoklims/semctx/issues/38) and
+[#35](https://github.com/hoklims/semctx/issues/35).
 
 ## Plugin runtime
 
