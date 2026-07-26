@@ -48,6 +48,122 @@ function gitTokenIndex(tokens) {
   return executable === "git" || executable === "git.exe" ? i : -1;
 }
 
+const GIT_GLOBAL_OPTIONS_WITH_VALUE = new Set([
+  "-C",
+  "-c",
+  "--git-dir",
+  "--namespace",
+  "--super-prefix",
+  "--work-tree",
+]);
+
+const GIT_RETARGET_OPTIONS = new Set([
+  "--git-dir",
+  "--namespace",
+  "--work-tree",
+]);
+
+const GIT_RETARGET_ENV = new Set([
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+  "GIT_COMMON_DIR",
+  "GIT_DIR",
+  "GIT_INDEX_FILE",
+  "GIT_NAMESPACE",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_REPLACE_REF_BASE",
+  "GIT_SHALLOW_FILE",
+  "GIT_WORK_TREE",
+]);
+
+const GIT_RETARGET_CONFIG = new Set([
+  "core.bare",
+  "core.worktree",
+  "extensions.worktreeconfig",
+]);
+
+function gitOptionName(token) {
+  const clean = stripQuotes(token);
+  const equals = clean.indexOf("=");
+  return equals < 0 ? clean : clean.slice(0, equals);
+}
+
+function gitOptionConsumesNext(token) {
+  const clean = stripQuotes(token);
+  return !clean.includes("=") && GIT_GLOBAL_OPTIONS_WITH_VALUE.has(clean);
+}
+
+function gitCPath(token, nextToken) {
+  const clean = stripQuotes(token);
+  if (clean === "-C") return nextToken === undefined ? null : stripQuotes(nextToken);
+  return clean.startsWith("-C") && clean.length > 2 ? clean.slice(2) : null;
+}
+
+function pathRequiresShellExpansion(token) {
+  return /[$~*?{}\[\]]/.test(stripQuotes(token));
+}
+
+function isRetargetingEnvironmentAssignment(token) {
+  const match = /^([A-Za-z_][A-Za-z0-9_]*)=/.exec(String(token ?? ""));
+  if (match === null) return false;
+  const name = match[1].toUpperCase();
+  return GIT_RETARGET_ENV.has(name) || name.startsWith("GIT_CONFIG_");
+}
+
+function isRetargetingConfig(value) {
+  const key = stripQuotes(value).split("=", 1)[0].toLowerCase();
+  return GIT_RETARGET_CONFIG.has(key);
+}
+
+/**
+ * Whether the command can make Git operate on state other than the structurally resolved cwd.
+ * These forms are not evaluated or expanded by the hook, so guarded mode must use the session
+ * guard as a fail-closed fallback.
+ */
+function gitScopeRequiresSessionGuard(command) {
+  const text = String(command ?? "");
+  const nested = shellCommandBody(text);
+  if (nested !== null && gitScopeRequiresSessionGuard(nested)) return true;
+
+  for (const segment of text.split(/&&|\|\||;|\||\n/)) {
+    const tokens = segment.trim().split(/\s+/).filter(Boolean);
+    let i = 0;
+    while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) {
+      if (isRetargetingEnvironmentAssignment(tokens[i])) return true;
+      i += 1;
+    }
+    if (stripQuotes(tokens[i]).toLowerCase() === "cd" && tokens[i + 1] !== undefined) {
+      if (pathRequiresShellExpansion(tokens[i + 1])) return true;
+      continue;
+    }
+
+    const gitIndex = gitTokenIndex(tokens);
+    if (gitIndex < 0) continue;
+    for (let prefix = 0; prefix < gitIndex; prefix += 1) {
+      if (isRetargetingEnvironmentAssignment(tokens[prefix])) return true;
+    }
+
+    i = gitIndex + 1;
+    while (i < tokens.length) {
+      const token = stripQuotes(tokens[i]);
+      const option = gitOptionName(token);
+      const cwdPath = gitCPath(token, tokens[i + 1]);
+      if (cwdPath !== null) {
+        if (pathRequiresShellExpansion(cwdPath)) return true;
+      } else if (option === "-c") {
+        if (tokens[i + 1] !== undefined && isRetargetingConfig(tokens[i + 1])) return true;
+      } else if (option === "--config-env") {
+        const config = token.includes("=") ? token.slice(token.indexOf("=") + 1) : tokens[i + 1];
+        if (config !== undefined && isRetargetingConfig(config)) return true;
+      } else if (GIT_RETARGET_OPTIONS.has(option) || option === "--bare") {
+        return true;
+      }
+      if (!token.startsWith("-")) break;
+      i += gitOptionConsumesNext(token) ? 2 : 1;
+    }
+  }
+  return false;
+}
+
 /** Detect a terminal git verb (commit|push) in a shell command, structurally. Returns the verb or null. */
 export function isTerminalGitCommand(command) {
   const nested = shellCommandBody(command);
@@ -62,12 +178,12 @@ export function isTerminalGitCommand(command) {
     if (gitIndex < 0) continue;
     let i = gitIndex + 1;
     while (i < tokens.length) {
-      const t = tokens[i];
-      if (t === "-C" || t === "-c") { i += 2; continue; } // options that take a value
+      const t = stripQuotes(tokens[i]);
+      if (gitOptionConsumesNext(t)) { i += 2; continue; }
       if (t?.startsWith("-")) { i += 1; continue; } // other global flags
       break;
     }
-    const sub = tokens[i];
+    const sub = stripQuotes(tokens[i]);
     if (sub === "commit" || sub === "push") return sub;
   }
   return null;
@@ -81,6 +197,7 @@ export function isIsolatedTerminalGitCommand(command) {
   const text = String(command ?? "").trim();
   if (text === "" || shellCommandBody(text) !== null) return false;
   if (/\$\(|`|\r|\n|\|\||(?<!\|)\|(?!\|)|;|(?<!&)&(?!&)|[<>]/.test(text)) return false;
+  if (gitScopeRequiresSessionGuard(text)) return false;
 
   const segments = text.split("&&").map((segment) => segment.trim());
   if (segments.some((segment) => segment === "")) return false;
@@ -91,7 +208,7 @@ export function isIsolatedTerminalGitCommand(command) {
     const tokens = prefix.split(/\s+/).filter(Boolean);
     if (tokens.length !== 2 || stripQuotes(tokens[0]).toLowerCase() !== "cd") return false;
     const target = stripQuotes(tokens[1]);
-    if (target === "" || /[$*?{}\[\]]/.test(target)) return false;
+    if (target === "" || pathRequiresShellExpansion(target)) return false;
   }
   return true;
 }
@@ -113,9 +230,9 @@ function resolveUnder(base, p) {
 /**
  * Resolve the directory the terminal git command will actually run in, so the guard evaluates the
  * repo being committed to — not the session cwd. Honors left-to-right `cd <path>` prefixes and
- * git's own `-C <path>` global option, resolved relative to inputCwd. An unresolvable path (e.g.
- * `cd $VAR`) points at a non-existent dir, which safely degrades to advisory (no guard.json found →
- * fail-open) rather than blocking the wrong repo. Falls back to inputCwd.
+ * git's own `-C <path>` global option, resolved relative to inputCwd. Paths that require shell
+ * expansion are deliberately not interpreted here; guarded mode treats their scope as ambiguous
+ * and falls back to the session guard. Falls back to inputCwd.
  */
 export function resolveGitCwd(command, inputCwd) {
   const text = String(command ?? "");
@@ -140,8 +257,14 @@ export function resolveGitCwd(command, inputCwd) {
     let gitCwd = cwd;
     while (i < tokens.length) {
       const t = tokens[i];
-      if (t === "-C" && tokens[i + 1] !== undefined) { gitCwd = resolveUnder(gitCwd, tokens[i + 1]); i += 2; continue; }
+      const cwdPath = gitCPath(t, tokens[i + 1]);
+      if (cwdPath !== null) {
+        gitCwd = resolveUnder(gitCwd, cwdPath);
+        i += stripQuotes(t) === "-C" ? 2 : 1;
+        continue;
+      }
       if (t === "-c" && tokens[i + 1] !== undefined) { i += 2; continue; } // -c takes a value, not a path
+      if (gitOptionConsumesNext(t)) { i += 2; continue; }
       if (t?.startsWith("-")) { i += 1; continue; }
       break;
     }
@@ -235,7 +358,7 @@ export function guardDecision(ctx) {
   if (ctx.commandIsolated === false) {
     return {
       block: true,
-      reason: `semctx guarded mode: git ${ctx.terminalVerb} must be an isolated command; compound commands, shell substitutions, and redirections are not authorized.\n${retry}`,
+      reason: `semctx guarded mode: git ${ctx.terminalVerb} must be an isolated command; compound commands, shell substitutions, redirections, unexpanded cwd paths, and Git repository retargeting are not authorized.\n${retry}`,
     };
   }
   if (!ctx.state) {
@@ -321,21 +444,32 @@ function main() {
   if (!terminalVerb) process.exit(0);
 
   const inputCwd = input.cwd ?? process.cwd();
+  const commandIsolated = isIsolatedTerminalGitCommand(command);
+  const scopeRequiresSessionGuard = gitScopeRequiresSessionGuard(command);
   const cwd = resolveGitCwd(command, inputCwd); // the repo the git command targets, not the session cwd
-  const enabled = guardEnabled(process.env, readJson(join(cwd, ".semctx", "guard.json")));
+  const targetGuard = readJson(join(cwd, ".semctx", "guard.json"));
+  const sessionGuard = scopeRequiresSessionGuard
+    ? readJson(join(inputCwd, ".semctx", "guard.json"))
+    : null;
+  const enabled = guardEnabled(process.env, targetGuard)
+    || (scopeRequiresSessionGuard && guardEnabled(process.env, sessionGuard));
   if (!enabled) process.exit(0); // advisory (default)
 
-  const state = readJson(join(cwd, ".semctx", "verification-state.json"));
+  const state = commandIsolated
+    ? readJson(join(cwd, ".semctx", "verification-state.json"))
+    : null;
   let currentState = null;
-  try {
-    currentState = captureVerificationGitState(cwd);
-  } catch {
-    currentState = null;
+  if (commandIsolated) {
+    try {
+      currentState = captureVerificationGitState(cwd);
+    } catch {
+      currentState = null;
+    }
   }
   const decision = guardDecision({
     enabled,
     terminalVerb,
-    commandIsolated: isIsolatedTerminalGitCommand(command),
+    commandIsolated,
     state,
     currentState,
     verifyCommand: verifyRecordCommand(process.env),
