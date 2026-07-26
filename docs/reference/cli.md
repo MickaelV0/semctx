@@ -79,6 +79,23 @@ than an error: `SEMANTIC_MODEL_INVALID` for error-severity diagnostics or duplic
 `SEMANTIC_LIFECYCLE_INVALID` for error-severity lifecycle findings. Both are `UNSEALED` and exit 3.
 Run `semctx semantic check` to see the individual findings behind the reason code.
 
+## `control authority`
+
+Report the authority a change requires at a given abstraction altitude.
+
+```text
+semctx control authority [--altitude 0..6] [--json]
+```
+
+`--altitude` defaults to `0`. L0-L1 are `autonomous`, L2 is `constrained`, L3 is `reviewed_plan`,
+and L4-L6 require `human_authority`; obligations accumulate as the regime tightens. The report is
+bound to the repository's current freshness verdict, and an autonomous write needs both an
+`autonomous` regime and a preflight that admits high-risk control.
+
+**Exit codes**: 0 when an autonomous write is admitted; 3 when it is not — mirroring `status`, a
+verdict was produced and the gate is closed. The command grants no execution authority and never
+writes to `.semctx`.
+
 ## `control trace`
 
 Traverse the read-only Plane C coordinate graph from a plane-qualified id.

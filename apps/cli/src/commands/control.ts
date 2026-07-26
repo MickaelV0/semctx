@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { SemctxError } from "@semantic-context/core";
 import {
+  controlAltitudeAuthority,
   loadControlState,
   planControlMigration,
   queryControlArchitectureComparison,
@@ -48,6 +49,7 @@ Usage:
   semctx control trace <qualified-id> [--to 0..6] [--direction lift|lower]
       [--max-depth N] [--max-results N] [--json]
   semctx control graph [--json]
+  semctx control authority [--altitude 0..6] [--json]
   semctx control traversal <coordinate> [--to 0..6] [--direction lift|lower] [--json]
   semctx control coverage <coordinate> [--source-seal <sha256>] [--index-seal <sha256>]
       [--to 0..6] [--direction lift|lower] [--json]
@@ -149,6 +151,21 @@ export function runControl(root: string, args: ParsedArgs): number {
     const report = queryControlGraph(root);
     emit(report, flagBool(args, "json"), `${report.payload?.nodes.length ?? 0} coordinate(s)`);
     return 0;
+  }
+
+  if (subcommand === "authority") {
+    const altitude = integerFlag(args, "altitude", 0, 0, 6) as 0 | 1 | 2 | 3 | 4 | 5 | 6;
+    const report = controlAltitudeAuthority(root, altitude);
+    emit(
+      report,
+      flagBool(args, "json"),
+      `L${report.requiredAltitude} ${report.regime}`
+        + ` (autonomous write: ${report.allowsAutonomousWrite ? "yes" : "no"})`
+        + `\n  obligations: ${report.obligations.join(", ")}`
+        + `\n  ${report.rationale}`,
+    );
+    // Exit 3 mirrors status: a verdict was produced, but an autonomous write is not admitted.
+    return report.allowsAutonomousWrite ? 0 : 3;
   }
 
   if (subcommand === "traversal") {

@@ -7,3 +7,5 @@ export { snapshotArchitecture, compareArchitectures, architectureDeltasEqual, fi
 export type { SnapshotIdentity } from "./architecture";
 export { compileMigrationPlan } from "./migration";
 export { authorizeTransition, authorizeStep, authorizeDeletion } from "./policy";
+export { decideAltitudeAuthority } from "./altitude-authority";
+export type { AltitudeAuthorityInput } from "./altitude-authority";

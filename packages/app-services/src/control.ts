@@ -14,10 +14,12 @@ import {
   type TraversalReportV2,
   type ControlQueryEnvelopeV1,
   type SealedAttestationIndexV1,
+  type AltitudeAuthorityReportV1,
 } from "@semantic-context/control-model";
 import {
   buildCoordinateGraph,
   compileMigrationPlan,
+  decideAltitudeAuthority,
   fingerprintCoordinateGraph,
   lift,
   lower,
@@ -317,6 +319,15 @@ export function controlStatus(root: string): ControlFreshnessStatusReport {
     if (unavailable !== null) return unavailable;
     throw error;
   }
+}
+
+/** Report the authority a change at `requiredAltitude` demands under this repository's current freshness.
+ * Read-only and total: the preflight always yields a verdict, so this always yields a report. */
+export function controlAltitudeAuthority(
+  root: string,
+  requiredAltitude: 0 | 1 | 2 | 3 | 4 | 5 | 6,
+): AltitudeAuthorityReportV1 {
+  return decideAltitudeAuthority({ requiredAltitude, freshness: controlStatus(root) });
 }
 
 /** Return an exact control seal only when the current repository state proves it safe.

@@ -13,3 +13,5 @@ export * from "./normalizers";
 export * from "./task-envelope-types";
 export * from "./task-envelope-canonical";
 export * from "./task-envelope-schemas";
+export * from "./altitude-authority";
+export * from "./altitude-authority-schemas";
