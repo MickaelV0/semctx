@@ -69,7 +69,9 @@ SEMCTX_GUARD=off
 
 The guard only ever gates the two terminal git verbs — never file edits, tests, exploration, or
 non-terminal git commands. It compares a hash of the working diff to the last verified hash
-(ADR 0007); it runs no analysis itself.
+(ADR 0007); it runs no analysis itself. In guarded mode, cwd prefixes must be literal and Git
+repository retargeting (`GIT_DIR`, `GIT_WORK_TREE`, `--git-dir`, `--work-tree`, and related forms)
+is rejected rather than compared against the session repository's hash.
 
 ## Requirements
 

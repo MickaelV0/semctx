@@ -50,8 +50,13 @@ describe("isTerminalGitCommand — structural detection (no shell eval)", () => 
     expect(isTerminalGitCommand("git push origin main")).toBe("push");
     expect(isTerminalGitCommand("git -C sub commit -m x")).toBe("commit");
     expect(isTerminalGitCommand("git -c user.name=x commit")).toBe("commit");
+    expect(isTerminalGitCommand("git --git-dir ../other/.git --work-tree ../other commit -m x")).toBe("commit");
     expect(isTerminalGitCommand("cd repo && git commit -m x")).toBe("commit");
     expect(isTerminalGitCommand("GIT_AUTHOR_NAME=x git commit")).toBe("commit");
+    expect(isTerminalGitCommand("env GIT_DIR=../other/.git git commit -m x")).toBe("commit");
+    expect(isTerminalGitCommand("env -i GIT_AUTHOR_NAME=x git commit -m x")).toBe("commit");
+    expect(isTerminalGitCommand("env -u GIT_DIR git push origin main")).toBe("push");
+    expect(isTerminalGitCommand("env -S 'git commit -m x'")).toBe("commit");
     expect(isTerminalGitCommand("git add -A && git commit -m x")).toBe("commit");
   });
 
@@ -84,6 +89,8 @@ describe("isIsolatedTerminalGitCommand — no mutation before authorization", ()
     expect(isIsolatedTerminalGitCommand("git commit -m x")).toBe(true);
     expect(isIsolatedTerminalGitCommand("cd repo && git push origin main")).toBe(true);
     expect(isIsolatedTerminalGitCommand("GIT_AUTHOR_NAME=x command git -C sub commit -m x")).toBe(true);
+    expect(isIsolatedTerminalGitCommand("env GIT_AUTHOR_NAME=x git commit -m x")).toBe(true);
+    expect(isIsolatedTerminalGitCommand("env -u SEMCTX_UNUSED git push origin main")).toBe(true);
   });
 
   it("rejects compound mutation, forced ignored staging, and shell substitutions", () => {
@@ -97,6 +104,44 @@ describe("isIsolatedTerminalGitCommand — no mutation before authorization", ()
     expect(isIsolatedTerminalGitCommand('env bash -c "git commit -am x"')).toBe(false);
     expect(isIsolatedTerminalGitCommand('env -i bash --noprofile -c "git commit -am x"')).toBe(false);
     expect(isIsolatedTerminalGitCommand('pwsh -NoProfile -ExecutionPolicy Bypass -Command "git push origin main"')).toBe(false);
+  });
+
+  it("rejects cwd targets that require shell expansion", () => {
+    for (const command of [
+      "cd $SEMCTX_TARGET && git commit -m x",
+      "cd ${SEMCTX_TARGET} && git push origin main",
+      "cd ~ && git commit -m x",
+      "git -C $SEMCTX_TARGET commit -m x",
+      "git -C ${SEMCTX_TARGET} push origin main",
+      "git -C ~ commit -m x",
+      "git -C$SEMCTX_TARGET commit -m x",
+    ]) {
+      expect(isIsolatedTerminalGitCommand(command)).toBe(false);
+    }
+  });
+
+  it("rejects environment, option, and config forms that retarget Git state", () => {
+    for (const command of [
+      "GIT_DIR=../other/.git git commit -m x",
+      "GIT_WORK_TREE=../other git commit -m x",
+      "GIT_COMMON_DIR=../other/.git git push origin main",
+      "GIT_INDEX_FILE=../other/index git commit -m x",
+      "GIT_CONFIG_COUNT=1 git commit -m x",
+      "env GIT_DIR=../other/.git GIT_WORK_TREE=../other git commit -m x",
+      "env -i GIT_COMMON_DIR=../other/.git git push origin main",
+      "env -i GIT_AUTHOR_NAME=x git commit -m x",
+      "env -u GIT_DIR git commit -m x",
+      "env -C ../other git commit -m x",
+      "env -S 'git commit -m x'",
+      "git --git-dir ../other/.git --work-tree ../other commit -m x",
+      "git --git-dir=../other/.git --work-tree=../other commit -m x",
+      "git --namespace other push origin main",
+      "git --bare commit -m x",
+      "git -c core.worktree=../other commit -m x",
+      "git -c core.bare=true commit -m x",
+    ]) {
+      expect(isIsolatedTerminalGitCommand(command)).toBe(false);
+    }
   });
 });
 
@@ -410,6 +455,75 @@ describe("guard runtime — large working diffs", () => {
   });
 });
 
+describe("guard runtime — repository scope must be explicit", () => {
+  function createGuardedRepo(prefix: string) {
+    const repo = mkdtempSync(join(tmpdir(), prefix));
+    execFileSync("git", ["init"], { cwd: repo, stdio: "ignore" });
+    writeFileSync(join(repo, "tracked.ts"), "export const value = 1;\n");
+    writeFileSync(join(repo, ".gitignore"), ".semctx/\n");
+    execFileSync("git", ["add", "tracked.ts", ".gitignore"], { cwd: repo, stdio: "ignore" });
+    execFileSync(
+      "git",
+      ["-c", "user.name=Semctx Test", "-c", "user.email=semctx@example.invalid", "commit", "-m", "baseline"],
+      { cwd: repo, stdio: "ignore" },
+    );
+    mkdirSync(join(repo, ".semctx"));
+    writeFileSync(join(repo, ".semctx", "guard.json"), JSON.stringify({ enabled: true }));
+    writeFileSync(
+      join(repo, ".semctx", "verification-state.json"),
+      JSON.stringify({ version: 2, ...captureVerificationGitState(repo), verdict: "PASS" }),
+    );
+    return repo;
+  }
+
+  it("blocks unexpanded cd and git -C targets instead of losing the guarded session", () => {
+    const repo = createGuardedRepo("semctx-guard-unexpanded-");
+    try {
+      const guard = resolve(import.meta.dir, "../hooks/semctx-guard.mjs");
+      for (const command of [
+        "cd $SEMCTX_TARGET && git commit -m x",
+        "git -C $SEMCTX_TARGET push origin main",
+        "git -C$SEMCTX_TARGET commit -m x",
+      ]) {
+        const result = spawnSync("node", [guard], {
+          cwd: repo,
+          env: { ...process.env, SEMCTX_TARGET: join(repo, "other") },
+          input: JSON.stringify({ tool_name: "Bash", tool_input: { command }, cwd: repo }),
+          encoding: "utf8",
+        });
+        expect(result.status).toBe(2);
+        expect(result.stderr).toContain("must be an isolated command");
+      }
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks Git environment and CLI retargeting under a valid session baseline", () => {
+    const repo = createGuardedRepo("semctx-guard-retarget-");
+    try {
+      const guard = resolve(import.meta.dir, "../hooks/semctx-guard.mjs");
+      for (const command of [
+        "GIT_DIR=../other/.git GIT_WORK_TREE=../other git commit -m x",
+        "env GIT_DIR=../other/.git GIT_WORK_TREE=../other git commit -m x",
+        "env -i GIT_COMMON_DIR=../other/.git git push origin main",
+        "env -S 'git commit -m x'",
+        "git --git-dir ../other/.git --work-tree ../other commit -m x",
+      ]) {
+        const result = spawnSync("node", [guard], {
+          cwd: repo,
+          input: JSON.stringify({ tool_name: "Bash", tool_input: { command }, cwd: repo }),
+          encoding: "utf8",
+        });
+        expect(result.status).toBe(2);
+        expect(result.stderr).toContain("must be an isolated command");
+      }
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("verification-state capture parity", () => {
   it("matches the application service for tracked and untracked bytes", () => {
     const repo = mkdtempSync(join(tmpdir(), "semctx-guard-parity-"));
@@ -441,6 +555,7 @@ describe("resolveGitCwd — evaluate the repo the command targets, not the sessi
 
   it("honors git -C <relative>, resolved against inputCwd", () => {
     expect(resolveGitCwd("git -C sub commit -m x", SESSION)).toBe(resolve(SESSION, "sub"));
+    expect(resolveGitCwd("git -Csub commit -m x", SESSION)).toBe(resolve(SESSION, "sub"));
   });
 
   it("honors a `cd <path> &&` prefix", () => {
@@ -454,6 +569,8 @@ describe("resolveGitCwd — evaluate the repo the command targets, not the sessi
 
   it("skips env assignments before git", () => {
     expect(resolveGitCwd("GIT_AUTHOR_NAME=x git -C sub commit", SESSION)).toBe(resolve(SESSION, "sub"));
+    expect(resolveGitCwd("env -i GIT_AUTHOR_NAME=x git -C sub commit", SESSION)).toBe(resolve(SESSION, "sub"));
+    expect(resolveGitCwd("env -u SEMCTX_UNUSED command git -C sub push", SESSION)).toBe(resolve(SESSION, "sub"));
   });
 
   it("honors -C when git is invoked through an absolute path or command wrapper", () => {
