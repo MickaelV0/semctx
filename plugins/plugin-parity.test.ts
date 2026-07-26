@@ -38,6 +38,34 @@ function sharedContractBody(skill: string): string {
 }
 
 describe("Codex and Claude Code plugin parity", () => {
+  test("renderControlSkill rejects a template without the host marker", () => {
+    expect(() => renderControlSkill("claude-code", "# no marker\n")).toThrow(/HOST_CLI_LADDER/);
+  });
+
+  test("renderControlSkill rejects a template that embeds CLAUDE_PLUGIN_ROOT", () => {
+    const bad = "# x\n{{HOST_CLI_LADDER}}\n${CLAUDE_PLUGIN_ROOT}\n";
+    expect(() => renderControlSkill("claude-code", bad)).toThrow(/CLAUDE_PLUGIN_ROOT/);
+  });
+
+  test("hostCliLadder option-A invariants (Claude plugin rung, Codex no relative dist)", () => {
+    const claude = hostCliLadder("claude-code");
+    expect(claude).toContain("Plugin-bundled CLI");
+    expect(claude).toContain('bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js"');
+    expect(claude).toContain("semctx --version");
+    // Plugin rung before global fallback in the ordered list.
+    expect(claude.indexOf("Plugin-bundled CLI")).toBeLessThan(claude.indexOf("Global `semctx` on PATH"));
+
+    const codex = hostCliLadder("semctx-control");
+    expect(codex).not.toContain("CLAUDE_PLUGIN_ROOT");
+    expect(codex).not.toContain("Plugin-bundled CLI");
+    // Agent-runnable fence must not teach relative plugin paths (prose may name them as forbidden).
+    const codexFence = codex.match(/```text\n([\s\S]*?)```/)?.[1] ?? "";
+    expect(codexFence.length).toBeGreaterThan(0);
+    expect(codexFence).not.toMatch(/bun\s+["']?\.\/dist\/semctx\.js/);
+    expect(codexFence).toContain("semctx --version");
+    expect(codex).toContain("does **not** substitute a plugin-root path");
+  });
+
   test("ships one shared semctx-control workflow contract with host-generated CLI ladders", () => {
     const template = read("plugins/shared/skills/semctx-control/SKILL.md");
     expect(template).toContain("{{HOST_CLI_LADDER}}");
@@ -51,7 +79,12 @@ describe("Codex and Claude Code plugin parity", () => {
     expect(codex).toBe(renderControlSkill("semctx-control", template));
 
     // Host-neutral body is still byte-identical across hosts.
-    expect(sharedContractBody(claude)).toBe(sharedContractBody(codex));
+    const shared = sharedContractBody(claude);
+    expect(shared).toBe(sharedContractBody(codex));
+    // Host leakage must live only inside the strip region.
+    expect(shared).not.toContain("CLAUDE_PLUGIN_ROOT");
+    expect(shared).not.toContain("Plugin-bundled CLI");
+    expect(shared).not.toContain("host-cli-ladder");
 
     for (const required of [
       "semctx_control_status",
@@ -65,14 +98,14 @@ describe("Codex and Claude Code plugin parity", () => {
       "runtime tests",
       "Local equivalents when MCP is unavailable",
     ]) {
-      expect(sharedContractBody(codex)).toContain(required);
+      expect(shared).toContain(required);
     }
 
     // Claude keeps the plugin-bundled placeholder rung.
     expect(claude).toContain("Plugin-bundled CLI");
     expect(claude).toContain('bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js"');
     expect(claude).toContain("semctx --version");
-    expect(claude).toContain(hostCliLadder("claude-code").trim().slice(0, 40));
+    expect(claude).toContain(hostCliLadder("claude-code").trim());
 
     // Codex ships only host-working instructions — no Claude placeholder in any form.
     expect(codex).toContain("Global / CI CLI");
@@ -80,6 +113,8 @@ describe("Codex and Claude Code plugin parity", () => {
     expect(codex).toContain("semctx status --json");
     expect(codex).not.toContain("CLAUDE_PLUGIN_ROOT");
     expect(codex).not.toContain("Plugin-bundled CLI");
+    const codexFence = codex.match(/```text\n([\s\S]*?)```/)?.[1] ?? "";
+    expect(codexFence).not.toMatch(/bun\s+["']?\.\/dist\/semctx\.js/);
     expect(codex).toContain("does **not** substitute a plugin-root path");
   });
 
@@ -103,6 +138,7 @@ describe("Codex and Claude Code plugin parity", () => {
       "docs/integrations/claude-code-guarded-mode.md",
       "docs/integrations/codex-control-plane.md",
     ];
+    expect(shipped.length).toBeGreaterThan(0);
     // Matches $CLAUDE_PLUGIN_ROOT only when it is NOT the ${…} form.
     const bare = /\$CLAUDE_PLUGIN_ROOT/;
     // Canary: a neutered pattern would leave this suite permanently green.
@@ -122,11 +158,13 @@ describe("Codex and Claude Code plugin parity", () => {
     expect(anyForm.test("${CLAUDE_PLUGIN_ROOT}")).toBe(true);
     expect(anyForm.test("$CLAUDE_PLUGIN_ROOT")).toBe(true);
 
+    // Enumerated text surfaces (not dist/ binaries). Anti-neuter: list must stay non-empty.
     const codexTree = [
       "plugins/semctx-control/skills/semctx-control/SKILL.md",
       "plugins/semctx-control/.mcp.json",
       "plugins/semctx-control/.codex-plugin/plugin.json",
     ];
+    expect(codexTree.length).toBeGreaterThan(0);
     for (const path of codexTree) {
       const offenders = read(path)
         .split("\n")

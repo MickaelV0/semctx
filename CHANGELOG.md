@@ -39,7 +39,7 @@ Marketplace. The published CLI lags this repository — see
   `plugin:build` fills a marked host region per plugin. Claude gets the `${CLAUDE_PLUGIN_ROOT}`
   plugin-CLI rung; Codex gets only global `semctx` instructions. `plugin-parity` asserts the
   shared body is still byte-identical after stripping the host region, forbids any
-  `CLAUDE_PLUGIN_ROOT` under `plugins/semctx-control/**`, and `plugin:check` fails on a stale
+  `CLAUDE_PLUGIN_ROOT` in the Codex skill/manifest/MCP config, and `plugin:check` fails on a stale
   generated skill.
 - **CI runs the full suite**: `plugin-runtime` now runs `bun run test` instead of a three-file
   selection that skipped the guard-hook and CLI tests gating plugin packaging.
