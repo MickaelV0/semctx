@@ -6,10 +6,12 @@ import type { Claim, EvidenceRecord, RepositoryGraph } from "@semantic-context/c
 import { ControlFreshnessStatusReportSchema } from "@semantic-context/control-model";
 import type { ControlFreshnessSeal, ControlFreshnessStatusReport, Sha256Hash } from "@semantic-context/control-model";
 import type { SemanticModel } from "@semantic-context/semantic-model";
+import type { DiscoveredFile } from "@semantic-context/ts-analyzer";
 import { initWorkspace } from "@semantic-context/repository-store";
 import { newChangeContract, writeActiveChange, writeChangeFile } from "@semantic-context/semantic-engine";
+import { sampleConfig } from "@semantic-context/test-fixtures";
 import * as appServices from "../src";
-import { buildControlFreshnessSeal, captureGitState, controlStatus, indexRepository, type IndexedControlSnapshot } from "../src";
+import { buildControlFreshnessSeal, captureGitState, controlStatus, fingerprintAnalysisInputs, indexRepository, type IndexedControlSnapshot } from "../src";
 
 function git(root: string, ...args: string[]): void {
   const result = Bun.spawnSync(["git", ...args], { cwd: root, stdout: "pipe", stderr: "pipe" });
@@ -181,6 +183,37 @@ describe("control freshness seal", () => {
     expect(left.repositoryGraphHash).toMatch(/^sha256:[a-f0-9]{64}$/);
     expect(left.semanticModelHash).toMatch(/^sha256:[a-f0-9]{64}$/);
     expect(left.sealHash).toMatch(/^sha256:[a-f0-9]{64}$/);
+  });
+
+  it("binds analysis inputs to source state rather than to the checkout's line endings", () => {
+    const config = sampleConfig();
+    const discovered = (eol: string): DiscoveredFile[] => [
+      {
+        absPath: join(config.repositoryRoot, "src", "a.ts"),
+        relPath: "src/a.ts",
+        role: "source",
+        content: `export const a = 1;${eol}export const b = 2;${eol}`,
+      },
+      {
+        absPath: join(config.repositoryRoot, "docs", "a.md"),
+        relPath: "docs/a.md",
+        role: "document",
+        content: `# Title${eol}${eol}body${eol}`,
+      },
+    ];
+
+    expect(fingerprintAnalysisInputs(config, discovered("\r\n")))
+      .toBe(fingerprintAnalysisInputs(config, discovered("\n")));
+  });
+
+  it("still separates analysis inputs that differ beyond line endings", () => {
+    const config = sampleConfig();
+    const discovered = (content: string): DiscoveredFile[] => [
+      { absPath: join(config.repositoryRoot, "src", "a.ts"), relPath: "src/a.ts", role: "source", content },
+    ];
+
+    expect(fingerprintAnalysisInputs(config, discovered("export const a = 1;\n")))
+      .not.toBe(fingerprintAnalysisInputs(config, discovered("export const a = 2;\n")));
   });
 
   it("changes for graph, semantic, and working-diff inputs", () => {
