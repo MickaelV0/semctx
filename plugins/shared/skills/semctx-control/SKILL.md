@@ -51,24 +51,4 @@ Report the framed objective, authority sources, freshness verdict, seal hash and
 
 ## Local equivalents when MCP is unavailable
 
-<!-- BEGIN host-cli-ladder:semctx-control -->
-Prefer MCP tools when they are connected. For shell fallbacks, use a global `semctx` on
-PATH (`bun install -g semctx` / `bunx semctx`) — keep it on the **same version** as the plugin
-(`semctx --version` should match the marketplace plugin version).
-
-This host does **not** substitute a plugin-root path into skill content, and the agent's shell cwd
-is the user's repository (not the plugin package root), so the bundled `dist/semctx.js` is not
-addressable via a relative or placeholder path from this skill. The plugin still ships the CLI next
-to the MCP runtime for lockstep releases and for humans who know the absolute path.
-
-If `semctx` is not available, say so and continue with MCP-only or ask the user to install the CLI
-— do not invent results.
-
-```text
-# Global / CI CLI — same subcommands as the plugin MCP tools
-semctx --version
-semctx status --json
-semctx semantic check --json
-semctx verify diff --base origin/main
-```
-<!-- END host-cli-ladder -->
+{{HOST_CLI_LADDER}}
