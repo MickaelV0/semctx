@@ -77,7 +77,8 @@ const SETUP_TIMEOUT_MS = 120_000;
 // Copies the sample repo, commits it, and indexes it — ~0.5s on Linux, but on a Windows runner the
 // same work regularly crosses the default hook budget (2 of these 4 tests timed out at 15-26s while
 // the other 2 passed: variance around the threshold, not a hang). Budget for the slow platform
-// rather than weaken what the tests assert.
+// rather than weaken what the tests assert. The same budget is applied to each it() body: bun's
+// default 5 s does not cover post-setup I/O variance on that platform either.
 beforeEach(() => {
   parent = mkdtempSync(join(tmpdir(), "semctx-public-roundtrip-"));
   root = join(parent, "semctx");
@@ -102,7 +103,9 @@ afterEach(() => {
 }, SETUP_TIMEOUT_MS);
 
 describe("public indexed L6-to-L0 round trip", () => {
-  it("resolves real evidence and round-trips through public graph and coverage services", () => {
+  it(
+    "resolves real evidence and round-trips through public graph and coverage services",
+    () => {
     const fixtureBytes = readFileSync(
       join(root, "packages", "control-engine", "test", "fixtures", "l6-l0-refinement.patch"),
     );
@@ -177,9 +180,13 @@ describe("public indexed L6-to-L0 round trip", () => {
       "refinement.07.plane-separation-constraint",
       "refinement.08.fail-closed-constraint",
     ]);
-  });
+  },
+    SETUP_TIMEOUT_MS,
+  );
 
-  it("refuses public coverage after the indexed patch evidence changes", () => {
+  it(
+    "refuses public coverage after the indexed patch evidence changes",
+    () => {
     const fixture = join(
       root,
       "packages",
@@ -203,9 +210,13 @@ describe("public indexed L6-to-L0 round trip", () => {
         reasons: expect.arrayContaining(["WORKING_DIFF_MISMATCH"]),
       },
     });
-  });
+  },
+    SETUP_TIMEOUT_MS,
+  );
 
-  it("refuses public coverage after indexed document evidence changes", () => {
+  it(
+    "refuses public coverage after indexed document evidence changes",
+    () => {
     const evidence = join(root, "docs", "architecture", "semantic-layer-v1.md");
     writeFileSync(evidence, Buffer.concat([readFileSync(evidence), Buffer.from("\nEvidence drift.\n")]));
 
@@ -222,9 +233,13 @@ describe("public indexed L6-to-L0 round trip", () => {
         reasons: expect.arrayContaining(["WORKING_DIFF_MISMATCH"]),
       },
     });
-  });
+  },
+    SETUP_TIMEOUT_MS,
+  );
 
-  it("keeps legacy v1 snapshots without L0 and reports the missing mapping", () => {
+  it(
+    "keeps legacy v1 snapshots without L0 and reports the missing mapping",
+    () => {
     const store = openStore(root);
     const snapshot = JSON.parse(
       store.getMeta(CONTROL_INDEX_SNAPSHOT_META_KEY)!,
@@ -263,7 +278,9 @@ describe("public indexed L6-to-L0 round trip", () => {
         reasonCode: "MAPPING_MISSING",
       },
     });
-  });
+  },
+    SETUP_TIMEOUT_MS,
+  );
 });
 
 function copyTrackedInput(relative: string): void {
