@@ -173,8 +173,13 @@ positives, then enforce by risk/altitude.
 - [ ] **Agent primitives** — provide focused tools for `frame_task`, `bind_scope`, `refine`,
       `target_propose`, `reconcile_diff` and `status` instead of making the model assemble raw
       control-plane payloads.
-- [ ] **Required-altitude policy** — L0-L1 may remain autonomous, L2 is constrained, L3 requires a
+- [x] **Required-altitude policy** — L0-L1 may remain autonomous, L2 is constrained, L3 requires a
       reviewed plan/rollback, and L4-L6 require explicit human authority appropriate to the change.
+      Shipped as one canonical table with accumulating obligations, served identically by
+      `semctx control authority` and `semctx_control_authority`. Autonomy requires both the
+      `autonomous` regime and a preflight that admits high-risk control, so stale or unsealed inputs
+      withdraw it at every altitude. The report grants no execution authority. This satisfies the
+      policy itself; the host adapters that must consume it remain open above and below.
 - [ ] **Codex lifecycle integration** — route eligible prompts, preflight before the first L2+
       write, accumulate touched coordinates after edits, capture a sealed pre-compaction handoff,
       resume it, and reconcile/verify before Stop.

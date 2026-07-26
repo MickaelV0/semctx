@@ -17,6 +17,7 @@ import {
 import {
   controlArchitectureComparisonTool,
   controlAuthorizeDeletionTool,
+  controlAuthorityTool,
   controlAuthorizeStepTool,
   controlAuthorizeTransitionTool,
   controlExplainWhyTool,
@@ -388,6 +389,36 @@ export function createSemctxServer(root: string): McpServer {
     async ({ repositoryRoot }) => {
       try {
         return ok(controlStatusTool(requestRoot(root, repositoryRoot)));
+      } catch (err) {
+        return errorResult(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "semctx_control_authority",
+    {
+      title: "Report the authority a change altitude requires",
+      description:
+        "Read-only required-altitude policy: L0-L1 autonomous, L2 constrained, L3 reviewed plan and rollback, L4-L6 explicit human authority. "
+        + "Reports the regime and its obligations; it never grants execution, and a STALE or UNSEALED preflight withdraws autonomous write at every altitude.",
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+      inputSchema: {
+        repositoryRoot: REPOSITORY_ROOT,
+        requiredAltitude: z.union([
+          z.literal(0), z.literal(1), z.literal(2), z.literal(3),
+          z.literal(4), z.literal(5), z.literal(6),
+        ]).describe("Abstraction altitude the change requires (L0 syntax through L6 strategy)."),
+      },
+    },
+    async ({ repositoryRoot, requiredAltitude }) => {
+      try {
+        return ok(controlAuthorityTool(requestRoot(root, repositoryRoot), requiredAltitude));
       } catch (err) {
         return errorResult(err);
       }
