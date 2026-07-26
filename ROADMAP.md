@@ -172,7 +172,10 @@ positives, then enforce by risk/altitude.
       Claude Code; generate or test host-specific adapters rather than duplicating semantic rules.
 - [ ] **Agent primitives** — provide focused tools for `frame_task`, `bind_scope`, `refine`,
       `target_propose`, `reconcile_diff` and `status` instead of making the model assemble raw
-      control-plane payloads.
+      control-plane payloads. `status`, `reconcile_diff` and `refine` (as `control plan-change`) are
+      served; `frame_task` is now reachable on its own through `control frame-task`, so scope can be
+      validated before a plan exists. `bind_scope` is not yet separable from framing, and
+      `target_propose` still requires callers to author the target artifact directly.
 - [x] **Required-altitude policy** — L0-L1 may remain autonomous, L2 is constrained, L3 requires a
       reviewed plan/rollback, and L4-L6 require explicit human authority appropriate to the change.
       Shipped as one canonical table with accumulating obligations, served identically by
