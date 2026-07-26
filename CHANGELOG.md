@@ -61,6 +61,17 @@ nothing has been published to a package registry (npm) or the GitHub Marketplace
   - Docs: semantic-layer-v1, semantic-model, change-contracts, the Claude Code integration guide, a
     reservation walkthrough, and ADR 0009.
 
+- **Required-altitude authority policy** (P3, [#28](https://github.com/hoklims/semctx/issues/28)):
+  one canonical table turns a change's abstraction altitude into the authority it requires — L0-L1
+  `autonomous`, L2 `constrained`, L3 `reviewed_plan`, L4-L6 `human_authority` — with obligations
+  accumulating as a strict superset at each step. Exposed identically as CLI
+  `semctx control authority` and MCP `semctx_control_authority`, so both hosts derive the regime
+  from the same contract instead of restating it. Autonomy is a conjunction of the regime and a
+  trusted preflight: a `STALE` or `UNSEALED` verdict withdraws autonomous write at every altitude,
+  including L0. The report carries `executionAuthority: "none"`; it names the authority a change
+  requires and never grants it. Host lifecycle integration, handoff v2, telemetry and shadow
+  enforcement remain open on #28.
+
 ### Changed
 
 - `SemctxConfigSchema` gains an optional `semantic` object (backward-compatible; pre-semantic configs

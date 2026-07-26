@@ -353,3 +353,32 @@ describe("semctx control CLI", () => {
     }
   });
 });
+
+describe("control authority CLI transport", () => {
+  it("exits 0 only when an autonomous write is admitted", () => {
+    const autonomous = run(["control", "authority", "--altitude", "1", "--json"]);
+    expect(autonomous.code).toBe(0);
+    const report = JSON.parse(autonomous.out);
+    expect(report.regime).toBe("autonomous");
+    expect(report.allowsAutonomousWrite).toBe(true);
+    expect(report.executionAuthority).toBe("none");
+
+    for (const altitude of ["2", "3", "4", "5", "6"]) {
+      const constrained = run(["control", "authority", "--altitude", altitude, "--json"]);
+      expect(constrained.code).toBe(3);
+      expect(JSON.parse(constrained.out).allowsAutonomousWrite).toBe(false);
+    }
+  });
+
+  it("defaults to L0 and prints the regime with its obligations", () => {
+    const { code, out } = run(["control", "authority"]);
+
+    expect(code).toBe(0);
+    expect(out).toContain("L0 autonomous");
+    expect(out).toContain("preflight_fresh_inputs");
+  });
+
+  it("rejects an altitude outside L0-L6", () => {
+    expect(() => run(["control", "authority", "--altitude", "7"])).toThrow("--altitude must be an integer between 0 and 6");
+  });
+});

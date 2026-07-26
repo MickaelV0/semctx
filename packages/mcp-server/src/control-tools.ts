@@ -1,6 +1,7 @@
 /** Thin Plane C MCP transport over the shared application services. */
 
 import {
+  controlAltitudeAuthority,
   controlStatus,
   planControlMigration,
   queryControlArchitectureComparison,
@@ -22,6 +23,7 @@ import {
   type TraversalQueryV1,
 } from "@semantic-context/app-services";
 import type {
+  AltitudeAuthorityReportV1,
   ArchitectureDelta,
   ArchitectureSnapshot,
   ControlFreshnessStatusReport,
@@ -45,6 +47,13 @@ export interface ControlPlanInput {
   changeId: string;
   target?: ArchitectureSnapshot;
   delta?: ArchitectureDelta;
+}
+
+export function controlAuthorityTool(
+  root: string,
+  requiredAltitude: 0 | 1 | 2 | 3 | 4 | 5 | 6,
+): AltitudeAuthorityReportV1 {
+  return controlAltitudeAuthority(root, requiredAltitude);
 }
 
 export function controlStatusTool(root: string): ControlFreshnessStatusReport {

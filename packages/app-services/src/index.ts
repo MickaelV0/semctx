@@ -9,6 +9,7 @@ export type { VerificationGitState } from "./verification-state";
 export { closeChange, normalizeChangeId, openChange, updateChange, verifyAuthoredChange } from "./changes";
 export type { OpenChangeCommand, UpdateChangeCommand } from "./changes";
 export {
+  controlAltitudeAuthority,
   controlStatus,
   loadControlQueryRuntime,
   loadControlState,

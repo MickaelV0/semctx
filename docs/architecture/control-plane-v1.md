@@ -88,6 +88,31 @@ distinction is that refusing to act never becomes refusing to say why. A caller 
 untyped configuration error could neither proceed nor prove it had to stop, and the same drift also
 blocks `semctx index`, so the tool that names the repair must stay answerable.
 
+## Required-altitude authority
+
+A change's abstraction altitude decides which authority it requires. One canonical table holds the
+rule so that Codex and Claude Code derive the same regime instead of each restating it:
+
+| Required altitude | Regime | Adds over the looser regime |
+| --- | --- | --- |
+| L0-L1 syntax, symbols, tests, schemas | `autonomous` | — (`preflight_fresh_inputs` is the floor) |
+| L2 components, boundaries | `constrained` | `bound_repository_scope` |
+| L3 capabilities | `reviewed_plan` | `reviewed_refinement_plan`, `declared_rollback` |
+| L4-L6 invariants, product intent, strategy | `human_authority` | `explicit_human_authority` |
+
+Obligations accumulate: each regime is a strict superset of the looser one, so an agent that
+satisfies a higher regime has already satisfied every lower one.
+
+Autonomy is a conjunction, never an inheritance. `allowsAutonomousWrite` is true only when the
+regime is `autonomous` **and** the preflight verdict admits high-risk control. A `STALE` or
+`UNSEALED` preflight therefore withdraws autonomous write at every altitude, including L0 — the
+policy cannot be more confident than the state it was computed from.
+
+Naming the authority a change requires is not holding it: the report carries
+`executionAuthority: "none"` like every other Plane C artifact, and no host guard becomes a sandbox
+or a boundary against a hostile agent. Both `semctx control authority` and
+`semctx_control_authority` return the same versioned report for the same repository state.
+
 ## Semantic coordinates
 
 Ids are plane-qualified: `repo:<repository-node-id>` or `semantic:<semantic-node-id>`. The mapping is
