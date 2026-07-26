@@ -11,9 +11,13 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import {
   BuildPlanningBundleCommandV1Schema,
+  PrepareTaskEnvelopeCommandV1Schema,
   buildPlanningBundle,
+  prepareTaskEnvelope,
   reconcileWorkingTree,
   type BuildPlanningBundleCommandV1,
+  type PrepareTaskEnvelopeCommandV1,
+  type PreparedTaskEnvelopeV1,
 } from "@semantic-context/app-services/reconciliation";
 import {
   ReconcileWorkingTreeInputV1Schema,
@@ -36,6 +40,13 @@ interface TextResult {
   isError?: boolean;
 }
 
+export function controlFrameTaskTool(
+  root: string,
+  command: PrepareTaskEnvelopeCommandV1,
+): PreparedTaskEnvelopeV1 {
+  return prepareTaskEnvelope(root, command);
+}
+
 export function controlPlanChangeTool(
   root: string,
   command: BuildPlanningBundleCommandV1,
@@ -55,6 +66,36 @@ export function registerReconciliationTools(
   server: McpServer,
   boundRoot: string,
 ): void {
+  server.registerTool(
+    "semctx_control_frame_task",
+    {
+      title: "Frame a task and bind its repository scope",
+      description:
+        "Read-only compilation of a diagnostic TaskEnvelope from persisted Plane A/B inputs: it classifies the task and turns candidate anchors into resolved bindings, so scope can be validated before any plan exists. "
+        + "Returns the same envelope semctx_control_plan_change embeds, without requiring expectations or a rollback description. Certifies nothing and grants no execution authority.",
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+      inputSchema: {
+        repositoryRoot: REPOSITORY_ROOT,
+        command: PrepareTaskEnvelopeCommandV1Schema,
+      },
+    },
+    async ({ repositoryRoot, command }) => {
+      try {
+        return canonical(controlFrameTaskTool(
+          requestRoot(boundRoot, repositoryRoot),
+          command as PrepareTaskEnvelopeCommandV1,
+        ));
+      } catch (error) {
+        return errorResult(error);
+      }
+    },
+  );
+
   server.registerTool(
     "semctx_control_plan_change",
     {

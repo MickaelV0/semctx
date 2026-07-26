@@ -79,6 +79,24 @@ than an error: `SEMANTIC_MODEL_INVALID` for error-severity diagnostics or duplic
 `SEMANTIC_LIFECYCLE_INVALID` for error-severity lifecycle findings. Both are `UNSEALED` and exit 3.
 Run `semctx semantic check` to see the individual findings behind the reason code.
 
+## `control frame-task`
+
+Compile a diagnostic `TaskEnvelope` and resolve its repository bindings, before any plan exists.
+
+```text
+semctx control frame-task <change-id> --task-id <task-id> [--input <framing.json>] [--json]
+```
+
+`--input` carries the framing half only — candidate anchors, explicit discoveries, authored link
+resolutions, an optional target selection. It is optional: with no file, framing runs from the
+persisted Plane A/B inputs alone. Unlike `control plan-change`, no expectations and no
+`rollbackDescription` are required, so an agent can check whether its anchors resolve before
+describing a plan it may have to discard.
+
+The returned envelope is byte-identical to the one `control plan-change` embeds for the same
+inputs. The report is `certifying: false` and carries `executionAuthority: "none"`; it never writes,
+indexes, reviews a target, or accepts caller-selected Git refs.
+
 ## `control authority`
 
 Report the authority a change requires at a given abstraction altitude.

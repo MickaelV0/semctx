@@ -32,6 +32,7 @@ import {
   serializeControlReport,
 } from "@semantic-context/control-model/reconciliation";
 import {
+  controlFrameTaskTool,
   controlPlanChangeTool,
   controlReconcileDiffTool,
 } from "@semantic-context/mcp-server/reconciliation";
@@ -167,6 +168,47 @@ describe("task reconciliation MCP adapters", () => {
       expect(invalidPlan.isError).toBe(true);
       expect(textContent(invalidPlan)).toContain("Input validation error");
       expect(textContent(invalidPlan)).toContain("\"base\"");
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("frames a task without requiring a plan, and yields the envelope the bundle embeds", () => {
+    const fixture = preparedRepository();
+
+    const framed = controlFrameTaskTool(fixture.root, fixture.command);
+    const bundle = controlPlanChangeTool(fixture.root, {
+      ...fixture.command,
+      rollbackDescription: "Restore the committed implementation.",
+      repositoryEditExpectations: [fixture.edit],
+    });
+
+    // The whole point of the separate step: the same envelope, reachable before a plan exists.
+    expect(framed.envelope).toEqual(bundle.taskEnvelope);
+    expect(framed).toEqual(prepareTaskEnvelope(fixture.root, fixture.command));
+    expect(framed.kind).toBe("prepared_task_envelope");
+    expect(framed.certifying).toBe(false);
+    expect(framed.envelope.executionAuthority).toBe("none");
+    expect(framed.envelope.resolvedBindings.length).toBeGreaterThan(0);
+  });
+
+  it("exposes framing over the actual MCP transport as canonical shared bytes", async () => {
+    const fixture = preparedRepository();
+    const expected = controlFrameTaskTool(fixture.root, fixture.command);
+    const server = createSemctxServer(fixture.root);
+    const client = new Client({ name: "semctx-framing-test", version: "0.1.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      const result = await client.callTool({
+        name: "semctx_control_frame_task",
+        arguments: { repositoryRoot: fixture.root, command: fixture.command },
+      });
+
+      expect(textContent(result)).toBe(serializeControlReport(expected));
     } finally {
       await client.close();
       await server.close();
