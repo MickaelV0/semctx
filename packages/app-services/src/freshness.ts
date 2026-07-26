@@ -189,6 +189,16 @@ export function fingerprintSemanticModel(model: SemanticModel): Sha256Hash {
   return hash("semantic-model", serializeControlReport(normalized));
 }
 
+/**
+ * Line endings are a checkout artifact, not content: Git rewrites them per platform, so the same
+ * commit reaches a CRLF and an LF working tree with different bytes. Normalizing here keeps the
+ * seal bound to the source state rather than to the machine that captured it. Only the fingerprint
+ * normalizes — analysis and L0 coordinates keep the exact on-disk bytes.
+ */
+function normalizeLineEndings(content: string): string {
+  return content.replace(/\r\n/g, "\n");
+}
+
 /** Fingerprint the exact discovered Plane A contents plus the parsed analyzer configuration. */
 export function fingerprintAnalysisInputs(config: SemctxConfig, files: readonly DiscoveredFile[]): Sha256Hash {
   const manifest = {
@@ -197,7 +207,7 @@ export function fingerprintAnalysisInputs(config: SemctxConfig, files: readonly 
       .map((file) => ({
         path: file.relPath.replace(/\\/g, "/"),
         role: file.role,
-        contentHash: hash("analysis-input-content", file.content),
+        contentHash: hash("analysis-input-content", normalizeLineEndings(file.content)),
       }))
       .sort((a, b) => compareIds(a.path, b.path)),
   };
