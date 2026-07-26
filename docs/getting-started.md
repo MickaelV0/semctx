@@ -8,8 +8,8 @@ It is local-first, deterministic, and needs no LLM, network, or service.
 
 - [Bun](https://bun.sh) ≥ 1.3 (the engine runs under Bun).
 - A git repository with TypeScript sources.
-- `semctx` is not yet on npm — run it from source. In this repo, `bun apps/cli/src/index.ts` is
-  the CLI; below it is written as `semctx`.
+- `semctx` is on npm, but the published release lags this repository — run it from source. In this
+  repo, `bun apps/cli/src/index.ts` is the CLI; below it is written as `semctx`.
 
 ## 1. Bootstrap
 
