@@ -33,10 +33,14 @@ Marketplace. The published CLI lags this repository — see
   they do not short-circuit a real subcommand such as `verify`.
 - **Codex shell fallback**: the shared skill dropped the `bun ./dist/semctx.js` rung. That path
   assumed the agent's cwd was the plugin package root; on Codex the shell runs in the user's
-  repository, so the rung could never resolve. Global `semctx` remains the Codex shell fallback.
-  The shared skill still lists Claude's `${CLAUDE_PLUGIN_ROOT}` rung (substituted only by Claude
-  Code; Codex agents must skip the unsubstituted placeholder — see #40 for a host-generated
-  contract).
+  repository, so the rung could never resolve.
+- **Host-generated CLI ladder in the control skill** (#40 option A): one authored template
+  (`plugins/shared/skills/semctx-control/SKILL.md`) holds the host-neutral workflow contract;
+  `plugin:build` fills a marked host region per plugin. Claude gets the `${CLAUDE_PLUGIN_ROOT}`
+  plugin-CLI rung; Codex gets only global `semctx` instructions. `plugin-parity` asserts the
+  shared body is still byte-identical after stripping the host region, forbids any
+  `CLAUDE_PLUGIN_ROOT` in the Codex skill/manifest/MCP config, and `plugin:check` fails on a stale
+  generated skill.
 - **CI runs the full suite**: `plugin-runtime` now runs `bun run test` instead of a three-file
   selection that skipped the guard-hook and CLI tests gating plugin packaging.
 

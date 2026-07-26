@@ -20,7 +20,10 @@ runtime behaviour. The analysis is local and deterministic; semctx itself needs 
   the guard hook prints a resolved path. The variable is exported to hooks and MCP servers, **not**
   to the agent's shell. A global `semctx` (`bun install -g semctx`) remains optional for CI and
   non-plugin shells.
-- **Shared skill**: `skills/semctx-control`, byte-identical to the Codex workflow contract.
+- **Shared skill**: `skills/semctx-control` — host-neutral workflow body is byte-identical to Codex;
+  the shell CLI ladder is generated per host at `plugin:build` (Claude keeps the plugin-CLI
+  placeholder; Codex documents global `semctx` only). Source template:
+  `plugins/shared/skills/semctx-control/SKILL.md`.
 - **Focused skills**: `skills/semctx-verify` for Plane A and `skills/semctx-semantic` for Plane B.
 - **Guard hook** (`hooks/`): a `PreToolUse` guard that is **inert by default** (advisory) and, when
   the project opts into guarded mode, blocks non-isolated `git commit` / `git push` commands or an

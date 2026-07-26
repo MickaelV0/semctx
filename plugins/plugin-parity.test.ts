@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
+import {
+  HOST_CLI_STRIP,
+  hostCliLadder,
+  renderControlSkill,
+  type SkillHost,
+} from "../scripts/build-plugin-runtime.ts";
 
 const repoRoot = resolve(import.meta.dir, "..");
 
@@ -18,12 +24,68 @@ function typescriptLibs(plugin: "claude-code" | "semctx-control"): string[] {
     .sort();
 }
 
-describe("Codex and Claude Code plugin parity", () => {
-  test("ships one byte-identical semctx-control workflow contract", () => {
-    const codex = read("plugins/semctx-control/skills/semctx-control/SKILL.md");
-    const claude = read("plugins/claude-code/skills/semctx-control/SKILL.md");
+function skillPath(host: SkillHost): string {
+  return host === "claude-code"
+    ? "plugins/claude-code/skills/semctx-control/SKILL.md"
+    : "plugins/semctx-control/skills/semctx-control/SKILL.md";
+}
 
-    expect(claude).toBe(codex);
+/** Shared workflow contract = generated skill with the host CLI ladder region removed. */
+function sharedContractBody(skill: string): string {
+  const stripped = skill.replace(HOST_CLI_STRIP, "");
+  expect(stripped).not.toBe(skill); // host region must be present and strip-able
+  return stripped;
+}
+
+describe("Codex and Claude Code plugin parity", () => {
+  test("renderControlSkill rejects a template without the host marker", () => {
+    expect(() => renderControlSkill("claude-code", "# no marker\n")).toThrow(/HOST_CLI_LADDER/);
+  });
+
+  test("renderControlSkill rejects a template that embeds CLAUDE_PLUGIN_ROOT", () => {
+    const bad = "# x\n{{HOST_CLI_LADDER}}\n${CLAUDE_PLUGIN_ROOT}\n";
+    expect(() => renderControlSkill("claude-code", bad)).toThrow(/CLAUDE_PLUGIN_ROOT/);
+  });
+
+  test("hostCliLadder option-A invariants (Claude plugin rung, Codex no relative dist)", () => {
+    const claude = hostCliLadder("claude-code");
+    expect(claude).toContain("Plugin-bundled CLI");
+    expect(claude).toContain('bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js"');
+    expect(claude).toContain("semctx --version");
+    // Plugin rung before global fallback in the ordered list.
+    expect(claude.indexOf("Plugin-bundled CLI")).toBeLessThan(claude.indexOf("Global `semctx` on PATH"));
+
+    const codex = hostCliLadder("semctx-control");
+    expect(codex).not.toContain("CLAUDE_PLUGIN_ROOT");
+    expect(codex).not.toContain("Plugin-bundled CLI");
+    // Agent-runnable fence must not teach relative plugin paths (prose may name them as forbidden).
+    const codexFence = codex.match(/```text\n([\s\S]*?)```/)?.[1] ?? "";
+    expect(codexFence.length).toBeGreaterThan(0);
+    expect(codexFence).not.toMatch(/bun\s+["']?\.\/dist\/semctx\.js/);
+    expect(codexFence).toContain("semctx --version");
+    expect(codex).toContain("does **not** substitute a plugin-root path");
+  });
+
+  test("ships one shared semctx-control workflow contract with host-generated CLI ladders", () => {
+    const template = read("plugins/shared/skills/semctx-control/SKILL.md");
+    expect(template).toContain("{{HOST_CLI_LADDER}}");
+    expect(template).not.toContain("CLAUDE_PLUGIN_ROOT");
+
+    const codex = read(skillPath("semctx-control"));
+    const claude = read(skillPath("claude-code"));
+
+    // Generated artifacts match the build (deterministic).
+    expect(claude).toBe(renderControlSkill("claude-code", template));
+    expect(codex).toBe(renderControlSkill("semctx-control", template));
+
+    // Host-neutral body is still byte-identical across hosts.
+    const shared = sharedContractBody(claude);
+    expect(shared).toBe(sharedContractBody(codex));
+    // Host leakage must live only inside the strip region.
+    expect(shared).not.toContain("CLAUDE_PLUGIN_ROOT");
+    expect(shared).not.toContain("Plugin-bundled CLI");
+    expect(shared).not.toContain("host-cli-ladder");
+
     for (const required of [
       "semctx_control_status",
       "semctx_control_trace",
@@ -34,14 +96,26 @@ describe("Codex and Claude Code plugin parity", () => {
       "BLOCKED",
       "PARTIAL",
       "runtime tests",
-      "dist/semctx.js",
-      "Plugin-bundled CLI",
-      "Global `semctx` on PATH",
-      'bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js"',
-      "semctx --version",
+      "Local equivalents when MCP is unavailable",
     ]) {
-      expect(codex).toContain(required);
+      expect(shared).toContain(required);
     }
+
+    // Claude keeps the plugin-bundled placeholder rung.
+    expect(claude).toContain("Plugin-bundled CLI");
+    expect(claude).toContain('bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js"');
+    expect(claude).toContain("semctx --version");
+    expect(claude).toContain(hostCliLadder("claude-code").trim());
+
+    // Codex ships only host-working instructions — no Claude placeholder in any form.
+    expect(codex).toContain("Global / CI CLI");
+    expect(codex).toContain("semctx --version");
+    expect(codex).toContain("semctx status --json");
+    expect(codex).not.toContain("CLAUDE_PLUGIN_ROOT");
+    expect(codex).not.toContain("Plugin-bundled CLI");
+    const codexFence = codex.match(/```text\n([\s\S]*?)```/)?.[1] ?? "";
+    expect(codexFence).not.toMatch(/bun\s+["']?\.\/dist\/semctx\.js/);
+    expect(codex).toContain("does **not** substitute a plugin-root path");
   });
 
   // Claude Code substitutes ${CLAUDE_PLUGIN_ROOT} into skill/agent content, hook and monitor
@@ -54,6 +128,7 @@ describe("Codex and Claude Code plugin parity", () => {
       "plugins/claude-code/skills/semctx-semantic/SKILL.md",
       "plugins/claude-code/skills/semctx-verify/SKILL.md",
       "plugins/semctx-control/skills/semctx-control/SKILL.md",
+      "plugins/shared/skills/semctx-control/SKILL.md",
       "plugins/claude-code/hooks/hooks.json",
       "plugins/claude-code/.mcp.json",
       "plugins/claude-code/README.md",
@@ -63,6 +138,7 @@ describe("Codex and Claude Code plugin parity", () => {
       "docs/integrations/claude-code-guarded-mode.md",
       "docs/integrations/codex-control-plane.md",
     ];
+    expect(shipped.length).toBeGreaterThan(0);
     // Matches $CLAUDE_PLUGIN_ROOT only when it is NOT the ${…} form.
     const bare = /\$CLAUDE_PLUGIN_ROOT/;
     // Canary: a neutered pattern would leave this suite permanently green.
@@ -73,6 +149,27 @@ describe("Codex and Claude Code plugin parity", () => {
         .split("\n")
         .map((line, index) => ({ line, number: index + 1 }))
         .filter(({ line }) => bare.test(line));
+      expect({ path, offenders }).toEqual({ path, offenders: [] });
+    }
+  });
+
+  test("Codex plugin never ships CLAUDE_PLUGIN_ROOT in any form", () => {
+    const anyForm = /CLAUDE_PLUGIN_ROOT/;
+    expect(anyForm.test("${CLAUDE_PLUGIN_ROOT}")).toBe(true);
+    expect(anyForm.test("$CLAUDE_PLUGIN_ROOT")).toBe(true);
+
+    // Enumerated text surfaces (not dist/ binaries). Anti-neuter: list must stay non-empty.
+    const codexTree = [
+      "plugins/semctx-control/skills/semctx-control/SKILL.md",
+      "plugins/semctx-control/.mcp.json",
+      "plugins/semctx-control/.codex-plugin/plugin.json",
+    ];
+    expect(codexTree.length).toBeGreaterThan(0);
+    for (const path of codexTree) {
+      const offenders = read(path)
+        .split("\n")
+        .map((line, index) => ({ line, number: index + 1 }))
+        .filter(({ line }) => anyForm.test(line));
       expect({ path, offenders }).toEqual({ path, offenders: [] });
     }
   });

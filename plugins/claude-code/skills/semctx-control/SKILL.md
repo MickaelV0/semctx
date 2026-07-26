@@ -3,6 +3,8 @@ name: semctx-control
 description: Use semctx through its MCP tools for repository impact analysis, authored goals and invariants, proof-carrying change contracts, handoffs, and read-only fail-closed migration planning. Use for non-trivial code changes, refactors, migrations, architecture reconstruction, semantic trace requests, invariant preservation, generic project demonstrations, or pre-commit verification in a semctx-enabled repository.
 ---
 
+<!-- GENERATED leaves: edit this template only, then run `bun run plugin:build`. -->
+
 # Semctx Control
 
 Use the `semctx` MCP server as a proof surface, not as a replacement for repository search or runtime tests. This workflow contract is shared by the Codex and Claude Code plugins.
@@ -51,23 +53,23 @@ Report the framed objective, authority sources, freshness verdict, seal hash and
 
 ## Local equivalents when MCP is unavailable
 
+<!-- BEGIN host-cli-ladder:claude-code -->
 Prefer MCP tools when they are connected. For shell fallbacks, resolve the CLI in this order
 (stop at the first that works):
 
 1. **Plugin-bundled CLI** (same release as the MCP bundle) — the `bun "…/dist/semctx.js"` path in
-   the block below. A host that supports plugin path substitution rewrites the plugin root into
-   this skill **when the skill is loaded**, so the path you read is already absolute. If it still
-   reads as a literal `${…}` placeholder, your host does not substitute it: skip to the next step.
-   Never expect `CLAUDE_PLUGIN_ROOT` to exist in the shell — where it is set at all, it is exported
-   to hooks and MCP servers, not to your terminal. Do not try to guess the plugin directory, and do
-   not assume the shell's cwd is the plugin package root: it is the user's repository.
+   the block below. Claude Code substitutes the plugin root into this skill **when the skill is
+   loaded**, so the path you read is already absolute. Never expect `CLAUDE_PLUGIN_ROOT` to exist
+   in the shell — where it is set at all, it is exported to hooks and MCP servers, not to your
+   terminal. Do not try to guess the plugin directory, and do not assume the shell's cwd is the
+   plugin package root: it is the user's repository.
 2. **Global `semctx` on PATH** (`bun install -g semctx` / `bunx semctx`) — keep it on the **same
    version** as the plugin (`semctx --version` should match the marketplace plugin version).
 3. If neither is available, say so and continue with MCP-only or ask the user to update the plugin /
    install the CLI — do not invent results.
 
 ```text
-# Plugin CLI (path substituted at skill load; skip if it is still a literal placeholder)
+# Plugin CLI (path substituted at skill load)
 bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" status --json
 bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" semantic check --json
 bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" semantic slice --change change.<slug> --format agent
@@ -82,3 +84,4 @@ bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" semantic resume
 semctx --version
 semctx status --json
 ```
+<!-- END host-cli-ladder -->

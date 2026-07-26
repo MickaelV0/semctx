@@ -69,9 +69,13 @@ the generated runtimes resolve them relative to the installed plugin directory r
 build checkout:
 
 ```bash
-bun run plugin:build   # refresh tracked dist/semctx-mcp.js + dist/semctx.js on both plugins
+bun run plugin:build   # refresh tracked dist/* + host-generated control skills on both plugins
 bun run plugin:check   # fail if any tracked artifact is missing or stale
 ```
+
+`plugin:build` also renders `plugins/*/skills/semctx-control/SKILL.md` from
+`plugins/shared/skills/semctx-control/SKILL.md`: Claude gets the `${CLAUDE_PLUGIN_ROOT}` CLI rung;
+Codex gets only global `semctx` instructions (#40). Edit the template, not the generated leaves.
 
 Agent sessions should prefer the plugin-bundled CLI so a marketplace update keeps MCP and CLI in
 lockstep. The npm `semctx` package remains the channel for CI, GitHub Actions, and non-plugin shells.
