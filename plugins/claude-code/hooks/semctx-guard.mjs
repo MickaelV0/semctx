@@ -40,11 +40,55 @@ function shellCommandBody(command) {
   return wrappedShellCommand(command)?.body ?? null;
 }
 
+function envSplitStringBody(command) {
+  const text = String(command ?? "").trim();
+  const tokens = text.split(/\s+/).filter(Boolean);
+  let i = 0;
+  while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) i += 1;
+  if (executableName(tokens[i]) !== "env" && executableName(tokens[i]) !== "env.exe") return null;
+  const splitOption = /(?:^|\s)(?:-S\s+|--split-string(?:=|\s+))/.exec(text);
+  if (splitOption === null) return null;
+  return unwrapShellBody(text.slice(splitOption.index + splitOption[0].length));
+}
+
+function executableName(token) {
+  return stripQuotes(token).replace(/\\/g, "/").split("/").pop()?.toLowerCase();
+}
+
+const ENV_OPTIONS_WITH_VALUE = new Set([
+  "-a",
+  "-C",
+  "-S",
+  "-u",
+  "--argv0",
+  "--chdir",
+  "--split-string",
+  "--unset",
+]);
+
+function envCommandIndex(tokens, start) {
+  if (executableName(tokens[start]) !== "env" && executableName(tokens[start]) !== "env.exe") return start;
+  let i = start + 1;
+  while (i < tokens.length) {
+    const token = stripQuotes(tokens[i]);
+    if (token === "--") return i + 1;
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(token) || !token.startsWith("-")) return i;
+    if (ENV_OPTIONS_WITH_VALUE.has(token)) {
+      i += 2;
+      continue;
+    }
+    i += 1;
+  }
+  return i;
+}
+
 function gitTokenIndex(tokens) {
   let i = 0;
   while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) i += 1;
+  i = envCommandIndex(tokens, i);
+  while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) i += 1;
   if (stripQuotes(tokens[i]) === "command") i += 1;
-  const executable = stripQuotes(tokens[i]).replace(/\\/g, "/").split("/").pop()?.toLowerCase();
+  const executable = executableName(tokens[i]);
   return executable === "git" || executable === "git.exe" ? i : -1;
 }
 
@@ -102,16 +146,54 @@ function pathRequiresShellExpansion(token) {
   return /[$~*?{}\[\]]/.test(stripQuotes(token));
 }
 
+function isRetargetingEnvironmentName(name) {
+  const normalized = String(name ?? "").toUpperCase();
+  return GIT_RETARGET_ENV.has(normalized) || normalized.startsWith("GIT_CONFIG_");
+}
+
 function isRetargetingEnvironmentAssignment(token) {
   const match = /^([A-Za-z_][A-Za-z0-9_]*)=/.exec(String(token ?? ""));
   if (match === null) return false;
-  const name = match[1].toUpperCase();
-  return GIT_RETARGET_ENV.has(name) || name.startsWith("GIT_CONFIG_");
+  return isRetargetingEnvironmentName(match[1]);
 }
 
 function isRetargetingConfig(value) {
   const key = stripQuotes(value).split("=", 1)[0].toLowerCase();
   return GIT_RETARGET_CONFIG.has(key);
+}
+
+function envWrapperMakesScopeAmbiguous(tokens, gitIndex) {
+  let envIndex = 0;
+  while (envIndex < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[envIndex])) envIndex += 1;
+  if (executableName(tokens[envIndex]) !== "env" && executableName(tokens[envIndex]) !== "env.exe") return false;
+  const envArgs = tokens.slice(envIndex + 1, gitIndex);
+  for (let i = 0; i < envArgs.length; i += 1) {
+    const token = stripQuotes(envArgs[i]);
+    if (token === "-i" || token === "--ignore-environment") return true;
+    if (token === "-u" || token === "--unset") {
+      if (isRetargetingEnvironmentName(stripQuotes(envArgs[i + 1]))) return true;
+      i += 1;
+      continue;
+    }
+    if (
+      (token.startsWith("-u") && token.length > 2 && isRetargetingEnvironmentName(token.slice(2)))
+      || (token.startsWith("--unset=") && isRetargetingEnvironmentName(token.slice("--unset=".length)))
+    ) {
+      return true;
+    }
+    if (
+      token === "-C"
+      || token === "-S"
+      || token === "--chdir"
+      || token === "--split-string"
+      || (token.startsWith("-C") && token.length > 2)
+      || token.startsWith("--chdir=")
+      || token.startsWith("--split-string=")
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -121,6 +203,7 @@ function isRetargetingConfig(value) {
  */
 function gitScopeRequiresSessionGuard(command) {
   const text = String(command ?? "");
+  if (envSplitStringBody(text) !== null) return true;
   const nested = shellCommandBody(text);
   if (nested !== null && gitScopeRequiresSessionGuard(nested)) return true;
 
@@ -138,6 +221,7 @@ function gitScopeRequiresSessionGuard(command) {
 
     const gitIndex = gitTokenIndex(tokens);
     if (gitIndex < 0) continue;
+    if (envWrapperMakesScopeAmbiguous(tokens, gitIndex)) return true;
     for (let prefix = 0; prefix < gitIndex; prefix += 1) {
       if (isRetargetingEnvironmentAssignment(tokens[prefix])) return true;
     }
@@ -166,6 +250,11 @@ function gitScopeRequiresSessionGuard(command) {
 
 /** Detect a terminal git verb (commit|push) in a shell command, structurally. Returns the verb or null. */
 export function isTerminalGitCommand(command) {
+  const envSplit = envSplitStringBody(command);
+  if (envSplit !== null) {
+    const verb = isTerminalGitCommand(envSplit);
+    if (verb !== null) return verb;
+  }
   const nested = shellCommandBody(command);
   if (nested !== null) {
     const verb = isTerminalGitCommand(nested);
@@ -195,7 +284,7 @@ export function isTerminalGitCommand(command) {
  */
 export function isIsolatedTerminalGitCommand(command) {
   const text = String(command ?? "").trim();
-  if (text === "" || shellCommandBody(text) !== null) return false;
+  if (text === "" || shellCommandBody(text) !== null || envSplitStringBody(text) !== null) return false;
   if (/\$\(|`|\r|\n|\|\||(?<!\|)\|(?!\|)|;|(?<!&)&(?!&)|[<>]/.test(text)) return false;
   if (gitScopeRequiresSessionGuard(text)) return false;
 
@@ -236,6 +325,8 @@ function resolveUnder(base, p) {
  */
 export function resolveGitCwd(command, inputCwd) {
   const text = String(command ?? "");
+  const envSplit = envSplitStringBody(text);
+  if (envSplit !== null) return resolveGitCwd(envSplit, inputCwd);
   const wrapped = wrappedShellCommand(text);
   if (wrapped !== null) {
     const nestedBase = wrapped.start > 0 ? resolveGitCwd(text.slice(0, wrapped.start), inputCwd) : inputCwd;

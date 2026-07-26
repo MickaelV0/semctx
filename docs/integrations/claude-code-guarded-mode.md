@@ -56,7 +56,10 @@ and globs in `cd` or `git -C` are rejected. Git repository retargeting is also o
 including `GIT_DIR` / `GIT_WORK_TREE` and related index, object, common-dir, namespace, or config
 environment; `--git-dir`, `--work-tree`, `--namespace`, `--bare`; and `-c core.worktree` /
 `-c core.bare`. Use a plain literal `cd <repo> && git commit`, `git -C <repo> commit`, or the
-equivalent `push`.
+equivalent `push`. Direct `env` wrappers are parsed too: non-retargeting forms such as
+`env GIT_AUTHOR_NAME=name git commit` remain in contract, while retargeting assignments,
+environment clearing (`-i`), repository-affecting `-u` / `--unset`, `env -C` / `--chdir`, and
+`env -S` / `--split-string` are rejected.
 
 ## Disable
 

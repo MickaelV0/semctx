@@ -127,11 +127,11 @@ Marketplace. The published CLI lags this repository — see
 ### Fixed
 
 - **Guarded Git scope now fails closed** (#47): unexpanded cwd paths in `cd` / `git -C` and Git
-  repository retargeting through `GIT_DIR`, `GIT_WORK_TREE`, related repository-state environment,
-  `--git-dir`, `--work-tree`, namespaces, bare mode, or `core.worktree` / `core.bare` config are
-  rejected as non-isolated. A guarded session remains authoritative when the command's target cannot
-  be resolved structurally, so the hook never compares one repository's verification hash before
-  committing or pushing another.
+  repository retargeting through direct or `env`-wrapped `GIT_DIR`, `GIT_WORK_TREE`, related
+  repository-state environment, `--git-dir`, `--work-tree`, namespaces, bare mode, or
+  `core.worktree` / `core.bare` config are rejected as non-isolated. A guarded session remains
+  authoritative when the command's target cannot be resolved structurally, so the hook never
+  compares one repository's verification hash before committing or pushing another.
 - **The freshness preflight always returns a verdict.** `semctx status` and `semctx_control_status`
   raised `CONFIG_INVALID` ("semantic model cannot be projected into Plane C") instead of reporting a
   verdict when the authored model carried error-severity diagnostics, duplicate ids, or
