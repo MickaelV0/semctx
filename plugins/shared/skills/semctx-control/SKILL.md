@@ -3,6 +3,8 @@ name: semctx-control
 description: Use semctx through its MCP tools for repository impact analysis, authored goals and invariants, proof-carrying change contracts, handoffs, and read-only fail-closed migration planning. Use for non-trivial code changes, refactors, migrations, architecture reconstruction, semantic trace requests, invariant preservation, generic project demonstrations, or pre-commit verification in a semctx-enabled repository.
 ---
 
+<!-- GENERATED leaves: edit this template only, then run `bun run plugin:build`. -->
+
 # Semctx Control
 
 Use the `semctx` MCP server as a proof surface, not as a replacement for repository search or runtime tests. This workflow contract is shared by the Codex and Claude Code plugins.

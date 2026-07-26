@@ -3,6 +3,8 @@ name: semctx-control
 description: Use semctx through its MCP tools for repository impact analysis, authored goals and invariants, proof-carrying change contracts, handoffs, and read-only fail-closed migration planning. Use for non-trivial code changes, refactors, migrations, architecture reconstruction, semantic trace requests, invariant preservation, generic project demonstrations, or pre-commit verification in a semctx-enabled repository.
 ---
 
+<!-- GENERATED leaves: edit this template only, then run `bun run plugin:build`. -->
+
 # Semctx Control
 
 Use the `semctx` MCP server as a proof surface, not as a replacement for repository search or runtime tests. This workflow contract is shared by the Codex and Claude Code plugins.
@@ -58,8 +60,9 @@ PATH (`bun install -g semctx` / `bunx semctx`) — keep it on the **same version
 
 This host does **not** substitute a plugin-root path into skill content, and the agent's shell cwd
 is the user's repository (not the plugin package root), so the bundled `dist/semctx.js` is not
-addressable via a relative or placeholder path from this skill. The plugin still ships the CLI next
-to the MCP runtime for lockstep releases and for humans who know the absolute path.
+addressable via a relative path such as `bun ./dist/semctx.js` or a placeholder. The plugin still
+ships the CLI next to the MCP runtime for lockstep releases and for humans who know the absolute
+path.
 
 If `semctx` is not available, say so and continue with MCP-only or ask the user to install the CLI
 — do not invent results.

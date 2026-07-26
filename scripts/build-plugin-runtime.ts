@@ -99,8 +99,9 @@ PATH (\`bun install -g semctx\` / \`bunx semctx\`) — keep it on the **same ver
 
 This host does **not** substitute a plugin-root path into skill content, and the agent's shell cwd
 is the user's repository (not the plugin package root), so the bundled \`dist/semctx.js\` is not
-addressable via a relative or placeholder path from this skill. The plugin still ships the CLI next
-to the MCP runtime for lockstep releases and for humans who know the absolute path.
+addressable via a relative path such as \`bun ./dist/semctx.js\` or a placeholder. The plugin still
+ships the CLI next to the MCP runtime for lockstep releases and for humans who know the absolute
+path.
 
 If \`semctx\` is not available, say so and continue with MCP-only or ask the user to install the CLI
 — do not invent results.
