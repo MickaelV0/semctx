@@ -51,7 +51,15 @@ commit is blocked until you re-run `semctx verify diff --record` (or the plugin-
 guard prints).
 Run `git commit` and `git push` as isolated commands in guarded mode. Compound commands,
 redirections, and shell substitutions are rejected because they could mutate repository bytes
-after the hook's pre-check.
+after the hook's pre-check. Cwd prefixes must use literal paths: unexpanded `$VAR`, `${VAR}`, `~`,
+and globs in `cd` or `git -C` are rejected. Git repository retargeting is also outside the contract,
+including `GIT_DIR` / `GIT_WORK_TREE` and related index, object, common-dir, namespace, or config
+environment; `--git-dir`, `--work-tree`, `--namespace`, `--bare`; and `-c core.worktree` /
+`-c core.bare`. Use a plain literal `cd <repo> && git commit`, `git -C <repo> commit`, or the
+equivalent `push`. Direct `env` wrappers are parsed too: non-retargeting forms such as
+`env GIT_AUTHOR_NAME=name git commit` remain in contract, while retargeting assignments,
+environment clearing (`-i`), repository-affecting `-u` / `--unset`, `env -C` / `--chdir`, and
+`env -S` / `--split-string` are rejected.
 
 ## Disable
 
@@ -73,4 +81,6 @@ can edit `verification-state.json`, set `SEMCTX_GUARD=off`, invoke Git outside C
 command shape/tool the hook does not recognize. Detection covers direct Bash invocations plus common
 quoted/path/`command` forms; compound commands and recognized `bash -c`, PowerShell, and `cmd /c`
 wrappers are detected but rejected in guarded mode. Aliases, shell functions, and arbitrary
-nesting remain outside the contract. A syntactically valid state is still an authored assertion.
+nesting remain outside the contract. Within recognized direct invocations, guarded isolation is
+fail-closed for ambiguous cwd expansion and Git repository retargeting. A syntactically valid state
+is still an authored assertion.
