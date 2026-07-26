@@ -5,9 +5,11 @@ The `semctx-control` Codex plugin combines two surfaces:
 - a skill that tells the agent when and how to use semctx without overstating certainty;
 - a local stdio MCP server that exposes deterministic repository, semantic, and control-plane tools.
 
-The workflow skill is byte-identical to `plugins/claude-code/skills/semctx-control/SKILL.md`, so
-Codex and Claude Code use the same lanes, verdict semantics, generic demo objective and completion
-contract. Host-specific installation, approval and guard behaviour remains separate.
+The host-neutral workflow body is byte-identical to Claude's after stripping the generated
+`host-cli-ladder` region (#40), so Codex and Claude Code use the same lanes, verdict semantics,
+generic demo objective and completion contract. Shell CLI resolution ladders are host-generated
+(Codex: global `semctx` only). Host-specific installation, approval and guard behaviour remains
+separate.
 
 The plugin does not add an executor. It helps Codex trace intent, compile a shadow-first plan, and
 prove a change; Codex still edits code with its normal tools and runs the repository's real tests.
@@ -39,10 +41,11 @@ shared skill passes the absolute `repositoryRoot` on every tool call. The server
 repository instead of the plugin cache. Read-only Plane C tools are auto-approved from their MCP
 annotations; authored-state writes retain Codex's approval prompt.
 
-The plugin ships `dist/semctx.js` (the full CLI) next to the MCP bundle, but Codex does not
-substitute a plugin-root placeholder into skill content and the agent's shell runs in the user's
-repository, not in the plugin package root — so a Codex session has no reliable way to address the
-bundled binary. Shell fallbacks there use a global install:
+The plugin ships `dist/semctx.js` (the full CLI) next to the MCP bundle for release lockstep with
+the MCP runtime. Codex does not substitute a plugin-root placeholder into skill content and the
+agent's shell runs in the user's repository, not in the plugin package root — so the control skill
+generated for this host documents only a global install (no Claude-only placeholder). Shell
+fallbacks:
 
 ```text
 semctx setup
@@ -51,6 +54,7 @@ semctx verify diff --base origin/main
 
 The bundled CLI is still worth running by absolute path when you know it (`bun
 /path/to/plugin/dist/semctx.js …`), since it is guaranteed to match the MCP runtime's release.
+See #40: host-generated skill ladders keep the shared workflow contract host-neutral.
 
 If semctx was previously registered directly in `~/.codex/config.toml`, remove that legacy entry
 after the plugin is installed to avoid duplicate server definitions:
