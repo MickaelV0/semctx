@@ -15,6 +15,7 @@ import type { TaskFrame } from "@semantic-context/core";
 import { indexRepository } from "@semantic-context/app-services";
 import {
   buildPlanningBundle,
+  prepareTaskEnvelope,
   reconcileWorkingTree,
 } from "@semantic-context/app-services/reconciliation";
 import {
@@ -50,12 +51,66 @@ afterEach(() => {
 
 describe("control reconciliation CLI transport", () => {
   it("documents only bounded pre-edit planning and read-only reconciliation", () => {
+    expect(CONTROL_RECONCILIATION_HELP).toContain("frame-task <change-id>");
     expect(CONTROL_RECONCILIATION_HELP).toContain("plan-change <change-id>");
     expect(CONTROL_RECONCILIATION_HELP).toContain("executionAuthority \"none\"");
     expect(CONTROL_RECONCILIATION_HELP).toContain("reconcile-diff <input.json>");
     expect(CONTROL_RECONCILIATION_HELP).toContain("no caller-selected Git refs");
     expect(CONTROL_RECONCILIATION_HELP).not.toContain("--base");
     expect(CONTROL_RECONCILIATION_HELP).not.toContain("--head");
+  });
+
+  it("frames a task from framing-only inputs, with no plan and no rollback required", () => {
+    const fixture = preparedRepository();
+    // Only the framing half: no rollbackDescription, no expectations, no test references.
+    const framingInputs = { explicitDiscoveries: fixture.plannerInputs.explicitDiscoveries };
+    const inputFile = temporaryJson("framing.json", framingInputs);
+    const expected = prepareTaskEnvelope(fixture.root, {
+      schemaVersion: 1,
+      taskFrameId: fixture.taskFrameId,
+      changeId: fixture.changeId,
+      ...framingInputs,
+    });
+
+    const result = runCli(fixture.root, [
+      "control",
+      "frame-task",
+      fixture.changeId,
+      "--task-id",
+      fixture.taskFrameId,
+      "--input",
+      inputFile,
+      "--json",
+    ]);
+
+    expect(result.code, result.err).toBe(0);
+    expect(result.out).toBe(`${serializeControlReport(expected)}\n`);
+    expect(JSON.parse(result.out)).toMatchObject({
+      schemaVersion: 1,
+      kind: "prepared_task_envelope",
+      certifying: false,
+    });
+    // Same envelope the full bundle embeds, reached without describing a plan.
+    expect(JSON.parse(result.out).envelope)
+      .toEqual(buildPlanningBundle(fixture.root, fixture.command).taskEnvelope);
+  });
+
+  it("rejects framing files that redefine CLI-bound identities", () => {
+    const fixture = preparedRepository();
+    const inputFile = temporaryJson("framing-bad.json", { changeId: "change.other" });
+
+    const result = runCli(fixture.root, [
+      "control",
+      "frame-task",
+      fixture.changeId,
+      "--task-id",
+      fixture.taskFrameId,
+      "--input",
+      inputFile,
+    ]);
+
+    expect(result.code).not.toBe(0);
+    expect(result.err).toContain("must not redefine CLI-bound fields");
   });
 
   it("emits the exact canonical PlanningBundle returned by app-services", () => {

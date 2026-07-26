@@ -2,9 +2,12 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   BuildPlanningBundleCommandV1Schema,
+  PrepareTaskEnvelopeCommandV1Schema,
   buildPlanningBundle,
+  prepareTaskEnvelope,
   reconcileWorkingTree,
   type BuildPlanningBundleCommandV1,
+  type PrepareTaskEnvelopeCommandV1,
 } from "@semantic-context/app-services/reconciliation";
 import {
   ReconcileWorkingTreeInputV1Schema,
@@ -15,7 +18,9 @@ import type { ParsedArgs } from "../args";
 import { flagString } from "../args";
 import { info } from "../output";
 
-export const CONTROL_RECONCILIATION_HELP = `  control plan-change <change-id> --task-id <task-id> --input <planner.json> [--json]
+export const CONTROL_RECONCILIATION_HELP = `  control frame-task <change-id> --task-id <task-id> [--input <framing.json>] [--json]
+      compile a diagnostic TaskEnvelope and resolve its bindings, with no plan required
+  control plan-change <change-id> --task-id <task-id> --input <planner.json> [--json]
       compile a versioned pre-edit PlanningBundle with executionAuthority "none"
   control reconcile-diff <input.json> [--json]
       read-only reconciliation of the current worktree against a strict
@@ -30,7 +35,7 @@ const FORBIDDEN_GIT_REFERENCE_FLAGS = [
   "headRef",
 ] as const;
 
-type ReconciliationSubcommand = "plan-change" | "reconcile-diff";
+type ReconciliationSubcommand = "frame-task" | "plan-change" | "reconcile-diff";
 
 /**
  * Dedicated non-authorizing CLI transport for issue #27.
@@ -44,15 +49,51 @@ export function runControlReconciliation(
   args: ParsedArgs,
 ): number | undefined {
   const subcommand = args.positionals[1];
-  if (subcommand !== "plan-change" && subcommand !== "reconcile-diff") {
+  if (subcommand !== "frame-task" && subcommand !== "plan-change" && subcommand !== "reconcile-diff") {
     return undefined;
   }
   rejectCallerSelectedGitRefs(args, subcommand);
 
+  if (subcommand === "frame-task") {
+    return runFrameTask(root, args);
+  }
   if (subcommand === "plan-change") {
     return runPlanChange(root, args);
   }
   return runReconcileDiff(root, args);
+}
+
+/** Framing and scope binding without a plan: the step an agent runs before it can describe one. */
+function runFrameTask(root: string, args: ParsedArgs): number {
+  const usage = "semctx control frame-task <change-id> --task-id <task-id> [--input <framing.json>]";
+  assertPositionalCount(args, 3, usage);
+  const changeId = requiredPositional(args, 2, usage);
+  const taskFrameId = requiredFlag(args, "task-id");
+  const inputFile = flagString(args, "input");
+  const framingInputs = inputFile === undefined
+    ? {}
+    : readJsonObject(root, inputFile, "framing input");
+  assertNoReservedKeys(framingInputs);
+  const command = PrepareTaskEnvelopeCommandV1Schema.parse({
+    schemaVersion: 1,
+    ...framingInputs,
+    taskFrameId,
+    changeId,
+  }) as PrepareTaskEnvelopeCommandV1;
+  const prepared = prepareTaskEnvelope(root, command);
+  info(serializeControlReport(prepared));
+  return 0;
+}
+
+function assertNoReservedKeys(inputs: Record<string, unknown>): void {
+  const reservedKeys = ["schemaVersion", "taskFrameId", "changeId"].filter((key) =>
+    Object.hasOwn(inputs, key)
+  );
+  if (reservedKeys.length > 0) {
+    throw new Error(
+      `planner input must not redefine CLI-bound fields: ${reservedKeys.join(", ")}`,
+    );
+  }
 }
 
 function runPlanChange(root: string, args: ParsedArgs): number {
@@ -65,14 +106,7 @@ function runPlanChange(root: string, args: ParsedArgs): number {
   const taskFrameId = requiredFlag(args, "task-id");
   const inputFile = requiredFlag(args, "input");
   const plannerInputs = readJsonObject(root, inputFile, "planner input");
-  const reservedKeys = ["schemaVersion", "taskFrameId", "changeId"].filter((key) =>
-    Object.hasOwn(plannerInputs, key)
-  );
-  if (reservedKeys.length > 0) {
-    throw new Error(
-      `planner input must not redefine CLI-bound fields: ${reservedKeys.join(", ")}`,
-    );
-  }
+  assertNoReservedKeys(plannerInputs);
   const command = BuildPlanningBundleCommandV1Schema.parse({
     schemaVersion: 1,
     ...plannerInputs,
