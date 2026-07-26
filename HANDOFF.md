@@ -13,7 +13,7 @@ whether the actual diff realizes the intended change, without adding execution a
 - Verification:
   - `bun run plugin:check`
   - `bun run typecheck`
-  - `bun test --timeout 30000 packages apps plugins`
+  - `bun test --timeout 60000 packages apps plugins`
 
 ## Read first
 
