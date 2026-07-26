@@ -61,6 +61,16 @@ nothing has been published to a package registry (npm) or the GitHub Marketplace
   - Docs: semantic-layer-v1, semantic-model, change-contracts, the Claude Code integration guide, a
     reservation walkthrough, and ADR 0009.
 
+- **Task framing as a standalone agent primitive** (P3, [#28](https://github.com/hoklims/semctx/issues/28)):
+  `semctx control frame-task` and MCP `semctx_control_frame_task` compile a diagnostic `TaskEnvelope`
+  and resolve its repository bindings without requiring a plan. Previously the only agent path was
+  `plan-change`, which demanded expectations and a `rollbackDescription` before reporting whether the
+  anchors resolved at all — so the model had to assemble the whole control-plane payload up front and
+  guess. The envelope returned by the framing step is byte-identical to the one the planning bundle
+  embeds for the same inputs, asserted by test. `certifying: false`,
+  `executionAuthority: "none"`, no writes and no caller-selected Git refs. `bind_scope`,
+  `target_propose` and the host lifecycle work remain open on #28.
+
 - **Required-altitude authority policy** (P3, [#28](https://github.com/hoklims/semctx/issues/28)):
   one canonical table turns a change's abstraction altitude into the authority it requires — L0-L1
   `autonomous`, L2 `constrained`, L3 `reviewed_plan`, L4-L6 `human_authority` — with obligations
