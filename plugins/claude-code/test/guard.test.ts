@@ -18,16 +18,31 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { captureVerificationGitState as captureApplicationVerificationGitState } from "@semantic-context/app-services";
 
-// POSIX shell is required only for shellQuote round-trip and command-replay e2e. Default
-// Git-for-Windows puts Git\cmd on PATH (git.exe) but not Git\bin (bash.exe); skip rather than ENOENT.
-const hasBash = (() => {
+// A host-compatible POSIX shell is required only for shellQuote round-trip and command-replay e2e.
+// Default Git-for-Windows puts Git\cmd on PATH (git.exe) but not Git\bin (bash.exe). Windows may
+// also expose WSL's bash.exe, which cannot consume host paths or find the host Bun binary.
+const hostPathProbe = process.platform === "win32" ? String.raw`C:\semctx probe\a$b` : "/tmp/semctx probe/a$b";
+const quotedHostPathProbe = `'${hostPathProbe.replaceAll("'", "'\\''")}'`;
+const hasHostCompatibleBash = (() => {
   try {
-    execFileSync("bash", ["-c", "true"], { stdio: "ignore" });
-    return true;
+    const echoed = execFileSync("bash", ["-c", `printf '%s' ${quotedHostPathProbe}`], {
+      encoding: "utf8",
+    });
+    return echoed === hostPathProbe;
   } catch {
     return false;
   }
 })();
+const bashCanRunBun =
+  hasHostCompatibleBash &&
+  (() => {
+    try {
+      execFileSync("bash", ["-c", "command -v bun >/dev/null"], { stdio: "ignore" });
+      return true;
+    } catch {
+      return false;
+    }
+  })();
 
 describe("isTerminalGitCommand — structural detection (no shell eval)", () => {
   it("detects commit and push, including global options and env assignments", () => {
@@ -165,7 +180,7 @@ describe("guardDecision — diff-hash gate (ADR 0007)", () => {
     }
   });
 
-  it.skipIf(!hasBash)("shellQuote round-trips hostile paths through a real shell", () => {
+  it.skipIf(!hasHostCompatibleBash)("shellQuote round-trips hostile paths through a real shell", () => {
     for (const name of ["My Plugin", "it's", "a$b", "back`tick"]) {
       const parent = mkdtempSync(join(tmpdir(), "semctx-guard-quote-roundtrip-"));
       try {
@@ -296,7 +311,7 @@ describe("guard runtime — large working diffs", () => {
     }
   });
 
-  it.skipIf(!hasBash)(
+  it.skipIf(!bashCanRunBun)(
     "main() prints a verify command that a shell without CLAUDE_PLUGIN_ROOT can actually run",
     () => {
     const repo = mkdtempSync(join(tmpdir(), "semctx-guard-plugin-cli-"));
