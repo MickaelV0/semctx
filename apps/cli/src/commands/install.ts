@@ -1,5 +1,6 @@
 import packageJson from "../../package.json";
 import { isSemctxError, SemctxError } from "@semantic-context/core";
+import { Buffer } from "node:buffer";
 import type { ParsedArgs } from "../args";
 import { flagBool, flagString } from "../args";
 import { c, fail, heading, info, json, success } from "../output";
@@ -43,11 +44,12 @@ export interface SetupExecution {
 export interface InstallRuntime {
   run(command: readonly string[], cwd: string): CommandResult;
   setup(root: string, dryRun: boolean): SetupExecution;
+  deferCodexCleanup(marketplaceNames: readonly string[], cwd: string): CommandResult;
 }
 
 interface InstallStep {
   action: string;
-  status: "planned" | "ok" | "failed";
+  status: "planned" | "ok" | "deferred" | "failed";
   command: string[];
   detail?: string;
 }
@@ -58,6 +60,7 @@ interface HostInstallReport {
   status: HostInstallStatus;
   version?: string;
   restartRequired: boolean;
+  cleanupDeferred?: boolean;
   steps: InstallStep[];
   error?: string;
 }
@@ -150,6 +153,106 @@ function defaultRun(command: readonly string[], cwd: string): CommandResult {
   }
 }
 
+const DEFERRED_CODEX_CLEANUP_SCRIPT = String.raw`
+const root = process.argv[1];
+const payload = process.argv[2];
+const allowed = new Set(["personal", "semctx"]);
+let marketplaceNames;
+try {
+  marketplaceNames = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+  if (!Array.isArray(marketplaceNames)
+    || marketplaceNames.length === 0
+    || marketplaceNames.some((name) => typeof name !== "string" || !allowed.has(name))) {
+    process.exit(2);
+  }
+} catch {
+  process.exit(2);
+}
+
+const run = (command) => Bun.spawnSync(command, {
+  cwd: root,
+  stdin: "ignore",
+  stdout: "pipe",
+  stderr: "pipe",
+});
+const parseObject = (result) => {
+  if (result.exitCode !== 0) return null;
+  try {
+    const value = JSON.parse(new TextDecoder().decode(result.stdout));
+    return value !== null && typeof value === "object" && !Array.isArray(value) ? value : null;
+  } catch {
+    return null;
+  }
+};
+
+const deadline = Date.now() + 12 * 60 * 60 * 1000;
+while (Date.now() < deadline) {
+  const pluginState = parseObject(run(["codex", "plugin", "list", "--json"]));
+  const marketplaceState = parseObject(
+    run(["codex", "plugin", "marketplace", "list", "--json"]),
+  );
+  const installed = pluginState?.installed;
+  const marketplaces = marketplaceState?.marketplaces;
+  let complete = Array.isArray(installed) && Array.isArray(marketplaces);
+
+  if (complete) {
+    for (const name of marketplaceNames) {
+      const pluginId = "semctx-control@" + name;
+      if (installed.some((plugin) => plugin?.pluginId === pluginId && plugin?.installed === true)) {
+        const removed = run(["codex", "plugin", "remove", pluginId, "--json"]);
+        if (removed.exitCode !== 0) {
+          complete = false;
+          break;
+        }
+      }
+      if (marketplaces.some((marketplace) => marketplace?.name === name)) {
+        const removed = run(["codex", "plugin", "marketplace", "remove", name, "--json"]);
+        if (removed.exitCode !== 0) {
+          complete = false;
+          break;
+        }
+      }
+    }
+  }
+
+  if (complete) process.exit(0);
+  await Bun.sleep(5000);
+}
+process.exit(1);
+`;
+
+function defaultDeferCodexCleanup(
+  marketplaceNames: readonly string[],
+  cwd: string,
+): CommandResult {
+  try {
+    const payload = Buffer.from(JSON.stringify(marketplaceNames), "utf8").toString("base64url");
+    const child = Bun.spawn(
+      [process.execPath, "-e", DEFERRED_CODEX_CLEANUP_SCRIPT, cwd, payload],
+      {
+        cwd,
+        stdin: "ignore",
+        stdout: "ignore",
+        stderr: "ignore",
+        detached: true,
+        windowsHide: true,
+      },
+    );
+    child.unref();
+    return {
+      code: 0,
+      out: JSON.stringify({ pid: child.pid }),
+      err: "",
+    };
+  } catch (cause) {
+    return {
+      code: 1,
+      out: "",
+      err: cause instanceof Error ? cause.message : String(cause),
+    };
+  }
+}
+
 function parseJsonObject(out: string): Record<string, unknown> | null {
   try {
     const value: unknown = JSON.parse(out);
@@ -183,6 +286,7 @@ function defaultSetup(root: string, dryRun: boolean): SetupExecution {
 const DEFAULT_RUNTIME: InstallRuntime = {
   run: defaultRun,
   setup: defaultSetup,
+  deferCodexCleanup: defaultDeferCodexCleanup,
 };
 
 function hostReport(requested: boolean): HostInstallReport {
@@ -250,6 +354,74 @@ function runMutation(
   report.status = "failed";
   report.error = `${action}: ${step.detail}`;
   return false;
+}
+
+interface CodexCleanupOperation {
+  action: string;
+  command: string[];
+  marketplaceName: string;
+}
+
+function isLockedCodexCacheRemoval(result: CommandResult): boolean {
+  const detail = compactError(result).toLowerCase();
+  return detail.includes("failed to remove existing")
+    && detail.includes("cache entry")
+    && detail.includes("os error 32");
+}
+
+function runCodexLegacyCleanup(
+  runtime: InstallRuntime,
+  root: string,
+  report: HostInstallReport,
+  operations: readonly CodexCleanupOperation[],
+  dryRun: boolean,
+): boolean {
+  for (let index = 0; index < operations.length; index += 1) {
+    const operation = operations[index];
+    if (operation === undefined) continue;
+    const step: InstallStep = {
+      action: operation.action,
+      status: dryRun ? "planned" : "ok",
+      command: [...operation.command],
+    };
+    report.steps.push(step);
+    if (dryRun) continue;
+
+    const result = runtime.run(operation.command, root);
+    if (result.code === 0) continue;
+    if (isLockedCodexCacheRemoval(result)) {
+      const pendingNames = [...new Set(
+        operations.slice(index).map((item) => item.marketplaceName),
+      )];
+      const deferred = runtime.deferCodexCleanup(pendingNames, root);
+      if (deferred.code === 0) {
+        const detail =
+          "active Codex sessions are using the legacy cache; cleanup is retrying in the background";
+        step.status = "deferred";
+        step.detail = detail;
+        for (const pending of operations.slice(index + 1)) {
+          report.steps.push({
+            action: pending.action,
+            status: "deferred",
+            command: [...pending.command],
+            detail,
+          });
+        }
+        report.cleanupDeferred = true;
+        report.restartRequired = true;
+        return true;
+      }
+      step.detail =
+        `${compactError(result)}; could not schedule deferred cleanup: ${compactError(deferred)}`;
+    } else {
+      step.detail = compactError(result);
+    }
+    step.status = "failed";
+    report.status = "failed";
+    report.error = `${operation.action}: ${step.detail}`;
+    return false;
+  }
+  return true;
 }
 
 function recordVerification(
@@ -392,29 +564,27 @@ function installCodex(
     )) return;
     if (!dryRun && !verifyCodexInstall(root, runtime, report)) return;
 
+    const cleanupOperations: CodexCleanupOperation[] = [];
     for (const legacy of legacyMarketplaces) {
       const legacyName = String(legacy.name);
       const installedLegacy = plugins.some(
         (item) => item.pluginId === `${CODEX_PLUGIN}@${legacyName}`
           && item.installed === true,
       );
-      if (installedLegacy && !runMutation(
-        runtime,
-        root,
-        report,
-        "remove legacy Codex plugin",
-        ["codex", "plugin", "remove", `${CODEX_PLUGIN}@${legacyName}`, "--json"],
-        dryRun,
-      )) return;
-      if (!runMutation(
-        runtime,
-        root,
-        report,
-        "remove legacy Codex marketplace",
-        ["codex", "plugin", "marketplace", "remove", legacyName, "--json"],
-        dryRun,
-      )) return;
+      if (installedLegacy) {
+        cleanupOperations.push({
+          action: "remove legacy Codex plugin",
+          command: ["codex", "plugin", "remove", `${CODEX_PLUGIN}@${legacyName}`, "--json"],
+          marketplaceName: legacyName,
+        });
+      }
+      cleanupOperations.push({
+        action: "remove legacy Codex marketplace",
+        command: ["codex", "plugin", "marketplace", "remove", legacyName, "--json"],
+        marketplaceName: legacyName,
+      });
     }
+    if (!runCodexLegacyCleanup(runtime, root, report, cleanupOperations, dryRun)) return;
     report.status = dryRun ? "planned" : "migrated";
     report.restartRequired = !dryRun;
     return;
@@ -667,7 +837,13 @@ function nextSteps(
 ): string[] {
   if (dryRun) return ["re-run without --dry-run to apply this plan"];
   const next: string[] = [];
-  if (hosts.codex.restartRequired) next.push("open a new Codex task so the refreshed plugin is loaded");
+  if (hosts.codex.cleanupDeferred) {
+    next.push(
+      "open a new Codex task so the refreshed plugin is loaded; legacy cleanup will finish automatically",
+    );
+  } else if (hosts.codex.restartRequired) {
+    next.push("open a new Codex task so the refreshed plugin is loaded");
+  }
   if (hosts.claude.restartRequired) next.push("restart Claude Code so the refreshed plugin is loaded");
   for (const host of ["codex", "claude"] as const) {
     const report = hosts[host];
@@ -742,7 +918,11 @@ function renderHost(host: Host, report: HostInstallReport): void {
   info(`  ${mark} ${label.padEnd(8)} ${report.status}${report.version ? c.dim(` (${report.version})`) : ""}`);
   if (report.error !== undefined) info(`             ${c.red(report.error)}`);
   for (const step of report.steps) {
-    const stepMark = step.status === "failed" ? c.red("!!") : step.status === "planned" ? c.dim("··") : c.green("ok");
+    const stepMark = step.status === "failed"
+      ? c.red("!!")
+      : step.status === "planned" || step.status === "deferred"
+        ? c.dim("··")
+        : c.green("ok");
     info(`      ${stepMark} ${step.action}`);
   }
 }
