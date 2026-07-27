@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
+import { AGENT_WORKFLOW_CONTRACT_V1 } from "@semantic-context/control-model";
 import {
   HOST_CLI_STRIP,
   hostCliLadder,
@@ -38,12 +39,35 @@ function sharedContractBody(skill: string): string {
 }
 
 describe("Codex and Claude Code plugin parity", () => {
+  test("renders the machine workflow contract into both host adapters", () => {
+    const template = read("plugins/shared/skills/semctx-control/SKILL.md");
+    expect(template).toContain("{{SHARED_WORKFLOW_CONTRACT}}");
+
+    for (const host of ["claude-code", "semctx-control"] as const) {
+      const skill = read(skillPath(host));
+      expect(skill).toContain("<!-- BEGIN shared-workflow-contract:v1 -->");
+      expect(skill).toContain("<!-- END shared-workflow-contract -->");
+      expect(skill).not.toContain("{{SHARED_WORKFLOW_CONTRACT}}");
+      for (const stage of AGENT_WORKFLOW_CONTRACT_V1.stages) {
+        expect(skill).toContain(`**${stage.id}**`);
+        for (const tool of stage.mcpTools) expect(skill).toContain(tool);
+      }
+    }
+  });
+
   test("renderControlSkill rejects a template without the host marker", () => {
     expect(() => renderControlSkill("claude-code", "# no marker\n")).toThrow(/HOST_CLI_LADDER/);
   });
 
+  test("renderControlSkill rejects a template without the machine workflow marker", () => {
+    expect(() => renderControlSkill(
+      "claude-code",
+      "# incomplete\n{{HOST_CLI_LADDER}}\n",
+    )).toThrow(/SHARED_WORKFLOW_CONTRACT/);
+  });
+
   test("renderControlSkill rejects a template that embeds CLAUDE_PLUGIN_ROOT", () => {
-    const bad = "# x\n{{HOST_CLI_LADDER}}\n${CLAUDE_PLUGIN_ROOT}\n";
+    const bad = "# x\n{{SHARED_WORKFLOW_CONTRACT}}\n{{HOST_CLI_LADDER}}\n${CLAUDE_PLUGIN_ROOT}\n";
     expect(() => renderControlSkill("claude-code", bad)).toThrow(/CLAUDE_PLUGIN_ROOT/);
   });
 

@@ -1,5 +1,10 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import {
+  AGENT_WORKFLOW_CONTRACT_V1,
+  AgentWorkflowContractV1Schema,
+  type AgentWorkflowContractV1,
+} from "@semantic-context/control-model";
 
 const root = resolve(import.meta.dir, "..");
 const pluginDists = [
@@ -42,6 +47,7 @@ const bundles: BundleSpec[] = [
 export type SkillHost = "claude-code" | "semctx-control";
 
 const HOST_CLI_MARKER = "{{HOST_CLI_LADDER}}";
+const SHARED_WORKFLOW_MARKER = "{{SHARED_WORKFLOW_CONTRACT}}";
 const HOST_CLI_BEGIN = (host: SkillHost) => `<!-- BEGIN host-cli-ladder:${host} -->`;
 const HOST_CLI_END = "<!-- END host-cli-ladder -->";
 // Strip markers + host body so parity can assert the shared contract is still one document.
@@ -116,10 +122,38 @@ semctx verify diff --base origin/main
 `;
 }
 
+export function renderSharedWorkflowContract(
+  contract: AgentWorkflowContractV1 = AGENT_WORKFLOW_CONTRACT_V1,
+): string {
+  const parsed = AgentWorkflowContractV1Schema.parse(contract) as AgentWorkflowContractV1;
+  const stages = parsed.stages.map((stage, index) => {
+    const tools = stage.mcpTools.length > 0
+      ? stage.mcpTools.map((tool) => `\`${tool}\``).join(", ")
+      : "host-local";
+    return `${index + 1}. **${stage.id}** — ${stage.instruction}\n`
+      + `   - Surface: ${tools}; effect: \`${stage.effect}\`; condition: \`${stage.condition}\`.`;
+  }).join("\n");
+  return `<!-- BEGIN shared-workflow-contract:v1 -->
+Machine policy: enforcement is \`${parsed.enforcementMode}\`, blocking is disabled, repositories
+without Semctx follow \`${parsed.nonSemctxRepository}\`, and execution authority is
+\`${parsed.executionAuthority}\`.
+
+${stages}
+
+Completion requires: ${parsed.completion.requiredStageIds.map((id) => `\`${id}\``).join(" → ")}.
+The bounded transfer stage is \`${parsed.completion.handoffStageId}\`.
+<!-- END shared-workflow-contract -->`;
+}
+
 export function renderControlSkill(host: SkillHost, template: string = readSkillTemplate()): string {
   if (!template.includes(HOST_CLI_MARKER)) {
     throw new Error(
       `skill template missing ${HOST_CLI_MARKER}: ${skillTemplatePath}`,
+    );
+  }
+  if (!template.includes(SHARED_WORKFLOW_MARKER)) {
+    throw new Error(
+      `skill template missing ${SHARED_WORKFLOW_MARKER}: ${skillTemplatePath}`,
     );
   }
   if (template.includes("CLAUDE_PLUGIN_ROOT")) {
@@ -128,7 +162,11 @@ export function renderControlSkill(host: SkillHost, template: string = readSkill
     );
   }
   const body = hostCliLadder(host).replace(/\n$/, "");
+  const workflow = renderSharedWorkflowContract();
   const filled = template.replace(
+    SHARED_WORKFLOW_MARKER,
+    workflow,
+  ).replace(
     HOST_CLI_MARKER,
     `${HOST_CLI_BEGIN(host)}\n${body}\n${HOST_CLI_END}`,
   );

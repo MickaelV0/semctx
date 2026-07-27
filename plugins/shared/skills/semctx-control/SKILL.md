@@ -20,17 +20,11 @@ For every MCP call, pass `repositoryRoot` as the absolute root of the repository
 
 ## Shared workflow
 
-1. Establish the repository state with normal code search and Git inspection. Do not use `semctx_prepare_task` as code search.
-2. Run `semctx_semantic_check`, preserving its canonical reason codes; then rehydrate existing intent with `semctx_resume`, `semctx_semantic_inspect`, or `semctx_semantic_slice` when a change id or semantic id exists. Treat anything absent from the bounded slice as unknown, not false.
-3. Use `semctx_control_status` before high-risk control work. Continue only for `FRESH` or `DIRTY_KNOWN`; preserve every `STALE` or `UNSEALED` reason verbatim.
-4. Use `semctx_control_trace` to connect repository and semantic coordinates across L0-L6. Keep traversal bounded and label observed, authored, inferred, and ambiguous statements honestly.
-5. Record the returned freshness verdict, `freshnessSeal.sealHash`, and current/indexed input pairs. The seal is an attestation; `semctx_control_status` owns the verdict.
-6. When an explicit future architecture needs a repository artifact, call `semctx_control_target_propose` only from a `FRESH` state and only with user-authorized target content. The tool writes one new `proposed` revision, fixes authorship to `agent`, and grants no authority; review and acceptance remain separate.
-7. Use `semctx_control_plan` only for an explicit target architecture. Treat `BLOCKED` for unsafe inputs, a missing or unaccepted target, open unknowns, stale links, or insufficient proof as the correct fail-closed result.
-8. On a write-scoped task, use `semctx_change_open` or `semctx_change_update` to record the goal, preserved invariants, required evidence, and unresolved unknowns before substantial edits.
-9. Make the smallest coherent change. Run the runtime tests selected by the impact report; semctx never runs or replaces them.
-10. After edits, call `semctx_verify_change`, record only evidence actually obtained, then call `semctx_change_verify` when a change contract exists. Resolve an unknown only after its authored node has a `proved_by` relation to evidence in a proven status. A `verified` lifecycle is derived by composed verification and cannot be asserted through a generic update.
-11. Before compaction or handoff on a write-scoped task, call `semctx_handoff`. In a fresh context, call `semctx_resume` first. A read-only task must remain mutation-free.
+The ordered lifecycle below is generated from the strict `AgentWorkflowContractV1`. Treat its
+declared effects and conditions as the host-neutral policy; host-specific shell resolution appears
+only in the final CLI ladder.
+
+{{SHARED_WORKFLOW_CONTRACT}}
 
 ## Verdict namespaces
 
