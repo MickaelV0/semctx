@@ -32,7 +32,7 @@
     },
     "packages/app-services": {
       "name": "@semantic-context/app-services",
-      "version": "0.1.10",
+      "version": "0.1.11",
       "dependencies": {
         "@semantic-context/context-engine": "workspace:*",
         "@semantic-context/control-engine": "workspace:*",
@@ -110,7 +110,7 @@
     },
     "packages/mcp-server": {
       "name": "@semantic-context/mcp-server",
-      "version": "0.1.10",
+      "version": "0.1.11",
       "bin": {
         "semctx-mcp": "./src/index.ts",
       },

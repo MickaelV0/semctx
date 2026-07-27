@@ -88,7 +88,7 @@ Report the framed objective, authority sources, freshness verdict, seal hash and
 
 <!-- BEGIN host-cli-ladder:semctx-control -->
 Prefer MCP tools when they are connected. For shell fallbacks, use a global `semctx` on
-PATH (`bun install -g semctx` / `bunx semctx`) — keep it on the **same version** as the plugin
+PATH (`bun install -g semctx@latest` / `bunx semctx@latest`) — keep it on the **same version** as the plugin
 (`semctx --version` should match the marketplace plugin version).
 
 This host does **not** substitute a plugin-root path into skill content, and the agent's shell cwd

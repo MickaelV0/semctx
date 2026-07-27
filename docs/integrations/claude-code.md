@@ -15,14 +15,28 @@ user request
   -> semctx verdicts + runtime tests close the proof loop
 ```
 
-## Install from a clone
+## Install or update
 
 Requirements: Claude Code with plugin support, Bun 1.3 or newer, and Node for the optional guard
 hook. The marketplace plugin contains its own MCP runtime; no clone-time link is required.
 
 ```powershell
+bunx semctx@latest install --host claude
+```
+
+Run it from a target repository to install/update the plugin and prepare that repository together,
+or add `--skip-setup` for a machine-only refresh. The command is idempotent, migrates the legacy
+`semctx@semctx` registration, and refuses to overwrite an unrelated marketplace. Fresh
+registrations follow the release-managed `stable` branch, marketplace refreshes retain the
+last-known cache if Git fails, and the final installed version and enabled state are verified
+before success is reported. Installation and legacy cleanup are limited to user scope; project
+and local marketplace declarations are never removed.
+
+Manual install from a clone remains available:
+
+```powershell
 claude plugin marketplace add ./
-claude plugin install semctx@semctx --scope user
+claude plugin install semctx@semctx-stable --scope user
 ```
 
 Claude Code launches the committed `dist/semctx-mcp.js` bundle from its plugin cache through Bun.
@@ -44,7 +58,7 @@ hook prints an already-resolved absolute path when it blocks. The variable is ex
 MCP processes only — it is **not** present in the agent's shell, so an unexpanded
 `CLAUDE_PLUGIN_ROOT` reference in a command silently resolves to nothing.
 
-A global `semctx` (`bun install -g semctx`) remains the channel for CI and non-plugin shells:
+A global `semctx` (`bun install -g semctx@latest`) remains the channel for CI and non-plugin shells:
 
 ```text
 semctx setup
@@ -63,10 +77,10 @@ entry after installing the plugin to avoid two servers exposing the same tools:
 claude mcp remove semctx -s user
 ```
 
-For a local development reinstall:
+For a machine-only update:
 
 ```powershell
-claude plugin update semctx@semctx
+bunx semctx@latest install --host claude --skip-setup
 ```
 
 ## Shared skills
@@ -154,6 +168,6 @@ For source development without the plugin, launch the entrypoint directly:
 ## Uninstall
 
 ```powershell
-claude plugin uninstall semctx@semctx
-claude plugin marketplace remove semctx
+claude plugin uninstall semctx@semctx-stable
+claude plugin marketplace remove semctx-stable
 ```

@@ -4,8 +4,9 @@ Prep for the "publish" move (competitive-scan 2026-07: publishing is the stronge
 lever against commoditisation — visibility).
 
 **Decided 2026-07-05** (owner ratified): the CLI publishes as **`semctx`** (unscoped — the name is
-free on npm), **bun-only**, as a **single self-contained bundle**. This shipped: `0.1.0` and `0.1.1`
-are published. Subsequent releases remain the owner's to run and need `npm login` (credentials).
+free on npm), **bun-only**, as a **single self-contained bundle**. `0.1.0` and `0.1.1` were the
+first published versions. From `0.1.11`, the npm CLI and both plugins are one lockstep release and
+tag-driven npm + GitHub Release publication is automated by `.github/workflows/release.yml`.
 
 ## Decisions (ratified)
 
@@ -18,42 +19,56 @@ are published. Subsequent releases remain the owner's to run and need `npm login
 2. **Name → `semctx`** (unscoped, verified free on npm). Install = `bunx semctx`. Product name =
    install name. The internal libs stay `@semantic-context/*` and are **not** published — they are
    inlined into the bundle.
-3. **Packaging → single autonomous bundle.** `bun build src/index.ts --target=bun --minify`
-   inlines the 6 workspace libs into `apps/cli/dist/index.js` (3.8 MB — it embeds the TypeScript
-   compiler, needed by `semctx index`). This **removes the topological publish-order blocker**:
-   one package to publish, not seven; no npm org to create.
+3. **Packaging → one autonomous portable bundle.** `bun run cli:build` inlines the workspace libs
+   into `apps/cli/dist/index.js`, rewrites the TypeScript compiler's build-machine paths, and ships
+   its `typescript-lib/*.d.ts` files beside the bundle. This **removes the topological publish-order
+   blocker**: one package to publish, not seven; no npm org to create.
 
 ## What was done here
 
 - `apps/cli/package.json`: renamed `@semantic-context/cli` → `semctx`; `bin` → `./dist/index.js`;
-  `files: ["dist", "README.md", "LICENSE"]`; `build` / `prepublishOnly` run the bundle; the 6
+  `files: ["dist", "README.md", "LICENSE"]`; `build` / `prepack` run the bundle; the
   `@semantic-context/*` deps moved to `devDependencies` (dev only; inlined at build; never
   installed by a consumer).
 - `apps/cli/README.md` + `apps/cli/LICENSE` added (npm ships them from the package directory).
-- Verified end-to-end: `bun build` bundles 62 modules; the shebang is preserved; the **extracted
-  tarball runs outside node_modules** — `--help`, `verify diff --dry-run`, and `doctor`
-  (exercising `bun:sqlite`) all work.
-- `npm pack --dry-run`: exactly 4 files (LICENSE, README.md, dist/index.js, package.json),
-  1.1 MB packed / 3.8 MB unpacked.
+- Verified end-to-end: `npm pack` runs `prepack`, the tarball is installed into a clean consumer
+  project, and its generated npm `semctx` bin runs `--version` plus a real `setup` outside the
+  checkout.
 
-## Final step — the owner runs this
+## Release path
+
+One-time npm configuration: register `hoklims/semctx`, workflow filename `release.yml`, and
+environment name `npm` as the package's GitHub Actions trusted publisher. Protect the GitHub
+`npm` environment for `v*` tags and protect matching tags from update/deletion. The workflow uses
+short-lived OIDC credentials; no long-lived `NPM_TOKEN` is stored. It has `id-token: write`, uses
+current npm on Node 24, verifies typecheck/tests/plugin artifacts, and accepts only an annotated
+version-matching tag whose commit is already on `origin/main`.
+
+After that one-time registry setting, push the annotated release tag:
 
 ```bash
-npm login                         # or set NPM_TOKEN in the environment
-cd apps/cli
-npm publish --access public       # 'semctx' is unscoped → public by default;
-                                  # prepublishOnly rebuilds dist/index.js from source first
+git tag -a v<package-version> -m "semctx v<package-version>"
+git push origin v<package-version>
 ```
 
-Then tag the release: `git tag v0.1.0 && git push --tags` (and optionally announce).
+The tag workflow publishes npm first, advances the automation-owned `stable` branch to that exact
+release commit, then creates the GitHub Release. This ordering keeps `bunx semctx@latest` and both
+plugin marketplaces on the same public version. Do not push `stable` manually. All steps are
+rerunnable only for the same commit: an existing npm version must expose a `gitHead` exactly equal
+to the tag commit before `stable` can move. An unchanged `stable` ref or GitHub Release is treated
+as already complete. npm trusted publishing also emits provenance automatically.
 
-**Published.** `semctx` `0.1.0` and `0.1.1` are live on npm (`0.1.1` since 2026-07-05). The
-publishing mechanics above are proven, not pending.
+Local/manual fallback remains:
 
-What is unresolved is the *release policy*, not the ability to release: `apps/cli/package.json`
-still reads `0.1.1` while the plugins ship `0.1.10`, so `bunx semctx` serves a CLI well behind this
-repository. See [#38](https://github.com/hoklims/semctx/issues/38) and
-[#35](https://github.com/hoklims/semctx/issues/35).
+```bash
+npm login
+cd apps/cli
+npm publish --access public --provenance
+```
+
+The lockstep policy resolves the release-cadence decision in
+[#38](https://github.com/hoklims/semctx/issues/38): plugin-facing changes do not advance the plugin
+version without advancing and publishing the npm CLI at the same version.
 
 ## Plugin runtime
 
@@ -99,7 +114,7 @@ These surfaces must share the same `x.y.z` on every plugin/CLI release:
 
 `plugins/plugin-parity.test.ts` fails CI when plugins, marketplace, MCP, app-services, or the npm
 CLI package diverge. Plugin MCP/CLI **bundles** are rebuilt together via `plugin:build` (same
-entrypoint sources). The npm CLI uses a separate `apps/cli` prepublish bundle for CI/global
+entrypoint sources). The npm CLI uses a separate `apps/cli` prepack bundle for CI/global
 installs — same version number, two packagers by design.
 
 Plugin, marketplace, MCP package and runtime versions move together. CI runs the freshness check,

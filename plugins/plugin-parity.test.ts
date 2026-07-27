@@ -223,9 +223,16 @@ describe("Codex and Claude Code plugin parity", () => {
     }>(
       "plugins/claude-code/.claude-plugin/plugin.json",
     );
-    const marketplace = json<{ plugins: Array<{ name: string; version: string }> }>(
+    const marketplace = json<{
+      name: string;
+      plugins: Array<{ name: string; version: string }>;
+    }>(
       ".claude-plugin/marketplace.json",
     );
+    const codexMarketplace = json<{
+      name: string;
+      plugins: Array<{ name: string; source: { source: string; path: string } }>;
+    }>(".agents/plugins/marketplace.json");
 
     expect(Object.keys(codexMcp.mcpServers)).toEqual(["semctx"]);
     expect(Object.keys(claudeMcp.mcpServers)).toEqual(["semctx"]);
@@ -264,6 +271,17 @@ describe("Codex and Claude Code plugin parity", () => {
     expect(marketplace.plugins.find((plugin) => plugin.name === "semctx")?.version).toBe(
       claudeManifest.version,
     );
+    expect(marketplace.name).toBe("semctx-stable");
+    expect(codexMarketplace.name).toBe("semctx-stable");
+    expect(codexMarketplace.plugins).toContainEqual({
+      name: "semctx-control",
+      source: { source: "local", path: "./plugins/semctx-control" },
+      policy: {
+        installation: "AVAILABLE",
+        authentication: "ON_INSTALL",
+      },
+      category: "Productivity",
+    });
     expect(json<{ version: string }>("packages/mcp-server/package.json").version).toBe(claudeManifest.version);
     expect(json<{ version: string }>("packages/app-services/package.json").version).toBe(claudeManifest.version);
     // Release SSOT: npm CLI package must ship the same release as the marketplace plugins/MCP.
@@ -271,6 +289,25 @@ describe("Codex and Claude Code plugin parity", () => {
     const serverSource = read("packages/mcp-server/src/server.ts");
     expect(serverSource).toContain('import packageJson from "../package.json"');
     expect(serverSource).toContain("version: packageJson.version");
+  });
+
+  test("publishes one commit atomically across npm, stable, and the GitHub Release", () => {
+    const workflow = read(".github/workflows/release.yml");
+    expect(workflow).toContain("environment: npm");
+    expect(workflow).toContain("fetch-depth: 0");
+    expect(workflow).toContain('git cat-file -t "$GITHUB_REF_NAME"');
+    expect(workflow).toContain('git merge-base --is-ancestor "$GITHUB_SHA" origin/main');
+    expect(workflow).toContain('npm view "semctx@$version" gitHead');
+    expect(workflow).toContain('"$published_sha" != "$GITHUB_SHA"');
+
+    const publish = workflow.indexOf("npm publish --access public");
+    const confirm = workflow.indexOf('"$confirmed_sha" == "$GITHUB_SHA"');
+    const stable = workflow.indexOf('git push origin "$GITHUB_SHA:refs/heads/stable"');
+    const release = workflow.indexOf('gh release create "$GITHUB_REF_NAME"');
+    expect(publish).toBeGreaterThanOrEqual(0);
+    expect(confirm).toBeGreaterThan(publish);
+    expect(stable).toBeGreaterThan(confirm);
+    expect(release).toBeGreaterThan(stable);
   });
 
   test("documents the shared Plane A, B, and C workflow for both hosts", () => {

@@ -16,12 +16,16 @@ import { runSemantic } from "./commands/semantic";
 import { runChange } from "./commands/change";
 import { runControl } from "./commands/control";
 import { runStatus } from "./commands/status";
+import { runInstall } from "./commands/install";
 
 const HELP = `semctx — repository change-impact analyzer (v${packageJson.version})
 
 Usage: semctx <command> [options]
 
 Core:
+  install [--host auto|codex|claude|all]
+                                  install/update detected agent plugins + setup this Git repository
+      --skip-setup --dry-run       machine-only install / preview without changing anything
   setup [--preset github-claude]   one command: config + index + semantic scaffold + check (idempotent)
   init [--preset github-claude]    initialise .semctx/ (db + config)
       --dry-run --force            preview / overwrite existing files
@@ -94,6 +98,8 @@ async function dispatch(args: ParsedArgs): Promise<number> {
   }
 
   switch (command) {
+    case "install":
+      return runInstall(root, args);
     case "setup":
       return runSetup(root, args);
     case "init":
