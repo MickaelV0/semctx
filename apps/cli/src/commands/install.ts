@@ -204,6 +204,14 @@ function requestedExplicitly(selection: HostSelection, host: Host): boolean {
 }
 
 function parseSelection(args: ParsedArgs): HostSelection {
+  const raw = args.flags.get("host");
+  if (raw === true) {
+    throw new SemctxError(
+      "INVALID_TASK_INPUT",
+      "--host requires auto|codex|claude|all",
+      { host: null },
+    );
+  }
   const value = flagString(args, "host") ?? "auto";
   if (value === "auto" || value === "all" || value === "codex" || value === "claude") {
     return value;
