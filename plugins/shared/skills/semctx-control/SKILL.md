@@ -1,6 +1,6 @@
 ---
 name: semctx-control
-description: Use semctx through its MCP tools for repository impact analysis, authored goals and invariants, proof-carrying change contracts, handoffs, and read-only fail-closed migration planning. Use for non-trivial code changes, refactors, migrations, architecture reconstruction, semantic trace requests, invariant preservation, generic project demonstrations, or pre-commit verification in a semctx-enabled repository.
+description: Use semctx through its MCP tools for repository impact analysis, authored goals and invariants, proof-carrying change contracts, handoffs, bounded target proposals, and fail-closed migration planning. Use for non-trivial code changes, refactors, migrations, architecture reconstruction, semantic trace requests, invariant preservation, generic project demonstrations, or pre-commit verification in a semctx-enabled repository.
 ---
 
 <!-- GENERATED leaves: edit this template only, then run `bun run plugin:build`. -->
@@ -15,7 +15,7 @@ For every MCP call, pass `repositoryRoot` as the absolute root of the repository
 
 - **Read-only audit or explanation:** use only inspect, trace, slice, plan, verify, and resume tools. Do not create or update semantic files and do not write a handoff.
 - **User-authorized implementation:** open or reuse a change contract before substantial edits, then keep its invariants, evidence, and unknowns current.
-- **Migration planning:** require an explicit target architecture supplied by the user or a repository artifact. Never invent the target.
+- **Migration planning:** require an explicit target architecture supplied by the user or a repository artifact. On a user-authorized write task, `semctx_control_target_propose` may create an immutable hypothetical proposal from explicit target content; never invent the target or treat a proposal as accepted.
 - **Generic demonstration:** identify the project's most critical functional path from repository evidence, reconstruct its contracts and invariants, then select one concrete weakness only when the available evidence supports it. If no weakness is proved, report the leading risk and the missing proof instead of inventing a change.
 
 ## Shared workflow
@@ -25,11 +25,12 @@ For every MCP call, pass `repositoryRoot` as the absolute root of the repository
 3. Use `semctx_control_status` before high-risk control work. Continue only for `FRESH` or `DIRTY_KNOWN`; preserve every `STALE` or `UNSEALED` reason verbatim.
 4. Use `semctx_control_trace` to connect repository and semantic coordinates across L0-L6. Keep traversal bounded and label observed, authored, inferred, and ambiguous statements honestly.
 5. Record the returned freshness verdict, `freshnessSeal.sealHash`, and current/indexed input pairs. The seal is an attestation; `semctx_control_status` owns the verdict.
-6. Use `semctx_control_plan` only for an explicit target architecture. Treat `BLOCKED` for unsafe inputs, a missing target, open unknowns, stale links, or insufficient proof as the correct fail-closed result.
-7. On a write-scoped task, use `semctx_change_open` or `semctx_change_update` to record the goal, preserved invariants, required evidence, and unresolved unknowns before substantial edits.
-8. Make the smallest coherent change. Run the runtime tests selected by the impact report; semctx never runs or replaces them.
-9. After edits, call `semctx_verify_change`, record only evidence actually obtained, then call `semctx_change_verify` when a change contract exists. Resolve an unknown only after its authored node has a `proved_by` relation to evidence in a proven status. A `verified` lifecycle is derived by composed verification and cannot be asserted through a generic update.
-10. Before compaction or handoff on a write-scoped task, call `semctx_handoff`. In a fresh context, call `semctx_resume` first. A read-only task must remain mutation-free.
+6. When an explicit future architecture needs a repository artifact, call `semctx_control_target_propose` only from a `FRESH` state and only with user-authorized target content. The tool writes one new `proposed` revision, fixes authorship to `agent`, and grants no authority; review and acceptance remain separate.
+7. Use `semctx_control_plan` only for an explicit target architecture. Treat `BLOCKED` for unsafe inputs, a missing or unaccepted target, open unknowns, stale links, or insufficient proof as the correct fail-closed result.
+8. On a write-scoped task, use `semctx_change_open` or `semctx_change_update` to record the goal, preserved invariants, required evidence, and unresolved unknowns before substantial edits.
+9. Make the smallest coherent change. Run the runtime tests selected by the impact report; semctx never runs or replaces them.
+10. After edits, call `semctx_verify_change`, record only evidence actually obtained, then call `semctx_change_verify` when a change contract exists. Resolve an unknown only after its authored node has a `proved_by` relation to evidence in a proven status. A `verified` lifecycle is derived by composed verification and cannot be asserted through a generic update.
+11. Before compaction or handoff on a write-scoped task, call `semctx_handoff`. In a fresh context, call `semctx_resume` first. A read-only task must remain mutation-free.
 
 ## Verdict namespaces
 

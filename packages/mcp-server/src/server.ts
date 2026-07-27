@@ -32,6 +32,7 @@ import {
 import {
   registerReconciliationTools,
 } from "./reconciliation-tools";
+import { registerTargetTools } from "./target-tools";
 import {
   AttestationRequestV1Schema,
   ArchitectureDeltaSchema,
@@ -729,6 +730,7 @@ export function createSemctxServer(root: string): McpServer {
   );
 
   registerReconciliationTools(server, root);
+  registerTargetTools(server, root);
 
   return server;
 }

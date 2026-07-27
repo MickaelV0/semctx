@@ -113,11 +113,12 @@ describe("packaged MCP runtime", () => {
     try {
       await client.connect(transport);
       const { tools } = await client.listTools();
-      expect(tools).toHaveLength(29);
+      expect(tools).toHaveLength(30);
       expect(tools.some((tool) => tool.name === "semctx_semantic_check")).toBe(true);
       expect(tools.some((tool) => tool.name === "semctx_control_authority")).toBe(true);
       expect(tools.some((tool) => tool.name === "semctx_control_frame_task")).toBe(true);
       expect(tools.some((tool) => tool.name === "semctx_control_bind_scope")).toBe(true);
+      expect(tools.some((tool) => tool.name === "semctx_control_target_propose")).toBe(true);
       expect(tools.some((tool) => tool.name === "semctx_change_close")).toBe(true);
       expect(tools.some((tool) => tool.name === "semctx_control_plan_change")).toBe(true);
       expect(tools.some((tool) => tool.name === "semctx_control_reconcile_diff")).toBe(true);

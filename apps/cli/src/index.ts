@@ -44,11 +44,12 @@ Semantic layer (authored intent, invariants, decisions, evidence, change contrac
   semantic <init|check|inspect|render|format|slice|handoff|resume>
   change   <open|update|inspect|verify|close> <id>
 
-Control plane (read-only semantic coordinates and migration planning):
+Control plane (bounded semantic coordination and migration planning):
   control trace <qualified-id> [--to 0..6] [--direction lift|lower] [--json]
   control graph|traversal|coverage|impact|explain-why|compare-architecture [options] [--json]
   control authorize-transition|authorize-step|authorize-deletion --input <query.json> [--json]
   control plan <change-id> [--target <snapshot.json>] [--delta <delta.json>] [--json]
+  control target-propose --input <proposal.json> [--json]
   control bind-scope <change-id> --task-id <task-id> [--input <bindings.json>] [--json]
   control plan-change <change-id> --task-id <task-id> --input <planner.json> [--json]
   control reconcile-diff <input.json> [--json]
