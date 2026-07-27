@@ -38,9 +38,16 @@ import {
   reviewTargetProposal,
 } from "../src";
 import {
+  BindTaskScopeCommandV1Schema,
+  bindTaskScope,
   buildPlanningBundle,
   prepareTaskEnvelope,
   reconcileWorkingTree,
+  type BindTaskScopeCommandV1,
+  type BoundTaskScopeV1,
+  type BuildPlanningBundleCommandV1,
+  type PrepareTaskEnvelopeCommandV1,
+  type PreparedTaskEnvelopeV1,
 } from "@semantic-context/app-services/reconciliation";
 
 const roots: string[] = [];
@@ -63,24 +70,55 @@ afterEach(() => {
 describe("read-only task reconciliation application boundary", () => {
   it("prepares deterministic diagnostic envelopes and is the only certifying bundle surface", () => {
     const fixture = preparedRepository();
-    const left = prepareTaskEnvelope(fixture.root, fixture.command);
-    const right = prepareTaskEnvelope(fixture.root, fixture.command);
+    const command: BindTaskScopeCommandV1 = fixture.command;
+    const compatibilityCommand: PrepareTaskEnvelopeCommandV1 = command;
+    const left: BoundTaskScopeV1 = bindTaskScope(fixture.root, command);
+    const right: PreparedTaskEnvelopeV1 = prepareTaskEnvelope(
+      fixture.root,
+      compatibilityCommand,
+    );
 
     expect(left).toEqual(right);
     expect(left.certifying).toBe(false);
     expect(left.envelope.executionAuthority).toBe("none");
     expect(left.baseline.cleanliness).toBe("FRESH");
 
-    const bundle = buildPlanningBundle(fixture.root, {
+    const planningCommand: BuildPlanningBundleCommandV1 = {
       ...fixture.command,
       rollbackDescription: "Restore the committed implementation.",
       repositoryEditExpectations: [fixture.edit],
       testReferences: ["test/capacity.test.ts"],
-    });
+    };
+    const bundle = buildPlanningBundle(fixture.root, planningCommand);
     expect(bundle.executionAuthority).toBe("none");
     expect(bundle.semanticChangeSet.executionAuthority).toBe("none");
     expect(bundle.baseline.cleanliness).toBe("FRESH");
     expect(bundle.semanticChangeSet.repositoryEditExpectations).toEqual([fixture.edit]);
+  });
+
+  it("keeps bind-scope inputs strict and planning-free", () => {
+    const fixture = preparedRepository();
+
+    expect(BindTaskScopeCommandV1Schema.safeParse(fixture.command).success).toBe(true);
+    expect(BindTaskScopeCommandV1Schema.safeParse({
+      ...fixture.command,
+      rollbackDescription: "must belong to plan-change",
+    }).success).toBe(false);
+    expect(BindTaskScopeCommandV1Schema.safeParse({
+      ...fixture.command,
+      taskFrameAdvisory: { altitudeCandidate: 2 },
+    }).success).toBe(false);
+    expect(BindTaskScopeCommandV1Schema.safeParse({
+      ...fixture.command,
+      targetSelection: {
+        reference: {
+          schemaVersion: 1,
+          targetId: "target.separate-primitive",
+          revision: 1,
+          artifactHash: sha256HashCanonicalJson({ target: "separate-primitive" }),
+        },
+      },
+    }).success).toBe(false);
   });
 
   it("observes the actual worktree without writing the index or target store", () => {

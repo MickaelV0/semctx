@@ -283,14 +283,17 @@ rollback are all proven.
 semctx status [--json]
 semctx control trace <repo:...|semantic:...> [--to 0..6] [--direction lift|lower] [--json]
 semctx control plan <change-id> [--target <snapshot.json>] [--delta <delta.json>] [--json]
+semctx control bind-scope <change-id> --task-id <task-id> [--input <bindings.json>] [--json]
 semctx control plan-change <change-id> --task-id <task-id> --input <planner.json> [--json]
 semctx control reconcile-diff <input.json> [--json]
 ```
 
 MCP exposes the equivalent `semctx_control_status`, `semctx_control_trace`, and
-`semctx_control_plan` tools, plus `semctx_control_plan_change` and
-`semctx_control_reconcile_diff`. CLI and MCP call the same application services, validate the same
-strict schemas and serialize successful results with the same canonical byte representation.
+`semctx_control_plan` tools, plus `semctx_control_bind_scope`, `semctx_control_plan_change` and
+`semctx_control_reconcile_diff`. The older `frame-task`/`semctx_control_frame_task` surfaces retain
+their wider framing contract and are byte-compatible when given binding-only inputs. CLI and MCP
+call the same application services, validate the same strict schemas and serialize successful
+results with the same canonical byte representation.
 `reconcile-diff` reads the current worktree only and rejects caller-selected base/head refs. None of
 these surfaces applies a patch, schedules a command or grants execution authority.
 

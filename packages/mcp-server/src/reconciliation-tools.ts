@@ -10,11 +10,14 @@ import { isAbsolute, resolve } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import {
+  BindTaskScopeCommandV1Schema,
   BuildPlanningBundleCommandV1Schema,
   PrepareTaskEnvelopeCommandV1Schema,
+  bindTaskScope,
   buildPlanningBundle,
   prepareTaskEnvelope,
   reconcileWorkingTree,
+  type BindTaskScopeCommandV1,
   type BuildPlanningBundleCommandV1,
   type PrepareTaskEnvelopeCommandV1,
   type PreparedTaskEnvelopeV1,
@@ -47,6 +50,13 @@ export function controlFrameTaskTool(
   return prepareTaskEnvelope(root, command);
 }
 
+export function controlBindScopeTool(
+  root: string,
+  command: BindTaskScopeCommandV1,
+): PreparedTaskEnvelopeV1 {
+  return bindTaskScope(root, command);
+}
+
 export function controlPlanChangeTool(
   root: string,
   command: BuildPlanningBundleCommandV1,
@@ -61,18 +71,47 @@ export function controlReconcileDiffTool(
   return reconcileWorkingTree(root, input);
 }
 
-/** Register the issue #27 read-only MCP tools from their narrow authority closure. */
+/** Register the issue #27/#28 read-only MCP tools from their narrow authority closure. */
 export function registerReconciliationTools(
   server: McpServer,
   boundRoot: string,
 ): void {
   server.registerTool(
+    "semctx_control_bind_scope",
+    {
+      title: "Bind explicit repository scope",
+      description:
+        "Focused read-only scope-binding primitive. It turns authored links and explicit discoveries into a diagnostic TaskEnvelope before planning. "
+        + "Candidate anchors remain advisory, the result certifies nothing, and executionAuthority remains \"none\".",
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+      inputSchema: {
+        repositoryRoot: REPOSITORY_ROOT,
+        command: BindTaskScopeCommandV1Schema,
+      },
+    },
+    async ({ repositoryRoot, command }) => {
+      try {
+        return canonical(controlBindScopeTool(
+          requestRoot(boundRoot, repositoryRoot),
+          command as BindTaskScopeCommandV1,
+        ));
+      } catch (error) {
+        return errorResult(error);
+      }
+    },
+  );
+
+  server.registerTool(
     "semctx_control_frame_task",
     {
-      title: "Frame a task and bind its repository scope",
+      title: "Frame a task and bind its repository scope (compatibility surface)",
       description:
-        "Read-only compilation of a diagnostic TaskEnvelope from persisted Plane A/B inputs: it classifies the task and turns candidate anchors into resolved bindings, so scope can be validated before any plan exists. "
-        + "Returns the same envelope semctx_control_plan_change embeds, without requiring expectations or a rollback description. Certifies nothing and grants no execution authority.",
+        "Compatibility framing surface. For binding-only inputs it returns the same canonical diagnostic TaskEnvelope as semctx_control_bind_scope. It certifies nothing and grants no execution authority.",
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
