@@ -20,17 +20,49 @@ For every MCP call, pass `repositoryRoot` as the absolute root of the repository
 
 ## Shared workflow
 
-1. Establish the repository state with normal code search and Git inspection. Do not use `semctx_prepare_task` as code search.
-2. Run `semctx_semantic_check`, preserving its canonical reason codes; then rehydrate existing intent with `semctx_resume`, `semctx_semantic_inspect`, or `semctx_semantic_slice` when a change id or semantic id exists. Treat anything absent from the bounded slice as unknown, not false.
-3. Use `semctx_control_status` before high-risk control work. Continue only for `FRESH` or `DIRTY_KNOWN`; preserve every `STALE` or `UNSEALED` reason verbatim.
-4. Use `semctx_control_trace` to connect repository and semantic coordinates across L0-L6. Keep traversal bounded and label observed, authored, inferred, and ambiguous statements honestly.
-5. Record the returned freshness verdict, `freshnessSeal.sealHash`, and current/indexed input pairs. The seal is an attestation; `semctx_control_status` owns the verdict.
-6. When an explicit future architecture needs a repository artifact, call `semctx_control_target_propose` only from a `FRESH` state and only with user-authorized target content. The tool writes one new `proposed` revision, fixes authorship to `agent`, and grants no authority; review and acceptance remain separate.
-7. Use `semctx_control_plan` only for an explicit target architecture. Treat `BLOCKED` for unsafe inputs, a missing or unaccepted target, open unknowns, stale links, or insufficient proof as the correct fail-closed result.
-8. On a write-scoped task, use `semctx_change_open` or `semctx_change_update` to record the goal, preserved invariants, required evidence, and unresolved unknowns before substantial edits.
-9. Make the smallest coherent change. Run the runtime tests selected by the impact report; semctx never runs or replaces them.
-10. After edits, call `semctx_verify_change`, record only evidence actually obtained, then call `semctx_change_verify` when a change contract exists. Resolve an unknown only after its authored node has a `proved_by` relation to evidence in a proven status. A `verified` lifecycle is derived by composed verification and cannot be asserted through a generic update.
-11. Before compaction or handoff on a write-scoped task, call `semctx_handoff`. In a fresh context, call `semctx_resume` first. A read-only task must remain mutation-free.
+The ordered lifecycle below is generated from the strict `AgentWorkflowContractV1`. Treat its
+declared effects and conditions as the host-neutral policy; host-specific shell resolution appears
+only in the final CLI ladder.
+
+<!-- BEGIN shared-workflow-contract:v1 -->
+Machine policy: enforcement is `shadow`, blocking is disabled, repositories
+without Semctx follow `no_op`, and execution authority is
+`none`.
+
+1. **inspect_repository** — Establish the repository state with normal code search and Git inspection. Do not use Semctx as a substitute for reading the code.
+   - Surface: host-local; effect: `read_only`; condition: `always`.
+2. **semantic_check** — Check the semantic model and preserve its canonical reason codes. Rehydrate existing intent with semctx_resume, semctx_semantic_inspect or semctx_semantic_slice when an identity exists; absent context stays unknown.
+   - Surface: `semctx_semantic_check`, `semctx_resume`, `semctx_semantic_inspect`, `semctx_semantic_slice`; effect: `read_only`; condition: `semantic_context_present`.
+3. **status** — Run the control preflight before governed work. Continue only for FRESH or DIRTY_KNOWN, preserve every STALE or UNSEALED reason verbatim, and record the freshness seal plus current and indexed input pairs as an attestation rather than authority.
+   - Surface: `semctx_control_status`; effect: `read_only`; condition: `semantic_context_present`.
+4. **frame_task** — Frame the task without promoting task prose, candidates or hypotheses into normative repository scope.
+   - Surface: `semctx_control_frame_task`; effect: `read_only`; condition: `write_task`.
+5. **bind_scope** — Bind only explicit repository files or coordinates. Keep unresolved or advisory candidates outside the declared reconciliation scope.
+   - Surface: `semctx_control_bind_scope`; effect: `read_only`; condition: `write_task`.
+6. **trace_impact** — Trace bounded L0-L6 impact and label observed, authored, inferred and ambiguous statements honestly.
+   - Surface: `semctx_control_trace`; effect: `read_only`; condition: `write_task`.
+7. **authority** — Evaluate the required altitude and its accumulating obligations. The report describes required authority and never grants execution authority.
+   - Surface: `semctx_control_authority`; effect: `read_only`; condition: `write_task`.
+8. **target_propose** — When explicit user-authorized target content needs a repository artifact, create one immutable proposed revision from a FRESH state. Review and acceptance remain separate.
+   - Surface: `semctx_control_target_propose`; effect: `tracked_create_only`; condition: `migration_task`.
+9. **refine** — Compile the bound task into the smallest proof-bearing refinement plan with semctx_control_plan_change. Use semctx_control_plan only for an explicit target architecture, and treat every fail-closed refusal as a real planning result.
+   - Surface: `semctx_control_plan_change`, `semctx_control_plan`; effect: `read_only`; condition: `write_task`.
+10. **change_contract** — Open or update the authored change contract before substantial edits, recording the goal, invariants, evidence requirements and unresolved unknowns.
+   - Surface: `semctx_change_open`, `semctx_change_update`; effect: `tracked_create_or_update`; condition: `write_task`.
+11. **implement** — Make only the user-authorized coherent change and run the runtime tests selected by repository evidence. Semctx never executes the change or replaces those tests.
+   - Surface: host-local; effect: `user_authorized_repository_write`; condition: `write_task`.
+12. **reconcile_diff** — Reconcile the actual worktree diff against the sealed envelope, planned edits, target, evidence, invariant impact and round-trip requirements.
+   - Surface: `semctx_control_reconcile_diff`; effect: `read_only`; condition: `after_edits`.
+13. **verify_change** — Verify the observed diff and record only evidence actually obtained; never upgrade a declared check into proof.
+   - Surface: `semctx_verify_change`; effect: `read_only`; condition: `after_edits`.
+14. **change_verify** — Compose Plane A evidence with the change contract. Resolve an unknown only after proved_by links it to proven evidence; completion requires a derived verified lifecycle, not a caller assertion.
+   - Surface: `semctx_change_verify`; effect: `read_only`; condition: `after_edits`.
+15. **handoff** — Capture the bounded handoff before compaction or owner transfer. A fresh context must return through semantic_check and resume the capsule before continuing.
+   - Surface: `semctx_handoff`; effect: `working_state_write`; condition: `before_handoff`.
+
+Completion requires: `reconcile_diff` → `verify_change` → `change_verify`.
+The bounded transfer stage is `handoff`.
+<!-- END shared-workflow-contract -->
 
 ## Verdict namespaces
 

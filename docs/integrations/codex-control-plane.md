@@ -5,11 +5,12 @@ The `semctx-control` Codex plugin combines two surfaces:
 - a skill that tells the agent when and how to use semctx without overstating certainty;
 - a local stdio MCP server that exposes deterministic repository, semantic, and control-plane tools.
 
-The host-neutral workflow body is byte-identical to Claude's after stripping the generated
-`host-cli-ladder` region (#40), so Codex and Claude Code use the same lanes, verdict semantics,
-generic demo objective and completion contract. Shell CLI resolution ladders are host-generated
-(Codex: global `semctx` only). Host-specific installation, approval and guard behaviour remains
-separate.
+The ordered lifecycle in the host-neutral workflow is generated from the strict
+`AgentWorkflowContractV1`. The resulting body is byte-identical to Claude's after stripping the
+generated `host-cli-ladder` region (#40), so Codex and Claude Code use the same stage order, tool
+surfaces, write effects, verdict semantics and completion gate. Shell CLI resolution ladders are
+host-generated (Codex: global `semctx` only). Host-specific installation, approval and guard
+behaviour remains separate.
 
 The plugin does not add an executor. It helps Codex trace intent, compile a shadow-first plan, and
 prove a change; Codex still edits code with its normal tools and runs the repository's real tests.
