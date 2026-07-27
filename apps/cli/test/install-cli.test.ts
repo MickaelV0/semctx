@@ -736,4 +736,24 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
       error: { code: "INVALID_TASK_INPUT" },
     });
   });
+
+  test("rejects a valueless --host instead of silently falling back to auto", () => {
+    const entrypoint = resolve(import.meta.dir, "../src/index.ts");
+    const process = Bun.spawnSync(
+      ["bun", entrypoint, "install", "--host", "--json"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const out = new TextDecoder().decode(process.stdout);
+
+    expect(process.exitCode).toBe(1);
+    expect(new TextDecoder().decode(process.stderr)).toBe("");
+    expect(JSON.parse(out)).toMatchObject({
+      ok: false,
+      version: "0.1.11",
+      error: {
+        code: "INVALID_TASK_INPUT",
+        message: "--host requires auto|codex|claude|all",
+      },
+    });
+  });
 });
