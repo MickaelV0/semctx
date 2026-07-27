@@ -32,6 +32,7 @@ import {
   serializeControlReport,
 } from "@semantic-context/control-model/reconciliation";
 import {
+  controlBindScopeTool,
   controlFrameTaskTool,
   controlPlanChangeTool,
   controlReconcileDiffTool,
@@ -193,6 +194,13 @@ describe("task reconciliation MCP adapters", () => {
     expect(framed.envelope.resolvedBindings.length).toBeGreaterThan(0);
   });
 
+  it("keeps frame-task byte-compatible with bind-scope for binding-only inputs", () => {
+    const fixture = preparedRepository();
+
+    expect(controlFrameTaskTool(fixture.root, fixture.command))
+      .toEqual(controlBindScopeTool(fixture.root, fixture.command));
+  });
+
   it("exposes framing over the actual MCP transport as canonical shared bytes", async () => {
     const fixture = preparedRepository();
     const expected = controlFrameTaskTool(fixture.root, fixture.command);
@@ -209,6 +217,42 @@ describe("task reconciliation MCP adapters", () => {
       });
 
       expect(textContent(result)).toBe(serializeControlReport(expected));
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("exposes focused scope binding over MCP with the canonical shared result", async () => {
+    const fixture = preparedRepository();
+    const expected = prepareTaskEnvelope(fixture.root, fixture.command);
+    const server = createSemctxServer(fixture.root);
+    const client = new Client({ name: "semctx-binding-test", version: "0.1.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      const result = await client.callTool({
+        name: "semctx_control_bind_scope",
+        arguments: { repositoryRoot: fixture.root, command: fixture.command },
+      });
+
+      expect(result.isError, JSON.stringify(result)).not.toBe(true);
+      expect(textContent(result)).toBe(serializeControlReport(expected));
+
+      const framingLeak = await client.callTool({
+        name: "semctx_control_bind_scope",
+        arguments: {
+          repositoryRoot: fixture.root,
+          command: {
+            ...fixture.command,
+            taskFrameAdvisory: {},
+          },
+        },
+      });
+      expect(framingLeak.isError).toBe(true);
+      expect(textContent(framingLeak)).toContain("taskFrameAdvisory");
     } finally {
       await client.close();
       await server.close();
