@@ -8,28 +8,40 @@ It is local-first, deterministic, and needs no LLM, network, or service.
 
 - [Bun](https://bun.sh) ≥ 1.3 (the engine runs under Bun).
 - A git repository with TypeScript sources.
-- `semctx` is on npm, but the published release lags this repository — run it from source. In this
-  repo, `bun apps/cli/src/index.ts` is the CLI; below it is written as `semctx`.
+- Optional: Codex and/or Claude Code with plugin support. `semctx install` detects whichever hosts
+  are already available; it never installs the host applications themselves.
 
-## 1. Bootstrap
+## 1. One-command agent onboarding
+
+Run this from the target Git repository:
 
 ```bash
-semctx init --preset github-claude --dry-run   # preview what will be created
-semctx init --preset github-claude             # write config + CI workflow + Claude note
+bunx semctx@latest install
 ```
 
-The preset never overwrites an existing file (use `--force`), adds no blocking hook by default,
-and prints exactly what it created or skipped. Add `--with-devcontainer` for a consumer dev
-container. Plain `semctx init` (no preset) just creates `.semctx/`.
+The command installs or updates every detected Semctx agent plugin, prepares the repository, and
+returns a final readiness report. It can be safely re-run. Preview with `--dry-run`, select a host
+with `--host codex|claude|all`, or update only the machine plugins with `--skip-setup`.
 
-## 2. Index
+After a successful run, open a new Codex task and/or restart Claude Code as reported.
+
+## 2. CLI-only bootstrap
 
 ```bash
+bunx semctx@latest setup
+```
+
+This combines configuration, semantic scaffold, indexing and validation. It is idempotent and does
+not overwrite existing configuration or authored `.sem` files. Use
+`semctx setup --preset github-claude` when the CI workflow and Claude note are also wanted.
+
+The lower-level `init` and `index` commands remain available for custom flows:
+
+```bash
+semctx init --preset github-claude --dry-run
+semctx init --preset github-claude
 semctx index
 ```
-
-This builds the deterministic graph (symbols, exports, cross-file calls, tests, docs, migrations,
-`@markers`). Re-run after large changes.
 
 ## 3. Verify a change
 

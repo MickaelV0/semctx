@@ -23,12 +23,18 @@ const portableTypeScriptPrelude =
   'var __dirname=import.meta.dir+"/typescript-lib",__filename=__dirname+"/typescript.js";';
 const escapedRoot = JSON.stringify(root).slice(1, -1);
 
-interface BundleSpec {
+export interface BundleSpec {
   /** Output basename under each plugin dist/ */
   name: string;
   entrypoint: string;
   label: string;
 }
+
+export const CLI_BUNDLE_SPEC: BundleSpec = {
+  name: "semctx.js",
+  entrypoint: "apps/cli/src/index.ts",
+  label: "plugin CLI",
+};
 
 const bundles: BundleSpec[] = [
   {
@@ -36,11 +42,7 @@ const bundles: BundleSpec[] = [
     entrypoint: "packages/mcp-server/src/index.ts",
     label: "plugin MCP runtime",
   },
-  {
-    name: "semctx.js",
-    entrypoint: "apps/cli/src/index.ts",
-    label: "plugin CLI",
-  },
+  CLI_BUNDLE_SPEC,
 ];
 
 /** Host-specific shell ladder for the shared control skill (issue #40 option A). */
@@ -75,7 +77,7 @@ export function hostCliLadder(host: SkillHost): string {
    in the shell — where it is set at all, it is exported to hooks and MCP servers, not to your
    terminal. Do not try to guess the plugin directory, and do not assume the shell's cwd is the
    plugin package root: it is the user's repository.
-2. **Global \`semctx\` on PATH** (\`bun install -g semctx\` / \`bunx semctx\`) — keep it on the **same
+2. **Global \`semctx\` on PATH** (\`bun install -g semctx@latest\` / \`bunx semctx@latest\`) — keep it on the **same
    version** as the plugin (\`semctx --version\` should match the marketplace plugin version).
 3. If neither is available, say so and continue with MCP-only or ask the user to update the plugin /
    install the CLI — do not invent results.
@@ -100,7 +102,7 @@ semctx status --json
   }
 
   return `Prefer MCP tools when they are connected. For shell fallbacks, use a global \`semctx\` on
-PATH (\`bun install -g semctx\` / \`bunx semctx\`) — keep it on the **same version** as the plugin
+PATH (\`bun install -g semctx@latest\` / \`bunx semctx@latest\`) — keep it on the **same version** as the plugin
 (\`semctx --version\` should match the marketplace plugin version).
 
 This host does **not** substitute a plugin-root path into skill content, and the agent's shell cwd
@@ -181,7 +183,7 @@ function readSkillTemplate(): string {
   return readFileSync(skillTemplatePath, "utf8").replaceAll("\r\n", "\n");
 }
 
-async function buildPortableBundle(spec: BundleSpec): Promise<Uint8Array> {
+export async function buildPortableBundle(spec: BundleSpec): Promise<Uint8Array> {
   const result = await Bun.build({
     entrypoints: [spec.entrypoint],
     root,
@@ -208,6 +210,15 @@ async function buildPortableBundle(spec: BundleSpec): Promise<Uint8Array> {
     throw new Error(`generated ${spec.label} still contains the build checkout path`);
   }
   return new TextEncoder().encode(portable);
+}
+
+export function writePortableTypeScriptLibs(dist: string): void {
+  const typescriptLibOutput = resolve(dist, "typescript-lib");
+  rmSync(typescriptLibOutput, { recursive: true, force: true });
+  mkdirSync(typescriptLibOutput, { recursive: true });
+  for (const lib of typescriptLibs) {
+    copyFileSync(resolve(typescriptLibSource, lib), resolve(typescriptLibOutput, lib));
+  }
 }
 
 function filesEqual(left: string, right: string): boolean {
@@ -268,11 +279,7 @@ async function main(): Promise<void> {
     for (const spec of bundles) {
       await Bun.write(resolve(dist, spec.name), built.get(spec.name)!);
     }
-    rmSync(typescriptLibOutput, { recursive: true, force: true });
-    mkdirSync(typescriptLibOutput, { recursive: true });
-    for (const lib of typescriptLibs) {
-      copyFileSync(resolve(typescriptLibSource, lib), resolve(typescriptLibOutput, lib));
-    }
+    writePortableTypeScriptLibs(dist);
   }
 
   // Host-generated control skills (always build + check — independent of dist loop).

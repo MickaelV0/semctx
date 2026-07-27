@@ -14,15 +14,19 @@ Requires [Bun](https://bun.sh) ≥ 1.3. The CLI ships as a single self-contained
 Bun (no `node_modules` to install).
 
 ```bash
-bunx semctx --help          # run without installing
-bun add -g semctx           # or install globally
+bunx semctx@latest install  # detected agent plugins + this Git repository
+bunx semctx@latest setup    # CLI-only repository bootstrap
+bun add -g semctx@latest    # optional global shell/CI install
 ```
+
+`install` is idempotent and supports `--dry-run`, `--host codex|claude|all`, `--skip-setup`, and
+`--json`. It does not install Codex or Claude Code themselves, overwrite an unrelated marketplace,
+or initialise a directory that is not a Git repository.
 
 ## Use
 
 ```bash
-semctx init --preset github-claude     # config + CI workflow + Claude Code note (preview first)
-semctx index                           # build the deterministic graph
+semctx install                         # plugins + setup + readiness report
 semctx verify diff --base origin/main  # analyse a range → PASS / WARN / BLOCK
 ```
 

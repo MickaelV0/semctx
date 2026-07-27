@@ -1,5 +1,5 @@
 {
-  "name": "semctx",
+  "name": "semctx-stable",
   "description": "Local semctx plugins for proof-honest repository changes",
   "owner": {
     "name": "hoklims",
@@ -10,7 +10,7 @@
       "name": "semctx",
       "source": "./plugins/claude-code",
       "description": "Trace repository impact, authored intent and fail-closed migration plans in Claude Code.",
-      "version": "0.1.10",
+      "version": "0.1.11",
       "author": {
         "name": "hoklims",
         "email": "hoklims@gmail.com"

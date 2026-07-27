@@ -4,6 +4,37 @@
 published it is `bunx semctx`. Global options: `--root <path>` (repository root,
 default cwd), `--json` (machine output where supported).
 
+## `install`
+
+Install or update Semctx for detected coding-agent hosts and prepare the current Git repository:
+
+```text
+semctx install [--host auto|codex|claude|all] [--skip-setup] [--dry-run] [--json]
+```
+
+The default `auto` mode configures every detected Codex/Claude host and ignores hosts that are not
+installed. Explicitly requested missing hosts fail honestly. Codex installations using the legacy
+`personal` or interim `semctx` marketplace names are migrated to `semctx-stable`; Claude's legacy
+`semctx` marketplace is migrated the same way. A different marketplace already named
+`semctx-stable` is never overwritten. Fresh registrations track the release-managed `stable`
+branch, which advances only after the matching npm package is public. Every completed install is
+re-read to prove the expected plugin version is installed and enabled. Claude installs use user
+scope, and legacy cleanup is explicitly limited to that scope.
+
+Unless `--skip-setup` is set, the command resolves `git rev-parse --show-toplevel` and runs the
+idempotent `setup` pipeline at that repository root, even when invoked from a nested directory.
+Outside a Git repository it installs the machine plugins but writes no workspace state and reports
+the exact follow-up command. `--dry-run` performs only read-only host and Git probes.
+
+The JSON report contains `ok`, CLI `version`, selected mode, per-host steps/status, workspace
+status, and restart/recovery actions. Exit 0 means at least one requested or auto-detected host is
+ready and the workspace step did not fail.
+
+## `setup`
+
+Idempotently create or preserve configuration and authored semantic files, index the repository,
+and validate the resulting model in one command.
+
 ## `init`
 
 Create `.semctx/` (SQLite db + config) and install the non-destructive `.gitignore` policy that keeps

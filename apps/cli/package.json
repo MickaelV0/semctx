@@ -1,6 +1,6 @@
 {
   "name": "semctx",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "type": "module",
   "description": "Deterministic, local-first repository change-impact analyzer: computes the semantic blast radius of a git diff and enforces contracts and invariants (PASS/WARN/BLOCK). Not a code-search replacement (ADR 0005).",
   "license": "Apache-2.0",
@@ -31,8 +31,8 @@
   "engines": { "bun": ">=1.3.0" },
   "bin": { "semctx": "./dist/index.js" },
   "scripts": {
-    "build": "bun build src/index.ts --target=bun --minify --outfile=dist/index.js",
-    "prepublishOnly": "bun build src/index.ts --target=bun --minify --outfile=dist/index.js"
+    "build": "bun ../../scripts/build-cli-package.ts",
+    "prepack": "bun ../../scripts/build-cli-package.ts"
   },
   "devDependencies": {
     "@semantic-context/core": "workspace:*",

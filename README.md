@@ -64,27 +64,34 @@ and derived from `severity` when absent. `BLOCK` exits non-zero — usable as a 
 
 ---
 
-## Get started in ~5 minutes
+## Get started
 
-Requires [Bun](https://bun.sh) ≥ 1.3. `semctx` publishes as a single self-contained bundle
-(`bunx semctx`). The published release lags this repository, so run from source to get the current
-CLI (see [`docs/publishing.md`](docs/publishing.md) for the release state and
-[#38](https://github.com/hoklims/semctx/issues/38) for the release policy).
+Requires [Bun](https://bun.sh) ≥ 1.3. From a TypeScript Git repository, one command detects Codex
+and/or Claude Code, installs or updates the matching plugins, prepares the repository, and verifies
+the result:
 
 ```bash
-bunx semctx --help                            # published release, currently behind main
-
-# …or from source in this repo (dev / pre-release):
-bun install
-bun apps/cli/src/index.ts --help              # aliased as `semctx` below
+bunx semctx@latest install
 ```
 
-Then, in your TypeScript repo — **one command** gets you ready (config + graph index + semantic
-scaffold + validation, idempotent):
+It is safe to run again. Existing installs are refreshed through the release-managed `stable`
+channel, legacy marketplace names are migrated, existing Semctx configuration and authored `.sem`
+files are preserved, and a non-Git directory is never initialised accidentally. Use `--dry-run`
+to preview, `--host codex|claude|all` to target a host, or `--skip-setup` for a machine-only plugin
+refresh. Open a new Codex task and/or restart Claude Code when the command tells you to.
+
+For CLI-only use without a coding-agent plugin:
 
 ```bash
-semctx setup                                  # ← the "just works" entry point
-semctx verify diff --base origin/main         # analyse the branch → PASS / WARN / BLOCK
+bunx semctx@latest setup
+bunx semctx@latest verify diff --base origin/main
+```
+
+For development from this checkout:
+
+```bash
+bun install
+bun apps/cli/src/index.ts install --dry-run
 ```
 
 `semctx setup --preset github-claude` also drops a CI workflow and a Claude Code note. The
