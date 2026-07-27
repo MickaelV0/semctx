@@ -75,7 +75,11 @@ bun run plugin:check   # fail if any tracked artifact is missing or stale
 
 `plugin:build` also renders `plugins/*/skills/semctx-control/SKILL.md` from
 `plugins/shared/skills/semctx-control/SKILL.md`: Claude gets the `${CLAUDE_PLUGIN_ROOT}` CLI rung;
-Codex gets only global `semctx` instructions (#40). Edit the template, not the generated leaves.
+Codex gets only global `semctx` instructions (#40). The template's
+`{{SHARED_WORKFLOW_CONTRACT}}` region is generated from the strict
+`AGENT_WORKFLOW_CONTRACT_V1` policy in `packages/control-model/src/agent-workflow.ts`. Edit that
+policy for workflow semantics, the shared template for surrounding prose, and never edit the
+generated host leaves.
 
 Agent sessions should prefer the plugin-bundled CLI so a marketplace update keeps MCP and CLI in
 lockstep. The npm `semctx` package remains the channel for CI, GitHub Actions, and non-plugin shells.

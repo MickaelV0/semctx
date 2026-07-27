@@ -71,9 +71,10 @@ claude plugin update semctx@semctx
 
 ## Shared skills
 
-- `semctx-control`: the complete Plane A/B/C workflow; host-neutral body is byte-identical to the
-  Codex skill after stripping the generated `host-cli-ladder` region (Claude keeps the plugin-CLI
-  placeholder rung; #40).
+- `semctx-control`: the complete Plane A/B/C workflow. Its ordered lifecycle is generated from the
+  strict `AgentWorkflowContractV1`; the host-neutral body is byte-identical to the Codex skill
+  after stripping the generated `host-cli-ladder` region (Claude keeps the plugin-CLI placeholder
+  rung; #40).
 - `semctx-semantic`: a focused Plane B compatibility workflow for change contracts and handoffs.
 - `semctx-verify`: a focused Plane A compatibility workflow for diff verification.
 
