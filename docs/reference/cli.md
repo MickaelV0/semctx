@@ -79,6 +79,38 @@ than an error: `SEMANTIC_MODEL_INVALID` for error-severity diagnostics or duplic
 `SEMANTIC_LIFECYCLE_INVALID` for error-severity lifecycle findings. Both are `UNSEALED` and exit 3.
 Run `semctx semantic check` to see the individual findings behind the reason code.
 
+## `control target-propose`
+
+Create one immutable, agent-authored target architecture proposal:
+
+```text
+semctx control target-propose --input <proposal.json> [--json]
+```
+
+The strict input contains only:
+
+```json
+{
+  "schemaVersion": 1,
+  "targetId": "target.checkout",
+  "revision": 1,
+  "statement": "Split checkout from catalog",
+  "elements": [],
+  "relations": [],
+  "preservedInvariantIds": []
+}
+```
+
+Semctx requires a `FRESH` control state and derives `baseCommit` and `sourceGraphSeal` from it.
+`authorshipOrigin` is fixed to `agent`; callers cannot provide those three fields or select Git
+refs. The command creates
+`.semctx/semantic/targets/<targetId>/r<revision>.target.json` without overwriting an existing
+revision.
+
+The returned `target_architecture_proposal` is `certifying: false`, carries
+`executionAuthority: "none"` and remains hypothetical. It does not review or accept the target.
+The equivalent MCP tool is `semctx_control_target_propose`.
+
 ## `control bind-scope`
 
 Resolve explicit repository bindings into a diagnostic `TaskEnvelope`, before any plan exists.
@@ -194,10 +226,10 @@ Status precedence is `REFUSED → VIOLATED → UNPROVEN → REALIZED`; reason co
 canonical order. Exit code 0 means `REALIZED`; every other valid reconciliation result exits 3.
 Advisory diagnostics never upgrade the result.
 
-The equivalent MCP tools are `semctx_control_bind_scope`, `semctx_control_plan_change` and
-`semctx_control_reconcile_diff`. `semctx_control_frame_task` remains a wider compatibility framing
-surface. They validate the same schemas, call the same application services and serialize successful
-results to the same canonical bytes.
+The equivalent MCP tools are `semctx_control_target_propose`, `semctx_control_bind_scope`,
+`semctx_control_plan_change` and `semctx_control_reconcile_diff`. `semctx_control_frame_task`
+remains a wider compatibility framing surface. They validate the same schemas, call the same
+application services and serialize successful results to the same canonical bytes.
 
 ## Experimental
 

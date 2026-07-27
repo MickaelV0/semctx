@@ -11,6 +11,7 @@ export {
   controlPlanChangeTool,
   controlReconcileDiffTool,
 } from "./reconciliation-tools";
+export { controlTargetProposeTool } from "./target-tools";
 
 /** Entry point: serve semctx over stdio for the current (or SEMCTX_ROOT) repository. */
 async function main(): Promise<void> {

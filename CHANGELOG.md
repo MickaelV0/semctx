@@ -103,8 +103,16 @@ Marketplace. The published CLI lags this repository — see
   anchors resolved at all — so the model had to assemble the whole control-plane payload up front and
   guess. The envelope returned by the framing step is byte-identical to the one the planning bundle
   embeds for the same inputs, asserted by test. `certifying: false`,
-  `executionAuthority: "none"`, no writes and no caller-selected Git refs. `bind_scope`,
-  `target_propose` and the host lifecycle work remain open on #28.
+  `executionAuthority: "none"`, no writes and no caller-selected Git refs. The focused scope and
+  target-proposal slices are described below; host lifecycle work remains open on #28.
+
+- **Focused target proposal primitive** (P3, [#28](https://github.com/hoklims/semctx/issues/28)):
+  CLI `semctx control target-propose` and MCP `semctx_control_target_propose` accept only target
+  content. The shared application boundary derives the exact current commit and repository-graph
+  seal from a `FRESH` control state, fixes authorship to `agent`, then creates one immutable
+  Git-versioned `proposed` artifact. Callers cannot inject source refs or claim human authorship.
+  The result is non-certifying with `executionAuthority: "none"`; review remains the only path to an
+  `accepted` revision.
 
 - **Required-altitude authority policy** (P3, [#28](https://github.com/hoklims/semctx/issues/28)):
   one canonical table turns a change's abstraction altitude into the authority it requires — L0-L1
