@@ -170,12 +170,14 @@ positives, then enforce by risk/altitude.
 
 - [ ] **Shared vertical workflow contract** — keep one canonical policy/schema for Codex and
       Claude Code; generate or test host-specific adapters rather than duplicating semantic rules.
-- [ ] **Agent primitives** — provide focused tools for `frame_task`, `bind_scope`, `refine`,
+- [x] **Agent primitives** — provide focused tools for `frame_task`, `bind_scope`, `refine`,
       `target_propose`, `reconcile_diff` and `status` instead of making the model assemble raw
       control-plane payloads. `status`, `reconcile_diff` and `refine` (as `control plan-change`) are
       served; `bind_scope` is now a focused CLI/MCP primitive over the shared strict application
       contract, while `frame_task` retains its wider compatibility contract for existing callers.
-      `target_propose` still requires callers to author the target artifact directly.
+      `target_propose` now accepts target content only, binds the current fresh commit and graph seal
+      inside the application service, records agent authorship and creates one immutable,
+      hypothetical Plane-B proposal. Acceptance and execution authority remain separate.
 - [x] **Required-altitude policy** — L0-L1 may remain autonomous, L2 is constrained, L3 requires a
       reviewed plan/rollback, and L4-L6 require explicit human authority appropriate to the change.
       Shipped as one canonical table with accumulating obligations, served identically by

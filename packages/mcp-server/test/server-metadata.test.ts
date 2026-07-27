@@ -56,6 +56,12 @@ describe("semctx MCP tool metadata", () => {
     expect(byName.get("semctx_change_update")?.annotations?.readOnlyHint).not.toBe(true);
     expect(byName.get("semctx_change_close")?.annotations?.readOnlyHint).not.toBe(true);
     expect(byName.get("semctx_handoff")?.annotations?.readOnlyHint).not.toBe(true);
+    expect(byName.get("semctx_control_target_propose")?.annotations).toEqual({
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    });
 
     const invalidRoot = await client.callTool({
       name: "semctx_verify_change",

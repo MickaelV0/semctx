@@ -42,8 +42,12 @@ import {
   CONTROL_RECONCILIATION_HELP,
   runControlReconciliation,
 } from "./control-reconciliation";
+import {
+  CONTROL_TARGET_HELP,
+  runControlTarget,
+} from "./control-target";
 
-const CONTROL_HELP = `semctx control — read-only semantic reconstruction control plane
+const CONTROL_HELP = `semctx control — bounded semantic reconstruction control plane
 
 Usage:
   semctx control trace <qualified-id> [--to 0..6] [--direction lift|lower]
@@ -60,6 +64,7 @@ Usage:
   semctx control authorize-step --input <query.json> [--json]
   semctx control authorize-deletion --input <query.json> [--json]
   semctx control plan <change-id> [--target <snapshot.json>] [--delta <delta.json>] [--json]
+${CONTROL_TARGET_HELP}
 ${CONTROL_RECONCILIATION_HELP}
 `;
 
@@ -126,6 +131,8 @@ export function runControl(root: string, args: ParsedArgs): number {
     info(CONTROL_HELP);
     return 0;
   }
+  const targetExitCode = runControlTarget(root, args);
+  if (targetExitCode !== undefined) return targetExitCode;
   const reconciliationExitCode = runControlReconciliation(root, args);
   if (reconciliationExitCode !== undefined) return reconciliationExitCode;
 
