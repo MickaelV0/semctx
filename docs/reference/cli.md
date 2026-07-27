@@ -20,6 +20,10 @@ installed. Explicitly requested missing hosts fail honestly. Codex installations
 branch, which advances only after the matching npm package is public. Every completed install is
 re-read to prove the expected plugin version is installed and enabled. Claude installs use user
 scope, and legacy cleanup is explicitly limited to that scope.
+When Windows reports that an active Codex task has locked the legacy plugin cache, the replacement
+must already be verified before cleanup is deferred. The report remains successful, marks the
+cleanup steps `deferred`, and a detached helper retries only those legacy removals in the background.
+Other cleanup errors remain blocking.
 
 Unless `--skip-setup` is set, the command resolves `git rev-parse --show-toplevel` and runs the
 idempotent `setup` pipeline at that repository root, even when invoked from a nested directory.
