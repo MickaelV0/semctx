@@ -173,8 +173,8 @@ positives, then enforce by risk/altitude.
 - [ ] **Agent primitives** — provide focused tools for `frame_task`, `bind_scope`, `refine`,
       `target_propose`, `reconcile_diff` and `status` instead of making the model assemble raw
       control-plane payloads. `status`, `reconcile_diff` and `refine` (as `control plan-change`) are
-      served; `frame_task` is now reachable on its own through `control frame-task`, so scope can be
-      validated before a plan exists. `bind_scope` is not yet separable from framing, and
+      served; `bind_scope` is now a focused CLI/MCP primitive over the shared strict application
+      contract, while `frame_task` retains its wider compatibility contract for existing callers.
       `target_propose` still requires callers to author the target artifact directly.
 - [x] **Required-altitude policy** — L0-L1 may remain autonomous, L2 is constrained, L3 requires a
       reviewed plan/rollback, and L4-L6 require explicit human authority appropriate to the change.

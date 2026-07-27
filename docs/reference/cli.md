@@ -79,23 +79,27 @@ than an error: `SEMANTIC_MODEL_INVALID` for error-severity diagnostics or duplic
 `SEMANTIC_LIFECYCLE_INVALID` for error-severity lifecycle findings. Both are `UNSEALED` and exit 3.
 Run `semctx semantic check` to see the individual findings behind the reason code.
 
-## `control frame-task`
+## `control bind-scope`
 
-Compile a diagnostic `TaskEnvelope` and resolve its repository bindings, before any plan exists.
+Resolve explicit repository bindings into a diagnostic `TaskEnvelope`, before any plan exists.
 
 ```text
-semctx control frame-task <change-id> --task-id <task-id> [--input <framing.json>] [--json]
+semctx control bind-scope <change-id> --task-id <task-id> [--input <bindings.json>] [--json]
 ```
 
-`--input` carries the framing half only — candidate anchors, explicit discoveries, authored link
-resolutions, an optional target selection. It is optional: with no file, framing runs from the
-persisted Plane A/B inputs alone. Unlike `control plan-change`, no expectations and no
-`rollbackDescription` are required, so an agent can check whether its anchors resolve before
-describing a plan it may have to discard.
+`--input` carries scope-binding inputs only: candidate anchors, explicit discoveries and authored
+link resolutions. Framing advisories, target selection, expectations and `rollbackDescription` are
+rejected by the strict schema. The file is optional; with no file, binding runs from persisted Plane
+A/B links alone. Candidate anchors remain advisory, while only authored links and explicit
+discoveries with evidence can become load-bearing bindings.
 
 The returned envelope is byte-identical to the one `control plan-change` embeds for the same
 inputs. The report is `certifying: false` and carries `executionAuthority: "none"`; it never writes,
 indexes, reviews a target, or accepts caller-selected Git refs.
+
+`control frame-task` retains its previous framing and target-selection inputs for compatibility.
+For binding-only inputs it returns byte-identical output to `bind-scope`; new host adapters should
+use the focused primitive.
 
 ## `control authority`
 
@@ -190,9 +194,10 @@ Status precedence is `REFUSED → VIOLATED → UNPROVEN → REALIZED`; reason co
 canonical order. Exit code 0 means `REALIZED`; every other valid reconciliation result exits 3.
 Advisory diagnostics never upgrade the result.
 
-The equivalent MCP tools are `semctx_control_plan_change` and
-`semctx_control_reconcile_diff`. They validate the same schemas, call the same application
-services and serialize successful results to the same canonical bytes.
+The equivalent MCP tools are `semctx_control_bind_scope`, `semctx_control_plan_change` and
+`semctx_control_reconcile_diff`. `semctx_control_frame_task` remains a wider compatibility framing
+surface. They validate the same schemas, call the same application services and serialize successful
+results to the same canonical bytes.
 
 ## Experimental
 

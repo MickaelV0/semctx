@@ -52,6 +52,7 @@ afterEach(() => {
 describe("control reconciliation CLI transport", () => {
   it("documents only bounded pre-edit planning and read-only reconciliation", () => {
     expect(CONTROL_RECONCILIATION_HELP).toContain("frame-task <change-id>");
+    expect(CONTROL_RECONCILIATION_HELP).toContain("bind-scope <change-id>");
     expect(CONTROL_RECONCILIATION_HELP).toContain("plan-change <change-id>");
     expect(CONTROL_RECONCILIATION_HELP).toContain("executionAuthority \"none\"");
     expect(CONTROL_RECONCILIATION_HELP).toContain("reconcile-diff <input.json>");
@@ -93,6 +94,64 @@ describe("control reconciliation CLI transport", () => {
     // Same envelope the full bundle embeds, reached without describing a plan.
     expect(JSON.parse(result.out).envelope)
       .toEqual(buildPlanningBundle(fixture.root, fixture.command).taskEnvelope);
+  });
+
+  it("binds scope through a focused primitive while preserving canonical envelope bytes", () => {
+    const fixture = preparedRepository();
+    const bindingInputs = { explicitDiscoveries: fixture.plannerInputs.explicitDiscoveries };
+    const inputFile = temporaryJson("bindings.json", bindingInputs);
+    const expected = prepareTaskEnvelope(fixture.root, {
+      schemaVersion: 1,
+      taskFrameId: fixture.taskFrameId,
+      changeId: fixture.changeId,
+      ...bindingInputs,
+    });
+
+    const result = runCli(fixture.root, [
+      "control",
+      "bind-scope",
+      fixture.changeId,
+      "--task-id",
+      fixture.taskFrameId,
+      "--input",
+      inputFile,
+      "--json",
+    ]);
+
+    expect(result.code, result.err).toBe(0);
+    expect(result.out).toBe(`${serializeControlReport(expected)}\n`);
+    expect(JSON.parse(result.out)).toMatchObject({
+      schemaVersion: 1,
+      kind: "prepared_task_envelope",
+      certifying: false,
+      envelope: {
+        executionAuthority: "none",
+      },
+    });
+  });
+
+  it("rejects framing-only fields from bind-scope while preserving frame-task compatibility", () => {
+    const fixture = preparedRepository();
+    const inputFile = temporaryJson("framing-only.json", {
+      taskFrameAdvisory: {},
+      explicitDiscoveries: fixture.plannerInputs.explicitDiscoveries,
+    });
+    const common = [
+      fixture.changeId,
+      "--task-id",
+      fixture.taskFrameId,
+      "--input",
+      inputFile,
+      "--json",
+    ];
+
+    const focused = runCli(fixture.root, ["control", "bind-scope", ...common]);
+    expect(focused.code).not.toBe(0);
+    expect(focused.err).toContain("ZodError");
+
+    const compatibility = runCli(fixture.root, ["control", "frame-task", ...common]);
+    expect(compatibility.code, compatibility.err).toBe(0);
+    expect(JSON.parse(compatibility.out).kind).toBe("prepared_task_envelope");
   });
 
   it("rejects framing files that redefine CLI-bound identities", () => {
