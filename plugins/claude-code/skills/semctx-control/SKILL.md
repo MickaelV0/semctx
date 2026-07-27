@@ -96,7 +96,7 @@ Prefer MCP tools when they are connected. For shell fallbacks, resolve the CLI i
    in the shell — where it is set at all, it is exported to hooks and MCP servers, not to your
    terminal. Do not try to guess the plugin directory, and do not assume the shell's cwd is the
    plugin package root: it is the user's repository.
-2. **Global `semctx` on PATH** (`bun install -g semctx` / `bunx semctx`) — keep it on the **same
+2. **Global `semctx` on PATH** (`bun install -g semctx@latest` / `bunx semctx@latest`) — keep it on the **same
    version** as the plugin (`semctx --version` should match the marketplace plugin version).
 3. If neither is available, say so and continue with MCP-only or ask the user to update the plugin /
    install the CLI — do not invent results.

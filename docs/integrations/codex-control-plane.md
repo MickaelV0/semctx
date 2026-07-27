@@ -26,14 +26,28 @@ user request
   -> semctx verdict + runtime tests close the proof loop
 ```
 
-## Install from a clone
+## Install or update
 
 Requirements: Codex CLI with plugin support and Bun 1.3 or newer. The plugin contains its own MCP
 runtime and a bundled CLI (`dist/semctx.js`); no global package link is required for agent use.
 
 ```powershell
+bunx semctx@latest install --host codex
+```
+
+Run it from a target repository to install/update the plugin and prepare that repository together,
+or add `--skip-setup` for a machine-only refresh. The command is idempotent, migrates the legacy
+`semctx-control@personal` and interim `semctx-control@semctx` registrations to
+`semctx-control@semctx-stable`, and refuses to overwrite an unrelated marketplace. A migration
+installs and verifies the replacement before removing a legacy registration, so a failed
+replacement leaves the working plugin intact. Normal updates follow the release-managed `stable`
+branch.
+
+Manual install from a clone remains available:
+
+```powershell
 codex plugin marketplace add .
-codex plugin add semctx-control@personal
+codex plugin add semctx-control@semctx-stable
 ```
 
 Codex launches the committed `dist/semctx-mcp.js` bundle from the plugin cache through Bun. Because
@@ -115,16 +129,15 @@ or insufficient deletion proof remain explicit blockers instead of being filled 
 
 ## Update or uninstall
 
-After changing the plugin manifest or skill, bump the plugin version before reinstalling it. For a
-local development reinstall:
+The supported update path is the same idempotent command:
 
 ```powershell
-codex plugin remove semctx-control@personal
-codex plugin add semctx-control@personal
+bunx semctx@latest install --host codex --skip-setup
 ```
 
 To remove the integration completely:
 
 ```powershell
-codex plugin remove semctx-control@personal
+codex plugin remove semctx-control@semctx-stable
+codex plugin marketplace remove semctx-stable
 ```

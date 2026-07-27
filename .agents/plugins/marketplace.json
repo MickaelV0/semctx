@@ -1,7 +1,7 @@
 {
-  "name": "personal",
+  "name": "semctx-stable",
   "interface": {
-    "displayName": "Personal"
+    "displayName": "Semctx Stable"
   },
   "plugins": [
     {
