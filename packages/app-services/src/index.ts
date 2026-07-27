@@ -30,6 +30,14 @@ export type { ControlPlanCommand, ControlTraceCommand, CurrentControlState } fro
 export { reviewTargetProposal } from "./target-review";
 export type { ReviewTargetArchitectureCommandV1 } from "./target-review";
 export {
+  ProposeTargetArchitectureCommandV1Schema,
+  proposeTargetArchitecture,
+} from "./target-proposal";
+export type {
+  ProposeTargetArchitectureCommandV1,
+  TargetArchitectureProposalResultV1,
+} from "./target-proposal";
+export {
   buildControlFreshnessSeal,
   canonicalRepositoryRoot,
   captureGitState,

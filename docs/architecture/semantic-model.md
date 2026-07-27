@@ -91,6 +91,11 @@ Git-versioned and hypothetical/non-normative. Review creates the next `accepted`
 the canonical attestation and superseded artifact identity, and preserves the proposal's
 canonical architecture payload under its domain-separated hash.
 
+The agent-facing `target_propose` application boundary accepts target content only. It binds
+`baseCommit` and `sourceGraphSeal` from the current `FRESH` control state and records
+`authorshipOrigin: "agent"` before invoking the immutable proposal writer. This provenance binding
+does not review the proposal or make it load-bearing.
+
 ## Ids
 
 A semantic id is the authored, already-namespaced label. Its prefix must match its kind:
