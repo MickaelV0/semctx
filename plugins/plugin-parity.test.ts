@@ -298,7 +298,10 @@ describe("Codex and Claude Code plugin parity", () => {
     expect(workflow).toContain("npm install --global npm@12.0.1");
     expect(workflow).toContain('git cat-file -t "$GITHUB_REF_NAME"');
     expect(workflow).toContain('git merge-base --is-ancestor "$GITHUB_SHA" origin/main');
-    expect(workflow).toContain('npm view "semctx@$version" gitHead');
+    expect(workflow).toContain(
+      'if published_sha="$(npm view "semctx@$version" gitHead 2>/dev/null)"; then',
+    );
+    expect(workflow).not.toContain("gitHead --json");
     expect(workflow).toContain('"$published_sha" != "$GITHUB_SHA"');
 
     const publish = workflow.indexOf("npm publish --access public");
