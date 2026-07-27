@@ -79,6 +79,8 @@ channel, legacy marketplace names are migrated, existing Semctx configuration an
 files are preserved, and a non-Git directory is never initialised accidentally. Use `--dry-run`
 to preview, `--host codex|claude|all` to target a host, or `--skip-setup` for a machine-only plugin
 refresh. Open a new Codex task and/or restart Claude Code when the command tells you to.
+On Windows, if a running Codex task still holds the legacy plugin cache open, the replacement stays
+installed and verified while cleanup automatically retries in the background after the task exits.
 
 For CLI-only use without a coding-agent plugin:
 
