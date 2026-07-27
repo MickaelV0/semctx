@@ -6,6 +6,8 @@ export { createSemctxServer } from "./server";
 export { prepareTaskTool, inspectTool, verifyChangeTool } from "./tools";
 export type { PrepareTaskResult } from "./tools";
 export {
+  controlBindScopeTool,
+  controlFrameTaskTool,
   controlPlanChangeTool,
   controlReconcileDiffTool,
 } from "./reconciliation-tools";

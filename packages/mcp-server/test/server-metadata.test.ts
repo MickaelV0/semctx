@@ -40,6 +40,7 @@ describe("semctx MCP tool metadata", () => {
       "semctx_control_status",
       "semctx_control_trace",
       "semctx_control_plan",
+      "semctx_control_bind_scope",
       "semctx_control_plan_change",
       "semctx_control_reconcile_diff",
     ]) {

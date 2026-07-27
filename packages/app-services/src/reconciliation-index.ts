@@ -99,14 +99,18 @@ import { openReadyRepository } from "./readiness";
 
 const CONTROL_ATTESTATION_INDEX_META_KEY = "control_attestation_index_v1";
 
-export interface PrepareTaskEnvelopeCommandV1 {
+export interface BindTaskScopeCommandV1 {
   schemaVersion: 1;
   taskFrameId: string;
   changeId: string;
-  taskFrameAdvisory?: TaskFrameAdvisoryV1;
   candidateAnchors?: readonly CandidateAnchorV1[];
   authoredLinkResolutions?: readonly AuthoredLinkResolutionInputV1[];
   explicitDiscoveries?: readonly ExplicitDiscoveryInputV1[];
+}
+
+/** @deprecated Use BindTaskScopeCommandV1 unless framing or target selection is required. */
+export interface PrepareTaskEnvelopeCommandV1 extends BindTaskScopeCommandV1 {
+  taskFrameAdvisory?: TaskFrameAdvisoryV1;
   targetSelection?: TargetSelectionInputV1;
 }
 
@@ -117,6 +121,8 @@ export interface PreparedTaskEnvelopeV1 {
   envelope: TaskEnvelopeV1;
   baseline: WorkspaceBaselineSnapshotV1;
 }
+
+export type BoundTaskScopeV1 = PreparedTaskEnvelopeV1;
 
 export interface BuildPlanningBundleCommandV1 extends PrepareTaskEnvelopeCommandV1 {
   semanticExpectations?: readonly SemanticExpectationV1[];
@@ -159,14 +165,18 @@ const TargetSelectionInputV1Schema = z.object({
   reference: TargetReferenceV1Schema,
 }).strict();
 
-export const PrepareTaskEnvelopeCommandV1Schema = z.object({
+export const BindTaskScopeCommandV1Schema = z.object({
   schemaVersion: z.literal(1),
   taskFrameId: NonEmptyCommandIdSchema,
   changeId: NonEmptyCommandIdSchema,
-  taskFrameAdvisory: TaskFrameAdvisoryV1Schema.optional(),
   candidateAnchors: z.array(CandidateAnchorV1Schema).optional(),
   authoredLinkResolutions: z.array(AuthoredLinkResolutionInputV1Schema).optional(),
   explicitDiscoveries: z.array(ExplicitDiscoveryInputV1Schema).optional(),
+}).strict();
+
+/** @deprecated Use BindTaskScopeCommandV1Schema unless framing or target selection is required. */
+export const PrepareTaskEnvelopeCommandV1Schema = BindTaskScopeCommandV1Schema.extend({
+  taskFrameAdvisory: TaskFrameAdvisoryV1Schema.optional(),
   targetSelection: TargetSelectionInputV1Schema.optional(),
 }).strict();
 
@@ -198,6 +208,17 @@ interface CapturedPlanningInputs {
  * Compile a diagnostic-only envelope from persisted Plane A/B inputs.
  * No part of this operation writes, indexes, reviews a target, or authorizes execution.
  */
+export function bindTaskScope(
+  root: string,
+  command: BindTaskScopeCommandV1,
+): BoundTaskScopeV1 {
+  const parsed = BindTaskScopeCommandV1Schema.parse(
+    command,
+  ) as BindTaskScopeCommandV1;
+  return bindTaskScopeFromValidatedCommand(root, parsed);
+}
+
+/** @deprecated Use bindTaskScope; retained as a byte-compatible transport alias. */
 export function prepareTaskEnvelope(
   root: string,
   command: PrepareTaskEnvelopeCommandV1,
@@ -205,10 +226,10 @@ export function prepareTaskEnvelope(
   const parsed = PrepareTaskEnvelopeCommandV1Schema.parse(
     command,
   ) as PrepareTaskEnvelopeCommandV1;
-  return prepareTaskEnvelopeFromValidatedCommand(root, parsed);
+  return bindTaskScopeFromValidatedCommand(root, parsed);
 }
 
-function prepareTaskEnvelopeFromValidatedCommand(
+function bindTaskScopeFromValidatedCommand(
   root: string,
   command: PrepareTaskEnvelopeCommandV1,
 ): PreparedTaskEnvelopeV1 {
@@ -250,7 +271,7 @@ export function buildPlanningBundle(
   const parsedCommand = BuildPlanningBundleCommandV1Schema.parse(
     command,
   ) as BuildPlanningBundleCommandV1;
-  const prepared = prepareTaskEnvelopeFromValidatedCommand(root, parsedCommand);
+  const prepared = bindTaskScopeFromValidatedCommand(root, parsedCommand);
   let changeSet = compileSemanticChangeSet({
     envelope: prepared.envelope,
     ...(parsedCommand.semanticExpectations === undefined

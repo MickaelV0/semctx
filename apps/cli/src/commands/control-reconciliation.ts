@@ -1,11 +1,14 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
+  BindTaskScopeCommandV1Schema,
   BuildPlanningBundleCommandV1Schema,
   PrepareTaskEnvelopeCommandV1Schema,
+  bindTaskScope,
   buildPlanningBundle,
   prepareTaskEnvelope,
   reconcileWorkingTree,
+  type BindTaskScopeCommandV1,
   type BuildPlanningBundleCommandV1,
   type PrepareTaskEnvelopeCommandV1,
 } from "@semantic-context/app-services/reconciliation";
@@ -19,7 +22,9 @@ import { flagString } from "../args";
 import { info } from "../output";
 
 export const CONTROL_RECONCILIATION_HELP = `  control frame-task <change-id> --task-id <task-id> [--input <framing.json>] [--json]
-      compile a diagnostic TaskEnvelope and resolve its bindings, with no plan required
+      compatibility framing surface; use bind-scope for focused repository binding
+  control bind-scope <change-id> --task-id <task-id> [--input <bindings.json>] [--json]
+      resolve explicit repository bindings into a diagnostic TaskEnvelope, with no plan required
   control plan-change <change-id> --task-id <task-id> --input <planner.json> [--json]
       compile a versioned pre-edit PlanningBundle with executionAuthority "none"
   control reconcile-diff <input.json> [--json]
@@ -35,10 +40,10 @@ const FORBIDDEN_GIT_REFERENCE_FLAGS = [
   "headRef",
 ] as const;
 
-type ReconciliationSubcommand = "frame-task" | "plan-change" | "reconcile-diff";
+type ReconciliationSubcommand = "frame-task" | "bind-scope" | "plan-change" | "reconcile-diff";
 
 /**
- * Dedicated non-authorizing CLI transport for issue #27.
+ * Dedicated non-authorizing CLI transport for issues #27 and #28.
  *
  * Returns undefined when the subcommand belongs to the legacy control handler.
  * Both handled commands emit the exact normalized application-service result as
@@ -49,7 +54,12 @@ export function runControlReconciliation(
   args: ParsedArgs,
 ): number | undefined {
   const subcommand = args.positionals[1];
-  if (subcommand !== "frame-task" && subcommand !== "plan-change" && subcommand !== "reconcile-diff") {
+  if (
+    subcommand !== "frame-task"
+    && subcommand !== "bind-scope"
+    && subcommand !== "plan-change"
+    && subcommand !== "reconcile-diff"
+  ) {
     return undefined;
   }
   rejectCallerSelectedGitRefs(args, subcommand);
@@ -57,32 +67,64 @@ export function runControlReconciliation(
   if (subcommand === "frame-task") {
     return runFrameTask(root, args);
   }
+  if (subcommand === "bind-scope") {
+    return runBindScope(root, args);
+  }
   if (subcommand === "plan-change") {
     return runPlanChange(root, args);
   }
   return runReconcileDiff(root, args);
 }
 
-/** Framing and scope binding without a plan: the step an agent runs before it can describe one. */
+/** Compatibility transport retaining the pre-bind-scope framing contract. */
 function runFrameTask(root: string, args: ParsedArgs): number {
   const usage = "semctx control frame-task <change-id> --task-id <task-id> [--input <framing.json>]";
+  const command = readEnvelopeCommand(
+    root,
+    args,
+    usage,
+    "framing input",
+    PrepareTaskEnvelopeCommandV1Schema,
+  ) as PrepareTaskEnvelopeCommandV1;
+  info(serializeControlReport(prepareTaskEnvelope(root, command)));
+  return 0;
+}
+
+/** Explicit repository scope binding without framing or planning fields. */
+function runBindScope(root: string, args: ParsedArgs): number {
+  const usage = "semctx control bind-scope <change-id> --task-id <task-id> [--input <bindings.json>]";
+  const command = readEnvelopeCommand(
+    root,
+    args,
+    usage,
+    "scope binding input",
+    BindTaskScopeCommandV1Schema,
+  ) as BindTaskScopeCommandV1;
+  info(serializeControlReport(bindTaskScope(root, command)));
+  return 0;
+}
+
+function readEnvelopeCommand(
+  root: string,
+  args: ParsedArgs,
+  usage: string,
+  inputLabel: string,
+  schema: { parse(value: unknown): unknown },
+): unknown {
   assertPositionalCount(args, 3, usage);
   const changeId = requiredPositional(args, 2, usage);
   const taskFrameId = requiredFlag(args, "task-id");
   const inputFile = flagString(args, "input");
-  const framingInputs = inputFile === undefined
+  const inputs = inputFile === undefined
     ? {}
-    : readJsonObject(root, inputFile, "framing input");
-  assertNoReservedKeys(framingInputs);
-  const command = PrepareTaskEnvelopeCommandV1Schema.parse({
+    : readJsonObject(root, inputFile, inputLabel);
+  assertNoReservedKeys(inputs);
+  return schema.parse({
     schemaVersion: 1,
-    ...framingInputs,
+    ...inputs,
     taskFrameId,
     changeId,
-  }) as PrepareTaskEnvelopeCommandV1;
-  const prepared = prepareTaskEnvelope(root, command);
-  info(serializeControlReport(prepared));
-  return 0;
+  });
 }
 
 function assertNoReservedKeys(inputs: Record<string, unknown>): void {
