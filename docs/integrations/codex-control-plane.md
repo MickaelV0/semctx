@@ -42,6 +42,9 @@ or add `--skip-setup` for a machine-only refresh. The command is idempotent, mig
 installs and verifies the replacement before removing a legacy registration, so a failed
 replacement leaves the working plugin intact. Normal updates follow the release-managed `stable`
 branch.
+On Windows, an already-running task can hold the old cache open. After the stable replacement is
+verified, `semctx install` marks that cleanup as deferred and retries it automatically in a hidden
+background helper; unexpected removal errors still fail the install.
 
 Manual install from a clone remains available:
 

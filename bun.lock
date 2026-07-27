@@ -11,7 +11,7 @@
     },
     "apps/cli": {
       "name": "semctx",
-      "version": "0.1.13",
+      "version": "0.1.14",
       "bin": {
         "semctx": "./dist/index.js",
       },
@@ -32,7 +32,7 @@
     },
     "packages/app-services": {
       "name": "@semantic-context/app-services",
-      "version": "0.1.13",
+      "version": "0.1.14",
       "dependencies": {
         "@semantic-context/context-engine": "workspace:*",
         "@semantic-context/control-engine": "workspace:*",
@@ -110,7 +110,7 @@
     },
     "packages/mcp-server": {
       "name": "@semantic-context/mcp-server",
-      "version": "0.1.13",
+      "version": "0.1.14",
       "bin": {
         "semctx-mcp": "./src/index.ts",
       },

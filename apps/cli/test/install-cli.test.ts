@@ -22,13 +22,20 @@ interface FakeOptions {
   claudePluginsAfter?: unknown;
   gitRoot?: string;
   failCommand?: string;
+  failError?: string;
+  deferFailure?: string;
   setup?: SetupExecution;
 }
 
 function fakeRuntime(
   options: FakeOptions = {},
-): InstallRuntime & { commands: string[][]; setupRoots: string[] } {
+): InstallRuntime & {
+  commands: string[][];
+  deferredCodexCleanups: string[][];
+  setupRoots: string[];
+} {
   const commands: string[][] = [];
+  const deferredCodexCleanups: string[][] = [];
   const setupRoots: string[] = [];
   let codexPluginReads = 0;
   let claudePluginReads = 0;
@@ -69,7 +76,7 @@ function fakeRuntime(
               pluginId: "semctx-control@semctx-stable",
               installed: true,
               enabled: true,
-              version: "0.1.13",
+              version: "0.1.14",
             }],
             available: [],
           };
@@ -86,12 +93,12 @@ function fakeRuntime(
             id: "semctx@semctx-stable",
             scope: "user",
             enabled: true,
-            version: "0.1.13",
+            version: "0.1.14",
           }];
         return ok(JSON.stringify(state));
       }
       if (argv.join(" ") === options.failCommand) {
-        return { code: 1, out: "", err: "injected command failure" };
+        return { code: 1, out: "", err: options.failError ?? "injected command failure" };
       }
       return ok("{}\n");
     },
@@ -104,6 +111,13 @@ function fakeRuntime(
         err: "",
       };
     },
+    deferCodexCleanup(marketplaceNames) {
+      deferredCodexCleanups.push([...marketplaceNames]);
+      return options.deferFailure === undefined
+        ? ok('{"pid":1234}\n')
+        : { code: 1, out: "", err: options.deferFailure };
+    },
+    deferredCodexCleanups,
     setupRoots,
   };
 }
@@ -369,6 +383,122 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
     ]);
   });
 
+  test("defers a locked legacy Codex cleanup after the replacement verifies", () => {
+    const runtime = fakeRuntime({
+      codex: true,
+      claude: false,
+      codexMarketplaces: {
+        marketplaces: [{
+          name: "personal",
+          marketplaceSource: { sourceType: "git", source: SEMCTX_SOURCE },
+        }],
+      },
+      codexPlugins: {
+        installed: [{
+          pluginId: "semctx-control@personal",
+          installed: true,
+          enabled: true,
+          version: "0.1.10",
+        }],
+      },
+      failCommand: "codex plugin remove semctx-control@personal --json",
+      failError:
+        "failed to remove existing plugin cache entry: file is used by another process (os error 32)",
+    });
+
+    const report = executeInstall(
+      "C:\\work\\project",
+      parseArgs(["install", "--skip-setup"]),
+      runtime,
+    );
+
+    expect(report.ok).toBe(true);
+    expect(report.hosts.codex.status).toBe("migrated");
+    expect(report.hosts.codex.restartRequired).toBe(true);
+    expect(report.hosts.codex.steps).toContainEqual(expect.objectContaining({
+      action: "remove legacy Codex plugin",
+      status: "deferred",
+    }));
+    expect(runtime.deferredCodexCleanups).toEqual([["personal"]]);
+    expect(runtime.commands).not.toContainEqual([
+      "codex",
+      "plugin",
+      "marketplace",
+      "remove",
+      "personal",
+      "--json",
+    ]);
+  });
+
+  test("keeps unexpected legacy cleanup failures blocking", () => {
+    const runtime = fakeRuntime({
+      codex: true,
+      claude: false,
+      codexMarketplaces: {
+        marketplaces: [{
+          name: "personal",
+          marketplaceSource: { sourceType: "git", source: SEMCTX_SOURCE },
+        }],
+      },
+      codexPlugins: {
+        installed: [{
+          pluginId: "semctx-control@personal",
+          installed: true,
+          enabled: true,
+          version: "0.1.10",
+        }],
+      },
+      failCommand: "codex plugin remove semctx-control@personal --json",
+      failError: "permission denied",
+    });
+
+    const report = executeInstall(
+      "C:\\work\\project",
+      parseArgs(["install", "--skip-setup"]),
+      runtime,
+    );
+
+    expect(report.ok).toBe(false);
+    expect(report.hosts.codex.status).toBe("failed");
+    expect(runtime.deferredCodexCleanups).toEqual([]);
+  });
+
+  test("fails honestly when locked cleanup cannot be deferred", () => {
+    const runtime = fakeRuntime({
+      codex: true,
+      claude: false,
+      codexMarketplaces: {
+        marketplaces: [{
+          name: "personal",
+          marketplaceSource: { sourceType: "git", source: SEMCTX_SOURCE },
+        }],
+      },
+      codexPlugins: {
+        installed: [{
+          pluginId: "semctx-control@personal",
+          installed: true,
+          enabled: true,
+          version: "0.1.10",
+        }],
+      },
+      failCommand: "codex plugin remove semctx-control@personal --json",
+      failError:
+        "failed to remove existing plugin cache entry: file is used by another process (os error 32)",
+      deferFailure: "cannot start background cleanup",
+    });
+
+    const report = executeInstall(
+      "C:\\work\\project",
+      parseArgs(["install", "--skip-setup"]),
+      runtime,
+    );
+
+    expect(report.ok).toBe(false);
+    expect(report.hosts.codex.status).toBe("failed");
+    expect(report.hosts.codex.error).toContain("cannot start background cleanup");
+    expect(runtime.deferredCodexCleanups).toEqual([["personal"]]);
+  });
+
   test("installs or updates Claude Code at user scope", () => {
     const fresh = fakeRuntime({ codex: false, claude: true });
     const freshReport = executeInstall("C:\\work\\project", parseArgs(["install"]), fresh);
@@ -604,7 +734,7 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
 
     expect(report.ok).toBe(false);
     expect(report.hosts.codex.status).toBe("failed");
-    expect(report.hosts.codex.error).toContain("expected plugin v0.1.13");
+    expect(report.hosts.codex.error).toContain("expected plugin v0.1.14");
   });
 
   test("fails closed when Claude remains disabled after the enable command succeeds", () => {
@@ -622,7 +752,7 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
         id: "semctx@semctx-stable",
         scope: "user",
         enabled: false,
-        version: "0.1.13",
+        version: "0.1.14",
       }],
     });
     const report = executeInstall(
@@ -732,7 +862,7 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
     expect(new TextDecoder().decode(process.stderr)).toBe("");
     expect(JSON.parse(out)).toMatchObject({
       ok: false,
-      version: "0.1.13",
+      version: "0.1.14",
       error: { code: "INVALID_TASK_INPUT" },
     });
   });
@@ -749,7 +879,7 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
     expect(new TextDecoder().decode(process.stderr)).toBe("");
     expect(JSON.parse(out)).toMatchObject({
       ok: false,
-      version: "0.1.13",
+      version: "0.1.14",
       error: {
         code: "INVALID_TASK_INPUT",
         message: "--host requires auto|codex|claude|all",

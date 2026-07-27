@@ -24,6 +24,8 @@ returns a final readiness report. It can be safely re-run. Preview with `--dry-r
 with `--host codex|claude|all`, or update only the machine plugins with `--skip-setup`.
 
 After a successful run, open a new Codex task and/or restart Claude Code as reported.
+If Windows has the legacy Codex cache locked in an active task, the install still succeeds after
+verifying the replacement and completes that legacy cleanup automatically in the background.
 
 ## 2. CLI-only bootstrap
 
