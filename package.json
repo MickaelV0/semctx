@@ -33,6 +33,7 @@
     "test": "bun test --timeout 60000 packages apps plugins",
     "plugin:build": "bun scripts/build-plugin-runtime.ts",
     "plugin:check": "bun scripts/build-plugin-runtime.ts --check",
+    "cli:build": "bun scripts/build-cli-package.ts",
     "semctx": "bun apps/cli/src/index.ts"
   },
   "devDependencies": {

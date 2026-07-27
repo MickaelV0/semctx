@@ -6,13 +6,11 @@ A minimal repository that adopts `semctx`. It is intentionally tiny: one source 
 ## Adopt semctx in under a minute
 
 ```bash
-# from this directory. `semctx` here is `bunx semctx` (or the repo's
-# `bun apps/cli/src/index.ts`) until the CLI is published to a registry.
-bunx semctx init --preset github-claude --dry-run   # preview what would be created
-bunx semctx init --preset github-claude             # write config, workflow, .claude note
-bunx semctx index                                   # build the deterministic graph
+# from this directory. The install command also configures a detected Codex/Claude host.
+bunx semctx@latest install --dry-run                # preview host + repository changes
+bunx semctx@latest install                          # plugins + config + index + semantic check
 # --base needs the base branch fetched locally (git fetch origin main; CI: actions/checkout fetch-depth: 0)
-bunx semctx verify diff --base origin/main          # analyse a range → PASS / WARN / BLOCK
+bunx semctx@latest verify diff --base origin/main   # analyse a range → PASS / WARN / BLOCK
 ```
 
 The preset never overwrites an existing file (use `--force` to replace), never adds a blocking

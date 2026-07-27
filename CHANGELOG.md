@@ -11,6 +11,22 @@ Marketplace. The published CLI lags this repository — see
 
 ### Added
 
+- **One-command onboarding and update**: `bunx semctx@latest install` detects Codex and/or Claude
+  Code, adds or refreshes their Semctx marketplaces and plugins, prepares the current Git
+  repository with the existing idempotent `setup` pipeline, and returns one readiness report.
+  `--host`, `--skip-setup`, `--dry-run`, and `--json` cover targeted, machine-only, preview, and
+  automated flows. Missing hosts, non-Git directories, partial failures, and unrelated marketplace
+  name conflicts remain explicit and recoverable.
+- **Stable marketplace channel and safe migration**: the release-managed marketplace is named
+  `semctx-stable`; `semctx install` automatically migrates the legacy
+  `semctx-control@personal`, interim `semctx-control@semctx`, and Claude `semctx@semctx`
+  registrations only after the replacement is installed and verified. A different marketplace
+  source is never overwritten.
+- **Portable npm release pipeline**: the npm CLI build now uses the same portable TypeScript-path
+  rewrite and colocated `typescript-lib` declarations as the plugins. A foreign-directory package
+  smoke proves `--version` and a real `setup`. Tag-driven publication is version-gated,
+  test-gated, plugin-artifact-gated, publishes npm first, then advances the `stable` plugin branch
+  and creates the GitHub Release. It is ready for npm trusted publishing with OIDC provenance.
 - **Plugin-bundled CLI** (`dist/semctx.js`): Claude Code and Codex plugins now ship a portable Bun
   CLI next to `dist/semctx-mcp.js`, built from the same `plugin:build` pipeline, so a
   marketplace/plugin update keeps MCP and CLI in lockstep. Global `semctx` remains optional for CI

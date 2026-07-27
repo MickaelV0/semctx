@@ -18,7 +18,7 @@ runtime behaviour. The analysis is local and deterministic; semctx itself needs 
   plugin update keeps agent MCP and CLI in lockstep. Agent sessions get its absolute path for free:
   Claude Code substitutes the `${CLAUDE_PLUGIN_ROOT}` placeholder into the skills at load time, and
   the guard hook prints a resolved path. The variable is exported to hooks and MCP servers, **not**
-  to the agent's shell. A global `semctx` (`bun install -g semctx`) remains optional for CI and
+  to the agent's shell. A global `semctx` (`bun install -g semctx@latest`) remains optional for CI and
   non-plugin shells.
 - **Shared skill**: `skills/semctx-control` — host-neutral workflow body is byte-identical to Codex;
   the shell CLI ladder is generated per host at `plugin:build` (Claude keeps the plugin-CLI
@@ -88,11 +88,18 @@ bun "<plugin-root>/dist/semctx.js" setup    # plugin bundle; the skills carry th
   The legacy equivalent is `semctx init && semctx index`; `setup --preset github-claude` also
   installs the preset integration files.
 
-Install from this clone:
+Preferred install/update from a target repository:
+
+```powershell
+bunx semctx@latest install --host claude
+```
+
+Use `--skip-setup` for a machine-only refresh or `--dry-run` to preview. Manual install from this
+clone remains available:
 
 ```powershell
 claude plugin marketplace add ./
-claude plugin install semctx@semctx --scope user
+claude plugin install semctx@semctx-stable --scope user
 ```
 
 Restart Claude Code after installing or updating the plugin.
