@@ -44,7 +44,10 @@ jobs:
         shell: bash
         run: |
           version="${GITHUB_REF_NAME#v}"
-          published_sha="$(npm view "semctx@$version" gitHead --json 2>/dev/null | tr -d '\"\r\n' || true)"
+          published_sha=""
+          if published_sha="$(npm view "semctx@$version" gitHead 2>/dev/null)"; then
+            published_sha="$(printf '%s' "$published_sha" | tr -d '\r\n')"
+          fi
           if [[ -n "$published_sha" && "$published_sha" != "$GITHUB_SHA" ]]; then
             echo "::error::semctx@$version already belongs to commit $published_sha, not $GITHUB_SHA"
             exit 1
@@ -53,9 +56,12 @@ jobs:
             npm publish --access public
           fi
           for attempt in {1..12}; do
-            confirmed_sha="$(npm view "semctx@$version" gitHead --json 2>/dev/null | tr -d '\"\r\n' || true)"
-            if [[ "$confirmed_sha" == "$GITHUB_SHA" ]]; then
-              exit 0
+            confirmed_sha=""
+            if confirmed_sha="$(npm view "semctx@$version" gitHead 2>/dev/null)"; then
+              confirmed_sha="$(printf '%s' "$confirmed_sha" | tr -d '\r\n')"
+              if [[ "$confirmed_sha" == "$GITHUB_SHA" ]]; then
+                exit 0
+              fi
             fi
             sleep 5
           done
