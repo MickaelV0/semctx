@@ -295,6 +295,7 @@ describe("Codex and Claude Code plugin parity", () => {
     const workflow = read(".github/workflows/release.yml");
     expect(workflow).toContain("environment: npm");
     expect(workflow).toContain("fetch-depth: 0");
+    expect(workflow).toContain("npm install --global npm@12.0.1");
     expect(workflow).toContain('git cat-file -t "$GITHUB_REF_NAME"');
     expect(workflow).toContain('git merge-base --is-ancestor "$GITHUB_SHA" origin/main');
     expect(workflow).toContain('npm view "semctx@$version" gitHead');

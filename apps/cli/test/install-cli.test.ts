@@ -69,7 +69,7 @@ function fakeRuntime(
               pluginId: "semctx-control@semctx-stable",
               installed: true,
               enabled: true,
-              version: "0.1.11",
+              version: "0.1.12",
             }],
             available: [],
           };
@@ -86,7 +86,7 @@ function fakeRuntime(
             id: "semctx@semctx-stable",
             scope: "user",
             enabled: true,
-            version: "0.1.11",
+            version: "0.1.12",
           }];
         return ok(JSON.stringify(state));
       }
@@ -604,7 +604,7 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
 
     expect(report.ok).toBe(false);
     expect(report.hosts.codex.status).toBe("failed");
-    expect(report.hosts.codex.error).toContain("expected plugin v0.1.11");
+    expect(report.hosts.codex.error).toContain("expected plugin v0.1.12");
   });
 
   test("fails closed when Claude remains disabled after the enable command succeeds", () => {
@@ -622,7 +622,7 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
         id: "semctx@semctx-stable",
         scope: "user",
         enabled: false,
-        version: "0.1.11",
+        version: "0.1.12",
       }],
     });
     const report = executeInstall(
@@ -732,7 +732,7 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
     expect(new TextDecoder().decode(process.stderr)).toBe("");
     expect(JSON.parse(out)).toMatchObject({
       ok: false,
-      version: "0.1.11",
+      version: "0.1.12",
       error: { code: "INVALID_TASK_INPUT" },
     });
   });
@@ -749,7 +749,7 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
     expect(new TextDecoder().decode(process.stderr)).toBe("");
     expect(JSON.parse(out)).toMatchObject({
       ok: false,
-      version: "0.1.11",
+      version: "0.1.12",
       error: {
         code: "INVALID_TASK_INPUT",
         message: "--host requires auto|codex|claude|all",
