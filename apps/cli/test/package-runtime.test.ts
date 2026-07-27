@@ -41,7 +41,12 @@ describe("published npm CLI package", () => {
   test("packs and installs a portable CLI whose npm bin runs outside the checkout", () => {
     const pack = run(["npm", "pack", "--json", "--silent"], cliRoot);
     expect(pack.code, pack.err).toBe(0);
-    const packed = JSON.parse(pack.out) as Array<{ filename: string; files: Array<{ path: string }> }>;
+    type PackedPackage = {
+      filename: string;
+      files: Array<{ path: string }>;
+    };
+    const packJson = JSON.parse(pack.out) as PackedPackage[] | Record<string, PackedPackage>;
+    const packed = Array.isArray(packJson) ? packJson : Object.values(packJson);
     expect(packed).toHaveLength(1);
     packedTarball = join(cliRoot, packed[0]!.filename);
     expect(existsSync(packedTarball)).toBe(true);
@@ -56,6 +61,13 @@ describe("published npm CLI package", () => {
       installRoot,
     );
     expect(install.code, install.err).toBe(0);
+    const semctxBin = join(
+      installRoot,
+      "node_modules",
+      ".bin",
+      process.platform === "win32" ? "semctx.cmd" : "semctx",
+    );
+    expect(existsSync(semctxBin)).toBe(true);
 
     const installed = join(installRoot, "node_modules", "semctx", "dist");
     const bundle = readFileSync(join(installed, "index.js"), "utf8");
@@ -65,7 +77,7 @@ describe("published npm CLI package", () => {
       .filter((name) => name.startsWith("lib") && name.endsWith(".d.ts"));
     expect(libs.length).toBeGreaterThan(90);
 
-    const help = run(["npm", "exec", "--offline", "--", "semctx", "--version"], installRoot);
+    const help = run([semctxBin, "--version"], installRoot);
     expect(help.code, help.err).toBe(0);
     expect(help.out.trim()).toBe(packageJson.version);
 
@@ -74,10 +86,7 @@ describe("published npm CLI package", () => {
       recursive: true,
       filter: (source) => !source.includes(".semctx") && !source.includes("node_modules"),
     });
-    const setup = run(
-      ["npm", "exec", "--offline", "--", "semctx", "setup", "--root", target, "--json"],
-      installRoot,
-    );
+    const setup = run([semctxBin, "setup", "--root", target, "--json"], installRoot);
     expect(setup.code, setup.err).toBe(0);
     expect(JSON.parse(setup.out).check.ok).toBe(true);
   }, 30_000);
