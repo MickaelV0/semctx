@@ -168,8 +168,13 @@ insufficient proof. `TaskEnvelope`, `SemanticChangeSet`, planning and reconcilia
 Integrate only after the read-only machine contracts above are stable. Start advisory, measure false
 positives, then enforce by risk/altitude.
 
-- [ ] **Shared vertical workflow contract** — keep one canonical policy/schema for Codex and
-      Claude Code; generate or test host-specific adapters rather than duplicating semantic rules.
+- [x] **Shared vertical workflow contract** — one strict `AgentWorkflowContractV1` now owns the
+      ordered shadow lifecycle, MCP surfaces, write effects, conditions and completion gate for
+      Codex and Claude Code. `plugin:build` renders the shared workflow section in both host skills
+      from that contract; strict schema and parity tests reject missing/reordered stages, host drift
+      and stale generated leaves. The contract fixes blocking off, non-Semctx repositories to
+      `no_op` and `executionAuthority` to `none`. Host lifecycle hooks that consume the policy
+      before and after edits remain open below.
 - [x] **Agent primitives** — provide focused tools for `frame_task`, `bind_scope`, `refine`,
       `target_propose`, `reconcile_diff` and `status` instead of making the model assemble raw
       control-plane payloads. `status`, `reconcile_diff` and `refine` (as `control plan-change`) are

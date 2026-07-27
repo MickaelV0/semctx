@@ -277,7 +277,21 @@ Legacy deletion remains denied until replacement presence, zero static dependenc
 dependencies, invariant preservation, accepted behavior delta, completed data migration and tested
 rollback are all proven.
 
-## Read-only transports
+## Shared agent workflow contract
+
+`AgentWorkflowContractV1` is the machine source for the Codex and Claude Code lifecycle. Its
+canonical stage order covers repository inspection, semantic and freshness preflight, task
+framing, scope binding, L0-L6 trace, altitude authority, optional target proposal, refinement,
+authored change-contract maintenance, user-authorized implementation, actual-diff reconciliation,
+composed verification and handoff. Each stage declares its MCP surfaces, observable write effect,
+activation condition and whether user write scope is required.
+
+The contract is deliberately advisory: `enforcementMode: "shadow"`, `blockingEnabled: false`,
+`nonSemctxRepository: "no_op"` and `executionAuthority: "none"`. The plugin build renders this
+single strict policy into both host skills. Host-specific CLI resolution remains outside the
+machine contract and is generated separately.
+
+## Agent transports
 
 ```text
 semctx status [--json]

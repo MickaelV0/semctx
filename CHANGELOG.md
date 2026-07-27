@@ -41,6 +41,14 @@ Marketplace. The published CLI lags this repository — see
   shared body is still byte-identical after stripping the host region, forbids any
   `CLAUDE_PLUGIN_ROOT` in the Codex skill/manifest/MCP config, and `plugin:check` fails on a stale
   generated skill.
+- **Machine-generated agent workflow contract** (P3,
+  [#28](https://github.com/hoklims/semctx/issues/28)): `AgentWorkflowContractV1` is the strict,
+  versioned source for the complete Codex/Claude lifecycle from repository inspection through
+  framing, scope binding, altitude authority, refinement, actual-diff reconciliation, composed
+  verification and handoff. Every stage declares its MCP surface, write effect, condition and need
+  for user write scope. The policy is fixed to shadow mode, blocking disabled, `no_op` for
+  repositories without Semctx and `executionAuthority: "none"`. `plugin:build` renders this machine
+  contract into both host skills; parity tests reject reordered/missing stages or stale host leaves.
 - **CI runs the full suite**: `plugin-runtime` now runs `bun run test` instead of a three-file
   selection that skipped the guard-hook and CLI tests gating plugin packaging.
 
