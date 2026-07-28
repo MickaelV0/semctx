@@ -463,6 +463,183 @@ const PreparedTaskEnvelopeSchema = z.object({
   ),
 }).strict();
 
+const PlaneAReasonCodeSchema = z.enum([
+  "AMBIGUOUS_LAYOUT",
+  "AMBIGUOUS_SCOPE",
+  "DISCOVERY_NOT_ESTABLISHED",
+  "ANALYSIS_DISABLED",
+  "LANGUAGE_UNSUPPORTED",
+  "PRODUCER_FAILED",
+  "BINDING_UNSEALED",
+  "BINDING_INVALID",
+  "CURRENT_STATE_UNSEALED",
+  "CURRENT_STATE_STALE",
+  "SCOPE_MISMATCH",
+  "CAPABILITY_MISSING",
+  "PRODUCER_VERSION_MISMATCH",
+  "CONFIG_DIGEST_MISMATCH",
+  "SCHEMA_DIGEST_MISMATCH",
+  "EVIDENCE_CONTRACT_MISMATCH",
+  "NEGATIVE_COMPLETENESS_MISSING",
+  "POLICY_DENIED",
+]).describe("Canonical Plane A health reason code.");
+
+const IndexHealthProducerSchema = z.object({
+  identity: described(z.string(), "Analyzer producer identity."),
+  version: described(z.string(), "Analyzer producer version."),
+}).strict();
+
+const WorkspaceManifestEvidenceSchema = z.object({
+  manifestPath: described(z.string(), "Repository-relative manifest path."),
+  field: described(z.string(), "Manifest field that establishes the workspace relation."),
+  value: described(
+    z.union([z.string(), z.array(z.string())]),
+    "Manifest value supporting the workspace relation.",
+  ),
+}).strict();
+
+const WorkspaceProjectionSchema = z.object({
+  schemaVersion: described(z.literal(1), "Workspace projection schema version."),
+  repositoryId: described(z.string(), "Repository identity used by the workspace projection."),
+  nodes: described(z.array(z.object({
+    id: described(z.string(), "Workspace node identifier."),
+    kind: described(z.literal("package"), "Workspace node kind."),
+    root: described(z.string(), "Repository-relative package root."),
+    identity: described(z.string(), "Package identity."),
+    evidence: described(z.array(WorkspaceManifestEvidenceSchema), "Evidence for this workspace node."),
+  }).strict()), "Discovered workspace package nodes."),
+  edges: described(z.array(z.object({
+    id: described(z.string(), "Workspace edge identifier."),
+    kind: described(
+      z.enum(["contained_in_workspace", "workspace_member_of"]),
+      "Workspace containment relation.",
+    ),
+    from: described(z.string(), "Source workspace node identifier."),
+    to: described(z.string(), "Target workspace node identifier."),
+    evidence: described(z.array(WorkspaceManifestEvidenceSchema), "Evidence for this workspace edge."),
+  }).strict()), "Discovered workspace relations."),
+  candidates: described(z.array(z.object({
+    root: described(z.string(), "Repository-relative candidate root."),
+    reason: described(z.literal("conventional-directory"), "Why the root is a workspace candidate."),
+  }).strict()), "Conventional workspace roots that were considered."),
+  diagnostics: described(z.array(z.object({
+    code: described(z.literal("AMBIGUOUS_LAYOUT"), "Workspace diagnostic code."),
+    message: described(z.string(), "Human-readable workspace diagnostic."),
+    roots: described(z.array(z.string()), "Repository-relative roots implicated by the diagnostic."),
+    evidence: described(z.array(WorkspaceManifestEvidenceSchema), "Evidence for the diagnostic."),
+  }).strict()), "Workspace layout diagnostics."),
+}).strict();
+
+const IndexHealthReportSchema = z.object({
+  schemaVersion: described(z.literal(1), "Index-health report schema version."),
+  kind: described(z.literal("index_health"), "Index-health report kind."),
+  capturedAt: described(
+    z.string().nullable(),
+    "Timestamp of the persisted Plane A snapshot, or null when no snapshot is available.",
+  ),
+  binding: described(z.object({
+    status: described(
+      z.enum(["valid", "invalid", "absent"]),
+      "Integrity status of the persisted Plane A binding.",
+    ),
+    sidecarDigest: described(z.string().nullable(), "Bound sidecar digest, when available."),
+    workspaceDigest: described(z.string().nullable(), "Bound workspace digest, when available."),
+  }).strict(), "Exact integrity binding between the shared index, sidecar, and workspace projection."),
+  freshness: described(z.object({
+    verdict: described(
+      z.enum(["FRESH", "DIRTY_KNOWN", "STALE", "UNSEALED"]),
+      "Current control-index freshness verdict; independent from coverage.",
+    ),
+    canRunHighRiskControl: described(
+      z.boolean(),
+      "Whether the current freshness state admits high-risk control operations.",
+    ),
+    reasons: described(
+      z.array(mcpSchema(ControlFreshnessReasonSchema)),
+      "Canonical reasons supporting the freshness verdict.",
+    ),
+  }).strict(), "Current repository freshness, reported separately from analysis coverage."),
+  coverage: described(z.object({
+    status: described(
+      z.enum(["complete", "partial", "insufficient"]),
+      "Aggregate Plane A analysis coverage.",
+    ),
+    candidates: described(z.number().int().nonnegative(), "Number of discovered candidates."),
+    selected: described(z.number().int().nonnegative(), "Number of selected candidates."),
+    excluded: described(z.number().int().nonnegative(), "Number of excluded candidates."),
+    analyzed: described(z.number().int().nonnegative(), "Number of successfully analyzed candidates."),
+    disabled: described(z.number().int().nonnegative(), "Number of candidates disabled by configuration."),
+    unsupported: described(z.number().int().nonnegative(), "Number of unsupported candidates."),
+    failed: described(z.number().int().nonnegative(), "Number of failed candidate analyses."),
+  }).strict(), "Candidate coverage counts; this does not imply freshness or authority."),
+  candidates: described(z.array(z.object({
+    candidateIdentity: described(z.string(), "Stable candidate identity."),
+    path: described(z.string(), "Repository-relative candidate path."),
+    language: described(z.string(), "Candidate language."),
+    workspaceUnitId: described(z.string().nullable(), "Owning workspace unit, when resolved."),
+    selectionDecision: described(z.enum(["selected", "excluded"]), "Discovery selection decision."),
+    analysisOutcome: described(
+      z.enum(["not_applicable", "disabled", "unsupported", "failed", "analyzed"]),
+      "Terminal analysis outcome.",
+    ),
+    selectionReasons: described(z.array(z.string()), "Reasons for selection or exclusion."),
+    analysisReasons: described(z.array(z.string()), "Analyzer outcome details."),
+    producer: described(IndexHealthProducerSchema.nullable(), "Selected analyzer producer, when any."),
+    negativeEvidenceEligible: described(
+      z.boolean(),
+      "Whether this candidate can support task-relative negative evidence.",
+    ),
+  }).strict()), "Deterministically ordered candidate health records."),
+  capabilities: described(z.array(z.object({
+    profileId: described(z.string(), "Capability profile identifier."),
+    factKind: described(z.string(), "Fact kind emitted by the capability."),
+    language: described(z.string(), "Language covered by the capability."),
+    producer: described(IndexHealthProducerSchema, "Analyzer producer for the capability."),
+    completenessClaim: described(z.string(), "Declared completeness claim."),
+    negativeEvidenceEligible: described(
+      z.boolean(),
+      "Whether the capability may support negative evidence.",
+    ),
+    label: described(z.string().nullable(), "Optional human-readable capability label."),
+  }).strict()), "Capability profiles bound to the persisted Plane A snapshot."),
+  workspace: described(
+    WorkspaceProjectionSchema.nullable(),
+    "Persisted workspace projection, or null when no valid binding is available.",
+  ),
+  evaluations: described(z.object({
+    schemaVersion: described(z.literal(1), "Plane A evaluation report schema version."),
+    decisions: described(
+      z.array(z.looseObject({
+        decisionKind: described(
+          z.enum(["pre_subject", "exact_subject"]),
+          "Whether evaluation stopped before an exact subject or evaluated one.",
+        ),
+        outcome: described(
+          z.enum(["PASS", "UNKNOWN", "INSUFFICIENT_ANALYSIS", "POLICY_DENIED"]),
+          "Task-relative Plane A decision.",
+        ),
+        admissible: described(z.boolean(), "Whether the evaluated evidence is admissible."),
+        reasons: described(z.array(z.looseObject({
+          code: PlaneAReasonCodeSchema,
+          details: described(z.array(z.looseObject({
+            coordinate: described(z.string(), "Coordinate associated with the reason."),
+            expected: described(z.unknown(), "Canonical expected value."),
+            actual: described(z.unknown(), "Canonical observed value."),
+          })), "Canonical reason details."),
+        })), "Canonical decision reasons."),
+        primaryReason: described(PlaneAReasonCodeSchema.optional(), "Primary decision reason, when any."),
+      })),
+      "Task-relative Plane A evaluation decisions.",
+    ),
+    reasonSummary: described(z.array(PlaneAReasonCodeSchema), "Canonical evaluation reason summary."),
+    primaryReason: described(PlaneAReasonCodeSchema.optional(), "Primary report reason, when any."),
+  }).strict(), "Task-relative admissibility evaluations; health alone grants no authority."),
+  reasonSummary: described(
+    z.array(PlaneAReasonCodeSchema),
+    "Canonical aggregate health reasons in deterministic order.",
+  ),
+}).strict();
+
 /**
  * Precise machine-readable result contracts for every public semctx MCP tool.
  * Business-layer Zod 3 contracts cross the MCP v2 boundary only through mcpSchema.
@@ -480,6 +657,7 @@ export const TOOL_OUTPUT_SCHEMAS = {
   semctx_semantic_inspect: SemanticInspectionSchema,
   semctx_handoff: HandoffSchema,
   semctx_resume: ResumeSchema,
+  semctx_index_health: IndexHealthReportSchema,
   semctx_control_status: mcpSchema(ControlFreshnessStatusReportSchema),
   semctx_control_authority: mcpSchema(AltitudeAuthorityReportV1Schema),
   semctx_control_trace: mcpSchema(TraversalReportV2Schema),

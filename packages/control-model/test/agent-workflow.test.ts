@@ -61,7 +61,13 @@ describe("shared agent workflow contract", () => {
         false,
         "semantic_context_present",
       ],
-      ["status", ["semctx_control_status"], "read_only", false, "semantic_context_present"],
+      [
+        "status",
+        ["semctx_index_health", "semctx_control_status"],
+        "read_only",
+        false,
+        "semantic_context_present",
+      ],
       ["frame_task", ["semctx_control_frame_task"], "read_only", false, "write_task"],
       ["bind_scope", ["semctx_control_bind_scope"], "read_only", false, "write_task"],
       ["trace_impact", ["semctx_control_trace"], "read_only", false, "write_task"],
@@ -102,6 +108,15 @@ describe("shared agent workflow contract", () => {
     expect(
       contract.stages.find((stage) => stage.id === "inspect_repository")?.instruction,
     ).toContain("semantic_context_present");
+    expect(
+      contract.stages.find((stage) => stage.id === "inspect_repository")?.instruction,
+    ).toContain("HIGHEST_BROKEN_LEVEL");
+    expect(
+      contract.stages.find((stage) => stage.id === "status")?.instruction,
+    ).toContain("distinct binding, index-freshness and analysis-coverage diagnostic");
+    expect(
+      contract.stages.find((stage) => stage.id === "status")?.instruction,
+    ).toContain("control-freshness");
   });
 
   test("rejects stage drift, duplicate tool ownership and dishonest write effects", () => {
