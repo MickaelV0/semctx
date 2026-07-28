@@ -99,7 +99,7 @@ preservation, or a generic project demonstration.
 
 | plane | tools | role |
 | --- | --- | --- |
-| A | `semctx_inspect`, `semctx_verify_change` | observed graph, impact, recommended tests, `PASS/WARN/BLOCK` |
+| A | `semctx_index_health`, `semctx_inspect`, `semctx_verify_change` | index binding, freshness, and coverage; observed graph, impact, recommended tests, `PASS/WARN/BLOCK` |
 | B | `semctx_semantic_check`, `semctx_semantic_slice`, `semctx_semantic_inspect`, `semctx_change_open`, `semctx_change_update`, `semctx_change_verify`, `semctx_handoff`, `semctx_resume` | authored intent, lifecycle integrity, proof-carrying contracts and rehydration |
 | C | `semctx_control_status`, `semctx_control_trace`, `semctx_control_plan` | read-only freshness preflight, L0-L6 trace and fail-closed migration planning |
 
@@ -116,16 +116,21 @@ unavailable verdicts are reported as `not run` or `not applicable`.
 ## Agent workflow
 
 1. Use normal repository search and Git inspection first.
-2. Resume or slice existing authored intent when it exists.
-3. Call `semctx_control_status`. Continue high-risk control work only for `FRESH` or `DIRTY_KNOWN`.
-4. Call `semctx_control_trace` for bounded L0-L6 reconstruction.
-5. Record the returned status, seal hash, and any current/indexed mismatch as explicit facts.
-6. Call `semctx_control_plan` only with an explicit target architecture.
-7. For a user-authorized write, open or update a change contract before substantial edits.
-8. Make the smallest coherent change.
-9. Call `semctx_verify_change`, run the selected runtime tests, record only obtained evidence, and
+2. Frame the top-down diagnosis and record `HIGHEST_BROKEN_LEVEL`, `WHY_NOT_HIGHER`,
+   `WHY_NOT_LOWER`, and `PROOF_PLAN` before substantial edits.
+3. Call `semctx_index_health`; keep binding, index freshness, coverage, candidate outcomes, workspace
+   diagnostics, and reasons separate.
+4. Resume or slice existing authored intent when it exists.
+5. Call `semctx_control_status`. Keep its control-freshness verdict separate from index health and
+   continue high-risk control work only for `FRESH` or `DIRTY_KNOWN`.
+6. Call `semctx_control_trace` for bounded L0-L6 reconstruction.
+7. Record the returned status, seal hash, and any current/indexed mismatch as explicit facts.
+8. Call `semctx_control_plan` only with an explicit target architecture.
+9. For a user-authorized write, open or update a change contract before substantial edits.
+10. Make the smallest coherent change.
+11. Call `semctx_verify_change`, run the selected runtime tests, record only obtained evidence, and
    compose `semctx_change_verify` when a contract exists.
-10. Write a handoff only for write-scoped work; read-only work remains mutation-free.
+12. Write a handoff only for write-scoped work; read-only work remains mutation-free.
 
 ## Decision semantics
 
@@ -136,6 +141,10 @@ unavailable verdicts are reported as `not run` or `not applicable`.
 `PASS` does not replace runtime tests. `PARTIAL` must name the missing proof. `STALE` requires
 re-linking. `READY` is a planning state, never execution authority. Plane C has no executor and
 never performs a cutover, deployment or deletion.
+
+Index binding, index freshness, and analysis coverage are three separately reported fields.
+Coverage is `complete`, `partial`, or `insufficient`; none of those index-health fields replaces or
+upgrades the independent control-freshness verdict.
 
 `ControlFreshnessSeal` remains a local input attestation rather than an authenticity signature.
 `semctx_control_status` owns the `FRESH` / `DIRTY_KNOWN` / `STALE` / `UNSEALED` decision; Claude
