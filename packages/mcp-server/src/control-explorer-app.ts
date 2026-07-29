@@ -315,8 +315,25 @@ export const CONTROL_EXPLORER_HTML = `<!doctype html>
           + " / " + String(snapshot.bounds.maxNodes ?? 0)
           + " nodes · " + String(snapshot.bounds.returnedEdges ?? 0)
           + " / " + String(snapshot.bounds.maxEdges ?? 0)
-          + " edges"
-          + (snapshot.truncated === true ? " · truncated" : "");
+          + " edges";
+        if (snapshot.truncated === true && isRecord(snapshot.graph.omissions)) {
+          const omissions = snapshot.graph.omissions;
+          bounds.textContent +=
+            " · omitted: "
+            + String(omissions.nodesByNodeLimit ?? 0) + " nodes by node limit, "
+            + String(omissions.structuralEdgesByNodeLimit ?? 0)
+            + " structural edges by node limit, "
+            + String(omissions.structuralEdgesByEdgeLimit ?? 0)
+            + " structural edges by edge limit, "
+            + String(omissions.refinementRelationsByMissingEndpoint ?? 0)
+            + " refinements with missing endpoints, "
+            + String(omissions.refinementRelationsByNodeLimit ?? 0)
+            + " refinements by node limit, "
+            + String(omissions.refinementRelationsByEdgeLimit ?? 0)
+            + " refinements by edge limit";
+        } else {
+          bounds.textContent += " · no omissions";
+        }
       };
 
       window.addEventListener("message", (event) => {

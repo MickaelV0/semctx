@@ -75,6 +75,20 @@ const ExplorerGraphSchema = z.object({
     staleLinks: z.number().int().nonnegative().describe("Total stale repository links."),
     danglingReferences: z.number().int().nonnegative().describe("Total dangling semantic references."),
   }).strict(),
+  omissions: z.object({
+    nodesByNodeLimit: z.number().int().nonnegative()
+      .describe("Coordinate nodes omitted by the requested node limit."),
+    structuralEdgesByNodeLimit: z.number().int().nonnegative()
+      .describe("Structural edges omitted because a required node was omitted by the node limit."),
+    structuralEdgesByEdgeLimit: z.number().int().nonnegative()
+      .describe("Structural edges omitted by the requested combined edge limit."),
+    refinementRelationsByMissingEndpoint: z.number().int().nonnegative()
+      .describe("Refinement relations omitted because an endpoint is absent from the full coordinate graph."),
+    refinementRelationsByNodeLimit: z.number().int().nonnegative()
+      .describe("Refinement relations omitted because an existing endpoint node was omitted by the node limit."),
+    refinementRelationsByEdgeLimit: z.number().int().nonnegative()
+      .describe("Refinement relations omitted by the requested combined edge limit."),
+  }).strict().describe("Exact omission counts without exposing omitted identifiers."),
 }).strict();
 
 export const ControlExplorerOutputSchema = z.object({
@@ -98,7 +112,7 @@ export const ControlExplorerOutputSchema = z.object({
     returnedNodes: z.number().int().nonnegative().describe("Nodes returned after bounding."),
     returnedEdges: z.number().int().nonnegative().describe("Combined edges returned after bounding."),
   }).strict().describe("Applied result bounds."),
-  truncated: z.boolean().describe("Whether nodes or edges were omitted by the requested bounds."),
+  truncated: z.boolean().describe("Whether any raw graph node or edge was omitted from the self-contained snapshot."),
 }).strict().superRefine((value, context) => {
   const selectedNodeIds = new Set(value.graph.nodes.map((node) => node.id));
   const selectedSemanticSourceIds = new Set(
@@ -118,6 +132,16 @@ export const ControlExplorerOutputSchema = z.object({
       message: "returnedNodes must equal the bounded node count",
     });
   }
+  if (
+    value.bounds.returnedNodes > value.bounds.maxNodes
+    || value.graph.nodes.length > value.bounds.maxNodes
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["bounds", "returnedNodes"],
+      message: "returnedNodes must not exceed maxNodes",
+    });
+  }
   const returnedEdges =
     value.graph.structuralEdges.length + value.graph.refinementRelations.length;
   if (returnedEdges !== value.bounds.returnedEdges) {
@@ -125,6 +149,54 @@ export const ControlExplorerOutputSchema = z.object({
       code: "custom",
       path: ["bounds", "returnedEdges"],
       message: "returnedEdges must equal the bounded combined edge count",
+    });
+  }
+  if (
+    value.bounds.returnedEdges > value.bounds.maxEdges
+    || returnedEdges > value.bounds.maxEdges
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["bounds", "returnedEdges"],
+      message: "returnedEdges must not exceed maxEdges",
+    });
+  }
+  const omissions = value.graph.omissions;
+  if (
+    value.graph.totals.nodes
+    !== value.bounds.returnedNodes + omissions.nodesByNodeLimit
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["graph", "totals", "nodes"],
+      message: "total nodes must equal returned nodes plus node-limit omissions",
+    });
+  }
+  const omittedEdges =
+    omissions.structuralEdgesByNodeLimit
+    + omissions.structuralEdgesByEdgeLimit
+    + omissions.refinementRelationsByMissingEndpoint
+    + omissions.refinementRelationsByNodeLimit
+    + omissions.refinementRelationsByEdgeLimit;
+  if (value.graph.totals.edges !== returnedEdges + omittedEdges) {
+    context.addIssue({
+      code: "custom",
+      path: ["graph", "totals", "edges"],
+      message: "total edges must equal returned edges plus all edge omissions",
+    });
+  }
+  const hasOmissions =
+    omissions.nodesByNodeLimit > 0
+    || omissions.structuralEdgesByNodeLimit > 0
+    || omissions.structuralEdgesByEdgeLimit > 0
+    || omissions.refinementRelationsByMissingEndpoint > 0
+    || omissions.refinementRelationsByNodeLimit > 0
+    || omissions.refinementRelationsByEdgeLimit > 0;
+  if (value.truncated !== hasOmissions) {
+    context.addIssue({
+      code: "custom",
+      path: ["truncated"],
+      message: "truncated must be true exactly when at least one item was omitted",
     });
   }
   if (
@@ -212,26 +284,57 @@ export function controlExplorerTool(
   );
   const structuralEdges = payload?.structuralEdges ?? [];
   const refinementRelations = payload?.refinementRelations ?? [];
-  const boundedStructuralEdges = structuralEdges
-    .filter((edge) =>
-      selectedNodeIds.has(edge.from) && selectedNodeIds.has(edge.to)
-    )
-    .slice(0, maxEdges);
+  const fullSemanticSourceIds = new Set(
+    allNodes
+      .filter((node) => node.plane === "semantic")
+      .map((node) => node.sourceId),
+  );
+  const fullObservedIds = new Set(
+    allNodes
+      .filter((node) => node.plane === "observed")
+      .flatMap((node) => [node.id, node.sourceId]),
+  );
+  const eligibleStructuralEdges = structuralEdges.filter((edge) =>
+    selectedNodeIds.has(edge.from) && selectedNodeIds.has(edge.to)
+  );
+  const boundedStructuralEdges = eligibleStructuralEdges.slice(0, maxEdges);
   const remainingEdgeBudget = maxEdges - boundedStructuralEdges.length;
-  const boundedRefinementRelations = refinementRelations
-    .filter((relation) =>
+  const refinementRelationsWithFullEndpoints = refinementRelations.filter(
+    (relation) =>
+      [relation.source, relation.target].every((endpoint) =>
+        endpoint.plane === "B"
+          ? fullSemanticSourceIds.has(endpoint.nodeId)
+          : fullObservedIds.has(endpoint.coordinateDigest)
+      ),
+  );
+  const eligibleRefinementRelations = refinementRelationsWithFullEndpoints.filter(
+    (relation) =>
       [relation.source, relation.target].every((endpoint) =>
         endpoint.plane === "B"
           ? selectedSemanticSourceIds.has(endpoint.nodeId)
           : selectedObservedIds.has(endpoint.coordinateDigest)
-      )
-    )
-    .slice(0, remainingEdgeBudget);
+      ),
+  );
+  const boundedRefinementRelations =
+    eligibleRefinementRelations.slice(0, remainingEdgeBudget);
   const returnedEdges =
     boundedStructuralEdges.length + boundedRefinementRelations.length;
   const totalEdges = structuralEdges.length + refinementRelations.length;
-  const truncated =
-    allNodes.length > boundedNodes.length || totalEdges > returnedEdges;
+  const omissions = {
+    nodesByNodeLimit: allNodes.length - boundedNodes.length,
+    structuralEdgesByNodeLimit:
+      structuralEdges.length - eligibleStructuralEdges.length,
+    structuralEdgesByEdgeLimit:
+      eligibleStructuralEdges.length - boundedStructuralEdges.length,
+    refinementRelationsByMissingEndpoint:
+      refinementRelations.length - refinementRelationsWithFullEndpoints.length,
+    refinementRelationsByNodeLimit:
+      refinementRelationsWithFullEndpoints.length
+      - eligibleRefinementRelations.length,
+    refinementRelationsByEdgeLimit:
+      eligibleRefinementRelations.length - boundedRefinementRelations.length,
+  };
+  const truncated = Object.values(omissions).some((count) => count > 0);
 
   const freshness = {
     schemaVersion: status.schemaVersion,
@@ -275,6 +378,7 @@ export function controlExplorerTool(
       staleLinks: payload?.staleLinks.length ?? 0,
       danglingReferences: payload?.danglingReferences.length ?? 0,
     },
+    omissions,
   };
   const coverage = {
     status: graphEnvelope.terminalStatus,
