@@ -1,40 +1,133 @@
 import { basename } from "node:path";
 import { z } from "zod-v4";
 import {
+  AltitudeAuthorityReportV1Schema,
+  ControlFreshnessReasonSchema,
+  ControlFreshnessVerdictSchema,
+  ControlReasonCodeV1Schema,
+  ControlTerminalStatusV1Schema,
+  CoordinateEdgeSchema,
+  CoordinateNodeV2Schema,
+  LevelCoverageV2Schema,
+  RefinementRelationV1Schema,
+  Sha256HashSchema,
+} from "@semantic-context/control-model";
+import {
   controlAuthorityTool,
   controlGraphTool,
   controlStatusTool,
 } from "./control-tools";
+import { mcpSchema } from "./schema-boundary";
 
 export const CONTROL_EXPLORER_DEFAULT_MAX_NODES = 250;
 export const CONTROL_EXPLORER_DEFAULT_MAX_EDGES = 500;
 export const CONTROL_EXPLORER_MAX_NODES = 1_000;
 export const CONTROL_EXPLORER_MAX_EDGES = 2_000;
 
-const JSON_OBJECT = z.record(z.string(), z.json());
+const ExplorerFreshnessSchema = z.object({
+  schemaVersion: z.literal(1).describe("Freshness report schema version."),
+  kind: z.literal("control_freshness_status").describe("Freshness report kind."),
+  basis: z.literal("control_index_snapshot_v1").describe("Snapshot basis used for the verdict."),
+  verdict: mcpSchema(ControlFreshnessVerdictSchema).describe("Current repository freshness verdict."),
+  canRunHighRiskControl: z.boolean().describe("Whether the current freshness state admits high-risk control."),
+  reasons: z.array(mcpSchema(ControlFreshnessReasonSchema)).describe("Canonical freshness reason codes."),
+  seal: z.object({
+    kind: z.literal("control_freshness_seal").describe("Freshness seal kind."),
+    sealSchemaVersion: z.literal(1).describe("Freshness seal schema version."),
+    sealHash: mcpSchema(Sha256HashSchema).describe("Digest of the complete underlying freshness seal."),
+    headAtCapture: z.string().min(1).nullable().describe("Git HEAD captured by the seal, when available."),
+    indexedHeadCommit: z.string().min(1).nullable().describe("Git commit bound to the index, when available."),
+    indexedAt: z.string().datetime().nullable().describe("Index capture time, when available."),
+    toolVersion: z.string().min(1).describe("Semctx version that produced the seal."),
+  }).strict().nullable().describe("Redacted freshness seal summary without repository paths."),
+}).strict();
+
+const ExplorerCoverageSchema = z.object({
+  status: mcpSchema(ControlTerminalStatusV1Schema).describe("Coordinate query terminal status."),
+  levels: z.number().int().min(0).max(7).describe("Number of represented L0-L6 coverage bands."),
+  unsupported: z.number().int().nonnegative().describe("Unsupported coordinate source count."),
+  unmapped: z.number().int().nonnegative().describe("Unmapped coordinate source count."),
+  reasons: z.array(mcpSchema(ControlReasonCodeV1Schema)).describe("Canonical coordinate query reason codes."),
+}).strict();
+
+const ExplorerGraphSchema = z.object({
+  schemaVersion: z.literal(1).describe("Control query envelope schema version."),
+  kind: z.literal("coordinate_graph").describe("Control query kind."),
+  terminalStatus: mcpSchema(ControlTerminalStatusV1Schema).describe("Coordinate graph terminal status."),
+  reasonCodes: z.array(mcpSchema(ControlReasonCodeV1Schema)).describe("Canonical coordinate graph reason codes."),
+  nodes: z.array(mcpSchema(CoordinateNodeV2Schema))
+    .max(CONTROL_EXPLORER_MAX_NODES)
+    .describe("Bounded coordinate nodes."),
+  structuralEdges: z.array(mcpSchema(CoordinateEdgeSchema))
+    .max(CONTROL_EXPLORER_MAX_EDGES)
+    .describe("Bounded structural graph edges."),
+  refinementRelations: z.array(mcpSchema(RefinementRelationV1Schema))
+    .max(CONTROL_EXPLORER_MAX_EDGES)
+    .describe("Bounded proof-carrying refinement relations."),
+  levelCoverage: z.array(mcpSchema(LevelCoverageV2Schema))
+    .max(7)
+    .describe("Explicit coordinate coverage for L0 through L6."),
+  totals: z.object({
+    nodes: z.number().int().nonnegative().describe("Total coordinate nodes before bounding."),
+    edges: z.number().int().nonnegative().describe("Total structural and refinement edges before bounding."),
+    unsupported: z.number().int().nonnegative().describe("Total unsupported sources."),
+    unmapped: z.number().int().nonnegative().describe("Total unmapped sources."),
+    staleLinks: z.number().int().nonnegative().describe("Total stale repository links."),
+    danglingReferences: z.number().int().nonnegative().describe("Total dangling semantic references."),
+  }).strict(),
+}).strict();
 
 export const ControlExplorerOutputSchema = z.object({
-  schemaVersion: z.literal(1),
-  kind: z.literal("control_explorer"),
+  schemaVersion: z.literal(1).describe("Control Explorer snapshot schema version."),
+  kind: z.literal("control_explorer").describe("Control Explorer snapshot kind."),
   repository: z.object({
-    name: z.string().min(1),
-  }).strict(),
-  executionAuthority: z.literal("none"),
-  freshness: JSON_OBJECT,
-  coverage: JSON_OBJECT,
-  graph: JSON_OBJECT,
+    name: z.string().min(1).describe("Repository directory name without an absolute path."),
+  }).strict().describe("Redacted repository identity."),
+  executionAuthority: z.literal("none").describe("The Explorer grants no execution authority."),
+  freshness: ExplorerFreshnessSchema.describe("Redacted control freshness report."),
+  coverage: ExplorerCoverageSchema.describe("Bounded L0-L6 coordinate coverage summary."),
+  graph: ExplorerGraphSchema.describe("Bounded coordinate graph evidence."),
   impact: z.object({
-    status: z.literal("not_requested"),
-  }).strict(),
-  authority: JSON_OBJECT,
+    status: z.literal("not_requested").describe("Impact analysis is not run by this read-only snapshot."),
+  }).strict().describe("Explicit impact-analysis state."),
+  authority: mcpSchema(AltitudeAuthorityReportV1Schema)
+    .describe("Required authority report for the highest abstraction altitude."),
   bounds: z.object({
-    maxNodes: z.number().int().min(1).max(CONTROL_EXPLORER_MAX_NODES),
-    maxEdges: z.number().int().min(1).max(CONTROL_EXPLORER_MAX_EDGES),
-    returnedNodes: z.number().int().nonnegative(),
-    returnedEdges: z.number().int().nonnegative(),
-  }).strict(),
-  truncated: z.boolean(),
-}).strict();
+    maxNodes: z.number().int().min(1).max(CONTROL_EXPLORER_MAX_NODES).describe("Requested node limit."),
+    maxEdges: z.number().int().min(1).max(CONTROL_EXPLORER_MAX_EDGES).describe("Requested combined edge limit."),
+    returnedNodes: z.number().int().nonnegative().describe("Nodes returned after bounding."),
+    returnedEdges: z.number().int().nonnegative().describe("Combined edges returned after bounding."),
+  }).strict().describe("Applied result bounds."),
+  truncated: z.boolean().describe("Whether nodes or edges were omitted by the requested bounds."),
+}).strict().superRefine((value, context) => {
+  if (value.graph.nodes.length !== value.bounds.returnedNodes) {
+    context.addIssue({
+      code: "custom",
+      path: ["bounds", "returnedNodes"],
+      message: "returnedNodes must equal the bounded node count",
+    });
+  }
+  const returnedEdges =
+    value.graph.structuralEdges.length + value.graph.refinementRelations.length;
+  if (returnedEdges !== value.bounds.returnedEdges) {
+    context.addIssue({
+      code: "custom",
+      path: ["bounds", "returnedEdges"],
+      message: "returnedEdges must equal the bounded combined edge count",
+    });
+  }
+  if (
+    value.coverage.levels !== value.graph.levelCoverage.length
+    || value.coverage.unsupported !== value.graph.totals.unsupported
+    || value.coverage.unmapped !== value.graph.totals.unmapped
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["coverage"],
+      message: "coverage summary must match the bounded graph report",
+    });
+  }
+});
 
 export type ControlExplorerSnapshot = z.infer<typeof ControlExplorerOutputSchema>;
 
