@@ -105,6 +105,14 @@ preservation, or a generic project demonstration.
 
 `semctx_prepare_task` remains experimental and is not a code-search replacement.
 
+Before substantial edits, the shared skill frames the highest broken contract from
+L6 strategy/constraints down through product intent, invariants, capabilities, boundaries and
+symbols to L0 sealed observed hunks. It records why the next higher level is healthy, why a
+lower-level patch would only move the symptom, and the smallest check able to falsify the
+diagnosis. Missing semantic links remain unknowns; neither `STALE` nor `UNSEALED` triggers an
+automatic reindex or reseal. For a diagnosis-only task, write-conditioned stages stay inactive and
+unavailable verdicts are reported as `not run` or `not applicable`.
+
 ## Agent workflow
 
 1. Use normal repository search and Git inspection first.
