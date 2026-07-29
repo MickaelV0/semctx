@@ -213,6 +213,117 @@ describe("read-only Control Explorer MCP App", () => {
     expect(ControlExplorerOutputSchema.safeParse(invalid).success).toBe(false);
   });
 
+  test("bounds every exposed graph identifier to the selected node set", () => {
+    const snapshot = controlExplorerTool(fixtureRoot, {
+      maxNodes: 2,
+      maxEdges: 20,
+    });
+    const selectedNodeIds = new Set(snapshot.graph.nodes.map((node) => node.id));
+    const selectedSemanticSourceIds = new Set(
+      snapshot.graph.nodes
+        .filter((node) => node.plane === "semantic")
+        .map((node) => node.sourceId),
+    );
+    const selectedObservedIds = new Set(
+      snapshot.graph.nodes
+        .filter((node) => node.plane === "observed")
+        .flatMap((node) => [node.id, node.sourceId]),
+    );
+
+    expect(selectedNodeIds.size).toBeLessThanOrEqual(2);
+    expect(
+      new Set(
+        snapshot.graph.levelCoverage.flatMap((level) => level.coordinateIds),
+      ).size,
+    ).toBeLessThanOrEqual(2);
+    for (const level of snapshot.graph.levelCoverage) {
+      expect(
+        level.coordinateIds.every((coordinateId) =>
+          selectedNodeIds.has(coordinateId)
+        ),
+      ).toBe(true);
+    }
+    for (const edge of snapshot.graph.structuralEdges) {
+      expect(selectedNodeIds.has(edge.from)).toBe(true);
+      expect(selectedNodeIds.has(edge.to)).toBe(true);
+    }
+    for (const relation of snapshot.graph.refinementRelations) {
+      for (const endpoint of [relation.source, relation.target]) {
+        expect(
+          endpoint.plane === "B"
+            ? selectedSemanticSourceIds.has(endpoint.nodeId)
+            : selectedObservedIds.has(endpoint.coordinateDigest),
+        ).toBe(true);
+      }
+    }
+  });
+
+  test("rejects omitted endpoint and level-coverage identifier leakage", () => {
+    const full = controlExplorerTool(fixtureRoot, {
+      maxNodes: 1_000,
+      maxEdges: 2_000,
+    });
+    const bounded = controlExplorerTool(fixtureRoot, {
+      maxNodes: 1,
+      maxEdges: 20,
+    });
+    const selectedNodeIds = new Set(bounded.graph.nodes.map((node) => node.id));
+    const selectedQualifiedNode = bounded.graph.nodes.find((node) =>
+      node.id.startsWith("repo:") || node.id.startsWith("semantic:")
+    );
+    const omittedQualifiedNode = full.graph.nodes.find((node) =>
+      !selectedNodeIds.has(node.id)
+      && (node.id.startsWith("repo:") || node.id.startsWith("semantic:"))
+    );
+    expect(selectedQualifiedNode).toBeDefined();
+    expect(omittedQualifiedNode).toBeDefined();
+    if (
+      selectedQualifiedNode === undefined
+      || omittedQualifiedNode === undefined
+    ) return;
+
+    const endpointLeak = {
+      ...bounded,
+      graph: {
+        ...bounded.graph,
+        structuralEdges: [{
+          from: selectedQualifiedNode.id,
+          to: omittedQualifiedNode.id,
+          relation: "adversarial_omitted_endpoint",
+          evidenceRefs: [],
+        }],
+        refinementRelations: [],
+      },
+      bounds: {
+        ...bounded.bounds,
+        returnedEdges: 1,
+      },
+    };
+    expect(ControlExplorerOutputSchema.safeParse(endpointLeak).success).toBe(false);
+
+    const coverageLevel = bounded.graph.levelCoverage[0];
+    expect(coverageLevel).toBeDefined();
+    if (coverageLevel === undefined) return;
+    const coverageLeak = {
+      ...bounded,
+      graph: {
+        ...bounded.graph,
+        levelCoverage: bounded.graph.levelCoverage.map((level) =>
+          level.level === coverageLevel.level
+            ? {
+                ...level,
+                coordinateIds: [
+                  ...level.coordinateIds,
+                  omittedQualifiedNode.id,
+                ].sort(),
+              }
+            : level
+        ),
+      },
+    };
+    expect(ControlExplorerOutputSchema.safeParse(coverageLeak).success).toBe(false);
+  });
+
   test("limits every non-explorer tool to model visibility", async () => {
     const { tools } = await client.listTools();
     const explorer = tools.find((tool) => tool.name === APP_TOOL);

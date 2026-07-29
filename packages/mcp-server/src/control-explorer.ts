@@ -100,6 +100,17 @@ export const ControlExplorerOutputSchema = z.object({
   }).strict().describe("Applied result bounds."),
   truncated: z.boolean().describe("Whether nodes or edges were omitted by the requested bounds."),
 }).strict().superRefine((value, context) => {
+  const selectedNodeIds = new Set(value.graph.nodes.map((node) => node.id));
+  const selectedSemanticSourceIds = new Set(
+    value.graph.nodes
+      .filter((node) => node.plane === "semantic")
+      .map((node) => node.sourceId),
+  );
+  const selectedObservedIds = new Set(
+    value.graph.nodes
+      .filter((node) => node.plane === "observed")
+      .flatMap((node) => [node.id, node.sourceId]),
+  );
   if (value.graph.nodes.length !== value.bounds.returnedNodes) {
     context.addIssue({
       code: "custom",
@@ -126,6 +137,38 @@ export const ControlExplorerOutputSchema = z.object({
       path: ["coverage"],
       message: "coverage summary must match the bounded graph report",
     });
+  }
+  for (const [index, edge] of value.graph.structuralEdges.entries()) {
+    if (!selectedNodeIds.has(edge.from) || !selectedNodeIds.has(edge.to)) {
+      context.addIssue({
+        code: "custom",
+        path: ["graph", "structuralEdges", index],
+        message: "structural edge endpoints must be present in the bounded node set",
+      });
+    }
+  }
+  for (const [index, relation] of value.graph.refinementRelations.entries()) {
+    const endpoints = [relation.source, relation.target];
+    if (endpoints.some((endpoint) =>
+      endpoint.plane === "B"
+        ? !selectedSemanticSourceIds.has(endpoint.nodeId)
+        : !selectedObservedIds.has(endpoint.coordinateDigest)
+    )) {
+      context.addIssue({
+        code: "custom",
+        path: ["graph", "refinementRelations", index],
+        message: "refinement relation endpoints must be present in the bounded node set",
+      });
+    }
+  }
+  for (const [index, level] of value.graph.levelCoverage.entries()) {
+    if (level.coordinateIds.some((coordinateId) => !selectedNodeIds.has(coordinateId))) {
+      context.addIssue({
+        code: "custom",
+        path: ["graph", "levelCoverage", index, "coordinateIds"],
+        message: "level coverage must expose only bounded node identifiers",
+      });
+    }
   }
 });
 
@@ -155,18 +198,40 @@ export function controlExplorerTool(
 
   const payload = graphEnvelope.payload;
   const allNodes = payload?.nodes ?? [];
+  const boundedNodes = selectBoundedNodes(allNodes, maxNodes);
+  const selectedNodeIds = new Set(boundedNodes.map((node) => node.id));
+  const selectedSemanticSourceIds = new Set(
+    boundedNodes
+      .filter((node) => node.plane === "semantic")
+      .map((node) => node.sourceId),
+  );
+  const selectedObservedIds = new Set(
+    boundedNodes
+      .filter((node) => node.plane === "observed")
+      .flatMap((node) => [node.id, node.sourceId]),
+  );
   const structuralEdges = payload?.structuralEdges ?? [];
   const refinementRelations = payload?.refinementRelations ?? [];
-  const boundedStructuralEdges = structuralEdges.slice(0, maxEdges);
+  const boundedStructuralEdges = structuralEdges
+    .filter((edge) =>
+      selectedNodeIds.has(edge.from) && selectedNodeIds.has(edge.to)
+    )
+    .slice(0, maxEdges);
   const remainingEdgeBudget = maxEdges - boundedStructuralEdges.length;
-  const boundedRefinementRelations = refinementRelations.slice(
-    0,
-    remainingEdgeBudget,
-  );
+  const boundedRefinementRelations = refinementRelations
+    .filter((relation) =>
+      [relation.source, relation.target].every((endpoint) =>
+        endpoint.plane === "B"
+          ? selectedSemanticSourceIds.has(endpoint.nodeId)
+          : selectedObservedIds.has(endpoint.coordinateDigest)
+      )
+    )
+    .slice(0, remainingEdgeBudget);
   const returnedEdges =
     boundedStructuralEdges.length + boundedRefinementRelations.length;
   const totalEdges = structuralEdges.length + refinementRelations.length;
-  const truncated = allNodes.length > maxNodes || totalEdges > maxEdges;
+  const truncated =
+    allNodes.length > boundedNodes.length || totalEdges > returnedEdges;
 
   const freshness = {
     schemaVersion: status.schemaVersion,
@@ -193,10 +258,15 @@ export function controlExplorerTool(
     kind: graphEnvelope.kind,
     terminalStatus: graphEnvelope.terminalStatus,
     reasonCodes: graphEnvelope.reasonCodes,
-    nodes: allNodes.slice(0, maxNodes),
+    nodes: boundedNodes,
     structuralEdges: boundedStructuralEdges,
     refinementRelations: boundedRefinementRelations,
-    levelCoverage: payload?.coverage ?? [],
+    levelCoverage: (payload?.coverage ?? []).map((level) => ({
+      ...level,
+      coordinateIds: level.coordinateIds.filter((coordinateId) =>
+        selectedNodeIds.has(coordinateId)
+      ),
+    })),
     totals: {
       nodes: allNodes.length,
       edges: totalEdges,
@@ -227,11 +297,38 @@ export function controlExplorerTool(
     bounds: {
       maxNodes,
       maxEdges,
-      returnedNodes: Math.min(allNodes.length, maxNodes),
+      returnedNodes: boundedNodes.length,
       returnedEdges,
     },
     truncated,
   }, root));
+}
+
+function selectBoundedNodes<T extends {
+  appliesAtLevel: number | null;
+}>(nodes: readonly T[], maxNodes: number): T[] {
+  if (nodes.length <= maxNodes) {
+    return [...nodes];
+  }
+
+  const selected: T[] = [];
+  const selectedIndexes = new Set<number>();
+  const representedLevels = new Set<number | null>();
+
+  for (const [index, node] of nodes.entries()) {
+    if (representedLevels.has(node.appliesAtLevel)) continue;
+    selected.push(node);
+    selectedIndexes.add(index);
+    representedLevels.add(node.appliesAtLevel);
+    if (selected.length === maxNodes) return selected;
+  }
+
+  for (const [index, node] of nodes.entries()) {
+    if (selectedIndexes.has(index)) continue;
+    selected.push(node);
+    if (selected.length === maxNodes) break;
+  }
+  return selected;
 }
 
 function redactRepositoryRoot(value: unknown, root: string): unknown {
