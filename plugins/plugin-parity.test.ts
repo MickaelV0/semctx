@@ -121,9 +121,22 @@ describe("Codex and Claude Code plugin parity", () => {
       "PARTIAL",
       "runtime tests",
       "Local equivalents when MCP is unavailable",
+      "Top-down diagnostic frame",
+      "L6 strategy/constraints",
+      "L0 sealed observed hunks",
+      "HIGHEST_BROKEN_LEVEL",
+      "WHY_NOT_HIGHER",
+      "WHY_NOT_LOWER",
+      "PROOF_PLAN",
+      "diagnosis-only task",
+      "UNKNOWN - missing evidence",
+      "not applicable",
     ]) {
       expect(shared).toContain(required);
     }
+    expect(shared).not.toContain("L0 outcome");
+    expect(shared).not.toContain("L5 implementation");
+    expect(shared).not.toContain("reindex before");
 
     // Claude keeps the plugin-bundled placeholder rung.
     expect(claude).toContain("Plugin-bundled CLI");

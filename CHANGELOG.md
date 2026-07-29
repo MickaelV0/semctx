@@ -11,6 +11,11 @@ Marketplace. The published CLI lags this repository — see
 
 ### Added
 
+- **Cross-host top-down diagnosis**: the shared `semctx-control` skill now locates the highest
+  broken contract from L6 strategy/constraints to L0 sealed observed hunks, records why higher and
+  lower levels are excluded, and defines the smallest falsification check before substantial
+  edits. Codex and Claude receive the same generated diagnostic contract; missing links,
+  `STALE`, and `UNSEALED` never trigger an automatic reindex or reseal.
 - **One-command onboarding and update**: `bunx semctx@latest install` detects Codex and/or Claude
   Code, adds or refreshes their Semctx marketplaces and plugins, prepares the current Git
   repository with the existing idempotent `setup` pipeline, and returns one readiness report.
