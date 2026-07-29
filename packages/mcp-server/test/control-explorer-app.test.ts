@@ -1,7 +1,13 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import type { McpServer } from "@modelcontextprotocol/server";
-import { cpSync, mkdtempSync, rmSync } from "node:fs";
+import {
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { indexRepository } from "@semantic-context/app-services";
@@ -53,6 +59,24 @@ describe("read-only Control Explorer MCP App", () => {
     });
     git(fixtureRoot, "init");
     initWorkspace(fixtureRoot);
+    const semanticDirectory = join(fixtureRoot, ".semctx", "semantic");
+    mkdirSync(semanticDirectory, { recursive: true });
+    writeFileSync(
+      join(semanticDirectory, "explorer-omissions.sem"),
+      [
+        "goal goal.explorer.omission-accounting",
+        "  statement: Explorer omission accounting has a non-vacuous authored refinement.",
+        "  status: declared",
+        "",
+        "relation relation.explorer.missing-observed-endpoint decomposes_to source semantic goal.explorer.omission-accounting",
+        `target observed_hunk sha256:${"a".repeat(64)}`,
+        "epistemicStatus human_declared",
+        "provenance author",
+        `evidenceRef document_span docs/booking-rules.md:1 sha256:${"b".repeat(64)}`,
+        "end",
+        "",
+      ].join("\n"),
+    );
     git(fixtureRoot, "add", ".");
     git(
       fixtureRoot,
@@ -172,6 +196,7 @@ describe("read-only Control Explorer MCP App", () => {
         "refinementRelations",
         "levelCoverage",
         "totals",
+        "omissions",
       ],
       impact: ["status"],
       authority: [
@@ -195,6 +220,21 @@ describe("read-only Control Explorer MCP App", () => {
       expect(nested?.required).toEqual(nestedFields);
       expect(nested?.additionalProperties).toBe(false);
     }
+
+    const graphSchema = outputSchema.properties?.["graph"] as OutputSchemaNode;
+    const omissionsSchema = graphSchema.properties?.["omissions"] as OutputSchemaNode;
+    const omissionFields = [
+      "nodesByNodeLimit",
+      "structuralEdgesByNodeLimit",
+      "structuralEdgesByEdgeLimit",
+      "refinementRelationsByMissingEndpoint",
+      "refinementRelationsByNodeLimit",
+      "refinementRelationsByEdgeLimit",
+    ];
+    expect(omissionsSchema.type).toBe("object");
+    expect(Object.keys(omissionsSchema.properties ?? {})).toEqual(omissionFields);
+    expect(omissionsSchema.required).toEqual(omissionFields);
+    expect(omissionsSchema.additionalProperties).toBe(false);
   });
 
   test("rejects undeclared fields inside the Explorer core payload", () => {
@@ -255,6 +295,121 @@ describe("read-only Control Explorer MCP App", () => {
             : selectedObservedIds.has(endpoint.coordinateDigest),
         ).toBe(true);
       }
+    }
+  });
+
+  test("accounts separately for missing endpoints, node bounds, and edge bounds", () => {
+    const full = controlExplorerTool(fixtureRoot, {
+      maxNodes: 1_000,
+      maxEdges: 2_000,
+    });
+    expect(
+      full.graph.omissions.refinementRelationsByMissingEndpoint,
+    ).toBe(1);
+    expect(full.truncated).toBe(true);
+    expect(full.graph.totals.nodes).toBe(
+      full.bounds.returnedNodes + full.graph.omissions.nodesByNodeLimit,
+    );
+    expect(full.graph.totals.edges).toBe(
+      full.bounds.returnedEdges
+      + Object.entries(full.graph.omissions)
+        .filter(([key]) => key !== "nodesByNodeLimit")
+        .reduce((total, [, count]) => total + count, 0),
+    );
+
+    const nodeBound = controlExplorerTool(fixtureRoot, {
+      maxNodes: 1,
+      maxEdges: 2_000,
+    });
+    expect(nodeBound.graph.omissions.nodesByNodeLimit).toBeGreaterThan(0);
+    expect(
+      nodeBound.graph.omissions.structuralEdgesByNodeLimit
+      + nodeBound.graph.omissions.refinementRelationsByNodeLimit,
+    ).toBeGreaterThan(0);
+    expect(nodeBound.bounds.returnedNodes).toBeLessThanOrEqual(1);
+
+    const edgeBound = controlExplorerTool(fixtureRoot, {
+      maxNodes: 1_000,
+      maxEdges: 1,
+    });
+    expect(
+      edgeBound.graph.omissions.structuralEdgesByEdgeLimit
+      + edgeBound.graph.omissions.refinementRelationsByEdgeLimit,
+    ).toBeGreaterThan(0);
+    expect(edgeBound.bounds.returnedEdges).toBeLessThanOrEqual(1);
+
+    expect(Object.values(full.graph.omissions).every(Number.isInteger)).toBe(true);
+    expect(JSON.stringify(full.graph.omissions)).not.toContain("goal.explorer");
+    expect(JSON.stringify(full.graph.omissions)).not.toContain(`sha256:${"a".repeat(64)}`);
+  });
+
+  test("rejects tampered bounds, counts, totals, and truncation claims", () => {
+    const snapshot = controlExplorerTool(fixtureRoot, {
+      maxNodes: 1_000,
+      maxEdges: 2_000,
+    });
+    const invalidSnapshots = [
+      {
+        ...snapshot,
+        bounds: { ...snapshot.bounds, maxNodes: 1 },
+      },
+      {
+        ...snapshot,
+        bounds: { ...snapshot.bounds, maxEdges: 1 },
+      },
+      {
+        ...snapshot,
+        bounds: {
+          ...snapshot.bounds,
+          returnedNodes: snapshot.bounds.returnedNodes + 1,
+        },
+      },
+      {
+        ...snapshot,
+        bounds: {
+          ...snapshot.bounds,
+          returnedEdges: snapshot.bounds.returnedEdges + 1,
+        },
+      },
+      {
+        ...snapshot,
+        graph: {
+          ...snapshot.graph,
+          omissions: {
+            ...snapshot.graph.omissions,
+            refinementRelationsByMissingEndpoint:
+              snapshot.graph.omissions.refinementRelationsByMissingEndpoint + 1,
+          },
+        },
+      },
+      {
+        ...snapshot,
+        graph: {
+          ...snapshot.graph,
+          totals: {
+            ...snapshot.graph.totals,
+            nodes: snapshot.graph.totals.nodes + 1,
+          },
+        },
+      },
+      {
+        ...snapshot,
+        graph: {
+          ...snapshot.graph,
+          totals: {
+            ...snapshot.graph.totals,
+            edges: snapshot.graph.totals.edges + 1,
+          },
+        },
+      },
+      {
+        ...snapshot,
+        truncated: !snapshot.truncated,
+      },
+    ];
+
+    for (const invalid of invalidSnapshots) {
+      expect(ControlExplorerOutputSchema.safeParse(invalid).success).toBe(false);
     }
   });
 
@@ -395,6 +550,9 @@ describe("read-only Control Explorer MCP App", () => {
     expect(html).not.toMatch(
       /<(?:script|img|link)\b[^>]*(?:src|href)\s*=|<iframe\b|@import\b|url\s*\(/i,
     );
+    expect(html).toContain("nodes by node limit");
+    expect(html).toContain("structural edges by edge limit");
+    expect(html).toContain("refinements with missing endpoints");
   });
 
   test("implements the MCP App result handshake with accessible semantic landmarks", async () => {

@@ -99,6 +99,11 @@ The snapshot keeps these dimensions separate:
 - graph and impact evidence;
 - authority regime and obligations.
 
+The bounded graph also reports exact omission counts by cause: node limit, edge
+limit, or a refinement endpoint absent from the full raw graph. Missing
+endpoints are classified before node bounding, totals reconcile with returned
+items plus omissions, and omitted identifiers are never exposed.
+
 `FRESH` does not imply complete analysis. `STALE` and `UNSEALED` never expose refused historical
 payloads as current facts. `ALLOW` and `DENY` are descriptive reports, not controls.
 
