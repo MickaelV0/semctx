@@ -1,8 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const root = resolve(import.meta.dir, "../../..");
+
+function collectFiles(directory: string): string[] {
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const path = resolve(directory, entry.name);
+    return entry.isDirectory() ? collectFiles(path) : [path];
+  });
+}
 
 describe("MCP 2026 SDK boundary", () => {
   test("uses the split v2 SDK without leaking it into the rest of the monorepo", () => {
@@ -34,18 +41,21 @@ describe("MCP 2026 SDK boundary", () => {
   });
 
   test("keeps legacy SDK imports out of production and test sources", () => {
+    const legacyPackage = ["@modelcontextprotocol", "sdk"].join("/");
+    const legacyImport = new RegExp(`from\\s+["']${legacyPackage}`);
+    const matches: string[] = [];
+
     for (const relative of [
       "packages/mcp-server/src",
       "packages/mcp-server/test",
     ]) {
-      const legacyPackage = ["@modelcontextprotocol", "sdk"].join("/");
-      const legacyImport = `from\\s+["']${legacyPackage}`;
-      const command = Bun.spawnSync(
-        ["rg", "-n", legacyImport, relative],
-        { cwd: root, stdout: "pipe", stderr: "pipe" },
-      );
-      expect(command.exitCode).toBe(1);
-      expect(command.stdout.toString()).toBe("");
+      for (const file of collectFiles(resolve(root, relative))) {
+        if (legacyImport.test(readFileSync(file, "utf8"))) {
+          matches.push(file);
+        }
+      }
     }
+
+    expect(matches).toEqual([]);
   });
 });
