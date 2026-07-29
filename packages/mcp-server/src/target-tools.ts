@@ -1,8 +1,7 @@
 /** MCP transport for immutable, non-authorizing target proposals. */
 
-import { isAbsolute, resolve } from "node:path";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { z } from "zod";
+import { isAbsolute } from "node:path";
+import { z } from "zod-v4";
 import {
   ProposeTargetArchitectureCommandV1Schema,
   proposeTargetArchitecture,
@@ -10,7 +9,13 @@ import {
   type TargetArchitectureProposalResultV1,
 } from "@semantic-context/app-services";
 import { serializeControlReport } from "@semantic-context/control-model";
+import { mcpSchema } from "./schema-boundary";
+import type { RepositoryRootResolver } from "./repository-root";
+import type { ToolRegistrar } from "./tool-contract";
 
+const MCP_PROPOSE_TARGET_ARCHITECTURE_COMMAND_V1 = mcpSchema(
+  ProposeTargetArchitectureCommandV1Schema,
+);
 const REPOSITORY_ROOT = z.string().min(1).refine(
   isAbsolute,
   "repositoryRoot must be absolute",
@@ -32,10 +37,10 @@ export function controlTargetProposeTool(
 }
 
 export function registerTargetTools(
-  server: McpServer,
-  boundRoot: string,
+  tools: ToolRegistrar,
+  rootResolver: RepositoryRootResolver,
 ): void {
-  server.registerTool(
+  tools.registerTool(
     "semctx_control_target_propose",
     {
       title: "Propose a target architecture",
@@ -50,13 +55,13 @@ export function registerTargetTools(
       },
       inputSchema: {
         repositoryRoot: REPOSITORY_ROOT,
-        command: ProposeTargetArchitectureCommandV1Schema,
+        command: MCP_PROPOSE_TARGET_ARCHITECTURE_COMMAND_V1,
       },
     },
     async ({ repositoryRoot, command }) => {
       try {
         return canonical(controlTargetProposeTool(
-          requestRoot(boundRoot, repositoryRoot),
+          rootResolver.resolve(repositoryRoot),
           command as ProposeTargetArchitectureCommandV1,
         ));
       } catch (error) {
@@ -64,10 +69,6 @@ export function registerTargetTools(
       }
     },
   );
-}
-
-function requestRoot(_boundRoot: string, repositoryRoot: string): string {
-  return resolve(repositoryRoot);
 }
 
 function canonical(value: unknown): TextResult {

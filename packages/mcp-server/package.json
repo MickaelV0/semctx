@@ -1,6 +1,6 @@
 {
   "name": "@semantic-context/mcp-server",
-  "version": "0.1.14",
+  "version": "0.1.15",
   "type": "module",
   "main": "./src/index.ts",
   "module": "./src/index.ts",
@@ -21,10 +21,13 @@
     "@semantic-context/control-model": "workspace:*",
     "@semantic-context/control-engine": "workspace:*",
     "@semantic-context/app-services": "workspace:*",
-    "@modelcontextprotocol/sdk": "^1.0.4",
-    "zod": "^3.23.8"
+    "@modelcontextprotocol/server": "2.0.0",
+    "zod": "^3.23.8",
+    "zod-to-json-schema": "3.25.2",
+    "zod-v4": "npm:zod@4.2.0"
   },
   "devDependencies": {
-    "@semantic-context/test-fixtures": "workspace:*"
+    "@semantic-context/test-fixtures": "workspace:*",
+    "@modelcontextprotocol/client": "2.0.0"
   }
 }

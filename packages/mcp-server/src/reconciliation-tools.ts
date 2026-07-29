@@ -6,9 +6,8 @@
  * shared application/control contracts.
  */
 
-import { isAbsolute, resolve } from "node:path";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { z } from "zod";
+import { isAbsolute } from "node:path";
+import { z } from "zod-v4";
 import {
   BindTaskScopeCommandV1Schema,
   BuildPlanningBundleCommandV1Schema,
@@ -29,6 +28,14 @@ import {
   type ReconcileDiffReportV1,
   type ReconcileWorkingTreeInputV1,
 } from "@semantic-context/control-model/reconciliation";
+import { mcpSchema } from "./schema-boundary";
+import type { RepositoryRootResolver } from "./repository-root";
+import type { ToolRegistrar } from "./tool-contract";
+
+const MCP_BIND_TASK_SCOPE_COMMAND_V1 = mcpSchema(BindTaskScopeCommandV1Schema);
+const MCP_BUILD_PLANNING_BUNDLE_COMMAND_V1 = mcpSchema(BuildPlanningBundleCommandV1Schema);
+const MCP_PREPARE_TASK_ENVELOPE_COMMAND_V1 = mcpSchema(PrepareTaskEnvelopeCommandV1Schema);
+const MCP_RECONCILE_WORKING_TREE_INPUT_V1 = mcpSchema(ReconcileWorkingTreeInputV1Schema);
 
 const REPOSITORY_ROOT = z.string().min(1).refine(
   isAbsolute,
@@ -73,10 +80,10 @@ export function controlReconcileDiffTool(
 
 /** Register the issue #27/#28 read-only MCP tools from their narrow authority closure. */
 export function registerReconciliationTools(
-  server: McpServer,
-  boundRoot: string,
+  tools: ToolRegistrar,
+  rootResolver: RepositoryRootResolver,
 ): void {
-  server.registerTool(
+  tools.registerTool(
     "semctx_control_bind_scope",
     {
       title: "Bind explicit repository scope",
@@ -91,13 +98,13 @@ export function registerReconciliationTools(
       },
       inputSchema: {
         repositoryRoot: REPOSITORY_ROOT,
-        command: BindTaskScopeCommandV1Schema,
+        command: MCP_BIND_TASK_SCOPE_COMMAND_V1,
       },
     },
     async ({ repositoryRoot, command }) => {
       try {
         return canonical(controlBindScopeTool(
-          requestRoot(boundRoot, repositoryRoot),
+          rootResolver.resolve(repositoryRoot),
           command as BindTaskScopeCommandV1,
         ));
       } catch (error) {
@@ -106,7 +113,7 @@ export function registerReconciliationTools(
     },
   );
 
-  server.registerTool(
+  tools.registerTool(
     "semctx_control_frame_task",
     {
       title: "Frame a task and bind its repository scope (compatibility surface)",
@@ -120,13 +127,13 @@ export function registerReconciliationTools(
       },
       inputSchema: {
         repositoryRoot: REPOSITORY_ROOT,
-        command: PrepareTaskEnvelopeCommandV1Schema,
+        command: MCP_PREPARE_TASK_ENVELOPE_COMMAND_V1,
       },
     },
     async ({ repositoryRoot, command }) => {
       try {
         return canonical(controlFrameTaskTool(
-          requestRoot(boundRoot, repositoryRoot),
+          rootResolver.resolve(repositoryRoot),
           command as PrepareTaskEnvelopeCommandV1,
         ));
       } catch (error) {
@@ -135,7 +142,7 @@ export function registerReconciliationTools(
     },
   );
 
-  server.registerTool(
+  tools.registerTool(
     "semctx_control_plan_change",
     {
       title: "Compile a semantic planning bundle",
@@ -149,13 +156,13 @@ export function registerReconciliationTools(
       },
       inputSchema: {
         repositoryRoot: REPOSITORY_ROOT,
-        command: BuildPlanningBundleCommandV1Schema,
+        command: MCP_BUILD_PLANNING_BUNDLE_COMMAND_V1,
       },
     },
     async ({ repositoryRoot, command }) => {
       try {
         return canonical(controlPlanChangeTool(
-          requestRoot(boundRoot, repositoryRoot),
+          rootResolver.resolve(repositoryRoot),
           command as BuildPlanningBundleCommandV1,
         ));
       } catch (error) {
@@ -164,7 +171,7 @@ export function registerReconciliationTools(
     },
   );
 
-  server.registerTool(
+  tools.registerTool(
     "semctx_control_reconcile_diff",
     {
       title: "Reconcile the current diff with a planning bundle",
@@ -178,13 +185,13 @@ export function registerReconciliationTools(
       },
       inputSchema: {
         repositoryRoot: REPOSITORY_ROOT,
-        input: ReconcileWorkingTreeInputV1Schema,
+        input: MCP_RECONCILE_WORKING_TREE_INPUT_V1,
       },
     },
     async ({ repositoryRoot, input }) => {
       try {
         return canonical(controlReconcileDiffTool(
-          requestRoot(boundRoot, repositoryRoot),
+          rootResolver.resolve(repositoryRoot),
           input as ReconcileWorkingTreeInputV1,
         ));
       } catch (error) {
@@ -192,10 +199,6 @@ export function registerReconciliationTools(
       }
     },
   );
-}
-
-function requestRoot(_boundRoot: string, repositoryRoot: string): string {
-  return resolve(repositoryRoot);
 }
 
 function canonical(value: unknown): TextResult {
