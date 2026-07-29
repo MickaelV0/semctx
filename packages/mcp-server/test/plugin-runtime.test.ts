@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { Client } from "@modelcontextprotocol/client";
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
@@ -113,7 +113,8 @@ describe("packaged MCP runtime", () => {
     try {
       await client.connect(transport);
       const { tools } = await client.listTools();
-      expect(tools).toHaveLength(30);
+      expect(tools).toHaveLength(31);
+      expect(tools.some((tool) => tool.name === "semctx_control_explorer")).toBe(true);
       expect(tools.some((tool) => tool.name === "semctx_semantic_check")).toBe(true);
       expect(tools.some((tool) => tool.name === "semctx_control_authority")).toBe(true);
       expect(tools.some((tool) => tool.name === "semctx_control_frame_task")).toBe(true);
