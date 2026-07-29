@@ -7,6 +7,7 @@ import { basename, join } from "node:path";
 import { indexRepository } from "@semantic-context/app-services";
 import { initWorkspace } from "@semantic-context/repository-store";
 import { SAMPLE_REPO } from "@semantic-context/test-fixtures";
+import { ControlExplorerOutputSchema, controlExplorerTool } from "../src/control-explorer";
 import { createSemctxServer } from "../src/server";
 
 const APP_TOOL = "semctx_control_explorer";
@@ -123,11 +124,13 @@ describe("read-only Control Explorer MCP App", () => {
     });
     expect(inputSchema.properties?.["maxEdges"]?.maximum).toBeGreaterThan(1);
 
-    const outputSchema = explorer.outputSchema as {
+    type OutputSchemaNode = {
       type?: string;
       properties?: Record<string, unknown>;
       required?: string[];
+      additionalProperties?: boolean;
     };
+    const outputSchema = explorer.outputSchema as OutputSchemaNode;
     expect(outputSchema.type).toBe("object");
     for (const field of [
       "schemaVersion",
@@ -145,6 +148,69 @@ describe("read-only Control Explorer MCP App", () => {
       expect(outputSchema.properties?.[field]).toBeDefined();
       expect(outputSchema.required).toContain(field);
     }
+    expect(outputSchema.additionalProperties).toBe(false);
+
+    const exactNestedShapes: Record<string, string[]> = {
+      repository: ["name"],
+      freshness: [
+        "schemaVersion",
+        "kind",
+        "basis",
+        "verdict",
+        "canRunHighRiskControl",
+        "reasons",
+        "seal",
+      ],
+      coverage: ["status", "levels", "unsupported", "unmapped", "reasons"],
+      graph: [
+        "schemaVersion",
+        "kind",
+        "terminalStatus",
+        "reasonCodes",
+        "nodes",
+        "structuralEdges",
+        "refinementRelations",
+        "levelCoverage",
+        "totals",
+      ],
+      impact: ["status"],
+      authority: [
+        "schemaVersion",
+        "kind",
+        "executionAuthority",
+        "requiredAltitude",
+        "regime",
+        "obligations",
+        "rationale",
+        "allowsAutonomousWrite",
+        "freshness",
+        "reasons",
+      ],
+      bounds: ["maxNodes", "maxEdges", "returnedNodes", "returnedEdges"],
+    };
+    for (const [field, nestedFields] of Object.entries(exactNestedShapes)) {
+      const nested = outputSchema.properties?.[field] as OutputSchemaNode | undefined;
+      expect(nested?.type).toBe("object");
+      expect(Object.keys(nested?.properties ?? {})).toEqual(nestedFields);
+      expect(nested?.required).toEqual(nestedFields);
+      expect(nested?.additionalProperties).toBe(false);
+    }
+  });
+
+  test("rejects undeclared fields inside the Explorer core payload", () => {
+    const snapshot = controlExplorerTool(fixtureRoot, {
+      maxNodes: 2,
+      maxEdges: 3,
+    });
+    const invalid = {
+      ...snapshot,
+      coverage: {
+        ...snapshot.coverage,
+        unexpected: true,
+      },
+    };
+
+    expect(ControlExplorerOutputSchema.safeParse(invalid).success).toBe(false);
   });
 
   test("limits every non-explorer tool to model visibility", async () => {
