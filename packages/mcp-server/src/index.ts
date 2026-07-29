@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { createSemctxServer } from "./server";
 
 export { createSemctxServer } from "./server";
@@ -13,16 +13,18 @@ export {
 } from "./reconciliation-tools";
 export { controlTargetProposeTool } from "./target-tools";
 
-/** Entry point: serve semctx over stdio for the current (or SEMCTX_ROOT) repository. */
-async function main(): Promise<void> {
-  const root = process.env["SEMCTX_ROOT"] ?? process.cwd();
-  const server = createSemctxServer(root);
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+/** Entry point: serve semctx over stdio, optionally pre-bound by SEMCTX_ROOT. */
+function main(): void {
+  const root = process.env["SEMCTX_ROOT"];
+  serveStdio(() => createSemctxServer(root), { legacy: "serve" });
   // stderr, so it never corrupts the stdio JSON-RPC channel.
-  process.stderr.write(`semctx MCP server ready (root: ${root})\n`);
+  process.stderr.write(
+    root === undefined
+      ? "semctx MCP server ready (root: pin-on-first-request)\n"
+      : `semctx MCP server ready (root: ${root})\n`,
+  );
 }
 
 if (import.meta.main) {
-  void main();
+  main();
 }
