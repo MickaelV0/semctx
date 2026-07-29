@@ -99,6 +99,9 @@ describe("shared agent workflow contract", () => {
       ["change_verify", ["semctx_change_verify"], "read_only", false, "after_edits"],
       ["handoff", ["semctx_handoff"], "working_state_write", true, "before_handoff"],
     ]);
+    expect(
+      contract.stages.find((stage) => stage.id === "inspect_repository")?.instruction,
+    ).toContain("semantic_context_present");
   });
 
   test("rejects stage drift, duplicate tool ownership and dishonest write effects", () => {

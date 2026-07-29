@@ -94,6 +94,14 @@ For a generic demonstration, it identifies the project's most critical functiona
 repository evidence, reconstructs its contracts and invariants, and selects a weakness only when it
 can prove one. Otherwise it reports the leading risk and missing proof instead of inventing work.
 
+Before substantial edits, the shared skill frames the highest broken contract from
+L6 strategy/constraints down through product intent, invariants, capabilities, boundaries and
+symbols to L0 sealed observed hunks. It records why the next higher level is healthy, why a
+lower-level patch would only move the symptom, and the smallest check able to falsify the
+diagnosis. Missing semantic links remain unknowns; neither `STALE` nor `UNSEALED` triggers an
+automatic reindex or reseal. For a diagnosis-only task, write-conditioned stages stay inactive and
+unavailable verdicts are reported as `not run` or `not applicable`.
+
 Typical tool sequence:
 
 1. Use normal Git/code search to find the implementation surface.

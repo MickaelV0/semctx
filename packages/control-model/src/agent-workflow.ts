@@ -161,7 +161,7 @@ export const AGENT_WORKFLOW_CONTRACT_V1 = AgentWorkflowContractV1Schema.parse({
       requiresUserWriteScope: false,
       condition: "always",
       instruction:
-        "Establish the repository state with normal code search and Git inspection. Do not use Semctx as a substitute for reading the code.",
+        "Establish the repository state with normal code search and Git inspection. Determine semantic_context_present only from repository evidence or an explicit user-provided identity, without initializing state. Do not use Semctx as a substitute for reading the code.",
     },
     {
       id: "semantic_check",
