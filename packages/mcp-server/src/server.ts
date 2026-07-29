@@ -1,7 +1,7 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer } from "@modelcontextprotocol/server";
 import packageJson from "../package.json";
-import { z } from "zod";
-import { isAbsolute, resolve } from "node:path";
+import { z } from "zod-v4";
+import { isAbsolute } from "node:path";
 import { prepareTaskTool, inspectTool, verifyChangeTool } from "./tools";
 import {
   semanticSliceTool,
@@ -53,15 +53,30 @@ import {
   type QualifiedCoordinateId,
   type SemanticLevel,
 } from "@semantic-context/control-model";
+import { mcpSchema } from "./schema-boundary";
+import { createRepositoryRootResolver } from "./repository-root";
+import { ToolRegistrar, type ToolRegistrarOptions } from "./tool-contract";
+import { registerControlExplorerApp } from "./control-explorer-app";
+
+const MCP_ATTESTATION_REQUEST_V1 = mcpSchema(AttestationRequestV1Schema);
+const MCP_ARCHITECTURE_DELTA = mcpSchema(ArchitectureDeltaSchema);
+const MCP_ARCHITECTURE_SNAPSHOT = mcpSchema(ArchitectureSnapshotSchema);
+const MCP_EXECUTION_STATE = mcpSchema(ExecutionStateSchema);
+const MCP_MIGRATION_PLAN = mcpSchema(MigrationPlanSchema);
+const MCP_MIGRATION_STATE = mcpSchema(MigrationStateSchema);
+const MCP_MIGRATION_STEP = mcpSchema(MigrationStepSchema);
+const MCP_PROOF_OBLIGATION = mcpSchema(ProofObligationSchema);
+const MCP_QUALIFIED_COORDINATE_ID = mcpSchema(QualifiedCoordinateIdSchema);
+const MCP_RISK_LEVEL = mcpSchema(RiskLevelSchema);
+const MCP_ROLLBACK_PLAN = mcpSchema(RollbackPlanSchema);
+const MCP_SEMANTIC_LEVEL = mcpSchema(SemanticLevelSchema);
+const MCP_SHA256_HASH = mcpSchema(Sha256HashSchema);
+const MCP_TRAVERSAL_DIRECTION = mcpSchema(TraversalDirectionSchema);
 
 const CHANGE_LIFECYCLE = z.enum(["draft", "active", "partial", "blocked", "stale", "superseded"]);
 const REPOSITORY_ROOT = z.string().min(1).refine(isAbsolute, "repositoryRoot must be absolute").describe(
   "absolute repository root; required on every call so plugin-cache launch directories cannot become implicit targets",
 );
-
-function requestRoot(_boundRoot: string, repositoryRoot: string): string {
-  return resolve(repositoryRoot);
-}
 
 interface TextResult {
   [key: string]: unknown;
@@ -79,11 +94,24 @@ function errorResult(err: unknown): TextResult {
 }
 
 /** Build the semctx MCP server bound to a repository root. */
-export function createSemctxServer(root: string): McpServer {
-  const server = new McpServer({ name: "semctx", version: packageJson.version });
+export function createSemctxServer(
+  root?: string,
+  options: ToolRegistrarOptions = {},
+): McpServer {
+  const rootResolver = createRepositoryRootResolver(root);
+  const server = new McpServer(
+    { name: "semctx", version: packageJson.version },
+    {
+      cacheHints: {
+        "tools/list": { ttlMs: 300_000, cacheScope: "private" },
+        "server/discover": { ttlMs: 300_000, cacheScope: "private" },
+      },
+    },
+  );
+  const tools = new ToolRegistrar(server, options);
 
   // --- Primary tool: change-impact analysis + verdict. Deterministic, marker-independent.
-  server.registerTool(
+  tools.registerTool(
     "semctx_verify_change",
     {
       title: "Verify a change (impact + verdict)",
@@ -96,14 +124,14 @@ export function createSemctxServer(root: string): McpServer {
     },
     async ({ repositoryRoot, gitDiff }) => {
       try {
-        return ok(verifyChangeTool(requestRoot(root, repositoryRoot), gitDiff !== undefined ? { gitDiff } : {}));
+        return ok(verifyChangeTool(rootResolver.resolve(repositoryRoot), gitDiff !== undefined ? { gitDiff } : {}));
       } catch (err) {
         return errorResult(err);
       }
     },
   );
 
-  server.registerTool(
+  tools.registerTool(
     "semctx_inspect",
     {
       title: "Inspect the repository graph",
@@ -120,7 +148,7 @@ export function createSemctxServer(root: string): McpServer {
     },
     async ({ repositoryRoot, query, kind }) => {
       try {
-        return ok(inspectTool(requestRoot(root, repositoryRoot), kind !== undefined ? { query, kind } : { query }));
+        return ok(inspectTool(rootResolver.resolve(repositoryRoot), kind !== undefined ? { query, kind } : { query }));
       } catch (err) {
         return errorResult(err);
       }
@@ -128,7 +156,7 @@ export function createSemctxServer(root: string): McpServer {
   );
 
   // --- Experimental: task -> ContextPack retriever. NOT a code-search replacement (ADR 0005).
-  server.registerTool(
+  tools.registerTool(
     "semctx_prepare_task",
     {
       title: "Prepare task context (experimental)",
@@ -145,7 +173,7 @@ export function createSemctxServer(root: string): McpServer {
     },
     async ({ repositoryRoot, task, mode }) => {
       try {
-        return ok(await prepareTaskTool(requestRoot(root, repositoryRoot), mode !== undefined ? { task, mode } : { task }));
+        return ok(await prepareTaskTool(rootResolver.resolve(repositoryRoot), mode !== undefined ? { task, mode } : { task }));
       } catch (err) {
         return errorResult(err);
       }
@@ -153,7 +181,7 @@ export function createSemctxServer(root: string): McpServer {
   );
 
   // --- Semantic layer (Plane B): authored intent, invariants, decisions, evidence, change contracts.
-  server.registerTool(
+  tools.registerTool(
     "semctx_semantic_check",
     {
       title: "Check semantic integrity and lifecycle",
@@ -169,14 +197,14 @@ export function createSemctxServer(root: string): McpServer {
     },
     async ({ repositoryRoot }) => {
       try {
-        return ok(semanticCheckTool(requestRoot(root, repositoryRoot)));
+        return ok(semanticCheckTool(rootResolver.resolve(repositoryRoot)));
       } catch (err) {
         return errorResult(err);
       }
     },
   );
 
-  server.registerTool(
+  tools.registerTool(
     "semctx_semantic_slice",
     {
       title: "Semantic slice (bounded context capsule)",
@@ -198,14 +226,14 @@ export function createSemctxServer(root: string): McpServer {
     },
     async ({ repositoryRoot, changeId, symbolRef, claimRef, maxNodes }) => {
       try {
-        return ok(semanticSliceTool(requestRoot(root, repositoryRoot), { ...(changeId !== undefined ? { changeId } : {}), ...(symbolRef !== undefined ? { symbolRef } : {}), ...(claimRef !== undefined ? { claimRef } : {}), ...(maxNodes !== undefined ? { maxNodes } : {}) }));
+        return ok(semanticSliceTool(rootResolver.resolve(repositoryRoot), { ...(changeId !== undefined ? { changeId } : {}), ...(symbolRef !== undefined ? { symbolRef } : {}), ...(claimRef !== undefined ? { claimRef } : {}), ...(maxNodes !== undefined ? { maxNodes } : {}) }));
       } catch (err) {
         return errorResult(err);
       }
     },
   );
 
-  server.registerTool(
+  tools.registerTool(
     "semctx_change_open",
     {
       title: "Open a change contract",
@@ -226,14 +254,14 @@ export function createSemctxServer(root: string): McpServer {
     },
     async (input) => {
       try {
-        return ok(changeOpenTool(requestRoot(root, input.repositoryRoot), input));
+        return ok(changeOpenTool(rootResolver.resolve(input.repositoryRoot), input));
       } catch (err) {
         return errorResult(err);
       }
     },
   );
 
-  server.registerTool(
+  tools.registerTool(
     "semctx_change_update",
     {
       title: "Update a change contract",
@@ -255,14 +283,14 @@ export function createSemctxServer(root: string): McpServer {
     },
     async (input) => {
       try {
-        return ok(changeUpdateTool(requestRoot(root, input.repositoryRoot), input));
+        return ok(changeUpdateTool(rootResolver.resolve(input.repositoryRoot), input));
       } catch (err) {
         return errorResult(err);
       }
     },
   );
 
-  server.registerTool(
+  tools.registerTool(
     "semctx_change_verify",
     {
       title: "Verify a change contract (composed)",
@@ -276,14 +304,14 @@ export function createSemctxServer(root: string): McpServer {
     },
     async ({ repositoryRoot, changeId, gitDiff }) => {
       try {
-        return ok(changeVerifyTool(requestRoot(root, repositoryRoot), gitDiff !== undefined ? { changeId, gitDiff } : { changeId }));
+        return ok(changeVerifyTool(rootResolver.resolve(repositoryRoot), gitDiff !== undefined ? { changeId, gitDiff } : { changeId }));
       } catch (err) {
         return errorResult(err);
       }
     },
   );
 
-  server.registerTool(
+  tools.registerTool(
     "semctx_change_close",
     {
       title: "Close a change contract",
@@ -298,7 +326,7 @@ export function createSemctxServer(root: string): McpServer {
     },
     async ({ repositoryRoot, id, superseded, gitDiff }) => {
       try {
-        return ok(changeCloseTool(requestRoot(root, repositoryRoot), {
+        return ok(changeCloseTool(rootResolver.resolve(repositoryRoot), {
           id,
           ...(superseded !== undefined ? { superseded } : {}),
           ...(gitDiff !== undefined ? { gitDiff } : {}),
@@ -309,7 +337,7 @@ export function createSemctxServer(root: string): McpServer {
     },
   );
 
-  server.registerTool(
+  tools.registerTool(
     "semctx_semantic_inspect",
     {
       title: "Inspect a semantic id",
@@ -322,14 +350,14 @@ export function createSemctxServer(root: string): McpServer {
     },
     async ({ repositoryRoot, id }) => {
       try {
-        return ok(semanticInspectTool(requestRoot(root, repositoryRoot), { id }));
+        return ok(semanticInspectTool(rootResolver.resolve(repositoryRoot), { id }));
       } catch (err) {
         return errorResult(err);
       }
     },
   );
 
-  server.registerTool(
+  tools.registerTool(
     "semctx_handoff",
     {
       title: "Capture a handoff capsule",
@@ -342,14 +370,14 @@ export function createSemctxServer(root: string): McpServer {
     },
     async ({ repositoryRoot, note }) => {
       try {
-        return ok(handoffTool(requestRoot(root, repositoryRoot), note !== undefined ? { note } : {}));
+        return ok(handoffTool(rootResolver.resolve(repositoryRoot), note !== undefined ? { note } : {}));
       } catch (err) {
         return errorResult(err);
       }
     },
   );
 
-  server.registerTool(
+  tools.registerTool(
     "semctx_resume",
     {
       title: "Resume from a handoff capsule",
@@ -365,7 +393,7 @@ export function createSemctxServer(root: string): McpServer {
     },
     async ({ repositoryRoot }) => {
       try {
-        return ok(resumeTool(requestRoot(root, repositoryRoot)));
+        return ok(resumeTool(rootResolver.resolve(repositoryRoot)));
       } catch (err) {
         return errorResult(err);
       }
@@ -373,7 +401,7 @@ export function createSemctxServer(root: string): McpServer {
   );
 
   // --- Control plane (Plane C): read-only coordinates and fail-closed migration planning.
-  server.registerTool(
+  tools.registerTool(
     "semctx_control_status",
     {
       title: "Check control-plane freshness",
@@ -389,14 +417,14 @@ export function createSemctxServer(root: string): McpServer {
     },
     async ({ repositoryRoot }) => {
       try {
-        return ok(controlStatusTool(requestRoot(root, repositoryRoot)));
+        return ok(controlStatusTool(rootResolver.resolve(repositoryRoot)));
       } catch (err) {
         return errorResult(err);
       }
     },
   );
 
-  server.registerTool(
+  tools.registerTool(
     "semctx_control_authority",
     {
       title: "Report the authority a change altitude requires",
@@ -419,14 +447,14 @@ export function createSemctxServer(root: string): McpServer {
     },
     async ({ repositoryRoot, requiredAltitude }) => {
       try {
-        return ok(controlAuthorityTool(requestRoot(root, repositoryRoot), requiredAltitude));
+        return ok(controlAuthorityTool(rootResolver.resolve(repositoryRoot), requiredAltitude));
       } catch (err) {
         return errorResult(err);
       }
     },
   );
 
-  server.registerTool(
+  tools.registerTool(
     "semctx_control_trace",
     {
       title: "Trace semantic coordinates",
@@ -440,16 +468,16 @@ export function createSemctxServer(root: string): McpServer {
       },
       inputSchema: {
         repositoryRoot: REPOSITORY_ROOT,
-        sourceId: QualifiedCoordinateIdSchema.describe("qualified coordinate id: repo:<id> or semantic:<id>"),
-        targetLevel: SemanticLevelSchema.optional().describe("target semantic level; defaults to L6 for lift and L0 for lower"),
-        direction: TraversalDirectionSchema.optional().describe("lift (default) or lower"),
+        sourceId: MCP_QUALIFIED_COORDINATE_ID.describe("qualified coordinate id: repo:<id> or semantic:<id>"),
+        targetLevel: MCP_SEMANTIC_LEVEL.optional().describe("target semantic level; defaults to L6 for lift and L0 for lower"),
+        direction: MCP_TRAVERSAL_DIRECTION.optional().describe("lift (default) or lower"),
         maxDepth: z.number().int().min(0).max(100).optional(),
         maxResults: z.number().int().min(1).max(10_000).optional(),
       },
     },
     async ({ repositoryRoot, sourceId, targetLevel, direction, maxDepth, maxResults }) => {
       try {
-        return ok(controlTraceTool(requestRoot(root, repositoryRoot), {
+        return ok(controlTraceTool(rootResolver.resolve(repositoryRoot), {
           sourceId: sourceId as QualifiedCoordinateId,
           ...(targetLevel !== undefined ? { targetLevel: targetLevel as SemanticLevel } : {}),
           ...(direction !== undefined ? { direction } : {}),
@@ -462,7 +490,7 @@ export function createSemctxServer(root: string): McpServer {
     },
   );
 
-  server.registerTool(
+  tools.registerTool(
     "semctx_control_graph",
     {
       title: "Read the typed coordinate graph",
@@ -472,14 +500,14 @@ export function createSemctxServer(root: string): McpServer {
     },
     async ({ repositoryRoot }) => {
       try {
-        return ok(controlGraphTool(requestRoot(root, repositoryRoot)));
+        return ok(controlGraphTool(rootResolver.resolve(repositoryRoot)));
       } catch (err) {
         return errorResult(err);
       }
     },
   );
 
-  server.registerTool(
+  tools.registerTool(
     "semctx_control_traversal",
     {
       title: "Traverse typed refinement",
@@ -487,16 +515,16 @@ export function createSemctxServer(root: string): McpServer {
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       inputSchema: {
         repositoryRoot: REPOSITORY_ROOT,
-        sourceId: z.union([QualifiedCoordinateIdSchema, Sha256HashSchema]),
-        targetLevel: SemanticLevelSchema,
-        direction: TraversalDirectionSchema,
+        sourceId: z.union([MCP_QUALIFIED_COORDINATE_ID, MCP_SHA256_HASH]),
+        targetLevel: MCP_SEMANTIC_LEVEL,
+        direction: MCP_TRAVERSAL_DIRECTION,
         maxDepth: z.number().int().min(0).max(100).optional(),
         maxResults: z.number().int().min(1).max(10_000).optional(),
       },
     },
     async ({ repositoryRoot, sourceId, targetLevel, direction, maxDepth, maxResults }) => {
       try {
-        return ok(controlTraversalTool(requestRoot(root, repositoryRoot), {
+        return ok(controlTraversalTool(rootResolver.resolve(repositoryRoot), {
           sourceId: sourceId as QualifiedCoordinateId | `sha256:${string}`,
           targetLevel: targetLevel as SemanticLevel,
           direction,
@@ -509,7 +537,7 @@ export function createSemctxServer(root: string): McpServer {
     },
   );
 
-  server.registerTool(
+  tools.registerTool(
     "semctx_control_refinement_coverage",
     {
       title: "Report refinement coverage",
@@ -517,18 +545,18 @@ export function createSemctxServer(root: string): McpServer {
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       inputSchema: {
         repositoryRoot: REPOSITORY_ROOT,
-        sourceId: z.union([QualifiedCoordinateIdSchema, Sha256HashSchema]),
-        targetLevel: SemanticLevelSchema,
-        direction: TraversalDirectionSchema,
-        sourceSeal: Sha256HashSchema.optional(),
-        indexSeal: Sha256HashSchema.optional(),
+        sourceId: z.union([MCP_QUALIFIED_COORDINATE_ID, MCP_SHA256_HASH]),
+        targetLevel: MCP_SEMANTIC_LEVEL,
+        direction: MCP_TRAVERSAL_DIRECTION,
+        sourceSeal: MCP_SHA256_HASH.optional(),
+        indexSeal: MCP_SHA256_HASH.optional(),
         maxDepth: z.number().int().min(0).max(100).optional(),
         maxResults: z.number().int().min(1).max(10_000).optional(),
       },
     },
     async ({ repositoryRoot, sourceId, targetLevel, direction, sourceSeal, indexSeal, maxDepth, maxResults }) => {
       try {
-        return ok(controlRefinementCoverageTool(requestRoot(root, repositoryRoot), {
+        return ok(controlRefinementCoverageTool(rootResolver.resolve(repositoryRoot), {
           sourceId: sourceId as QualifiedCoordinateId | `sha256:${string}`,
           targetLevel: targetLevel as SemanticLevel,
           direction,
@@ -543,7 +571,7 @@ export function createSemctxServer(root: string): McpServer {
     },
   );
 
-  server.registerTool(
+  tools.registerTool(
     "semctx_control_impact",
     {
       title: "Report structural impact",
@@ -551,14 +579,14 @@ export function createSemctxServer(root: string): McpServer {
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       inputSchema: {
         repositoryRoot: REPOSITORY_ROOT,
-        sourceIds: z.array(QualifiedCoordinateIdSchema).min(1),
+        sourceIds: z.array(MCP_QUALIFIED_COORDINATE_ID).min(1),
         maxDepth: z.number().int().min(0).max(100).optional(),
         maxResults: z.number().int().min(1).max(10_000).optional(),
       },
     },
     async ({ repositoryRoot, sourceIds, maxDepth, maxResults }) => {
       try {
-        return ok(controlImpactTool(requestRoot(root, repositoryRoot), {
+        return ok(controlImpactTool(rootResolver.resolve(repositoryRoot), {
           sourceIds: sourceIds as QualifiedCoordinateId[],
           ...(maxDepth !== undefined ? { maxDepth } : {}),
           ...(maxResults !== undefined ? { maxResults } : {}),
@@ -569,7 +597,7 @@ export function createSemctxServer(root: string): McpServer {
     },
   );
 
-  server.registerTool(
+  tools.registerTool(
     "semctx_control_explain_why",
     {
       title: "Explain authored rationale",
@@ -577,14 +605,14 @@ export function createSemctxServer(root: string): McpServer {
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       inputSchema: {
         repositoryRoot: REPOSITORY_ROOT,
-        sourceId: QualifiedCoordinateIdSchema,
+        sourceId: MCP_QUALIFIED_COORDINATE_ID,
         maxDepth: z.number().int().min(0).max(100).optional(),
         maxResults: z.number().int().min(1).max(10_000).optional(),
       },
     },
     async ({ repositoryRoot, sourceId, maxDepth, maxResults }) => {
       try {
-        return ok(controlExplainWhyTool(requestRoot(root, repositoryRoot), {
+        return ok(controlExplainWhyTool(rootResolver.resolve(repositoryRoot), {
           sourceId: sourceId as QualifiedCoordinateId,
           ...(maxDepth !== undefined ? { maxDepth } : {}),
           ...(maxResults !== undefined ? { maxResults } : {}),
@@ -595,7 +623,7 @@ export function createSemctxServer(root: string): McpServer {
     },
   );
 
-  server.registerTool(
+  tools.registerTool(
     "semctx_control_compare_architecture",
     {
       title: "Compare architecture snapshots",
@@ -603,13 +631,13 @@ export function createSemctxServer(root: string): McpServer {
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       inputSchema: {
         repositoryRoot: REPOSITORY_ROOT,
-        target: ArchitectureSnapshotSchema,
+        target: MCP_ARCHITECTURE_SNAPSHOT,
       },
     },
     async ({ repositoryRoot, target }) => {
       try {
         return ok(controlArchitectureComparisonTool(
-          requestRoot(root, repositoryRoot),
+          rootResolver.resolve(repositoryRoot),
           target as ArchitectureSnapshot,
         ));
       } catch (err) {
@@ -618,7 +646,7 @@ export function createSemctxServer(root: string): McpServer {
     },
   );
 
-  server.registerTool(
+  tools.registerTool(
     "control_authorize_transition",
     {
       title: "Report transition authorization",
@@ -626,28 +654,28 @@ export function createSemctxServer(root: string): McpServer {
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       inputSchema: {
         repositoryRoot: REPOSITORY_ROOT,
-        fromState: MigrationStateSchema,
-        toState: MigrationStateSchema,
-        risk: RiskLevelSchema,
+        fromState: MCP_MIGRATION_STATE,
+        toState: MCP_MIGRATION_STATE,
+        risk: MCP_RISK_LEVEL,
         subject: z.string().min(1),
         planningCommit: z.string().min(1),
         evaluatedAt: z.string().datetime({ offset: true }),
-        proofObligations: z.array(ProofObligationSchema),
-        rollback: RollbackPlanSchema.optional(),
+        proofObligations: z.array(MCP_PROOF_OBLIGATION),
+        rollback: MCP_ROLLBACK_PLAN.optional(),
         changesL4Invariant: z.boolean(),
-        attestationRequests: z.array(AttestationRequestV1Schema),
+        attestationRequests: z.array(MCP_ATTESTATION_REQUEST_V1),
       },
     },
     async ({ repositoryRoot, ...input }) => {
       try {
-        return ok(controlAuthorizeTransitionTool(requestRoot(root, repositoryRoot), input));
+        return ok(controlAuthorizeTransitionTool(rootResolver.resolve(repositoryRoot), input));
       } catch (err) {
         return errorResult(err);
       }
     },
   );
 
-  server.registerTool(
+  tools.registerTool(
     "control_authorize_step",
     {
       title: "Report step authorization",
@@ -655,17 +683,17 @@ export function createSemctxServer(root: string): McpServer {
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       inputSchema: {
         repositoryRoot: REPOSITORY_ROOT,
-        plan: MigrationPlanSchema,
-        step: MigrationStepSchema,
-        executionState: ExecutionStateSchema,
+        plan: MCP_MIGRATION_PLAN,
+        step: MCP_MIGRATION_STEP,
+        executionState: MCP_EXECUTION_STATE,
         evaluatedAt: z.string().datetime({ offset: true }),
-        attestationRequests: z.array(AttestationRequestV1Schema),
+        attestationRequests: z.array(MCP_ATTESTATION_REQUEST_V1),
       },
     },
     async ({ repositoryRoot, ...input }) => {
       try {
         return ok(controlAuthorizeStepTool(
-          requestRoot(root, repositoryRoot),
+          rootResolver.resolve(repositoryRoot),
           input as unknown as Parameters<typeof controlAuthorizeStepTool>[1],
         ));
       } catch (err) {
@@ -674,7 +702,7 @@ export function createSemctxServer(root: string): McpServer {
     },
   );
 
-  server.registerTool(
+  tools.registerTool(
     "control_authorize_deletion",
     {
       title: "Report deletion authorization",
@@ -685,19 +713,19 @@ export function createSemctxServer(root: string): McpServer {
         subject: z.string().min(1),
         planningCommit: z.string().min(1),
         evaluatedAt: z.string().datetime({ offset: true }),
-        attestationRequests: z.array(AttestationRequestV1Schema),
+        attestationRequests: z.array(MCP_ATTESTATION_REQUEST_V1),
       },
     },
     async ({ repositoryRoot, ...input }) => {
       try {
-        return ok(controlAuthorizeDeletionTool(requestRoot(root, repositoryRoot), input));
+        return ok(controlAuthorizeDeletionTool(rootResolver.resolve(repositoryRoot), input));
       } catch (err) {
         return errorResult(err);
       }
     },
   );
 
-  server.registerTool(
+  tools.registerTool(
     "semctx_control_plan",
     {
       title: "Compile a migration plan",
@@ -712,13 +740,13 @@ export function createSemctxServer(root: string): McpServer {
       inputSchema: {
         repositoryRoot: REPOSITORY_ROOT,
         changeId: z.string().min(1).describe("an authored change contract id"),
-        target: ArchitectureSnapshotSchema.optional().describe("explicit target architecture snapshot"),
-        delta: ArchitectureDeltaSchema.optional().describe("optional delta that must correspond to current and target snapshot ids"),
+        target: MCP_ARCHITECTURE_SNAPSHOT.optional().describe("explicit target architecture snapshot"),
+        delta: MCP_ARCHITECTURE_DELTA.optional().describe("optional delta that must correspond to current and target snapshot ids"),
       },
     },
     async ({ repositoryRoot, changeId, target, delta }) => {
       try {
-        return ok(controlPlanTool(requestRoot(root, repositoryRoot), {
+        return ok(controlPlanTool(rootResolver.resolve(repositoryRoot), {
           changeId,
           ...(target !== undefined ? { target: target as ArchitectureSnapshot } : {}),
           ...(delta !== undefined ? { delta: delta as ArchitectureDelta } : {}),
@@ -729,8 +757,9 @@ export function createSemctxServer(root: string): McpServer {
     },
   );
 
-  registerReconciliationTools(server, root);
-  registerTargetTools(server, root);
+  registerReconciliationTools(tools, rootResolver);
+  registerTargetTools(tools, rootResolver);
+  registerControlExplorerApp(server, tools, rootResolver);
 
   return server;
 }

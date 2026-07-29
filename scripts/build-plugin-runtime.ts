@@ -205,7 +205,9 @@ export async function buildPortableBundle(spec: BundleSpec): Promise<Uint8Array>
       `expected one bundled TypeScript path prelude in ${spec.label}, found ${preludeCount}`,
     );
   }
-  const portable = generated.replace(absoluteTypeScriptPrelude, portableTypeScriptPrelude);
+  const portable = generated
+    .replace(absoluteTypeScriptPrelude, portableTypeScriptPrelude)
+    .replace(/[ \t]+(?=\r?\n)/g, "");
   if (portable.includes(escapedRoot)) {
     throw new Error(`generated ${spec.label} still contains the build checkout path`);
   }
