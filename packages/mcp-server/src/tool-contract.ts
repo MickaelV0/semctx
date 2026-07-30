@@ -37,6 +37,7 @@ const TOOL_NAMES = [
   "semctx_resume",
   "semctx_index_health",
   "semctx_control_status",
+  "semctx_control_agent_lifecycle",
   "semctx_control_authority",
   "semctx_control_trace",
   "semctx_control_graph",
@@ -200,6 +201,7 @@ type ToolConfig<InputArgs extends z.ZodRawShape> = {
   title?: string;
   description?: string;
   inputSchema: InputArgs;
+  strictInput?: boolean;
   outputSchema?: z.ZodType;
   annotations?: ToolAnnotations;
   icons?: Array<Record<string, unknown>>;
@@ -349,8 +351,11 @@ function inputWithinPublicBudget(input: unknown): boolean {
 
 function prepareInputSchema<InputArgs extends z.ZodRawShape>(
   shape: InputArgs,
+  strictInput = false,
 ): PreparedInputSchema<InputArgs> {
-  const schema = z.object(shape);
+  const schema = strictInput
+    ? z.object(shape).strict()
+    : z.object(shape);
   const document = z.toJSONSchema(schema, {
     io: "input",
     target: "draft-2020-12",
@@ -401,8 +406,9 @@ export class ToolRegistrar {
     config: ToolConfig<InputArgs>,
     callback: ToolCallback<InputArgs>,
   ): RegisteredTool {
+    const { strictInput = false, ...toolConfig } = config;
     const outputSchema = config.outputSchema ?? TOOL_OUTPUT_SCHEMAS[name];
-    const inputSchema = prepareInputSchema(config.inputSchema);
+    const inputSchema = prepareInputSchema(config.inputSchema, strictInput);
     const configuredUi =
       typeof config._meta?.["ui"] === "object" && config._meta["ui"] !== null
         ? config._meta["ui"] as Record<string, unknown>
@@ -416,7 +422,7 @@ export class ToolRegistrar {
     return registerTool(
       name,
       {
-        ...config,
+        ...toolConfig,
         inputSchema: inputSchema.advertised,
         outputSchema,
         annotations: TOOL_EFFECTS[name],

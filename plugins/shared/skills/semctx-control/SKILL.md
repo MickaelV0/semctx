@@ -51,6 +51,10 @@ only in the final CLI ladder.
 
 {{SHARED_WORKFLOW_CONTRACT}}
 
+## Shared lifecycle checkpoints
+
+{{SHARED_LIFECYCLE_CONTRACT}}
+
 ## Verdict namespaces
 
 - **Plane A — diff impact:** `PASS`, `WARN`, `BLOCK`. `PASS` is a static policy result, not runtime proof. `WARN` needs attention but is not a failure. `BLOCK` must be resolved or explicitly disabled by user-owned policy.

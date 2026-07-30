@@ -216,6 +216,54 @@ describe("MCP 2026 public tool contract", () => {
     expect(calls).toBe(2);
   });
 
+  test("rejects unknown input fields before an opt-in strict handler can run", async () => {
+    const server = new McpServer(
+      { name: "strict-input-contract-test", version: "0.1.0" },
+    );
+    let calls = 0;
+    const tools = new ToolRegistrar(server);
+    tools.registerTool(
+      "semctx_control_status",
+      {
+        description: "Strict input contract.",
+        inputSchema: {
+          value: z.string(),
+        },
+        strictInput: true,
+        outputSchema: z.object({ value: z.string() }),
+      },
+      ({ value }) => {
+        calls += 1;
+        return {
+          content: [{ type: "text", text: JSON.stringify({ value }) }],
+        };
+      },
+    );
+    const client = new Client({
+      name: "strict-input-contract-client",
+      version: "0.1.0",
+    });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    servers.push(server);
+    clients.push(client);
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+
+    const result = await client.callTool({
+      name: "semctx_control_status",
+      arguments: { value: "accepted", ignored: true },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(
+      result.content.find((item) => item.type === "text")?.text ?? "{}",
+    )).toEqual({
+      code: "INVALID_ARGUMENTS",
+      error: "Tool arguments are invalid",
+    });
+    expect(calls).toBe(0);
+  });
+
   test("fails closed when a handler returns output outside its public schema", async () => {
     const server = new McpServer(
       { name: "invalid-output-contract-test", version: "0.1.0" },

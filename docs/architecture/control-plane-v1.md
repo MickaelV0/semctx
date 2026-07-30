@@ -291,6 +291,46 @@ The contract is deliberately advisory: `enforcementMode: "shadow"`, `blockingEna
 single strict policy into both host skills. Host-specific CLI resolution remains outside the
 machine contract and is generated separately.
 
+## Shared agent lifecycle checkpoint
+
+`AgentLifecyclePolicyV1` adds one strict, host-neutral stage-presence contract without changing
+`AgentWorkflowContractV1`. Codex and Claude Code expose it through the same read-only,
+MCP-only `semctx_control_agent_lifecycle` tool. Agents must invoke the tool explicitly:
+
+1. `before_implementation_write` before the first eligible L2+ implementation write;
+2. `after_repository_edits` after edits;
+3. `before_completion` before a completion claim;
+4. `before_compaction` before compaction or owner transfer.
+
+Each request supplies the `implementation` or `migration` profile, `requiredAltitude`, caller-recorded
+stage ids, prior touched coordinate ids, and newly observed touched coordinate ids. Pre-write L0-L1
+is not applicable. Pre-write L2-L6 requires the canonical preparation stages; migration also
+requires `target_propose`. Completion requires `reconcile_diff`, `verify_change`, and
+`change_verify`; compaction requires `handoff`. The after-edit checkpoint has no stage-presence
+requirement and folds touched coordinates.
+
+The presence verdicts have narrow meanings:
+
+- `NO_OP`: no stage-presence obligation applies;
+- `RECORDED`: every required stage id is caller-recorded;
+- `INCOMPLETE`: one or more required stage ids are missing.
+
+The report fixes `stageOutcomesEvaluated` to `false` and `admissibility` to `not_evaluated`.
+Recording a stage says nothing about its result, freshness, proof, or admissibility. A repository
+without Semctx is `non_semctx` and returns a true no-op with empty output arrays. A repository with
+Semctx markers but no ready index remains `semctx_unready`; it never collapses to `non_semctx`.
+
+Touched coordinates carry `touchEvidence: "caller_observed_advisory"` and
+`accumulationSemantics: "stateless_caller_reinjected_unbound"`. The caller must reinject prior ids.
+Semctx persists nothing and binds the fold to no task, session, diff, commit, or handoff. The tool
+is source-non-collecting: it does not collect source content or read source files to construct
+coordinate ids.
+
+Every report fixes `enforcementMode` to `shadow`, `blockingEnabled` to `false`, and
+`executionAuthority` to `none`. This foundation adds no automatic host lifecycle hooks, persisted
+or measured telemetry, Handoff v2, enforcement, executor, or CLI equivalent. The generated host
+instructions establish shared exposure and invocation guidance, not proof that a host event ran.
+
 ## Agent transports
 
 ```text
@@ -305,7 +345,8 @@ semctx control reconcile-diff <input.json> [--json]
 
 MCP exposes the equivalent `semctx_control_status`, `semctx_control_trace`, and
 `semctx_control_plan` tools, plus `semctx_control_target_propose`, `semctx_control_bind_scope`,
-`semctx_control_plan_change` and `semctx_control_reconcile_diff`. The older
+`semctx_control_plan_change`, `semctx_control_reconcile_diff`, and the MCP-only
+`semctx_control_agent_lifecycle` checkpoint. The older
 `frame-task`/`semctx_control_frame_task` surfaces retain their wider framing contract and are
 byte-compatible when given binding-only inputs. CLI and MCP call the same application services,
 validate the same strict schemas and serialize successful results with the same canonical byte

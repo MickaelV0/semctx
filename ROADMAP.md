@@ -190,6 +190,17 @@ positives, then enforce by risk/altitude.
       `autonomous` regime and a preflight that admits high-risk control, so stale or unsealed inputs
       withdraw it at every altitude. The report grants no execution authority. This satisfies the
       policy itself; the host adapters that must consume it remain open above and below.
+
+**Partial foundation, not P3 completion:** the MCP-only `semctx_control_agent_lifecycle` tool now
+exposes one strict policy and presence report to both hosts at four explicit invocation points:
+before the first eligible L2+ implementation write, after repository edits, before completion, and
+before compaction or owner transfer. It distinguishes a non-Semctx `NO_OP` from
+`semctx_unready`, reports `RECORDED` / `INCOMPLETE` for stage-id presence only, and folds
+`caller_observed_advisory` coordinates with `stateless_caller_reinjected_unbound` semantics.
+Outcomes and admissibility remain unevaluated. The tool is shadow-only, read-only, non-blocking,
+non-authorizing, and source-non-collecting. It adds no automatic lifecycle hooks, persisted or
+measured telemetry, Handoff v2, or enforcement; the rollout items below therefore remain open.
+
 - [ ] **Codex lifecycle integration** — route eligible prompts, preflight before the first L2+
       write, accumulate touched coordinates after edits, capture a sealed pre-compaction handoff,
       resume it, and reconcile/verify before Stop.

@@ -1,5 +1,6 @@
 import { z } from "zod-v4";
 import {
+  AgentLifecycleReportV1Schema,
   AltitudeAuthorityReportV1Schema,
   ArchitectureComparisonReportSchema,
   ControlFreshnessReasonSchema,
@@ -659,6 +660,7 @@ export const TOOL_OUTPUT_SCHEMAS = {
   semctx_resume: ResumeSchema,
   semctx_index_health: IndexHealthReportSchema,
   semctx_control_status: mcpSchema(ControlFreshnessStatusReportSchema),
+  semctx_control_agent_lifecycle: mcpSchema(AgentLifecycleReportV1Schema),
   semctx_control_authority: mcpSchema(AltitudeAuthorityReportV1Schema),
   semctx_control_trace: mcpSchema(TraversalReportV2Schema),
   semctx_control_graph: ControlGraphEnvelope,
