@@ -1,12 +1,21 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { SAMPLE_REPO } from "@semantic-context/test-fixtures";
+import type { AgentLifecycleCheckpointRequestV1 } from "@semantic-context/control-model";
 import { initSemanticScaffold, newChangeContract, writeChangeFile } from "@semantic-context/semantic-engine";
 import { initWorkspace } from "@semantic-context/repository-store";
-import { controlStatus, indexRepository, queryControlDeletionAuthorization, queryControlGraph } from "@semantic-context/app-services";
+import {
+  controlAgentLifecycleCheckpoint,
+  controlStatus,
+  indexRepository,
+  queryControlDeletionAuthorization,
+  queryControlGraph,
+} from "@semantic-context/app-services";
 import { controlAuthorizeDeletionTool, controlGraphTool, controlPlanTool, controlStatusTool, controlTraceTool } from "../src/control-tools";
+import { createSemctxServer } from "../src/server";
 
 let root: string;
 const CHANGE = "change.control-plane-mcp";
@@ -158,5 +167,231 @@ describe("MCP preflight on an unprojectable semantic model", () => {
       freshnessSeal: null,
     });
     expect(controlStatus(drifted)).toEqual(report);
+  });
+});
+
+const LIFECYCLE_TOOL = "semctx_control_agent_lifecycle";
+const lifecycleRequest: AgentLifecycleCheckpointRequestV1 = {
+  schemaVersion: 1,
+  checkpoint: "after_repository_edits",
+  profile: "implementation",
+  requiredAltitude: 2,
+  recordedStageIds: ["inspect_repository", "status"],
+  priorTouchedCoordinateIds: ["repo:zeta", "repo:alpha"],
+  newlyObservedTouchedCoordinateIds: ["semantic:beta", "repo:alpha"],
+};
+
+async function withMcpClient<T>(
+  boundRoot: string,
+  run: (client: Client) => Promise<T>,
+): Promise<T> {
+  const server = createSemctxServer(boundRoot);
+  const client = new Client({ name: "semctx-lifecycle-test", version: "0.1.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  try {
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    return await run(client);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+}
+
+async function expectLifecycleInvalidBeforeEvaluation(
+  client: Client,
+  request: unknown,
+): Promise<void> {
+  const result = await client.callTool({
+    name: LIFECYCLE_TOOL,
+    arguments: {
+      repositoryRoot: join(root, "missing"),
+      request,
+    },
+  });
+  expect(result.isError).toBe(true);
+  expect(result.content).toEqual([{
+    type: "text",
+    text: JSON.stringify({
+      code: "INVALID_ARGUMENTS",
+      error: "Tool arguments are invalid",
+    }),
+  }]);
+  expect(JSON.stringify(result)).not.toContain("agent_lifecycle_report");
+  expect(JSON.stringify(result)).not.toContain("reportHash");
+}
+
+describe("agent lifecycle MCP transport", () => {
+  it("advertises one strict top-level request with a strict shared nested schema", async () => {
+    await withMcpClient(root, async (client) => {
+      const tool = (await client.listTools()).tools.find(({ name }) => name === LIFECYCLE_TOOL);
+      expect(tool).toBeDefined();
+      expect(tool?.inputSchema).toMatchObject({
+        type: "object",
+        additionalProperties: false,
+        required: ["repositoryRoot", "request"],
+        properties: {
+          repositoryRoot: { type: "string" },
+          request: {
+            type: "object",
+            additionalProperties: false,
+            required: [
+              "schemaVersion",
+              "checkpoint",
+              "profile",
+              "requiredAltitude",
+              "recordedStageIds",
+              "priorTouchedCoordinateIds",
+              "newlyObservedTouchedCoordinateIds",
+            ],
+          },
+        },
+      });
+    });
+  });
+
+  it("rejects unknown top-level and nested authority/source/applicability fields before evaluation", async () => {
+    await withMcpClient(root, async (client) => {
+      const invalidCalls = [
+        {
+          repositoryRoot: join(root, "missing"),
+          request: lifecycleRequest,
+          unknownTopLevel: true,
+        },
+        {
+          repositoryRoot: join(root, "missing"),
+          request: { ...lifecycleRequest, executionAuthority: "none" },
+        },
+        {
+          repositoryRoot: join(root, "missing"),
+          request: { ...lifecycleRequest, sourceContentCollected: false },
+        },
+        {
+          repositoryRoot: join(root, "missing"),
+          request: { ...lifecycleRequest, applicability: "eligible" },
+        },
+      ];
+
+      for (const arguments_ of invalidCalls) {
+        const result = await client.callTool({
+          name: LIFECYCLE_TOOL,
+          arguments: arguments_,
+        });
+        expect(result.isError).toBe(true);
+        expect(result.content).toEqual([{
+          type: "text",
+          text: JSON.stringify({
+            code: "INVALID_ARGUMENTS",
+            error: "Tool arguments are invalid",
+          }),
+        }]);
+        expect(JSON.stringify(result)).not.toContain("reportHash");
+      }
+    });
+  });
+
+  it("requires an absolute repository root", async () => {
+    await withMcpClient(root, async (client) => {
+      const result = await client.callTool({
+        name: LIFECYCLE_TOOL,
+        arguments: { repositoryRoot: ".", request: lifecycleRequest },
+      });
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result.content)).toContain("INVALID_ARGUMENTS");
+      expect(JSON.stringify(result)).not.toContain("reportHash");
+    });
+  });
+
+  it("rejects invalid coordinate namespaces before lifecycle evaluation", async () => {
+    await withMcpClient(root, async (client) => {
+      await expectLifecycleInvalidBeforeEvaluation(client, {
+        ...lifecycleRequest,
+        newlyObservedTouchedCoordinateIds: ["file:not-a-lifecycle-coordinate"],
+      });
+    });
+  });
+
+  it("rejects whitespace and control characters in coordinate ids before lifecycle evaluation", async () => {
+    await withMcpClient(root, async (client) => {
+      for (const coordinateId of [" repo:leading-space", "repo:line\nbreak"]) {
+        await expectLifecycleInvalidBeforeEvaluation(client, {
+          ...lifecycleRequest,
+          newlyObservedTouchedCoordinateIds: [coordinateId],
+        });
+      }
+    });
+  });
+
+  it("rejects a 513-id accumulated union before lifecycle evaluation", async () => {
+    await withMcpClient(root, async (client) => {
+      await expectLifecycleInvalidBeforeEvaluation(client, {
+        ...lifecycleRequest,
+        priorTouchedCoordinateIds: Array.from(
+          { length: 512 },
+          (_, index) => `repo:prior-${index}`,
+        ),
+        newlyObservedTouchedCoordinateIds: ["semantic:new"],
+      });
+    });
+  });
+
+  it("returns the exact shared non-Semctx NO_OP report", async () => {
+    const nonSemctxRoot = mkdtempSync(join(tmpdir(), "semctx-lifecycle-no-op-"));
+    try {
+      await withMcpClient(nonSemctxRoot, async (client) => {
+        const result = await client.callTool({
+          name: LIFECYCLE_TOOL,
+          arguments: { repositoryRoot: nonSemctxRoot, request: lifecycleRequest },
+        });
+        const expected = controlAgentLifecycleCheckpoint(nonSemctxRoot, lifecycleRequest);
+        expect(result.isError).not.toBe(true);
+        expect(result.structuredContent).toEqual(expected);
+        expect(result.content).toEqual([{
+          type: "text",
+          text: JSON.stringify(expected, null, 2),
+        }]);
+        expect(expected).toMatchObject({
+          applicability: "not_applicable",
+          repositoryState: "non_semctx",
+          stagePresenceVerdict: "NO_OP",
+          reasonCodes: ["NON_SEMCTX_REPOSITORY"],
+          requiredStageIds: [],
+          recordedStageIds: [],
+          missingStageIds: [],
+          accumulatedTouchedCoordinateIds: [],
+          enforcementMode: "shadow",
+          blockingEnabled: false,
+          executionAuthority: "none",
+          sourceContentCollected: false,
+        });
+      });
+    } finally {
+      rmSync(nonSemctxRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("returns canonical identical content for permutation-equivalent calls", async () => {
+    await withMcpClient(root, async (client) => {
+      const first = await client.callTool({
+        name: LIFECYCLE_TOOL,
+        arguments: { repositoryRoot: root, request: lifecycleRequest },
+      });
+      const second = await client.callTool({
+        name: LIFECYCLE_TOOL,
+        arguments: {
+          repositoryRoot: root,
+          request: {
+            ...lifecycleRequest,
+            recordedStageIds: ["status", "inspect_repository"],
+            priorTouchedCoordinateIds: ["repo:alpha", "repo:zeta"],
+            newlyObservedTouchedCoordinateIds: ["repo:alpha", "semantic:beta"],
+          },
+        },
+      });
+      expect(first.isError).not.toBe(true);
+      expect(second.isError).not.toBe(true);
+      expect(second.content).toEqual(first.content);
+      expect(second.structuredContent).toEqual(first.structuredContent);
+    });
   });
 });

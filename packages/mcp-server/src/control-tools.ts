@@ -1,6 +1,7 @@
 /** Thin Plane C MCP transport over the shared application services. */
 
 import {
+  controlAgentLifecycleCheckpoint,
   controlAltitudeAuthority,
   controlStatus,
   indexHealth,
@@ -25,6 +26,8 @@ import {
   type IndexHealthReportV1,
 } from "@semantic-context/app-services";
 import type {
+  AgentLifecycleCheckpointRequestV1,
+  AgentLifecycleReportV1,
   AltitudeAuthorityReportV1,
   ArchitectureDelta,
   ArchitectureSnapshot,
@@ -56,6 +59,13 @@ export function controlAuthorityTool(
   requiredAltitude: 0 | 1 | 2 | 3 | 4 | 5 | 6,
 ): AltitudeAuthorityReportV1 {
   return controlAltitudeAuthority(root, requiredAltitude);
+}
+
+export function controlAgentLifecycleTool(
+  root: string,
+  request: AgentLifecycleCheckpointRequestV1,
+): AgentLifecycleReportV1 {
+  return controlAgentLifecycleCheckpoint(root, request);
 }
 
 export function controlStatusTool(root: string): ControlFreshnessStatusReport {
