@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -270,13 +271,14 @@ describe("controlAgentLifecycleCheckpoint", () => {
   it("reads only configuration and repository metadata, never repository source content", () => {
     const root = temporaryRoot();
     makeReady(root);
-    const source = join(root, "source.ts");
+    const canonicalRoot = realpathSync.native(root);
+    const source = join(canonicalRoot, "source.ts");
     const readSpy = spyOn(fs, "readFileSync");
 
     try {
       lifecycleService()(root, request());
       const readPaths = readSpy.mock.calls.map(([path]) => String(path));
-      expect(readPaths).toContain(configPath(root));
+      expect(readPaths).toContain(configPath(canonicalRoot));
       expect(readPaths).not.toContain(source);
     } finally {
       readSpy.mockRestore();
