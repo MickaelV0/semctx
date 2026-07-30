@@ -77,6 +77,41 @@ describe("private integrated Plane-A runtime", () => {
     expect(JSON.stringify(integrated.analysis.evidence)).toBe(JSON.stringify(legacy.evidence));
   });
 
+  it("merges TypeScript import specifiers that resolve to the same module", () => {
+    const root = repository();
+    write(
+      root,
+      "src/consumer.ts",
+      [
+        'import { first } from "./target";',
+        'import { second } from "./target.js";',
+        "export const value = first + second;",
+        "",
+      ].join("\n"),
+    );
+    write(
+      root,
+      "src/target.ts",
+      [
+        "export const first = 1;",
+        "export const second = 2;",
+        "",
+      ].join("\n"),
+    );
+    const config = v2(root);
+    const result = analyzePlaneARuntime(config, discoverRepository(config));
+    const importEdges = result.analysis.graph.edges.filter((edge) =>
+      edge.kind === "imports"
+      && edge.from === "mod:src/consumer.ts"
+      && edge.to === "mod:src/target.ts");
+
+    expect(importEdges).toHaveLength(1);
+    expect(importEdges[0]?.evidence.map((ref) => ref.startLine)).toEqual([1, 2]);
+    expect(importEdges[0]?.metadata).toEqual({
+      specifiers: '["./target","./target.js"]',
+    });
+  });
+
   it("keeps mixed-language source bindings stable across LF and CRLF checkout materialization", () => {
     const root = repository();
     const typescript = "export const value = 1;\nexport const next = value + 1;\n";
@@ -151,6 +186,43 @@ describe("private integrated Plane-A runtime", () => {
       .filter((batch) => batch.producer.identity === "@semantic-context/python-analyzer")
       .every((batch) => batch.facts.every((fact) =>
         fact.factType !== "node" || fact.kind !== "repository"))).toBe(true);
+  });
+
+  it("merges repeated Python imports between the same two modules", () => {
+    const root = repository();
+    write(
+      root,
+      "src/pkg/__init__.py",
+      [
+        "from ._result import HookCallError",
+        "from ._result import Result",
+        "",
+      ].join("\n"),
+    );
+    write(
+      root,
+      "src/pkg/_result.py",
+      [
+        "class HookCallError(Exception):",
+        "    pass",
+        "",
+        "class Result:",
+        "    pass",
+        "",
+      ].join("\n"),
+    );
+    const config = v2(root);
+    const result = analyzePlaneARuntime(config, discoverRepository(config));
+    const importEdges = result.analysis.graph.edges.filter((edge) =>
+      edge.kind === "imports"
+      && edge.from === "mod:src/pkg/__init__.py"
+      && edge.to === "mod:src/pkg/_result.py");
+
+    expect(importEdges).toHaveLength(1);
+    expect(importEdges[0]?.evidence.map((ref) => ref.startLine)).toEqual([1, 2]);
+    expect(importEdges[0]?.metadata).toEqual({
+      specifiers: '["._result:HookCallError","._result:Result"]',
+    });
   });
 
   it("does not resolve an absolute import by arbitrary repository-path suffix", () => {
