@@ -281,26 +281,28 @@ Design gate: [#57](https://github.com/hoklims/semctx/issues/57) and
 the capability, scope, authority, compatibility and conformance rules only. It does not change
 runtime behaviour, stabilize an adapter API or ship multi-language support.
 
-These follow-ups are dependency-ordered; each owner is currently **unassigned**.
+These follow-ups were delivered in dependency order by
+[#67](https://github.com/hoklims/semctx/pull/67). Their acceptance records remain linked below;
+delivery keeps the adapter seam private and provisional rather than declaring it stable.
 
-1. [ ] **F1 — provisional language-neutral boundary and TypeScript golden equivalence**
+1. [x] **F1 — provisional language-neutral boundary and TypeScript golden equivalence**
    ([#58](https://github.com/hoklims/semctx/issues/58)) — depends on #57. Extract the smallest
    internal capability/fact-batch seam while keeping it provisional. **Gate:** the current
    TypeScript fixture remains byte-identical for graph, evidence, claims, verification and
    analysis-input fingerprint. **Stop:** any unapproved TypeScript golden drift or attempt to
    stabilize the adapter API.
-2. [ ] **F2 — real include/exclude selection with explicit compatibility**
+2. [x] **F2 — real include/exclude selection with explicit compatibility**
    ([#59](https://github.com/hoklims/semctx/issues/59)) — depends on F1. Apply deterministic
    include/exclude precedence and ledger every candidate disposition. Preserve current selection
    for legacy configurations; any changed scope/hash must be an explicit opt-in or versioned
    migration. **Stop:** any silent graph shrink.
-3. [ ] **F3 — manifest-evidenced workspaces, versioned containment and separate `IndexHealth`**
+3. [x] **F3 — manifest-evidenced workspaces, versioned containment and separate `IndexHealth`**
    ([#60](https://github.com/hoklims/semctx/issues/60)) — depends on F2. Admit workspace units only
    from explicit manifest/workspace evidence, add versioned `contained_in_workspace` and
    `workspace_member_of` relations, and keep analysis coverage/health separate from freshness.
    **Stop:** layout-only membership, invalid containment cardinality/parents/cycles, a synthetic
    root package, ambiguity, legacy `belongs_to` drift or collapsed freshness/health.
-4. [ ] **F4 — first real second-language vertical and corpus gate**
+4. [x] **F4 — first real second-language vertical and corpus gate**
    ([#61](https://github.com/hoklims/semctx/issues/61)) — depends on F1-F3. Exercise the model with
    one real second-language analyzer using a deterministic unit fixture, a mixed-language
    workspace fixture and a repository snapshot pinned to commit and producer version. **Gate:** it
