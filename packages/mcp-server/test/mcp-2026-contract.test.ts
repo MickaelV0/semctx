@@ -4,8 +4,13 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { McpServer } from "@modelcontextprotocol/server";
+import { SemctxError } from "@semantic-context/core";
+import { z } from "zod-v4";
 import { createSemctxServer } from "../src/server";
-import { ToolRegistrar } from "../src/tool-contract";
+import {
+  ToolRegistrar,
+  type ToolFailureDiagnostic,
+} from "../src/tool-contract";
 
 type RequestTrace = {
   traceparent?: string;
@@ -15,7 +20,8 @@ type RequestTrace = {
 type SemctxServerFactory = (
   root?: string,
   options?: {
-    onRequestContext?: (trace: RequestTrace) => void;
+    onRequestContext?: (trace: RequestTrace) => unknown;
+    onInternalDiagnostic?: (event: ToolFailureDiagnostic) => unknown;
   },
 ) => McpServer;
 
@@ -143,6 +149,73 @@ describe("MCP 2026 public tool contract", () => {
     );
   });
 
+  test("preserves Zod parsing behind the pass-through SDK schema", async () => {
+    const server = new McpServer(
+      { name: "input-parsing-contract-test", version: "0.1.0" },
+    );
+    let calls = 0;
+    const tools = new ToolRegistrar(server);
+    tools.registerTool(
+      "semctx_control_status",
+      {
+        description: "Input parsing contract.",
+        inputSchema: {
+          value: z.string().trim().default("fallback"),
+        },
+        outputSchema: z.object({ value: z.string() }),
+      },
+      ({ value }) => {
+        calls += 1;
+        return {
+          content: [{ type: "text", text: JSON.stringify({ value }) }],
+        };
+      },
+    );
+    const client = new Client({
+      name: "input-parsing-contract-client",
+      version: "0.1.0",
+    });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    servers.push(server);
+    clients.push(client);
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+
+    const defaulted = await client.callTool({
+      name: "semctx_control_status",
+      arguments: {},
+    });
+    const transformed = await client.callTool({
+      name: "semctx_control_status",
+      arguments: { value: "  parsed  ", ignored: true },
+    });
+    const invalid = await client.callTool({
+      name: "semctx_control_status",
+      arguments: { value: 7 },
+    });
+    const overBudget = await client.callTool({
+      name: "semctx_control_status",
+      arguments: { ["k".repeat(1_025)]: true },
+    });
+
+    expect(defaulted.structuredContent).toEqual({ value: "fallback" });
+    expect(transformed.structuredContent).toEqual({ value: "parsed" });
+    expect(invalid.isError).toBe(true);
+    expect(JSON.parse(
+      invalid.content.find((item) => item.type === "text")?.text ?? "{}",
+    )).toEqual({
+      code: "INVALID_ARGUMENTS",
+      error: "Tool arguments are invalid",
+    });
+    expect(JSON.parse(
+      overBudget.content.find((item) => item.type === "text")?.text ?? "{}",
+    )).toEqual({
+      code: "INVALID_ARGUMENTS",
+      error: "Tool arguments are invalid",
+    });
+    expect(calls).toBe(2);
+  });
+
   test("fails closed when a handler returns output outside its public schema", async () => {
     const server = new McpServer(
       { name: "invalid-output-contract-test", version: "0.1.0" },
@@ -172,11 +245,340 @@ describe("MCP 2026 public tool contract", () => {
       name: "semctx_control_status",
       arguments: {},
     });
+    const text = result.content.find((item) => item.type === "text");
+    const payload = JSON.parse(
+      text?.type === "text" ? text.text : "{}",
+    );
 
     expect(result.isError).toBe(true);
-    expect(JSON.stringify(result.content)).toContain(
-      "does not match its public schema",
+    expect(result.structuredContent).toBeUndefined();
+    expect(payload).toEqual({
+      code: "INVALID_OUTPUT",
+      error: "Tool output did not match its public contract",
+    });
+  });
+
+  test("does not expose output-validation diagnostics", async () => {
+    const server = new McpServer(
+      { name: "bounded-output-validation-contract-test", version: "0.1.0" },
     );
+    const observed: ToolFailureDiagnostic[] = [];
+    const tools = new ToolRegistrar(server, {
+      onInternalDiagnostic: (event) => observed.push(event),
+    });
+    tools.registerTool(
+      "semctx_control_status",
+      {
+        description: "Deliberately invalid output with an oversized schema diagnostic.",
+        inputSchema: {},
+        outputSchema: z.object({
+          expected: z.string().refine(
+            () => false,
+            `secret-output-diagnostic-${"\u0000".repeat(10_000)}`,
+          ),
+        }),
+      },
+      () => ({
+        content: [{
+          type: "text",
+          text: JSON.stringify({ expected: "value" }),
+        }],
+      }),
+    );
+    const client = new Client({
+      name: "bounded-output-validation-contract-client",
+      version: "0.1.0",
+    });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    servers.push(server);
+    clients.push(client);
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+
+    const result = await client.callTool({
+      name: "semctx_control_status",
+      arguments: {},
+    });
+    const text = result.content.find((item) => item.type === "text");
+    const serialized = text?.type === "text" ? text.text : "";
+    const payload = JSON.parse(serialized) as {
+      code?: unknown;
+      error?: unknown;
+    };
+
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toBeUndefined();
+    expect(serialized.length).toBeLessThanOrEqual(4_096);
+    expect(payload).toEqual({
+      code: "INVALID_OUTPUT",
+      error: "Tool output did not match its public contract",
+    });
+    expect(serialized).not.toContain("secret-output-diagnostic");
+    expect(JSON.stringify(
+      (observed[0]?.cause as Error | undefined)?.cause,
+    )).toContain("secret-output-diagnostic");
+  });
+
+  test("keeps raw handler diagnostics on the internal observer only", async () => {
+    const server = new McpServer(
+      { name: "handler-error-contract-test", version: "0.1.0" },
+    );
+    const observed: ToolFailureDiagnostic[] = [];
+    const tools = new ToolRegistrar(server, {
+      onInternalDiagnostic: (event) => observed.push(event),
+    });
+    tools.registerTool(
+      "semctx_control_status",
+      {
+        description: "Deliberately throwing handler used to lock the shared error boundary.",
+        inputSchema: {},
+      },
+      () => {
+        throw new Error(
+          "secret-handler-failure C:\\private\\token.txt /private/token.txt",
+        );
+      },
+    );
+    const client = new Client({
+      name: "handler-error-contract-client",
+      version: "0.1.0",
+    });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    servers.push(server);
+    clients.push(client);
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+
+    const result = await client.callTool({
+      name: "semctx_control_status",
+      arguments: {},
+    });
+
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(
+      result.content.find((item) => item.type === "text")?.text ?? "{}",
+    )).toEqual({
+      code: "INTERNAL_ERROR",
+      error: "The tool could not complete the request",
+    });
+    expect(observed).toHaveLength(1);
+    expect(observed[0]?.phase).toBe("handler");
+    expect((observed[0]?.cause as Error).message).toContain(
+      "secret-handler-failure",
+    );
+  });
+
+  test("normalizes hostile thrown values without escaping the boundary", async () => {
+    const server = new McpServer(
+      { name: "hostile-handler-error-contract-test", version: "0.1.0" },
+    );
+    const tools = new ToolRegistrar(server);
+    tools.registerTool(
+      "semctx_control_status",
+      {
+        description: "Hostile thrown values used to lock the shared error boundary.",
+        inputSchema: {
+          variant: z.enum([
+            "primitive",
+            "non_string_message",
+            "proxy_prototype_trap",
+            "throwing_message_getter",
+            "throwing_to_string",
+          ]),
+        },
+      },
+      ({ variant }) => {
+        if (variant === "primitive") {
+          throw "primitive failure";
+        }
+        if (variant === "non_string_message") {
+          const malformed = new Error("ignored");
+          Object.defineProperty(malformed, "message", { value: 7 });
+          throw malformed;
+        }
+        if (variant === "proxy_prototype_trap") {
+          throw new Proxy({}, {
+            getPrototypeOf(): never {
+              throw new Error(
+                "SECRET_PROXY_TRAP C:\\private\\token /private/token",
+              );
+            },
+          });
+        }
+        if (variant === "throwing_message_getter") {
+          const malformed = new Error("ignored");
+          Object.defineProperty(malformed, "message", {
+            get(): never {
+              throw new Error("hidden message getter failure");
+            },
+          });
+          throw malformed;
+        }
+        throw {
+          toString(): string {
+            throw new Error("hidden conversion failure");
+          },
+        };
+      },
+    );
+    const client = new Client({
+      name: "hostile-handler-error-contract-client",
+      version: "0.1.0",
+    });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    servers.push(server);
+    clients.push(client);
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+
+    for (const variant of [
+      "primitive",
+      "non_string_message",
+      "proxy_prototype_trap",
+      "throwing_message_getter",
+      "throwing_to_string",
+    ] as const) {
+      const result = await client.callTool({
+        name: "semctx_control_status",
+        arguments: { variant },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).toBeUndefined();
+      expect(JSON.parse(
+        result.content.find((item) => item.type === "text")?.text ?? "{}",
+      )).toEqual({
+        code: "INTERNAL_ERROR",
+        error: "The tool could not complete the request",
+      });
+    }
+  });
+
+  test("rejects handler-authored error results even when diagnostics fail", async () => {
+    const server = new McpServer(
+      { name: "forged-handler-error-contract-test", version: "0.1.0" },
+    );
+    const tools = new ToolRegistrar(server, {
+      onInternalDiagnostic: async () => {
+        throw new Error("diagnostic observer failure");
+      },
+    });
+    tools.registerTool(
+      "semctx_control_status",
+      {
+        description: "A forged handler error must not become public text.",
+        inputSchema: {},
+      },
+      () => ({
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            error: "secret forged error C:\\private\\token.txt",
+          }),
+        }],
+        isError: true,
+      }) as never,
+    );
+    const client = new Client({
+      name: "forged-handler-error-contract-client",
+      version: "0.1.0",
+    });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    servers.push(server);
+    clients.push(client);
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+
+    const result = await client.callTool({
+      name: "semctx_control_status",
+      arguments: {},
+    });
+
+    expect(result.isError).toBe(true);
+    const serialized =
+      result.content.find((item) => item.type === "text")?.text ?? "";
+    expect(JSON.parse(serialized)).toEqual({
+      code: "INTERNAL_ERROR",
+      error: "The tool could not complete the request",
+    });
+    expect(serialized).not.toContain("secret forged error");
+  });
+
+  test("maps SemctxError codes without exposing their diagnostic messages", async () => {
+    const server = new McpServer(
+      { name: "semctx-error-contract-test", version: "0.1.0" },
+    );
+    const observed: ToolFailureDiagnostic[] = [];
+    const tools = new ToolRegistrar(server, {
+      onInternalDiagnostic: (event) => observed.push(event),
+    });
+    tools.registerTool(
+      "semctx_control_status",
+      {
+        description: "SemctxError sanitization contract.",
+        inputSchema: {},
+      },
+      () => {
+        throw new SemctxError(
+          "STORE_ERROR",
+          "secret store path C:\\private\\semctx.db",
+        );
+      },
+    );
+    const client = new Client({
+      name: "semctx-error-contract-client",
+      version: "0.1.0",
+    });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    servers.push(server);
+    clients.push(client);
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+
+    const result = await client.callTool({
+      name: "semctx_control_status",
+      arguments: {},
+    });
+    const serialized =
+      result.content.find((item) => item.type === "text")?.text ?? "";
+
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(serialized)).toEqual({
+      code: "STORE_ERROR",
+      error: "Repository state is unavailable",
+    });
+    expect(serialized).not.toContain("C:\\private");
+    expect(observed).toHaveLength(1);
+    expect((observed[0]?.cause as SemctxError).message).toContain(
+      "secret store path",
+    );
+  });
+
+  test("normalizes oversized invalid input before a handler can run", async () => {
+    const root = temporaryRoot("invalid-input");
+    const observed: ToolFailureDiagnostic[] = [];
+    const client = await connect(root, {
+      onInternalDiagnostic: (event) => observed.push(event),
+    });
+
+    const result = await client.callTool({
+      name: "semctx_control_impact",
+      arguments: {
+        repositoryRoot: root,
+        sourceIds: Array.from({ length: 1_000 }, () => ({ invalid: true })),
+      },
+    });
+    const serialized =
+      result.content.find((item) => item.type === "text")?.text ?? "";
+
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toBeUndefined();
+    expect(serialized.length).toBeLessThanOrEqual(4_096);
+    expect(JSON.parse(serialized)).toEqual({
+      code: "INVALID_ARGUMENTS",
+      error: "Tool arguments are invalid",
+    });
+    expect(observed).toHaveLength(1);
   });
 });
 
@@ -193,6 +595,33 @@ describe("MCP 2026 repository-root confinement", () => {
 
     expect(result.isError).toBe(true);
     expect(JSON.stringify(result.content)).toContain("repository root");
+  });
+
+  test("does not expose an invalid repository path", async () => {
+    const boundRoot = temporaryRoot("path-leak-bound");
+    const secretMarker = "token-should-not-cross-mcp";
+    const missingRoot = join(boundRoot, secretMarker, "missing");
+    const observed: ToolFailureDiagnostic[] = [];
+    const client = await connect(boundRoot, {
+      onInternalDiagnostic: (event) => observed.push(event),
+    });
+
+    const result = await client.callTool({
+      name: "semctx_control_status",
+      arguments: { repositoryRoot: missingRoot },
+    });
+    const serialized =
+      result.content.find((item) => item.type === "text")?.text ?? "";
+
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(serialized)).toEqual({
+      code: "REPOSITORY_ROOT_UNAVAILABLE",
+      error: "repository root does not exist or is not accessible",
+    });
+    expect(serialized).not.toContain(secretMarker);
+    expect(JSON.stringify(
+      (observed[0]?.cause as Error | undefined)?.cause,
+    )).toContain(secretMarker);
   });
 
   test("pins an unbound server to the first request root and rejects a second root", async () => {
@@ -241,6 +670,34 @@ describe("MCP 2026 repository-root confinement", () => {
 });
 
 describe("MCP 2026 request tracing boundary", () => {
+  test("keeps request observers advisory when they fail", async () => {
+    const root = temporaryRoot("trace-observer-failure");
+    const diagnostics: ToolFailureDiagnostic[] = [];
+    const client = await connect(root, {
+      onRequestContext: async () => {
+        throw new Error("secret trace observer failure");
+      },
+      onInternalDiagnostic: (event) => diagnostics.push(event),
+    });
+
+    const result = await client.callTool({
+      name: "semctx_semantic_check",
+      arguments: { repositoryRoot: root },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(result.isError).not.toBe(true);
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.phase).toBe("request_context");
+    expect((diagnostics[0]?.cause as Error).message).toContain(
+      "secret trace observer failure",
+    );
+    expect(JSON.stringify(result.content)).not.toContain(
+      "secret trace observer failure",
+    );
+  });
+
   test("makes traceparent and tracestate observable to the injected request hook", async () => {
     const root = temporaryRoot("trace");
     const observed: RequestTrace[] = [];

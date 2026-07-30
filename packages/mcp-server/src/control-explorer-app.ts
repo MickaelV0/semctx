@@ -74,32 +74,21 @@ export function registerControlExplorerApp(
         },
       },
     },
-    async ({ repositoryRoot, maxNodes, maxEdges }) => {
-      try {
-        const snapshot = controlExplorerTool(
-          rootResolver.resolve(repositoryRoot),
-          {
-            ...(maxNodes === undefined ? {} : { maxNodes }),
-            ...(maxEdges === undefined ? {} : { maxEdges }),
-          },
-        );
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify(snapshot, null, 2),
-          }],
-          structuredContent: snapshot,
-        };
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({ error: message }),
-          }],
-          isError: true,
-        };
-      }
+    ({ repositoryRoot, maxNodes, maxEdges }) => {
+      const snapshot = controlExplorerTool(
+        rootResolver.resolve(repositoryRoot),
+        {
+          ...(maxNodes === undefined ? {} : { maxNodes }),
+          ...(maxEdges === undefined ? {} : { maxEdges }),
+        },
+      );
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify(snapshot, null, 2),
+        }],
+        structuredContent: snapshot,
+      };
     },
   );
 }

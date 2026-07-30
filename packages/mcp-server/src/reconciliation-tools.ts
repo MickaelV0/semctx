@@ -47,7 +47,6 @@ const REPOSITORY_ROOT = z.string().min(1).refine(
 interface TextResult {
   [key: string]: unknown;
   content: Array<{ type: "text"; text: string }>;
-  isError?: boolean;
 }
 
 export function controlFrameTaskTool(
@@ -101,16 +100,10 @@ export function registerReconciliationTools(
         command: MCP_BIND_TASK_SCOPE_COMMAND_V1,
       },
     },
-    async ({ repositoryRoot, command }) => {
-      try {
-        return canonical(controlBindScopeTool(
-          rootResolver.resolve(repositoryRoot),
-          command as BindTaskScopeCommandV1,
-        ));
-      } catch (error) {
-        return errorResult(error);
-      }
-    },
+    ({ repositoryRoot, command }) => canonical(controlBindScopeTool(
+      rootResolver.resolve(repositoryRoot),
+      command as BindTaskScopeCommandV1,
+    )),
   );
 
   tools.registerTool(
@@ -130,16 +123,10 @@ export function registerReconciliationTools(
         command: MCP_PREPARE_TASK_ENVELOPE_COMMAND_V1,
       },
     },
-    async ({ repositoryRoot, command }) => {
-      try {
-        return canonical(controlFrameTaskTool(
-          rootResolver.resolve(repositoryRoot),
-          command as PrepareTaskEnvelopeCommandV1,
-        ));
-      } catch (error) {
-        return errorResult(error);
-      }
-    },
+    ({ repositoryRoot, command }) => canonical(controlFrameTaskTool(
+      rootResolver.resolve(repositoryRoot),
+      command as PrepareTaskEnvelopeCommandV1,
+    )),
   );
 
   tools.registerTool(
@@ -159,16 +146,10 @@ export function registerReconciliationTools(
         command: MCP_BUILD_PLANNING_BUNDLE_COMMAND_V1,
       },
     },
-    async ({ repositoryRoot, command }) => {
-      try {
-        return canonical(controlPlanChangeTool(
-          rootResolver.resolve(repositoryRoot),
-          command as BuildPlanningBundleCommandV1,
-        ));
-      } catch (error) {
-        return errorResult(error);
-      }
-    },
+    ({ repositoryRoot, command }) => canonical(controlPlanChangeTool(
+      rootResolver.resolve(repositoryRoot),
+      command as BuildPlanningBundleCommandV1,
+    )),
   );
 
   tools.registerTool(
@@ -188,27 +169,13 @@ export function registerReconciliationTools(
         input: MCP_RECONCILE_WORKING_TREE_INPUT_V1,
       },
     },
-    async ({ repositoryRoot, input }) => {
-      try {
-        return canonical(controlReconcileDiffTool(
-          rootResolver.resolve(repositoryRoot),
-          input as ReconcileWorkingTreeInputV1,
-        ));
-      } catch (error) {
-        return errorResult(error);
-      }
-    },
+    ({ repositoryRoot, input }) => canonical(controlReconcileDiffTool(
+      rootResolver.resolve(repositoryRoot),
+      input as ReconcileWorkingTreeInputV1,
+    )),
   );
 }
 
 function canonical(value: unknown): TextResult {
   return { content: [{ type: "text", text: serializeControlReport(value) }] };
-}
-
-function errorResult(error: unknown): TextResult {
-  const message = error instanceof Error ? error.message : String(error);
-  return {
-    content: [{ type: "text", text: JSON.stringify({ error: message }) }],
-    isError: true,
-  };
 }
