@@ -13,6 +13,7 @@ import {
   type SemctxConfig,
 } from "@semantic-context/core";
 import {
+  addAggregatedImportEdges,
   attachPlaneASidecar,
   canonicalSourceText,
   DeterministicGraphAssembler,
@@ -23,6 +24,7 @@ import {
   type CapabilityProfile,
   type DiscoveryLedgerEntry,
   type FactBatchV1,
+  type ImportEdgeOccurrence,
   type PlaneAFact,
   type PlaneASidecarV1,
   type ProducerIdentity,
@@ -438,6 +440,7 @@ function buildPythonFacts(
   }
 
   const unresolvedByPath = new Map<string, string[]>();
+  const resolvedImportEdges: ImportEdgeOccurrence[] = [];
   for (const item of extraction.imports) {
     const fromId = moduleIds.get(item.fromRelPath);
     if (fromId === undefined) continue;
@@ -452,13 +455,20 @@ function buildPythonFacts(
     }
     const toId = moduleIds.get(targetPath);
     if (toId === undefined || toId === fromId) continue;
-    builder.edge("imports", fromId, toId, [{
+    const evidence: EvidenceRef = {
       filePath: item.fromRelPath,
       startLine: item.range.startLine,
       endLine: item.range.endLine,
       sourceKind: filesByPath.get(item.fromRelPath)?.role === "test" ? "test" : "code",
-    }], { specifier: importDescriptor(item) });
+    };
+    resolvedImportEdges.push({
+      from: fromId,
+      to: toId,
+      evidence: [evidence],
+      specifier: importDescriptor(item),
+    });
   }
+  addAggregatedImportEdges(builder, resolvedImportEdges);
 
   const factsByPath = new Map<string, PlaneAFact[]>();
   for (const fact of builder.facts()) {

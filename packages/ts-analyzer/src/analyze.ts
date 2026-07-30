@@ -23,6 +23,7 @@ import type {
   EvidenceRecord,
 } from "@semantic-context/core";
 import {
+  addAggregatedImportEdges,
   DeterministicGraphAssembler,
   assertStableCapture,
   attachPlaneASidecar,
@@ -31,6 +32,7 @@ import {
   type ArtifactScope,
   type CapabilityProfile,
   type FactBatchV1,
+  type ImportEdgeOccurrence,
   type PlaneASidecarV1,
   type ProducerIdentity,
 } from "@semantic-context/plane-a-internal";
@@ -132,16 +134,21 @@ export function analyzeRepository(config: SemctxConfig, discoveredFiles?: readon
   }
 
   // Import edges.
+  const importEdges: ImportEdgeOccurrence[] = [];
   for (const imp of extraction.imports) {
     const fromId = nodeIdByRel.get(imp.fromRelPath);
     if (fromId === undefined) continue;
     if (imp.resolvedRelPath === undefined) continue;
     const toId = nodeIdByRel.get(imp.resolvedRelPath);
     if (toId === undefined) continue;
-    builder.edge("imports", fromId, toId, SYMBOL_EDGE_EVIDENCE(imp.fromRelPath, imp.line, "code"), {
+    importEdges.push({
+      from: fromId,
+      to: toId,
+      evidence: SYMBOL_EDGE_EVIDENCE(imp.fromRelPath, imp.line, "code"),
       specifier: imp.moduleSpecifier,
     });
   }
+  addAggregatedImportEdges(builder, importEdges);
 
   // Call edges between resolved symbols (best-effort static).
   for (const call of extraction.calls) {

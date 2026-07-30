@@ -4,12 +4,14 @@
  * This package is private and intentionally not re-exported from any public package.
  */
 export {
+  addAggregatedImportEdges,
   DeterministicGraphAssembler,
   PlaneAAssemblyError,
   assembleFactBatches,
 } from "./assembler";
 export type {
   AssembledPlaneA,
+  ImportEdgeOccurrence,
   PlaneAAssemblyErrorCode,
 } from "./assembler";
 export { canonicalJson, canonicalSourceText, digestCanonical } from "./canonical";

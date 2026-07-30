@@ -33,6 +33,13 @@ export interface AssembledPlaneA {
   evidence: EvidenceRecord[];
 }
 
+export interface ImportEdgeOccurrence {
+  readonly from: string;
+  readonly to: string;
+  readonly evidence: readonly EvidenceRef[];
+  readonly specifier: string;
+}
+
 function compareFacts(left: PlaneAFact, right: PlaneAFact): number {
   if (left.ordinal !== right.ordinal) return left.ordinal - right.ordinal;
   if (left.factType !== right.factType) return left.factType < right.factType ? -1 : 1;
@@ -261,6 +268,53 @@ export class DeterministicGraphAssembler {
       evidence: [...fact.evidence],
       metadata: { ...fact.metadata },
     });
+  }
+}
+
+/**
+ * Repository import edges are relations between modules, not individual import statements.
+ * Aggregate occurrence-level evidence before the strict assembler sees the relation so parallel
+ * declarations cannot disagree on singular metadata.
+ */
+export function addAggregatedImportEdges(
+  assembler: DeterministicGraphAssembler,
+  occurrences: readonly ImportEdgeOccurrence[],
+): void {
+  const grouped = new Map<string, {
+    readonly from: string;
+    readonly to: string;
+    readonly evidence: Map<string, EvidenceRef>;
+    readonly specifiers: Set<string>;
+  }>();
+  for (const occurrence of occurrences) {
+    const key = canonicalJson([occurrence.from, occurrence.to]);
+    const existing = grouped.get(key);
+    const group = existing ?? {
+      from: occurrence.from,
+      to: occurrence.to,
+      evidence: new Map<string, EvidenceRef>(),
+      specifiers: new Set<string>(),
+    };
+    for (const ref of occurrence.evidence) {
+      group.evidence.set(canonicalJson(ref), ref);
+    }
+    group.specifiers.add(occurrence.specifier);
+    if (existing === undefined) grouped.set(key, group);
+  }
+
+  for (const [, group] of [...grouped].sort(([left], [right]) =>
+    compareIds(left, right))) {
+    const specifiers = [...group.specifiers].sort(compareIds);
+    assembler.edge(
+      "imports",
+      group.from,
+      group.to,
+      [...group.evidence].sort(([left], [right]) => compareIds(left, right))
+        .map(([, ref]) => ref),
+      specifiers.length === 1
+        ? { specifier: specifiers[0] ?? "" }
+        : { specifiers: canonicalJson(specifiers) },
+    );
   }
 }
 
