@@ -152,8 +152,10 @@ describe("task reconciliation MCP adapters", () => {
         },
       });
       expect(invalidReconciliation.isError).toBe(true);
-      expect(textContent(invalidReconciliation)).toContain("Input validation error");
-      expect(textContent(invalidReconciliation)).toContain("\"head\"");
+      expect(JSON.parse(textContent(invalidReconciliation))).toEqual({
+        code: "INVALID_ARGUMENTS",
+        error: "Tool arguments are invalid",
+      });
 
       const invalidPlan = await client.callTool({
         name: "semctx_control_plan_change",
@@ -166,8 +168,10 @@ describe("task reconciliation MCP adapters", () => {
         },
       });
       expect(invalidPlan.isError).toBe(true);
-      expect(textContent(invalidPlan)).toContain("Input validation error");
-      expect(textContent(invalidPlan)).toContain("\"base\"");
+      expect(JSON.parse(textContent(invalidPlan))).toEqual({
+        code: "INVALID_ARGUMENTS",
+        error: "Tool arguments are invalid",
+      });
     } finally {
       await client.close();
       await server.close();
@@ -251,7 +255,10 @@ describe("task reconciliation MCP adapters", () => {
         },
       });
       expect(framingLeak.isError).toBe(true);
-      expect(textContent(framingLeak)).toContain("taskFrameAdvisory");
+      expect(JSON.parse(textContent(framingLeak))).toEqual({
+        code: "INVALID_ARGUMENTS",
+        error: "Tool arguments are invalid",
+      });
     } finally {
       await client.close();
       await server.close();

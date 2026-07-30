@@ -163,6 +163,13 @@ Marketplace. The published CLI lags this repository — see
 
 ### Fixed
 
+- **MCP tool failures now cross one bounded, non-leaking boundary.** Input, handler, observer, and
+  output-contract failures are normalized as `isError: true` JSON text with a stable code and a
+  fixed public message; they never expose raw exception text, Zod diagnostics, repository paths,
+  trace data, or successful `structuredContent`. Tool input keeps the same advertised JSON Schema,
+  but is now gated fail-fast and parsed by Zod inside `ToolRegistrar`, so oversized SDK validation
+  diagnostics cannot bypass the canonical envelope. Read-only, writer, Explorer, legacy stdio, and
+  2026 stdio calls share the same behavior.
 - **Guarded Git scope now fails closed** (#47): unexpanded cwd paths in `cd` / `git -C` and Git
   repository retargeting through direct or `env`-wrapped `GIT_DIR`, `GIT_WORK_TREE`, related
   repository-state environment, `--git-dir`, `--work-tree`, namespaces, bare mode, or

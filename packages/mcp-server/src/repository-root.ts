@@ -1,5 +1,6 @@
 import { realpathSync } from "node:fs";
 import { isAbsolute } from "node:path";
+import { ToolPublicError } from "./public-tool-error";
 
 function canonicalKey(path: string): string {
   return process.platform === "win32" ? path.toLowerCase() : path;
@@ -7,13 +8,17 @@ function canonicalKey(path: string): string {
 
 function canonicalRepositoryRoot(root: string): string {
   if (!isAbsolute(root)) {
-    throw new Error("repository root must be absolute");
+    throw new ToolPublicError("REPOSITORY_ROOT_INVALID", {
+      cause: { repositoryRoot: root },
+    });
   }
 
   try {
     return realpathSync.native(root);
   } catch {
-    throw new Error(`repository root does not exist or is not accessible: ${root}`);
+    throw new ToolPublicError("REPOSITORY_ROOT_UNAVAILABLE", {
+      cause: { repositoryRoot: root },
+    });
   }
 }
 
@@ -36,9 +41,9 @@ export function createRepositoryRootResolver(root?: string): RepositoryRootResol
       }
 
       if (canonicalKey(requestedRoot) !== canonicalKey(boundRoot)) {
-        throw new Error(
-          `repository root does not match the server-bound root: requested ${requestedRoot}`,
-        );
+        throw new ToolPublicError("REPOSITORY_ROOT_MISMATCH", {
+          cause: { requestedRoot, boundRoot },
+        });
       }
 
       return boundRoot;
