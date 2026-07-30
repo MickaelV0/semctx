@@ -1,6 +1,14 @@
 import { describe, expect, it } from "bun:test";
-import { analyzeRepository } from "@semantic-context/ts-analyzer";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createDefaultConfig } from "@semantic-context/core";
+import {
+  analyzeRepository,
+  TYPESCRIPT_DIALECT_VERSION,
+} from "@semantic-context/ts-analyzer";
 import { sampleConfig } from "@semantic-context/test-fixtures";
+import ts from "typescript";
 
 const internal = await import("../../plane-a-internal/src/index").catch(() => null);
 
@@ -44,5 +52,35 @@ describe("TypeScript Plane A internal sidecar", () => {
     expect(sidecar?.scope.selectedPaths).toEqual(
       [...(sidecar?.scope.selectedPaths ?? [])].sort(),
     );
+    expect(TYPESCRIPT_DIALECT_VERSION).toBe(ts.version);
+    expect(sidecar?.factBatches
+      .filter((batch) => batch.scope.language === "typescript")
+      .every((batch) => batch.scope.dialectVersion === ts.version)).toBe(true);
+  });
+
+  it("keeps source bindings stable across LF and CRLF checkout materialization", () => {
+    expect(internal).not.toBeNull();
+    if (internal === null) return;
+
+    const root = mkdtempSync(join(tmpdir(), "semctx-plane-a-eol-"));
+    try {
+      mkdirSync(join(root, "src"), { recursive: true });
+      const path = join(root, "src", "value.ts");
+      const lf = "export const value = 1;\nexport const next = value + 1;\n";
+      writeFileSync(path, lf, "utf8");
+      const config = createDefaultConfig(root);
+      const lfAnalysis = analyzeRepository(config);
+      const lfSidecar = internal.getPlaneASidecar(lfAnalysis);
+
+      writeFileSync(path, lf.replaceAll("\n", "\r\n"), "utf8");
+      const crlfAnalysis = analyzeRepository(config);
+      const crlfSidecar = internal.getPlaneASidecar(crlfAnalysis);
+
+      expect(crlfAnalysis.graph).toEqual(lfAnalysis.graph);
+      expect(crlfAnalysis.evidence).toEqual(lfAnalysis.evidence);
+      expect(crlfSidecar).toEqual(lfSidecar);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

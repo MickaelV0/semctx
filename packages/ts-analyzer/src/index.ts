@@ -17,7 +17,10 @@ export type {
   SourceLanguage,
 } from "./discovery";
 
-export { extractTypeScript } from "./ts-symbols";
+export {
+  extractTypeScript,
+  TYPESCRIPT_DIALECT_VERSION,
+} from "./ts-symbols";
 export type {
   TsExtraction,
   ExtractedSymbol,

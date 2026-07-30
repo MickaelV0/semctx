@@ -7,6 +7,10 @@ import { ControlFreshnessStatusReportSchema } from "@semantic-context/control-mo
 import type { ControlFreshnessSeal, ControlFreshnessStatusReport, Sha256Hash } from "@semantic-context/control-model";
 import type { SemanticModel } from "@semantic-context/semantic-model";
 import type { DiscoveredFile } from "@semantic-context/ts-analyzer";
+import {
+  canonicalSourceText,
+  digestCanonical,
+} from "@semantic-context/plane-a-internal";
 import { initWorkspace } from "@semantic-context/repository-store";
 import { newChangeContract, writeActiveChange, writeChangeFile } from "@semantic-context/semantic-engine";
 import { sampleConfig } from "@semantic-context/test-fixtures";
@@ -202,8 +206,19 @@ describe("control freshness seal", () => {
       },
     ];
 
-    expect(fingerprintAnalysisInputs(config, discovered("\r\n")))
-      .toBe(fingerprintAnalysisInputs(config, discovered("\n")));
+    const crlf = discovered("\r\n");
+    const lf = discovered("\n");
+    expect(fingerprintAnalysisInputs(config, crlf))
+      .toBe(fingerprintAnalysisInputs(config, lf));
+
+    const sourceManifest = (files: readonly DiscoveredFile[]) => files.map((file) => ({
+      relPath: file.relPath,
+      role: file.role,
+      language: file.language ?? null,
+      content: canonicalSourceText(file.content),
+    }));
+    expect(digestCanonical(sourceManifest(crlf)))
+      .toBe(digestCanonical(sourceManifest(lf)));
   });
 
   it("still separates analysis inputs that differ beyond line endings", () => {

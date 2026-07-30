@@ -3,7 +3,11 @@ import { join } from "node:path";
 import { SemctxError, createDefaultConfig, createGlobSelectionConfig } from "@semantic-context/core";
 import type { SemctxConfig } from "@semantic-context/core";
 import { isInitialized, loadConfig, saveConfig, semctxDir } from "@semantic-context/repository-store";
-import { indexRepository, openReadyRepository } from "@semantic-context/app-services";
+import {
+  indexHealth,
+  indexRepository,
+  openReadyRepository,
+} from "@semantic-context/app-services";
 import { countTypeScriptFiles, discoverRepository } from "@semantic-context/ts-analyzer";
 import { initSemanticScaffold, loadSemanticModel, checkSemanticModel, type RepositoryFacts } from "@semantic-context/semantic-engine";
 import { runPreset } from "./preset";
@@ -106,6 +110,33 @@ export function runSetup(root: string, args: ParsedArgs): number {
   const loaded = loadSemanticModel(root);
   const check = checkSemanticModel({ model: loaded.model, diagnostics: loaded.diagnostics, duplicateIds: loaded.duplicateIds, facts, graphIndexed: true });
   line(`  ${check.ok ? c.green("ok") : c.red("!!")} check     ${check.ok ? "model consistent" : `${check.counts.errors} error(s)`}`);
+  const health = indexHealth(root);
+  const analysisReady =
+    config.version !== 2
+    || (
+      health.binding.status === "valid"
+      && health.freshness.canRunHighRiskControl
+      && health.coverage.status !== "insufficient"
+    );
+  const setupReady = check.ok && analysisReady;
+  if (config.version === 2) {
+    const healthColor = !analysisReady
+      ? c.red
+      : health.coverage.status === "complete"
+        ? c.green
+        : c.yellow;
+    line(
+      `  ${!analysisReady
+        ? c.red("!!")
+        : health.coverage.status === "complete"
+          ? c.green("ok")
+          : c.yellow("!!")} analysis  `
+      + `${healthColor(health.coverage.status)}`
+      + `${health.reasonSummary.length === 0
+        ? ""
+        : c.dim(` (${health.reasonSummary.join(", ")})`)}`,
+    );
+  }
 
   if (asJson) {
     json({
@@ -126,11 +157,18 @@ export function runSetup(root: string, args: ParsedArgs): number {
       edges: analysis.graph.edges.length,
       claims: claims.length,
       freshnessSeal,
+      indexHealth: {
+        binding: health.binding,
+        freshness: health.freshness,
+        coverage: health.coverage,
+        workspaceDiagnostics: health.workspace?.diagnostics ?? [],
+        reasonSummary: health.reasonSummary,
+      },
       semanticFilesCreated: created,
       gitignore: scaffold.gitignore.action,
       check: { ok: check.ok, nodes: check.counts.nodes, changes: check.counts.changes, errors: check.counts.errors },
     });
-    return check.ok ? 0 : 1;
+    return setupReady ? 0 : 1;
   }
 
   info("");
@@ -141,13 +179,28 @@ export function runSetup(root: string, args: ParsedArgs): number {
         : "index found 0 nodes — review v2 include/exclude globs and language modes, then re-run 'semctx setup'.",
     );
   }
-  if (check.ok) {
-    success("ready");
+  if (setupReady) {
+    const analysisQualification =
+      config.version === 2 && health.coverage.status !== "complete"
+        ? ` (analysis ${health.coverage.status})`
+        : "";
+    success(`ready${analysisQualification}`);
+    if (config.version === 2 && health.coverage.status !== "complete") {
+      warn(
+        "setup succeeded, but incomplete analysis cannot justify negative conclusions; "
+        + "run 'semctx index-health --json' for the exact gates and reasons.",
+      );
+    }
     info(c.dim("Next: open a change and verify it —"));
     info(c.dim("  semctx change open change.my-change --preserves <invariant-ids>"));
     info(c.dim("  # edit code, then:  semctx change verify change.my-change --base origin/main"));
-  } else {
+  } else if (!check.ok) {
     fail("setup completed with model issues — run 'semctx semantic check' for details");
+  } else {
+    fail(
+      "setup completed, but analysis is not ready — "
+      + "run 'semctx index-health --json' for the exact gates and reasons.",
+    );
   }
-  return check.ok ? 0 : 1;
+  return setupReady ? 0 : 1;
 }

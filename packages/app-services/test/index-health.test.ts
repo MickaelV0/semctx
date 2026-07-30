@@ -19,6 +19,53 @@ import {
 
 const roots: string[] = [];
 
+interface MutableScope {
+  repositoryIdentity: string;
+  sourceStateDigest: string;
+  selectedPathSetDigest: string;
+  selectedPaths: string[];
+  workspaceUnitId?: string;
+  language: string;
+  dialectVersion?: string;
+}
+
+interface MutableProducer {
+  identity: string;
+  version: string;
+}
+
+interface MutablePlaneASidecar {
+  producerConfigurationDigest: string;
+  factSchemaDigest: string;
+  capabilityProfiles: {
+    profileId: string;
+    scope: MutableScope;
+    producer: MutableProducer;
+    producerConfigurationDigest: string;
+    factSchemaDigest: string;
+    evidenceContract: string;
+    resolutionSemantics: string;
+    soundnessClaim: string;
+    completenessClaim: string;
+  }[];
+  factBatches: {
+    batchId: string;
+    scope: MutableScope;
+    producer: MutableProducer;
+    producerConfigurationDigest: string;
+    factSchemaDigest: string;
+    evidenceContract: string;
+  }[];
+  producerResults: {
+    scope: MutableScope;
+    producer: MutableProducer;
+  }[];
+  discoveryLedger: {
+    scope: MutableScope;
+    selectedProducer?: MutableProducer;
+  }[];
+}
+
 function git(root: string, ...args: string[]): void {
   const result = Bun.spawnSync(["git", ...args], {
     cwd: root,
@@ -90,6 +137,38 @@ function pythonDiff(): string {
     "     return 1",
     "",
   ].join("\n");
+}
+
+function mutateAndResealPlaneA(
+  root: string,
+  mutate: (sidecar: MutablePlaneASidecar) => void,
+): void {
+  const store = openStore(root);
+  try {
+    const planeSnapshot = JSON.parse(
+      store.getMeta(PLANE_A_INDEX_SNAPSHOT_META_KEY)!,
+    ) as {
+      sidecarDigest: string;
+      sidecar: MutablePlaneASidecar;
+    };
+    mutate(planeSnapshot.sidecar);
+    planeSnapshot.sidecarDigest = digestCanonical(planeSnapshot.sidecar);
+    store.setMeta(
+      PLANE_A_INDEX_SNAPSHOT_META_KEY,
+      JSON.stringify(planeSnapshot),
+    );
+
+    const controlSnapshot = JSON.parse(
+      store.getMeta(CONTROL_INDEX_SNAPSHOT_META_KEY)!,
+    ) as { planeAIndexSnapshotHash?: string };
+    controlSnapshot.planeAIndexSnapshotHash = digestCanonical(planeSnapshot);
+    store.setMeta(
+      CONTROL_INDEX_SNAPSHOT_META_KEY,
+      JSON.stringify(controlSnapshot),
+    );
+  } finally {
+    store.close();
+  }
 }
 
 afterEach(() => {
@@ -298,6 +377,105 @@ describe("IndexHealth persistence and verification preflight", () => {
       reasonSummary: expect.arrayContaining(["SCHEMA_DIGEST_MISMATCH"]),
     });
   });
+
+  it.each([
+    {
+      coordinate: "producer version",
+      expectedReason: "PRODUCER_VERSION_MISMATCH",
+      mutate: (sidecar: MutablePlaneASidecar) => {
+        for (const profile of sidecar.capabilityProfiles) profile.producer.version = "9.9.9";
+        for (const batch of sidecar.factBatches) batch.producer.version = "9.9.9";
+        for (const result of sidecar.producerResults) result.producer.version = "9.9.9";
+        for (const entry of sidecar.discoveryLedger) {
+          if (entry.selectedProducer !== undefined) entry.selectedProducer.version = "9.9.9";
+        }
+      },
+    },
+    {
+      coordinate: "producer configuration",
+      expectedReason: "CONFIG_DIGEST_MISMATCH",
+      mutate: (sidecar: MutablePlaneASidecar) => {
+        const digest = digestCanonical({ forged: "configuration" });
+        sidecar.producerConfigurationDigest = digest;
+        for (const profile of sidecar.capabilityProfiles) {
+          profile.producerConfigurationDigest = digest;
+        }
+        for (const batch of sidecar.factBatches) {
+          batch.producerConfigurationDigest = digest;
+        }
+      },
+    },
+    {
+      coordinate: "fact schema",
+      expectedReason: "SCHEMA_DIGEST_MISMATCH",
+      mutate: (sidecar: MutablePlaneASidecar) => {
+        const digest = digestCanonical({ forged: "fact-schema" });
+        sidecar.factSchemaDigest = digest;
+        for (const profile of sidecar.capabilityProfiles) profile.factSchemaDigest = digest;
+        for (const batch of sidecar.factBatches) batch.factSchemaDigest = digest;
+      },
+    },
+    {
+      coordinate: "evidence contract",
+      expectedReason: "EVIDENCE_CONTRACT_MISMATCH",
+      mutate: (sidecar: MutablePlaneASidecar) => {
+        for (const profile of sidecar.capabilityProfiles) {
+          profile.evidenceContract = "producer-self-attested-v9";
+        }
+        for (const batch of sidecar.factBatches) {
+          batch.evidenceContract = "producer-self-attested-v9";
+        }
+      },
+    },
+    {
+      coordinate: "resolution semantics",
+      expectedReason: "CAPABILITY_MISSING",
+      mutate: (sidecar: MutablePlaneASidecar) => {
+        for (const profile of sidecar.capabilityProfiles) {
+          profile.resolutionSemantics = "path-only-self-attested";
+        }
+      },
+    },
+    {
+      coordinate: "soundness claim",
+      expectedReason: "CAPABILITY_MISSING",
+      mutate: (sidecar: MutablePlaneASidecar) => {
+        for (const profile of sidecar.capabilityProfiles) {
+          profile.soundnessClaim = "producer-says-sound";
+        }
+      },
+    },
+    {
+      coordinate: "completeness claim",
+      expectedReason: "CAPABILITY_MISSING",
+      mutate: (sidecar: MutablePlaneASidecar) => {
+        for (const profile of sidecar.capabilityProfiles) {
+          profile.completenessClaim = "complete";
+        }
+      },
+    },
+  ])(
+    "rejects coordinated $coordinate self-attestation despite a freshly resealed binding",
+    ({ expectedReason, mutate }) => {
+      const { root } = repository();
+      indexRepository(root, "2026-07-28T10:01:37.000Z");
+      mutateAndResealPlaneA(root, mutate);
+
+      const report = indexHealth(root);
+      expect(report).toMatchObject({
+        binding: { status: "valid" },
+        freshness: { verdict: "FRESH", canRunHighRiskControl: true },
+        coverage: { status: "insufficient" },
+        evaluations: {
+          reasonSummary: expect.arrayContaining([expectedReason]),
+        },
+        reasonSummary: expect.arrayContaining([expectedReason]),
+      });
+      expect(report.evaluations.decisions.some((decision) =>
+        decision.decisionKind === "exact_subject"
+        && decision.gates.capabilityMatch === "failed")).toBe(true);
+    },
+  );
 
   it("rejects a malformed persisted graph even when the Plane-A graph hash is recomputed", () => {
     const { root } = repository();

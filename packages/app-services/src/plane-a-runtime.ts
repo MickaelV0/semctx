@@ -14,6 +14,7 @@ import {
 } from "@semantic-context/core";
 import {
   attachPlaneASidecar,
+  canonicalSourceText,
   DeterministicGraphAssembler,
   digestCanonical,
   getPlaneASidecar,
@@ -40,6 +41,7 @@ import {
   type DiscoveredFile,
   type DiscoveryCandidate,
   type DiscoveryResult,
+  TYPESCRIPT_DIALECT_VERSION,
 } from "@semantic-context/ts-analyzer";
 import {
   analyzeWorkspaceSync,
@@ -608,7 +610,9 @@ function scopeForCandidate(
     selectedPaths,
     ...(workspaceUnitId === undefined ? {} : { workspaceUnitId }),
     language: candidate.language,
-    ...(candidate.language === "typescript" ? { dialectVersion: "5.6" } : {}),
+    ...(candidate.language === "typescript"
+      ? { dialectVersion: TYPESCRIPT_DIALECT_VERSION }
+      : {}),
     ...(candidate.language === "python" ? { dialectVersion: "<=3.12" } : {}),
   };
 }
@@ -618,7 +622,7 @@ function sourceInput(file: DiscoveredFile) {
     relPath: file.relPath,
     role: file.role,
     language: file.language ?? null,
-    content: file.content,
+    content: canonicalSourceText(file.content),
   };
 }
 

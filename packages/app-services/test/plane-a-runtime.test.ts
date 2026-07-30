@@ -77,6 +77,24 @@ describe("private integrated Plane-A runtime", () => {
     expect(JSON.stringify(integrated.analysis.evidence)).toBe(JSON.stringify(legacy.evidence));
   });
 
+  it("keeps mixed-language source bindings stable across LF and CRLF checkout materialization", () => {
+    const root = repository();
+    const typescript = "export const value = 1;\nexport const next = value + 1;\n";
+    const python = "def value():\n    return 1\n\ndef next_value():\n    return value() + 1\n";
+    write(root, "src/value.ts", typescript);
+    write(root, "src/value.py", python);
+    const config = v2(root);
+
+    const lf = analyzePlaneARuntime(config, discoverRepository(config));
+    write(root, "src/value.ts", typescript.replaceAll("\n", "\r\n"));
+    write(root, "src/value.py", python.replaceAll("\n", "\r\n"));
+    const crlf = analyzePlaneARuntime(config, discoverRepository(config));
+
+    expect(crlf.analysis.graph).toEqual(lf.analysis.graph);
+    expect(crlf.analysis.evidence).toEqual(lf.analysis.evidence);
+    expect(crlf.sidecar).toEqual(lf.sidecar);
+  });
+
   it("composes TypeScript and Python facts with explicit markers and local imports", () => {
     const root = repository();
     write(root, "src/value.ts", "export const value = 1;\n");

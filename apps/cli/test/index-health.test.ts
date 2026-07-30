@@ -8,9 +8,10 @@ import {
   indexRepository,
 } from "@semantic-context/app-services";
 import { digestCanonical, type PlaneASidecarV1 } from "@semantic-context/plane-a-internal";
-import { openStore, initWorkspace } from "@semantic-context/repository-store";
+import { openStore, initWorkspace, loadConfig } from "@semantic-context/repository-store";
 import { initSemanticScaffold } from "@semantic-context/semantic-engine";
 import { SAMPLE_REPO } from "@semantic-context/test-fixtures";
+import { TYPESCRIPT_DIALECT_VERSION } from "@semantic-context/ts-analyzer";
 import type { WorkspaceProjection } from "@semantic-context/workspace-analyzer-internal";
 import {
   createPlaneAIndexSnapshot,
@@ -58,19 +59,24 @@ function workspace(): WorkspaceProjection {
 
 function sidecar(partial: boolean): PlaneASidecarV1 {
   const producer = {
-    identity: "@semantic-context/test-analyzer",
-    version: "1.0.0",
+    identity: "@semantic-context/ts-analyzer",
+    version: "0.1.0",
   };
   const sourceDigest = digestCanonical({ fixture: "source" });
   const selectedPathSetDigest = digestCanonical(["src/booking/confirmation.ts"]);
-  const producerConfigurationDigest = digestCanonical({ fixture: "config" });
-  const factSchemaDigest = digestCanonical({ fixture: "fact-schema" });
+  const producerConfigurationDigest = digestCanonical(loadConfig(root));
+  const factSchemaDigest = digestCanonical({
+    schemaVersion: 1,
+    facts: ["node", "edge"],
+    evidence: "source-lines-v1",
+  });
   const scope = {
     repositoryIdentity: "repository:test",
     sourceStateDigest: sourceDigest,
     selectedPathSetDigest,
     selectedPaths: ["src/booking/confirmation.ts"],
     language: "typescript",
+    dialectVersion: TYPESCRIPT_DIALECT_VERSION,
   };
   const profile = {
     profileId: "profile:test",
@@ -80,7 +86,7 @@ function sidecar(partial: boolean): PlaneASidecarV1 {
     producerConfigurationDigest,
     factSchemaDigest,
     evidenceContract: "source-lines-v1",
-    resolutionSemantics: "test-static-v1",
+    resolutionSemantics: "typescript-static-v1",
     soundnessClaim: "best-effort-static",
     completenessClaim: "producer-declared",
     negativeEvidenceEligible: !partial,

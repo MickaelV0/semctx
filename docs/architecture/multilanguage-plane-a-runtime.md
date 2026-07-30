@@ -38,6 +38,11 @@ The private sidecar binds facts to:
 - one discovery decision and one terminal analysis outcome;
 - deterministic fact batches and producer results.
 
+Plane A source identities canonicalize line endings before hashing: every `CRLF` sequence becomes
+`LF`. This normalization applies only to Plane A source identities and their derived digests. L0
+sealed observed-diff hunks retain the raw observed bytes; source-identity normalization never
+rewrites or weakens that evidence.
+
 Assembly rejects conflicting ids, missing edge endpoints, out-of-scope facts, invalid evidence,
 and changed capture coordinates. A matching label such as `structural` never authorizes a fact.
 Negative conclusions remain ineligible unless completeness is established for the exact fact kind
@@ -81,6 +86,11 @@ The dimensions never replace each other:
 Freshness remains an explicitly nested, independently computed field in the report. Index health is
 therefore additive evidence. It does not rewrite `ControlFreshnessSeal`, turn freshness into a
 scalar coverage score, or grant task-relative authority.
+
+For load-bearing use, gate 6 is a conjunction: the generic
+`admissibleFor(task, operation, factKind, scope)` decision and the exact app-services authority
+policy must both grant the request. Either denial produces `POLICY_DENIED`; neither policy can
+repair a failed discovery, binding, freshness, capability, or completeness gate.
 
 ## Manifest-evidenced workspace projection
 
