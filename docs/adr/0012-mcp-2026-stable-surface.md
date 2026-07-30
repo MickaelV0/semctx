@@ -82,8 +82,24 @@ For every successful tool call:
 - the text fallback is derived from the same value using the existing deterministic formatting;
 - neither transport metadata nor trace context can change the value.
 
-Error responses remain `isError: true`, bounded, and text-compatible. They do not claim a successful
-structured result.
+Error responses remain `isError: true`, bounded, and text-compatible. Their text is deterministic
+JSON with exactly one stable error code and one fixed public message. Public messages come from an
+exhaustive catalogue and stay within 512 UTF-16 code units; raw exception messages, schema issues,
+arguments, repository paths, trace context, and diagnostic causes never enter the response. Error
+responses do not carry `structuredContent`.
+
+The advertised input JSON Schema remains authoritative. Because SDK v2 validates registered schemas
+before invoking a tool callback, the stdio registration adapter preserves that exact catalogue
+schema while `ToolRegistrar` owns execution-time validation: a raw structural budget, fail-fast
+JSON-Schema validation, then the original Zod parse for defaults, stripping, transforms, and custom
+refinements. The raw budget rejects inputs deeper than 64 levels, above 100,000 visited values, with
+an array longer than 50,000 items, or with a key longer than 1,024 UTF-16 code units. No business
+handler runs before all three gates pass.
+
+Local diagnostic and request-context observers are advisory. They may receive original causes
+in-process, but their own failures cannot change a successful tool result or escape into the public
+error envelope. A handler cannot publish its own `isError` payload; such a return is normalized as
+an internal contract failure.
 
 ## MCP App contract
 

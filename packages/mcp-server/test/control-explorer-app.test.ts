@@ -642,4 +642,20 @@ describe("read-only Control Explorer MCP App", () => {
       JSON.parse(text?.type === "text" ? text.text : "null"),
     ).toEqual(snapshot);
   });
+
+  test("uses the shared error boundary for explorer failures", async () => {
+    const missingRoot = join(fixtureRoot, "missing-repository");
+    const explorerError = await client.callTool({
+      name: APP_TOOL,
+      arguments: { repositoryRoot: missingRoot },
+    });
+    const statusError = await client.callTool({
+      name: "semctx_control_status",
+      arguments: { repositoryRoot: missingRoot },
+    });
+
+    expect(explorerError.isError).toBe(true);
+    expect(explorerError.structuredContent).toBeUndefined();
+    expect(explorerError.content).toEqual(statusError.content);
+  });
 });

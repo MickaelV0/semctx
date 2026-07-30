@@ -67,7 +67,9 @@ describe("semctx MCP tool metadata", () => {
       arguments: { repositoryRoot: ".", gitDiff: "" },
     });
     expect(invalidRoot.isError).toBe(true);
-    expect(JSON.stringify(invalidRoot.content)).toContain("repositoryRoot must be absolute");
+    expect(JSON.stringify(invalidRoot.content)).toContain(
+      "INVALID_ARGUMENTS",
+    );
 
     const invalidReconciliation = await client.callTool({
       name: "semctx_control_reconcile_diff",

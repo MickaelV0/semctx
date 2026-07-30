@@ -85,9 +85,123 @@ describe("MCP dual-era stdio negotiation", () => {
       try {
         await client.connect(transport);
         const result = await client.listTools();
+        const invalid = await client.callTool({
+          name: "semctx_semantic_check",
+          arguments: { repositoryRoot: "." },
+        });
+        const serialized =
+          invalid.content.find((item) => item.type === "text")?.text ?? "";
 
         expect(result.tools).toHaveLength(31);
         expect(result.tools.some((tool) => tool.name === "semctx_control_explorer")).toBe(true);
+        expect(invalid.isError).toBe(true);
+        expect(invalid.structuredContent).toBeUndefined();
+        expect(JSON.parse(serialized)).toEqual({
+          code: "INVALID_ARGUMENTS",
+          error: "Tool arguments are invalid",
+        });
+      } finally {
+        await client.close();
+      }
+    },
+    MODERN_STDIO_TIMEOUT_MS,
+  );
+
+  test(
+    "serves the same canonical failure for read-only and writer tools over 2026 stdio",
+    async () => {
+      const repositoryRoot = resolve(import.meta.dir, "../../..");
+      const missingRoot = resolve(
+        repositoryRoot,
+        "__missing_modern_stdio_repository__",
+      );
+      const transport = stdioTransport(repositoryRoot);
+      const client = new Client(
+        { name: "semctx-modern-stdio-error-test", version: "0.1.0" },
+        {
+          versionNegotiation: {
+            mode: { pin: "2026-07-28" },
+            probe: { timeoutMs: 10_000 },
+          },
+        },
+      );
+
+      try {
+        await client.connect(transport);
+        const readOnlyError = await client.callTool({
+          name: "semctx_control_status",
+          arguments: { repositoryRoot: missingRoot },
+        });
+        const writerError = await client.callTool({
+          name: "semctx_change_open",
+          arguments: {
+            repositoryRoot: missingRoot,
+            id: "change.stdio-error-contract",
+            statement: "Exercise the shared stdio error boundary.",
+          },
+        });
+        const text = readOnlyError.content.find(
+          (item) => item.type === "text",
+        );
+        const payload = JSON.parse(
+          text?.type === "text" ? text.text : "{}",
+        ) as { code?: unknown; error?: unknown };
+        const serialized = text?.type === "text" ? text.text : "";
+
+        expect(readOnlyError.isError).toBe(true);
+        expect(readOnlyError.structuredContent).toBeUndefined();
+        expect(writerError.isError).toBe(true);
+        expect(writerError.structuredContent).toBeUndefined();
+        expect(writerError.content).toEqual(readOnlyError.content);
+        expect(payload.code).toBe("REPOSITORY_ROOT_UNAVAILABLE");
+        expect(typeof payload.error).toBe("string");
+        expect((payload.error as string).length).toBeLessThanOrEqual(512);
+        expect(payload.error).toContain("repository root");
+        expect(serialized).not.toContain(missingRoot);
+      } finally {
+        await client.close();
+      }
+    },
+    MODERN_STDIO_TIMEOUT_MS,
+  );
+
+  test(
+    "bounds invalid tool input behind the canonical 2026 stdio envelope",
+    async () => {
+      const repositoryRoot = resolve(import.meta.dir, "../../..");
+      const transport = stdioTransport(repositoryRoot);
+      const client = new Client(
+        { name: "semctx-modern-stdio-input-error-test", version: "0.1.0" },
+        {
+          versionNegotiation: {
+            mode: { pin: "2026-07-28" },
+            probe: { timeoutMs: 10_000 },
+          },
+        },
+      );
+
+      try {
+        await client.connect(transport);
+        const result = await client.callTool({
+          name: "semctx_control_impact",
+          arguments: {
+            repositoryRoot,
+            sourceIds: Array.from(
+              { length: 1_000 },
+              () => ({ invalid: true }),
+            ),
+          },
+        });
+        const serialized =
+          result.content.find((item) => item.type === "text")?.text ?? "";
+
+        expect(result.isError).toBe(true);
+        expect(result.structuredContent).toBeUndefined();
+        expect(serialized.length).toBeLessThanOrEqual(4_096);
+        expect(JSON.parse(serialized)).toEqual({
+          code: "INVALID_ARGUMENTS",
+          error: "Tool arguments are invalid",
+        });
       } finally {
         await client.close();
       }
