@@ -23,7 +23,7 @@ file is portable.
 | `include` | Accepted, validated, and persisted, but **not applied by current discovery**. Changing these globs does not change which files are discovered. |
 | `exclude` | Applied to each normalized repository-relative file path as a plain substring after removing every `*`; it is not glob matching. Built-in ignored path segments are also excluded (below). |
 | `docsDirs` | Accepted and persisted, but not applied by current discovery. Every `.md` and `.mdx` file that survives exclusion is classified as a document. |
-| `migrationsDirs` | Used for role classification, not selection. A TypeScript file whose relative path starts with one of these values is classified as a migration; every `.sql` file is a migration regardless of this field. |
+| `migrationsDirs` | Contributes path-prefix role classification, not file selection. TypeScript-family files under a path segment exactly named `migration` or `migrations` are also classified as migrations. Every `.sql` file is classified as a migration regardless of this field. |
 | `testGlobs` | Accepted and persisted, but not applied by current discovery. TypeScript tests are currently recognized by fixed filename, directory, and test-import heuristics. |
 | `semanticProvider` | `none` (fully local) or `cocoindex` (optional candidate provider, ADR 0004). |
 | `blockingRules` | the verdict rules (below). |
@@ -44,9 +44,9 @@ all-`*` value matches every path.
 
 After exclusion, discovery admits only TypeScript-family files (`.ts`, `.tsx`, `.mts`, `.cts`),
 Markdown (`.md`, `.mdx`), and SQL (`.sql`). TypeScript-family files feed the current TypeScript
-analyzer; Markdown and SQL are classified as documents and migrations. Adding globs for another
-language does not install or enable an analyzer, establish capability, or make that language
-supported.
+analyzer; Markdown is classified as a document, while SQL is classified as a migration. Adding
+globs for another language does not install or enable an analyzer, establish capability, or make
+that language supported.
 
 ## Future multi-language design
 
