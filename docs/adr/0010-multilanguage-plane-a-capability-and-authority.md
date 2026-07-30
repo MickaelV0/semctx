@@ -394,13 +394,15 @@ The following rules are normative:
 | F3 | Add versioned `contained_in_workspace` and `workspace_member_of` edges. Preserve legacy `belongs_to` bytes and traversal behavior until migration. Keep source freshness separate from `IndexHealth`; maintain text/JSON/CLI/MCP/plugin parity under ADR 0008. |
 | F4 | Preserve existing TypeScript behavior while a real second-language vertical exercises the provisional model. Machine-output changes remain versioned. Stabilization requires the 13 behavioral ADR cases, all three F4 corpus fixtures, and `GATE-C14` on the F4 branch. |
 
-Current configuration documentation must remain explicit that `include` is not presently applied and
-that non-TypeScript globs do not enable semantic support.
+Current configuration documentation must keep the migration explicit: legacy v1 preserves its
+historical selection, v2 applies configured include/exclude semantics, and non-TypeScript globs
+alone do not enable semantic support.
 
 ## Provisional follow-ups and stabilization gate
 
-All follow-ups are open and currently unassigned. Each is blocked on the acceptance and merge of
-#57 and this ADR.
+F1–F4 were delivered in dependency order by
+[#67](https://github.com/hoklims/semctx/pull/67) after #57 and this ADR were accepted. The linked
+issues retain the acceptance and stop gates that governed delivery.
 
 | Phase | Issue | Dependency and acceptance gate | Stop condition |
 | --- | --- | --- | --- |
@@ -409,10 +411,9 @@ All follow-ups are open and currently unassigned. Each is blocked on the accepta
 | F3 | [#60 — Manifest-evidenced workspaces and separate index health](https://github.com/hoklims/semctx/issues/60) | Consume F1 and coordinate exact scope with F2; prove manifest evidence, cardinalities, nesting, ambiguity rejection, acyclicity, versioned edges, legacy `belongs_to`, and health/freshness separation. | Stop on layout-only admission, ambiguous membership, cardinality/cycle violation, synthetic roots, legacy drift, or collapsed health/freshness. |
 | F4 | [#61 — First real second-language Plane A vertical and corpus gate](https://github.com/hoklims/semctx/issues/61) | Blocked on F1-F3. Implement one genuine semantic vertical; pass `ADR-C01..C10` and `ADR-C15..C17`; pass the deterministic unit fixture, mixed-workspace fixture, and real-repository snapshot pinned to commit and producer version; run and pass `GATE-C14` on the F4 branch. | Stop on any failed ADR case, corpus fixture, or F4 branch gate; silent failure; incomplete-negative PASS; unpinned evidence; TypeScript regression; or value no stronger than path grep. |
 
-Only the semantic invariants, conformance cases, and migration gates in this ADR are stable now.
-Any F1 adapter API remains provisional and internal through F2 and F3. It must not be declared
-public or stable before F4 supplies real cross-language counterpressure and the complete conformance
-suite passes.
+Only the semantic invariants, conformance cases, and migration gates in this ADR are stable.
+The delivered adapter seam remains provisional and internal after F4; the cross-language corpus and
+complete conformance evidence permit a later stability decision but do not make that decision.
 
 For F4 stabilization, “complete conformance suite” means exactly the 13 behavioral ADR cases
 (`ADR-C01..C10` and `ADR-C15..C17`), the three F4 corpus fixtures, and `GATE-C14` using the exact
@@ -437,8 +438,8 @@ Every named case below must be reviewed as behavior, not as keyword presence.
 | `ADR-C08-WORKSPACE` | Apply workspace cases 1-9 above, then inspect cardinality and traversal. | Produce exactly the worked-case results; every workspace has exactly one parent, eligible artifacts have at most one most-specific containment edge, the graph is acyclic, and containment grants no semantic or authority implication. |
 | `ADR-C09-EDGES` | Compare the pre-F3 graph using `belongs_to` with the F3 workspace migration. | Pre-migration bytes/traversals remain unchanged. New semantics use versioned `contained_in_workspace` and `workspace_member_of`; `belongs_to` is not silently overloaded. |
 | `ADR-C10-PROVISIONAL` | F1 proposes a public/stable adapter API before an F4 second-language conformance and corpus run. | Reject stabilization. Only this ADR's semantic invariants and gates are frozen. |
-| `DOC-C11-INCLUDE` | Compare configuration documentation with current discovery behavior. | State that current `include` is not applied and non-TypeScript globs do not enable support. |
-| `DOC-C12-FOLLOWUPS` | Inspect F1-F4 delivery records. | Require linked issues #58-#61, dependencies, acceptance and stop gates, unassigned/owner state, and backlinks to #57/ADR 0010. |
+| `DOC-C11-INCLUDE` | Compare configuration documentation with current discovery behavior. | State that v1 preserves legacy selection, v2 applies include/exclude, and non-TypeScript globs alone do not enable support. |
+| `DOC-C12-FOLLOWUPS` | Inspect F1-F4 delivery records. | Require linked issues #58-#61, dependencies, acceptance and stop gates, delivery status, and backlinks to #57/ADR 0010. |
 | `SCOPE-C13-DOCS-ONLY` | Inspect the RFC PR changed-file set. | Permit only approved documentation/roadmap scope; any runtime, schema, test, dependency, lockfile, generated, CLI, MCP, or plugin behavior change fails. |
 | `GATE-C14-REPO` | Run repository typecheck, tests, and plugin checks. | All must exit zero, or an unrelated pre-existing failure must be recorded exactly. Do not report green without fresh evidence. |
 | `ADR-C15-GATE-ORDER` | Fail gate-1 scope resolution as a pre-subject request; fail gate 1 with an exact non-analyzed subject; present `selected`/`analyzed` with zero and multiple completed results or matching fact batches; then independently fail gates 2-6 after valid exact-subject creation while all other applicable gates pass. | A pre-subject or gate-1 cardinality failure does not evaluate gates 2-6. Cardinality failures normalize to `selected`/`failed` plus `PRODUCER_FAILED`. For every valid exact `selected`/`analyzed` subject, gates 2, 3, 4, and 6 are mandatory, and gate 5 is mandatory for negative conclusions. |
