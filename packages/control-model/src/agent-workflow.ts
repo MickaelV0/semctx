@@ -161,7 +161,7 @@ export const AGENT_WORKFLOW_CONTRACT_V1 = AgentWorkflowContractV1Schema.parse({
       requiresUserWriteScope: false,
       condition: "always",
       instruction:
-        "Establish the repository state with normal code search and Git inspection. Determine semantic_context_present only from repository evidence or an explicit user-provided identity, without initializing state. Do not use Semctx as a substitute for reading the code.",
+        "Establish the repository state with normal code search and Git inspection. Before substantial edits, frame the top-down diagnosis from the highest potentially broken L6-L0 contract and record HIGHEST_BROKEN_LEVEL, WHY_NOT_HIGHER, WHY_NOT_LOWER and PROOF_PLAN without promoting that diagnostic into authored truth. Determine semantic_context_present only from repository evidence or an explicit user-provided identity, without initializing state. Do not use Semctx as a substitute for reading the code.",
     },
     {
       id: "semantic_check",
@@ -179,12 +179,12 @@ export const AGENT_WORKFLOW_CONTRACT_V1 = AgentWorkflowContractV1Schema.parse({
     },
     {
       id: "status",
-      mcpTools: ["semctx_control_status"],
+      mcpTools: ["semctx_index_health", "semctx_control_status"],
       effect: "read_only",
       requiresUserWriteScope: false,
       condition: "semantic_context_present",
       instruction:
-        "Run the control preflight before governed work. Continue only for FRESH or DIRTY_KNOWN, preserve every STALE or UNSEALED reason verbatim, and record the freshness seal plus current and indexed input pairs as an attestation rather than authority.",
+        "Run index health as a distinct binding, index-freshness and analysis-coverage diagnostic, then run the control-freshness preflight before governed work. Never collapse those four fields into one health claim. Continue only for a control-freshness verdict of FRESH or DIRTY_KNOWN, preserve every invalid-binding, incomplete-coverage, STALE or UNSEALED reason verbatim, and record seals and bindings as attestations rather than authority.",
     },
     {
       id: "frame_task",

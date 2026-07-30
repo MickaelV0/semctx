@@ -4,6 +4,9 @@ import { normalizePath } from "@semantic-context/core";
 import type { NodeKind } from "@semantic-context/core";
 import { parseMarkers, type ParsedMarker } from "./markers";
 
+/** Exact TypeScript runtime version bound into Plane A capability scopes. */
+export const TYPESCRIPT_DIALECT_VERSION = ts.version;
+
 export interface ExtractedSymbol {
   name: string;
   kind: Extract<NodeKind, "function" | "class" | "interface" | "type" | "enum">;

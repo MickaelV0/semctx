@@ -27,9 +27,14 @@ import type {
   SemanticNode,
 } from "@semantic-context/semantic-model/reconciliation-read";
 import type { DiscoveredFile } from "@semantic-context/ts-analyzer";
+import {
+  canonicalSourceText,
+  digestCanonical,
+} from "@semantic-context/plane-a-internal";
 import packageJson from "../package.json";
 
 export const CONTROL_INDEX_SNAPSHOT_META_KEY = "control_index_snapshot_v1";
+export const PLANE_A_INDEX_SNAPSHOT_META_KEY = "plane_a_index_snapshot_v1";
 export const CONTROL_FRESHNESS_TOOL_VERSION = `${packageJson.name}@${packageJson.version}`;
 
 export interface GitStateCapture {
@@ -54,6 +59,8 @@ export interface IndexedControlSnapshotV2 extends Omit<IndexedControlSnapshotV1,
   schemaVersion: 2;
   observedHunkIndexHash: Sha256Hash;
   attestationSetHash: Sha256Hash | null;
+  /** Present for v2 selection configs; binds the private Plane-A snapshot into the control seal. */
+  planeAIndexSnapshotHash?: Sha256Hash;
 }
 
 export type IndexedControlSnapshot = IndexedControlSnapshotV1 | IndexedControlSnapshotV2;
@@ -68,6 +75,7 @@ export interface ControlFreshnessSealInput {
   indexedSnapshot: IndexedControlSnapshot | null;
   storeSchemaVersion: number | null;
   toolVersion?: string;
+  planeAIndexSnapshotHash?: Sha256Hash | null;
 }
 
 function hash(domain: string, payload: string | Uint8Array): Sha256Hash {
@@ -189,16 +197,6 @@ export function fingerprintSemanticModel(model: SemanticModel): Sha256Hash {
   return hash("semantic-model", serializeControlReport(normalized));
 }
 
-/**
- * Line endings are a checkout artifact, not content: Git rewrites them per platform, so the same
- * commit reaches a CRLF and an LF working tree with different bytes. Normalizing here keeps the
- * seal bound to the source state rather than to the machine that captured it. Only the fingerprint
- * normalizes — analysis and L0 coordinates keep the exact on-disk bytes.
- */
-function normalizeLineEndings(content: string): string {
-  return content.replace(/\r\n/g, "\n");
-}
-
 /** Fingerprint the exact discovered Plane A contents plus the parsed analyzer configuration. */
 export function fingerprintAnalysisInputs(config: SemctxConfig, files: readonly DiscoveredFile[]): Sha256Hash {
   const manifest = {
@@ -207,7 +205,7 @@ export function fingerprintAnalysisInputs(config: SemctxConfig, files: readonly 
       .map((file) => ({
         path: file.relPath.replace(/\\/g, "/"),
         role: file.role,
-        contentHash: hash("analysis-input-content", normalizeLineEndings(file.content)),
+        contentHash: hash("analysis-input-content", canonicalSourceText(file.content)),
       }))
       .sort((a, b) => compareIds(a.path, b.path)),
   };
@@ -462,6 +460,10 @@ export function parseIndexedControlSnapshot(value: string | undefined): IndexedC
         && (
           !isHash((parsed as Partial<IndexedControlSnapshotV2>).observedHunkIndexHash)
           || (
+            (parsed as Partial<IndexedControlSnapshotV2>).planeAIndexSnapshotHash !== undefined
+            && !isHash((parsed as Partial<IndexedControlSnapshotV2>).planeAIndexSnapshotHash)
+          )
+          || (
             (parsed as Partial<IndexedControlSnapshotV2>).attestationSetHash !== null
             && !isHash((parsed as Partial<IndexedControlSnapshotV2>).attestationSetHash)
           )
@@ -478,9 +480,27 @@ export function parseIndexedControlSnapshot(value: string | undefined): IndexedC
   }
 }
 
+export function fingerprintPlaneAIndexSnapshot(
+  value: string | undefined,
+): Sha256Hash | null {
+  if (value === undefined || value.length === 0) return null;
+  try {
+    return digestCanonical(JSON.parse(value)) as Sha256Hash;
+  } catch {
+    return null;
+  }
+}
+
 /** Build a local, deterministic attestation. This does not assign a freshness verdict. */
 export function buildControlFreshnessSeal(input: ControlFreshnessSealInput): ControlFreshnessSeal {
   const indexed = input.indexedSnapshot;
+  const indexedPlaneAIndexSnapshotHash =
+    indexed?.schemaVersion === 2
+      ? indexed.planeAIndexSnapshotHash
+      : undefined;
+  const bindPlaneA =
+    input.planeAIndexSnapshotHash !== undefined
+    || indexedPlaneAIndexSnapshotHash !== undefined;
   const payload = {
     sealSchemaVersion: 1 as const,
     kind: "control_freshness_seal" as const,
@@ -502,6 +522,12 @@ export function buildControlFreshnessSeal(input: ControlFreshnessSealInput): Con
     indexedStoreSchemaVersion: indexed?.storeSchemaVersion ?? null,
     toolVersion: input.toolVersion ?? CONTROL_FRESHNESS_TOOL_VERSION,
     indexedToolVersion: indexed?.toolVersion ?? null,
+    ...(bindPlaneA
+      ? {
+          planeAIndexSnapshotHash: input.planeAIndexSnapshotHash ?? null,
+          indexedPlaneAIndexSnapshotHash: indexedPlaneAIndexSnapshotHash ?? null,
+        }
+      : {}),
   };
   return { ...payload, sealHash: hash("control-freshness-seal", serializeControlReport(payload)) };
 }
