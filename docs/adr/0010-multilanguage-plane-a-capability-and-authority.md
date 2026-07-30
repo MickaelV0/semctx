@@ -31,6 +31,11 @@ This ADR establishes the semantic and migration boundary before implementation.
 > deliver multi-language support, enable configured `include`, create workspace edges, or freeze a
 > concrete adapter interface.
 
+> **Runtime follow-up:** issues #58–#61 implement these invariants through private provisional
+> packages and sidecars. See
+> [Multi-language Plane A runtime](../architecture/multilanguage-plane-a-runtime.md). This does not
+> retroactively turn the logical names in this ADR into a stable public API.
+
 ## Decision
 
 Plane A support is modeled through exact capability and scope coordinates, independent trust
@@ -66,6 +71,10 @@ or negative-completeness gate.
 - deterministic selected path set or path-domain digest;
 - a manifest-evidenced workspace-unit identity, or an explicit repository-root scope;
 - language and dialect/version where applicable.
+
+Plane A source-state identity canonicalizes `CRLF` to `LF` before computing source digests. This
+normalization is deliberately narrower than observation: L0 sealed observed-diff hunks retain the
+raw observed bytes, and their evidence is never rewritten to match the Plane A source identity.
 
 A capability, fact, or completeness claim cannot be reused outside an equal scope. A broader or
 wildcard policy is valid only when explicitly registered as policy; it cannot erase a mismatch in
@@ -191,6 +200,9 @@ only.
 `admissibleFor(task, operation, factKind, scope)` is the task-relative policy decision over exact
 coordinates. It returns admissible or not admissible plus deterministic reasons. It is evaluated
 only after the earlier load-bearing gates; favorable policy cannot make invalid facts valid.
+The implemented gate 6 additionally requires the exact app-services authority-policy registration
+for the same task, operation, fact kind, and scope coordinates. Generic `admissibleFor` and the
+app-services policy must both grant; either denial yields `POLICY_DENIED`.
 
 Negative conclusions such as “no test”, “no reference”, “no dependency”, or “no impacted contract”
 require exact scoped completeness for the queried negative fact kind and
@@ -215,7 +227,7 @@ sufficient by itself.
 | 3 | Current freshness preflight | Current state is `FRESH`, or sealed `DIRTY_KNOWN` whose exact non-empty diff matches the admitted contract. `STALE` and `UNSEALED` deny. | Diagnostic-only and `UNKNOWN` or `INSUFFICIENT_ANALYSIS`, never PASS. |
 | 4 | Capability match | Fact kind, exact scope, language/dialect, producer identity/version, config and schema digests, resolution/soundness, and evidence contract exactly match the registered profile. | Diagnostic-only and inadmissible for the requested operation. |
 | 5 | Negative completeness | For a negative fact, exact fact-kind/scope completeness holds and `negativeEvidenceEligible` is true. Positive facts mark this gate not applicable. | `UNKNOWN` or `INSUFFICIENT_ANALYSIS`; absence cannot be asserted. |
-| 6 | Task-relative authority | `admissibleFor(task, operation, factKind, scope)` grants use under the current policy. | `POLICY_DENIED`; the fact remains diagnostic-only. |
+| 6 | Task-relative authority | Both `admissibleFor(task, operation, factKind, scope)` and the exact app-services authority policy grant use. | `POLICY_DENIED`; the fact remains diagnostic-only. |
 
 ### Current-staleness withdrawal
 

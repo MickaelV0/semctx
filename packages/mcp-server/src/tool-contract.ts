@@ -35,6 +35,7 @@ const TOOL_NAMES = [
   "semctx_semantic_inspect",
   "semctx_handoff",
   "semctx_resume",
+  "semctx_index_health",
   "semctx_control_status",
   "semctx_control_authority",
   "semctx_control_trace",

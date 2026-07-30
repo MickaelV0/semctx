@@ -23,6 +23,7 @@ import {
   controlExplainWhyTool,
   controlGraphTool,
   controlImpactTool,
+  indexHealthTool,
   controlPlanTool,
   controlRefinementCoverageTool,
   controlStatusTool,
@@ -329,6 +330,24 @@ export function createSemctxServer(
   );
 
   // --- Control plane (Plane C): read-only coordinates and fail-closed migration planning.
+  tools.registerTool(
+    "semctx_index_health",
+    {
+      title: "Check shared index health",
+      description:
+        "Read-only Plane-A index health report. Returns the exact shared binding, freshness, coverage, candidate outcome, workspace diagnostic, and reason data; freshness and coverage remain separate dimensions.",
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+      inputSchema: { repositoryRoot: REPOSITORY_ROOT },
+    },
+    ({ repositoryRoot }) =>
+      ok(indexHealthTool(rootResolver.resolve(repositoryRoot))),
+  );
+
   tools.registerTool(
     "semctx_control_status",
     {
