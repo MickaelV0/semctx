@@ -26,7 +26,6 @@ const REPOSITORY_ROOT = z.string().min(1).refine(
 interface TextResult {
   [key: string]: unknown;
   content: Array<{ type: "text"; text: string }>;
-  isError?: boolean;
 }
 
 export function controlTargetProposeTool(
@@ -58,27 +57,13 @@ export function registerTargetTools(
         command: MCP_PROPOSE_TARGET_ARCHITECTURE_COMMAND_V1,
       },
     },
-    async ({ repositoryRoot, command }) => {
-      try {
-        return canonical(controlTargetProposeTool(
-          rootResolver.resolve(repositoryRoot),
-          command as ProposeTargetArchitectureCommandV1,
-        ));
-      } catch (error) {
-        return errorResult(error);
-      }
-    },
+    ({ repositoryRoot, command }) => canonical(controlTargetProposeTool(
+      rootResolver.resolve(repositoryRoot),
+      command as ProposeTargetArchitectureCommandV1,
+    )),
   );
 }
 
 function canonical(value: unknown): TextResult {
   return { content: [{ type: "text", text: serializeControlReport(value) }] };
-}
-
-function errorResult(error: unknown): TextResult {
-  const message = error instanceof Error ? error.message : String(error);
-  return {
-    content: [{ type: "text", text: JSON.stringify({ error: message }) }],
-    isError: true,
-  };
 }

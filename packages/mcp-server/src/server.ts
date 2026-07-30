@@ -81,16 +81,10 @@ const REPOSITORY_ROOT = z.string().min(1).refine(isAbsolute, "repositoryRoot mus
 interface TextResult {
   [key: string]: unknown;
   content: Array<{ type: "text"; text: string }>;
-  isError?: boolean;
 }
 
 function ok(value: unknown): TextResult {
   return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }] };
-}
-
-function errorResult(err: unknown): TextResult {
-  const message = err instanceof Error ? err.message : String(err);
-  return { content: [{ type: "text", text: JSON.stringify({ error: message }) }], isError: true };
 }
 
 /** Build the semctx MCP server bound to a repository root. */
@@ -122,13 +116,8 @@ export function createSemctxServer(
         gitDiff: z.string().optional().describe("a unified diff; if omitted, the current 'git diff HEAD' is used"),
       },
     },
-    async ({ repositoryRoot, gitDiff }) => {
-      try {
-        return ok(verifyChangeTool(rootResolver.resolve(repositoryRoot), gitDiff !== undefined ? { gitDiff } : {}));
-      } catch (err) {
-        return errorResult(err);
-      }
-    },
+    ({ repositoryRoot, gitDiff }) =>
+      ok(verifyChangeTool(rootResolver.resolve(repositoryRoot), gitDiff !== undefined ? { gitDiff } : {})),
   );
 
   tools.registerTool(
@@ -146,13 +135,8 @@ export function createSemctxServer(
           .describe("restrict the search to a node kind"),
       },
     },
-    async ({ repositoryRoot, query, kind }) => {
-      try {
-        return ok(inspectTool(rootResolver.resolve(repositoryRoot), kind !== undefined ? { query, kind } : { query }));
-      } catch (err) {
-        return errorResult(err);
-      }
-    },
+    ({ repositoryRoot, query, kind }) =>
+      ok(inspectTool(rootResolver.resolve(repositoryRoot), kind !== undefined ? { query, kind } : { query })),
   );
 
   // --- Experimental: task -> ContextPack retriever. NOT a code-search replacement (ADR 0005).
@@ -171,13 +155,8 @@ export function createSemctxServer(
           .describe("optional task mode; inferred from the text when omitted"),
       },
     },
-    async ({ repositoryRoot, task, mode }) => {
-      try {
-        return ok(await prepareTaskTool(rootResolver.resolve(repositoryRoot), mode !== undefined ? { task, mode } : { task }));
-      } catch (err) {
-        return errorResult(err);
-      }
-    },
+    async ({ repositoryRoot, task, mode }) =>
+      ok(await prepareTaskTool(rootResolver.resolve(repositoryRoot), mode !== undefined ? { task, mode } : { task })),
   );
 
   // --- Semantic layer (Plane B): authored intent, invariants, decisions, evidence, change contracts.
@@ -195,13 +174,7 @@ export function createSemctxServer(
       },
       inputSchema: { repositoryRoot: REPOSITORY_ROOT },
     },
-    async ({ repositoryRoot }) => {
-      try {
-        return ok(semanticCheckTool(rootResolver.resolve(repositoryRoot)));
-      } catch (err) {
-        return errorResult(err);
-      }
-    },
+    ({ repositoryRoot }) => ok(semanticCheckTool(rootResolver.resolve(repositoryRoot))),
   );
 
   tools.registerTool(
@@ -224,13 +197,8 @@ export function createSemctxServer(
         maxNodes: z.number().int().positive().optional().describe("node cap (default 60)"),
       },
     },
-    async ({ repositoryRoot, changeId, symbolRef, claimRef, maxNodes }) => {
-      try {
-        return ok(semanticSliceTool(rootResolver.resolve(repositoryRoot), { ...(changeId !== undefined ? { changeId } : {}), ...(symbolRef !== undefined ? { symbolRef } : {}), ...(claimRef !== undefined ? { claimRef } : {}), ...(maxNodes !== undefined ? { maxNodes } : {}) }));
-      } catch (err) {
-        return errorResult(err);
-      }
-    },
+    ({ repositoryRoot, changeId, symbolRef, claimRef, maxNodes }) =>
+      ok(semanticSliceTool(rootResolver.resolve(repositoryRoot), { ...(changeId !== undefined ? { changeId } : {}), ...(symbolRef !== undefined ? { symbolRef } : {}), ...(claimRef !== undefined ? { claimRef } : {}), ...(maxNodes !== undefined ? { maxNodes } : {}) })),
   );
 
   tools.registerTool(
@@ -252,13 +220,7 @@ export function createSemctxServer(
         draft: z.boolean().optional().describe("open as draft instead of active"),
       },
     },
-    async (input) => {
-      try {
-        return ok(changeOpenTool(rootResolver.resolve(input.repositoryRoot), input));
-      } catch (err) {
-        return errorResult(err);
-      }
-    },
+    (input) => ok(changeOpenTool(rootResolver.resolve(input.repositoryRoot), input)),
   );
 
   tools.registerTool(
@@ -281,13 +243,7 @@ export function createSemctxServer(
         addTags: z.array(z.string()).optional(),
       },
     },
-    async (input) => {
-      try {
-        return ok(changeUpdateTool(rootResolver.resolve(input.repositoryRoot), input));
-      } catch (err) {
-        return errorResult(err);
-      }
-    },
+    (input) => ok(changeUpdateTool(rootResolver.resolve(input.repositoryRoot), input)),
   );
 
   tools.registerTool(
@@ -302,13 +258,8 @@ export function createSemctxServer(
         gitDiff: z.string().optional().describe("a unified diff; if omitted, the current 'git diff HEAD' is used"),
       },
     },
-    async ({ repositoryRoot, changeId, gitDiff }) => {
-      try {
-        return ok(changeVerifyTool(rootResolver.resolve(repositoryRoot), gitDiff !== undefined ? { changeId, gitDiff } : { changeId }));
-      } catch (err) {
-        return errorResult(err);
-      }
-    },
+    ({ repositoryRoot, changeId, gitDiff }) =>
+      ok(changeVerifyTool(rootResolver.resolve(repositoryRoot), gitDiff !== undefined ? { changeId, gitDiff } : { changeId })),
   );
 
   tools.registerTool(
@@ -324,17 +275,11 @@ export function createSemctxServer(
         gitDiff: z.string().optional().describe("a unified diff; if omitted, the current 'git diff HEAD' is used"),
       },
     },
-    async ({ repositoryRoot, id, superseded, gitDiff }) => {
-      try {
-        return ok(changeCloseTool(rootResolver.resolve(repositoryRoot), {
-          id,
-          ...(superseded !== undefined ? { superseded } : {}),
-          ...(gitDiff !== undefined ? { gitDiff } : {}),
-        }));
-      } catch (err) {
-        return errorResult(err);
-      }
-    },
+    ({ repositoryRoot, id, superseded, gitDiff }) => ok(changeCloseTool(rootResolver.resolve(repositoryRoot), {
+      id,
+      ...(superseded !== undefined ? { superseded } : {}),
+      ...(gitDiff !== undefined ? { gitDiff } : {}),
+    })),
   );
 
   tools.registerTool(
@@ -348,13 +293,7 @@ export function createSemctxServer(
         id: z.string().min(1).describe("a semantic id (goal.* / invariant.* / decision.* / change.* / …)"),
       },
     },
-    async ({ repositoryRoot, id }) => {
-      try {
-        return ok(semanticInspectTool(rootResolver.resolve(repositoryRoot), { id }));
-      } catch (err) {
-        return errorResult(err);
-      }
-    },
+    ({ repositoryRoot, id }) => ok(semanticInspectTool(rootResolver.resolve(repositoryRoot), { id })),
   );
 
   tools.registerTool(
@@ -368,13 +307,8 @@ export function createSemctxServer(
         note: z.string().optional().describe("an optional free-text note to carry across the handoff"),
       },
     },
-    async ({ repositoryRoot, note }) => {
-      try {
-        return ok(handoffTool(rootResolver.resolve(repositoryRoot), note !== undefined ? { note } : {}));
-      } catch (err) {
-        return errorResult(err);
-      }
-    },
+    ({ repositoryRoot, note }) =>
+      ok(handoffTool(rootResolver.resolve(repositoryRoot), note !== undefined ? { note } : {})),
   );
 
   tools.registerTool(
@@ -391,13 +325,7 @@ export function createSemctxServer(
       },
       inputSchema: { repositoryRoot: REPOSITORY_ROOT },
     },
-    async ({ repositoryRoot }) => {
-      try {
-        return ok(resumeTool(rootResolver.resolve(repositoryRoot)));
-      } catch (err) {
-        return errorResult(err);
-      }
-    },
+    ({ repositoryRoot }) => ok(resumeTool(rootResolver.resolve(repositoryRoot))),
   );
 
   // --- Control plane (Plane C): read-only coordinates and fail-closed migration planning.
@@ -415,13 +343,7 @@ export function createSemctxServer(
       },
       inputSchema: { repositoryRoot: REPOSITORY_ROOT },
     },
-    async ({ repositoryRoot }) => {
-      try {
-        return ok(controlStatusTool(rootResolver.resolve(repositoryRoot)));
-      } catch (err) {
-        return errorResult(err);
-      }
-    },
+    ({ repositoryRoot }) => ok(controlStatusTool(rootResolver.resolve(repositoryRoot))),
   );
 
   tools.registerTool(
@@ -445,13 +367,8 @@ export function createSemctxServer(
         ]).describe("Abstraction altitude the change requires (L0 syntax through L6 strategy)."),
       },
     },
-    async ({ repositoryRoot, requiredAltitude }) => {
-      try {
-        return ok(controlAuthorityTool(rootResolver.resolve(repositoryRoot), requiredAltitude));
-      } catch (err) {
-        return errorResult(err);
-      }
-    },
+    ({ repositoryRoot, requiredAltitude }) =>
+      ok(controlAuthorityTool(rootResolver.resolve(repositoryRoot), requiredAltitude)),
   );
 
   tools.registerTool(
@@ -475,19 +392,14 @@ export function createSemctxServer(
         maxResults: z.number().int().min(1).max(10_000).optional(),
       },
     },
-    async ({ repositoryRoot, sourceId, targetLevel, direction, maxDepth, maxResults }) => {
-      try {
-        return ok(controlTraceTool(rootResolver.resolve(repositoryRoot), {
-          sourceId: sourceId as QualifiedCoordinateId,
-          ...(targetLevel !== undefined ? { targetLevel: targetLevel as SemanticLevel } : {}),
-          ...(direction !== undefined ? { direction } : {}),
-          ...(maxDepth !== undefined ? { maxDepth } : {}),
-          ...(maxResults !== undefined ? { maxResults } : {}),
-        }));
-      } catch (err) {
-        return errorResult(err);
-      }
-    },
+    ({ repositoryRoot, sourceId, targetLevel, direction, maxDepth, maxResults }) =>
+      ok(controlTraceTool(rootResolver.resolve(repositoryRoot), {
+        sourceId: sourceId as QualifiedCoordinateId,
+        ...(targetLevel !== undefined ? { targetLevel: targetLevel as SemanticLevel } : {}),
+        ...(direction !== undefined ? { direction } : {}),
+        ...(maxDepth !== undefined ? { maxDepth } : {}),
+        ...(maxResults !== undefined ? { maxResults } : {}),
+      })),
   );
 
   tools.registerTool(
@@ -498,13 +410,7 @@ export function createSemctxServer(
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       inputSchema: { repositoryRoot: REPOSITORY_ROOT },
     },
-    async ({ repositoryRoot }) => {
-      try {
-        return ok(controlGraphTool(rootResolver.resolve(repositoryRoot)));
-      } catch (err) {
-        return errorResult(err);
-      }
-    },
+    ({ repositoryRoot }) => ok(controlGraphTool(rootResolver.resolve(repositoryRoot))),
   );
 
   tools.registerTool(
@@ -522,19 +428,14 @@ export function createSemctxServer(
         maxResults: z.number().int().min(1).max(10_000).optional(),
       },
     },
-    async ({ repositoryRoot, sourceId, targetLevel, direction, maxDepth, maxResults }) => {
-      try {
-        return ok(controlTraversalTool(rootResolver.resolve(repositoryRoot), {
-          sourceId: sourceId as QualifiedCoordinateId | `sha256:${string}`,
-          targetLevel: targetLevel as SemanticLevel,
-          direction,
-          ...(maxDepth !== undefined ? { maxDepth } : {}),
-          ...(maxResults !== undefined ? { maxResults } : {}),
-        }));
-      } catch (err) {
-        return errorResult(err);
-      }
-    },
+    ({ repositoryRoot, sourceId, targetLevel, direction, maxDepth, maxResults }) =>
+      ok(controlTraversalTool(rootResolver.resolve(repositoryRoot), {
+        sourceId: sourceId as QualifiedCoordinateId | `sha256:${string}`,
+        targetLevel: targetLevel as SemanticLevel,
+        direction,
+        ...(maxDepth !== undefined ? { maxDepth } : {}),
+        ...(maxResults !== undefined ? { maxResults } : {}),
+      })),
   );
 
   tools.registerTool(
@@ -554,21 +455,16 @@ export function createSemctxServer(
         maxResults: z.number().int().min(1).max(10_000).optional(),
       },
     },
-    async ({ repositoryRoot, sourceId, targetLevel, direction, sourceSeal, indexSeal, maxDepth, maxResults }) => {
-      try {
-        return ok(controlRefinementCoverageTool(rootResolver.resolve(repositoryRoot), {
-          sourceId: sourceId as QualifiedCoordinateId | `sha256:${string}`,
-          targetLevel: targetLevel as SemanticLevel,
-          direction,
-          ...(sourceSeal === undefined ? {} : { sourceSeal: sourceSeal as `sha256:${string}` }),
-          ...(indexSeal === undefined ? {} : { indexSeal: indexSeal as `sha256:${string}` }),
-          ...(maxDepth !== undefined ? { maxDepth } : {}),
-          ...(maxResults !== undefined ? { maxResults } : {}),
-        }));
-      } catch (err) {
-        return errorResult(err);
-      }
-    },
+    ({ repositoryRoot, sourceId, targetLevel, direction, sourceSeal, indexSeal, maxDepth, maxResults }) =>
+      ok(controlRefinementCoverageTool(rootResolver.resolve(repositoryRoot), {
+        sourceId: sourceId as QualifiedCoordinateId | `sha256:${string}`,
+        targetLevel: targetLevel as SemanticLevel,
+        direction,
+        ...(sourceSeal === undefined ? {} : { sourceSeal: sourceSeal as `sha256:${string}` }),
+        ...(indexSeal === undefined ? {} : { indexSeal: indexSeal as `sha256:${string}` }),
+        ...(maxDepth !== undefined ? { maxDepth } : {}),
+        ...(maxResults !== undefined ? { maxResults } : {}),
+      })),
   );
 
   tools.registerTool(
@@ -584,17 +480,12 @@ export function createSemctxServer(
         maxResults: z.number().int().min(1).max(10_000).optional(),
       },
     },
-    async ({ repositoryRoot, sourceIds, maxDepth, maxResults }) => {
-      try {
-        return ok(controlImpactTool(rootResolver.resolve(repositoryRoot), {
-          sourceIds: sourceIds as QualifiedCoordinateId[],
-          ...(maxDepth !== undefined ? { maxDepth } : {}),
-          ...(maxResults !== undefined ? { maxResults } : {}),
-        }));
-      } catch (err) {
-        return errorResult(err);
-      }
-    },
+    ({ repositoryRoot, sourceIds, maxDepth, maxResults }) =>
+      ok(controlImpactTool(rootResolver.resolve(repositoryRoot), {
+        sourceIds: sourceIds as QualifiedCoordinateId[],
+        ...(maxDepth !== undefined ? { maxDepth } : {}),
+        ...(maxResults !== undefined ? { maxResults } : {}),
+      })),
   );
 
   tools.registerTool(
@@ -610,17 +501,12 @@ export function createSemctxServer(
         maxResults: z.number().int().min(1).max(10_000).optional(),
       },
     },
-    async ({ repositoryRoot, sourceId, maxDepth, maxResults }) => {
-      try {
-        return ok(controlExplainWhyTool(rootResolver.resolve(repositoryRoot), {
-          sourceId: sourceId as QualifiedCoordinateId,
-          ...(maxDepth !== undefined ? { maxDepth } : {}),
-          ...(maxResults !== undefined ? { maxResults } : {}),
-        }));
-      } catch (err) {
-        return errorResult(err);
-      }
-    },
+    ({ repositoryRoot, sourceId, maxDepth, maxResults }) =>
+      ok(controlExplainWhyTool(rootResolver.resolve(repositoryRoot), {
+        sourceId: sourceId as QualifiedCoordinateId,
+        ...(maxDepth !== undefined ? { maxDepth } : {}),
+        ...(maxResults !== undefined ? { maxResults } : {}),
+      })),
   );
 
   tools.registerTool(
@@ -634,16 +520,11 @@ export function createSemctxServer(
         target: MCP_ARCHITECTURE_SNAPSHOT,
       },
     },
-    async ({ repositoryRoot, target }) => {
-      try {
-        return ok(controlArchitectureComparisonTool(
-          rootResolver.resolve(repositoryRoot),
-          target as ArchitectureSnapshot,
-        ));
-      } catch (err) {
-        return errorResult(err);
-      }
-    },
+    ({ repositoryRoot, target }) =>
+      ok(controlArchitectureComparisonTool(
+        rootResolver.resolve(repositoryRoot),
+        target as ArchitectureSnapshot,
+      )),
   );
 
   tools.registerTool(
@@ -666,13 +547,8 @@ export function createSemctxServer(
         attestationRequests: z.array(MCP_ATTESTATION_REQUEST_V1),
       },
     },
-    async ({ repositoryRoot, ...input }) => {
-      try {
-        return ok(controlAuthorizeTransitionTool(rootResolver.resolve(repositoryRoot), input));
-      } catch (err) {
-        return errorResult(err);
-      }
-    },
+    ({ repositoryRoot, ...input }) =>
+      ok(controlAuthorizeTransitionTool(rootResolver.resolve(repositoryRoot), input)),
   );
 
   tools.registerTool(
@@ -690,16 +566,11 @@ export function createSemctxServer(
         attestationRequests: z.array(MCP_ATTESTATION_REQUEST_V1),
       },
     },
-    async ({ repositoryRoot, ...input }) => {
-      try {
-        return ok(controlAuthorizeStepTool(
-          rootResolver.resolve(repositoryRoot),
-          input as unknown as Parameters<typeof controlAuthorizeStepTool>[1],
-        ));
-      } catch (err) {
-        return errorResult(err);
-      }
-    },
+    ({ repositoryRoot, ...input }) =>
+      ok(controlAuthorizeStepTool(
+        rootResolver.resolve(repositoryRoot),
+        input as unknown as Parameters<typeof controlAuthorizeStepTool>[1],
+      )),
   );
 
   tools.registerTool(
@@ -716,13 +587,8 @@ export function createSemctxServer(
         attestationRequests: z.array(MCP_ATTESTATION_REQUEST_V1),
       },
     },
-    async ({ repositoryRoot, ...input }) => {
-      try {
-        return ok(controlAuthorizeDeletionTool(rootResolver.resolve(repositoryRoot), input));
-      } catch (err) {
-        return errorResult(err);
-      }
-    },
+    ({ repositoryRoot, ...input }) =>
+      ok(controlAuthorizeDeletionTool(rootResolver.resolve(repositoryRoot), input)),
   );
 
   tools.registerTool(
@@ -744,17 +610,12 @@ export function createSemctxServer(
         delta: MCP_ARCHITECTURE_DELTA.optional().describe("optional delta that must correspond to current and target snapshot ids"),
       },
     },
-    async ({ repositoryRoot, changeId, target, delta }) => {
-      try {
-        return ok(controlPlanTool(rootResolver.resolve(repositoryRoot), {
-          changeId,
-          ...(target !== undefined ? { target: target as ArchitectureSnapshot } : {}),
-          ...(delta !== undefined ? { delta: delta as ArchitectureDelta } : {}),
-        }));
-      } catch (err) {
-        return errorResult(err);
-      }
-    },
+    ({ repositoryRoot, changeId, target, delta }) =>
+      ok(controlPlanTool(rootResolver.resolve(repositoryRoot), {
+        changeId,
+        ...(target !== undefined ? { target: target as ArchitectureSnapshot } : {}),
+        ...(delta !== undefined ? { delta: delta as ArchitectureDelta } : {}),
+      })),
   );
 
   registerReconciliationTools(tools, rootResolver);
