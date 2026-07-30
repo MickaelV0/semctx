@@ -73,6 +73,12 @@ function analyzedInput() {
       negativeEvidenceEligible: false,
     }],
     requiredCapability: {
+      language: "typescript",
+      dialectVersion: "5.6",
+      producer,
+      producerConfigurationDigest: "sha256:expected-config",
+      factSchemaDigest: "sha256:schema",
+      evidenceContract: "source-lines-v1",
       resolutionSemantics: "typescript-static-v1",
       soundnessClaim: "sound-within-static-resolution",
       completenessClaim: "complete",
@@ -92,6 +98,10 @@ function validAnalyzedInput(): PlaneAEvaluationInput {
       completenessClaim: "complete",
       negativeEvidenceEligible: true,
     }],
+    requiredCapability: {
+      ...input.requiredCapability!,
+      producerConfigurationDigest: "sha256:actual-config",
+    },
     taskRelativeAuthority: { admissible: true },
   };
 }
@@ -296,6 +306,7 @@ describe("Plane A gate and reason engine", () => {
     expect(decision.reasons.map((reason) => reason.code)).toEqual([
       "CURRENT_STATE_STALE",
       "SCOPE_MISMATCH",
+      "CAPABILITY_MISSING",
       "CONFIG_DIGEST_MISMATCH",
       "NEGATIVE_COMPLETENESS_MISSING",
       "POLICY_DENIED",
@@ -334,6 +345,10 @@ describe("Plane A gate and reason engine", () => {
       currentFreshness: "FRESH",
       taskRelativeAuthority: { admissible: true },
       capabilityProfiles: [profile],
+      requiredCapability: {
+        ...input.requiredCapability!,
+        producerConfigurationDigest: "sha256:actual-config",
+      },
     });
 
     expect(decision.reasons).toEqual([{
@@ -444,6 +459,10 @@ describe("Plane A gate and reason engine", () => {
       currentFreshness: "FRESH",
       taskRelativeAuthority: { admissible: true },
       capabilityProfiles: [decoyProfile, goodProfile],
+      requiredCapability: {
+        ...input.requiredCapability!,
+        producerConfigurationDigest: "sha256:actual-config",
+      },
       factBatches: [{
         ...input.factBatches[0]!,
         capabilityProfileIds: ["profile:b"],

@@ -28,6 +28,18 @@ export interface ProducerIdentity {
   version: string;
 }
 
+export interface PlaneACapabilityRequirement {
+  readonly language: string;
+  readonly dialectVersion: string | null;
+  readonly producer: ProducerIdentity;
+  readonly producerConfigurationDigest: string;
+  readonly factSchemaDigest: string;
+  readonly evidenceContract: string;
+  readonly resolutionSemantics: string;
+  readonly soundnessClaim: string;
+  readonly completenessClaim: string;
+}
+
 export interface NodeFact {
   factType: "node";
   ordinal: number;
@@ -183,11 +195,7 @@ export interface PlaneAEvaluationInput {
   bindingAttestation: "absent" | "valid" | "invalid";
   currentFreshness: "FRESH" | "DIRTY_KNOWN" | "UNSEALED" | "STALE";
   capabilityProfiles: readonly CapabilityProfile[];
-  requiredCapability: {
-    resolutionSemantics: string;
-    soundnessClaim: string;
-    completenessClaim: string;
-  };
+  requiredCapability: PlaneACapabilityRequirement | null;
   taskRelativeAuthority: { admissible: boolean };
 }
 

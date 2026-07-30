@@ -11,6 +11,11 @@ Marketplace. The published CLI lags this repository — see
 
 ### Added
 
+- **0.1.17 multi-language Plane A runtime**: config v2 can select and analyze mixed TypeScript and
+  Python workspaces while preserving TypeScript compatibility. CLI/MCP `index-health` and `setup`
+  report partial or insufficient analysis explicitly. Exact capability requirements, source/result
+  binding, freshness, negative completeness, generic admissibility, and the app-services authority
+  policy remain independent fail-closed gates.
 - **Cross-host top-down diagnosis**: the shared `semctx-control` skill now locates the highest
   broken contract from L6 strategy/constraints to L0 sealed observed hunks, records why higher and
   lower levels are excluded, and defines the smallest falsification check before substantial

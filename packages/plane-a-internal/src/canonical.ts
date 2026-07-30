@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 import type { CanonicalValue } from "./model";
 
+/** Canonical source-text identity used by every Plane A seal and source digest. */
+export function canonicalSourceText(content: string): string {
+  return content.replace(/\r\n/g, "\n");
+}
+
 function canonicalize(value: unknown): CanonicalValue {
   if (value === null || typeof value === "string" || typeof value === "boolean") return value;
   if (typeof value === "number") {

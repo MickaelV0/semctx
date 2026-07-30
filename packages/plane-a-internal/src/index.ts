@@ -12,7 +12,7 @@ export type {
   AssembledPlaneA,
   PlaneAAssemblyErrorCode,
 } from "./assembler";
-export { canonicalJson, digestCanonical } from "./canonical";
+export { canonicalJson, canonicalSourceText, digestCanonical } from "./canonical";
 export {
   InvalidDiscoveryLedgerEntryError,
   aggregatePlaneAEvaluations,
@@ -45,6 +45,7 @@ export type {
   PlaneAEvaluationDecision,
   PlaneAEvaluationInput,
   PlaneAEvaluationReport,
+  PlaneACapabilityRequirement,
   PlaneAEvaluationRequest,
   PlaneAFact,
   PlaneAGates,

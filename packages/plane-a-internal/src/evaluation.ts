@@ -187,6 +187,17 @@ function capabilityReasons(
   batch: FactBatchV1,
   profiles: readonly CapabilityProfile[],
 ): { code: PlaneAReasonCode; detail: ReasonDetail }[] {
+  const requirement = input.requiredCapability;
+  if (requirement === null) {
+    return [{
+      code: "CAPABILITY_MISSING",
+      detail: {
+        coordinate: "capabilityRequirementCardinality",
+        expected: 1,
+        actual: 0,
+      },
+    }];
+  }
   const profile = profiles.length === 1 ? profiles[0] : undefined;
   if (profile === undefined) {
     return [{
@@ -252,26 +263,73 @@ function capabilityReasons(
   addMismatch(
     reasons,
     "CAPABILITY_MISSING",
+    "requiredLanguage",
+    requirement.language,
+    profile.scope.language,
+  );
+  addMismatch(
+    reasons,
+    "CAPABILITY_MISSING",
+    "requiredDialectVersion",
+    requirement.dialectVersion,
+    profile.scope.dialectVersion ?? null,
+  );
+  addMismatch(
+    reasons,
+    "CAPABILITY_MISSING",
+    "requiredProducerIdentity",
+    requirement.producer.identity,
+    profile.producer.identity,
+  );
+  addMismatch(
+    reasons,
+    "PRODUCER_VERSION_MISMATCH",
+    "requiredProducerVersion",
+    requirement.producer.version,
+    profile.producer.version,
+  );
+  addMismatch(
+    reasons,
+    "CONFIG_DIGEST_MISMATCH",
+    "requiredProducerConfigurationDigest",
+    requirement.producerConfigurationDigest,
+    profile.producerConfigurationDigest,
+  );
+  addMismatch(
+    reasons,
+    "SCHEMA_DIGEST_MISMATCH",
+    "requiredFactSchemaDigest",
+    requirement.factSchemaDigest,
+    profile.factSchemaDigest,
+  );
+  addMismatch(
+    reasons,
+    "EVIDENCE_CONTRACT_MISMATCH",
+    "requiredEvidenceContract",
+    requirement.evidenceContract,
+    profile.evidenceContract,
+  );
+  addMismatch(
+    reasons,
+    "CAPABILITY_MISSING",
     "resolutionSemantics",
-    input.requiredCapability.resolutionSemantics,
+    requirement.resolutionSemantics,
     profile.resolutionSemantics,
   );
   addMismatch(
     reasons,
     "CAPABILITY_MISSING",
     "soundnessClaim",
-    input.requiredCapability.soundnessClaim,
+    requirement.soundnessClaim,
     profile.soundnessClaim,
   );
-  if (!input.request.negativeConclusion) {
-    addMismatch(
-      reasons,
-      "CAPABILITY_MISSING",
-      "completenessClaim",
-      input.requiredCapability.completenessClaim,
-      profile.completenessClaim,
-    );
-  }
+  addMismatch(
+    reasons,
+    "CAPABILITY_MISSING",
+    "completenessClaim",
+    requirement.completenessClaim,
+    profile.completenessClaim,
+  );
   return reasons;
 }
 
@@ -434,6 +492,8 @@ export function evaluatePlaneA(input: PlaneAEvaluationInput): PlaneAEvaluationDe
   failures.push(...capabilityReasons(input, factBatch, profilesForFactKind));
   if (input.request.negativeConclusion) {
     if (
+      input.requiredCapability === null
+      ||
       profile === undefined
       || profile.completenessClaim !== input.requiredCapability.completenessClaim
     ) {
@@ -441,7 +501,8 @@ export function evaluatePlaneA(input: PlaneAEvaluationInput): PlaneAEvaluationDe
         code: "NEGATIVE_COMPLETENESS_MISSING",
         detail: {
           coordinate: "completenessClaim",
-          expected: input.requiredCapability.completenessClaim,
+          expected: input.requiredCapability?.completenessClaim
+            ?? "one registered capability requirement",
           actual: profile?.completenessClaim ?? null,
         },
       });

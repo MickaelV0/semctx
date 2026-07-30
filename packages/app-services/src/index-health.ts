@@ -22,6 +22,8 @@ import { loadConfig } from "@semantic-context/repository-store";
 import { openReadyRepository } from "./readiness";
 import type { WorkspaceProjection } from "@semantic-context/workspace-analyzer-internal";
 import { controlStatus } from "./control";
+import { resolvePlaneACapabilityRequirement } from "./plane-a-capability-requirements";
+import { isPlaneAOperationAdmitted } from "./plane-a-authority-policy";
 import {
   CONTROL_INDEX_SNAPSHOT_META_KEY,
   PLANE_A_INDEX_SNAPSHOT_META_KEY,
@@ -587,6 +589,8 @@ function evaluateSnapshot(
   snapshot: PersistedPlaneAIndexSnapshotV1,
   bindingAttestation: "valid" | "invalid",
   freshness: ControlFreshnessStatusReport,
+  configVersion: 1 | 2,
+  producerConfigurationDigest: string,
 ): PlaneAEvaluationReport {
   const decisions: PlaneAEvaluationDecision[] = [];
   for (const entry of snapshot.sidecar.discoveryLedger) {
@@ -613,8 +617,25 @@ function evaluateSnapshot(
         .filter((profile) =>
           profile.factKind === factKind
           && batch?.capabilityProfileIds.includes(profile.profileId));
-      const profile = referencedProfiles.length === 1 ? referencedProfiles[0] : undefined;
+      const referencedProfile =
+        referencedProfiles.length === 1 ? referencedProfiles[0] : undefined;
+      const requiredCapability = resolvePlaneACapabilityRequirement({
+        configVersion,
+        producerConfigurationDigest,
+        task: "verify",
+        operation: "change",
+        language: entry.scope.language,
+        factKind,
+        completenessClaim: referencedProfile?.completenessClaim ?? "",
+      });
       const policy = admissibleFor({
+        task: "verify",
+        operation: "change",
+        factKind,
+        scope: entry.scope,
+      });
+      const operationAdmitted = isPlaneAOperationAdmitted({
+        configVersion,
         task: "verify",
         operation: "change",
         factKind,
@@ -648,12 +669,10 @@ function evaluateSnapshot(
         bindingAttestation,
         currentFreshness: freshness.verdict,
         capabilityProfiles: snapshot.sidecar.capabilityProfiles,
-        requiredCapability: {
-          resolutionSemantics: profile?.resolutionSemantics ?? "declared-profile-required",
-          soundnessClaim: profile?.soundnessClaim ?? "declared-profile-required",
-          completenessClaim: profile?.completenessClaim ?? "declared-profile-required",
+        requiredCapability,
+        taskRelativeAuthority: {
+          admissible: policy.admissible && operationAdmitted,
         },
-        taskRelativeAuthority: { admissible: policy.admissible },
       }));
     }
   }
@@ -840,6 +859,8 @@ export function indexHealth(root: string): IndexHealthReportV1 {
       snapshot,
       validBinding ? "valid" : "invalid",
       freshness,
+      config.version,
+      digestCanonical(config),
     );
 
     const reasonCodes = new Set<PlaneAReasonCode>();

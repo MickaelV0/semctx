@@ -26,6 +26,7 @@ import {
   DeterministicGraphAssembler,
   assertStableCapture,
   attachPlaneASidecar,
+  canonicalSourceText,
   digestCanonical,
   type ArtifactScope,
   type CapabilityProfile,
@@ -34,7 +35,10 @@ import {
   type ProducerIdentity,
 } from "@semantic-context/plane-a-internal";
 import { discoverFiles, sourceLanguage, type DiscoveredFile } from "./discovery";
-import { extractTypeScript } from "./ts-symbols";
+import {
+  extractTypeScript,
+  TYPESCRIPT_DIALECT_VERSION,
+} from "./ts-symbols";
 import { extractDoc } from "./docs";
 import { extractMigration } from "./migrations";
 
@@ -203,7 +207,7 @@ function buildTypeScriptSidecar(
       relPath: file.relPath,
       role: file.role,
       language: file.language ?? null,
-      content: file.content,
+      content: canonicalSourceText(file.content),
     }))
     .sort((left, right) => compareIds(left.relPath, right.relPath));
   const sourceDigest = digestCanonical(sourceInputs);
@@ -221,7 +225,7 @@ function buildTypeScriptSidecar(
         relPath: file.relPath,
         role: file.role,
         language: file.language ?? null,
-        content,
+        content: content === null ? null : canonicalSourceText(content),
       };
     })
     .sort((left, right) => compareIds(left.relPath, right.relPath));
@@ -277,7 +281,9 @@ function buildTypeScriptSidecar(
       selectedPathSetDigest: digestCanonical(languagePaths),
       selectedPaths: languagePaths,
       language,
-      ...(language === "typescript" ? { dialectVersion: "5.6" } : {}),
+      ...(language === "typescript"
+        ? { dialectVersion: TYPESCRIPT_DIALECT_VERSION }
+        : {}),
     };
     const factKinds = [...new Set(languageFacts.map((fact) => fact.kind))].sort();
     const profiles = factKinds.map((factKind): CapabilityProfile => ({
