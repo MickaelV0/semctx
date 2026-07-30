@@ -1,8 +1,11 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import {
+  AGENT_LIFECYCLE_POLICY_V1,
   AGENT_WORKFLOW_CONTRACT_V1,
+  AgentLifecyclePolicyV1Schema,
   AgentWorkflowContractV1Schema,
+  type AgentLifecyclePolicyV1,
   type AgentWorkflowContractV1,
 } from "@semantic-context/control-model";
 
@@ -50,6 +53,7 @@ export type SkillHost = "claude-code" | "semctx-control";
 
 const HOST_CLI_MARKER = "{{HOST_CLI_LADDER}}";
 const SHARED_WORKFLOW_MARKER = "{{SHARED_WORKFLOW_CONTRACT}}";
+const SHARED_LIFECYCLE_MARKER = "{{SHARED_LIFECYCLE_CONTRACT}}";
 const HOST_CLI_BEGIN = (host: SkillHost) => `<!-- BEGIN host-cli-ladder:${host} -->`;
 const HOST_CLI_END = "<!-- END host-cli-ladder -->";
 // Strip markers + host body so parity can assert the shared contract is still one document.
@@ -147,6 +151,46 @@ The bounded transfer stage is \`${parsed.completion.handoffStageId}\`.
 <!-- END shared-workflow-contract -->`;
 }
 
+export function renderSharedLifecycleContract(
+  policy: AgentLifecyclePolicyV1 = AGENT_LIFECYCLE_POLICY_V1,
+): string {
+  const parsed = AgentLifecyclePolicyV1Schema.parse(policy) as AgentLifecyclePolicyV1;
+  const checkpoints = parsed.checkpoints.map((checkpoint) => {
+    const implementation = checkpoint.requiredStageIds.implementation.length > 0
+      ? checkpoint.requiredStageIds.implementation.map((id) => `\`${id}\``).join(" → ")
+      : "no stage-presence requirement";
+    const migration = checkpoint.requiredStageIds.migration.length > 0
+      ? checkpoint.requiredStageIds.migration.map((id) => `\`${id}\``).join(" → ")
+      : "no stage-presence requirement";
+    const threshold = checkpoint.minimumAltitude === 2
+      ? " Eligible from L2 through L6; L0-L1 is `NO_OP`."
+      : "";
+    return `- **${checkpoint.id}** — minimum altitude L${checkpoint.minimumAltitude}.${threshold}\n`
+      + `  Implementation stages: ${implementation}.\n`
+      + `  Migration stages: ${migration}.`;
+  }).join("\n");
+
+  return `<!-- BEGIN shared-lifecycle-contract:v1 -->
+Codex and Claude Code expose \`${parsed.mcpTool}\` through the same Semctx MCP runtime.
+Both hosts are instructed to invoke these checkpoints; these instructions are not automatic hooks
+and do not prove that a host event ran.
+
+This is a presence-only advisory contract. \`NO_OP\` means no stage-presence obligation applies,
+\`RECORDED\` means every required stage id was caller-recorded, and \`INCOMPLETE\` means required
+stage ids are missing. Recorded stage outcomes remain unevaluated and admissibility is not evaluated.
+Enforcement is \`${parsed.enforcementMode}\`, blocking is disabled, and execution authority is \`${parsed.executionAuthority}\`.
+
+Invoke the checkpoints in policy order:
+${checkpoints}
+
+After repository edits, fold prior and newly observed touched coordinate ids as
+\`caller_observed_advisory\` evidence. Accumulation is
+\`${parsed.coordinateAccumulation}\`: the caller must reinject prior ids, and Semctx binds them to
+no task, session, diff, commit, or handoff. Before completion, record the required completion
+stages; before compaction or owner transfer, record \`handoff\`.
+<!-- END shared-lifecycle-contract -->`;
+}
+
 export function renderControlSkill(host: SkillHost, template: string = readSkillTemplate()): string {
   if (!template.includes(HOST_CLI_MARKER)) {
     throw new Error(
@@ -158,6 +202,11 @@ export function renderControlSkill(host: SkillHost, template: string = readSkill
       `skill template missing ${SHARED_WORKFLOW_MARKER}: ${skillTemplatePath}`,
     );
   }
+  if (!template.includes(SHARED_LIFECYCLE_MARKER)) {
+    throw new Error(
+      `skill template missing ${SHARED_LIFECYCLE_MARKER}: ${skillTemplatePath}`,
+    );
+  }
   if (template.includes("CLAUDE_PLUGIN_ROOT")) {
     throw new Error(
       `skill template must not embed CLAUDE_PLUGIN_ROOT (host-specific; lives in hostCliLadder only): ${skillTemplatePath}`,
@@ -165,9 +214,13 @@ export function renderControlSkill(host: SkillHost, template: string = readSkill
   }
   const body = hostCliLadder(host).replace(/\n$/, "");
   const workflow = renderSharedWorkflowContract();
+  const lifecycle = renderSharedLifecycleContract();
   const filled = template.replace(
     SHARED_WORKFLOW_MARKER,
     workflow,
+  ).replace(
+    SHARED_LIFECYCLE_MARKER,
+    lifecycle,
   ).replace(
     HOST_CLI_MARKER,
     `${HOST_CLI_BEGIN(host)}\n${body}\n${HOST_CLI_END}`,

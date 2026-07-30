@@ -130,6 +130,28 @@ For a read-only request, the skill forbids the mutating change-contract and hand
 write request, those tools may version authored intent under `.semctx/semantic/`; they never modify
 application code themselves.
 
+## MCP-only lifecycle foundation
+
+Codex and Claude Code expose the same strict lifecycle policy and report through
+`semctx_control_agent_lifecycle`. Agents must invoke it explicitly at four points:
+
+1. `before_implementation_write` before the first eligible L2+ implementation write;
+2. `after_repository_edits` after edits, to fold caller-observed touched coordinate ids;
+3. `before_completion` before claiming completion;
+4. `before_compaction` before compaction or owner transfer.
+
+The request carries `requiredAltitude`. Pre-write L0-L1 is `NO_OP`; L2-L6 checks the policy's
+required stage ids. `NO_OP` means no stage-presence obligation applies, `RECORDED` means all
+required stage ids were recorded, and `INCOMPLETE` means required ids are missing. These verdicts
+evaluate neither stage outcomes nor admissibility. The report also distinguishes a non-Semctx
+`non_semctx` no-op from an explicit `semctx_unready` repository.
+
+Touched coordinates are `caller_observed_advisory`. Their fold is
+`stateless_caller_reinjected_unbound`: the caller must reinject prior ids, and Semctx persists or
+binds none of them to a task, session, diff, commit, or handoff. The tool is read-only and
+source-non-collecting; `shadow` mode blocks nothing and grants no execution authority. This slice
+adds no automatic lifecycle hooks, persisted or measured telemetry, Handoff v2, or enforcement.
+
 ## Decision semantics
 
 - `PASS` says the deterministic diff policy found no blocking condition. It does not replace tests.

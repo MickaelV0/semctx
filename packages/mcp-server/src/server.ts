@@ -15,6 +15,7 @@ import {
   resumeTool,
 } from "./semantic-tools";
 import {
+  controlAgentLifecycleTool,
   controlArchitectureComparisonTool,
   controlAuthorizeDeletionTool,
   controlAuthorityTool,
@@ -35,6 +36,7 @@ import {
 } from "./reconciliation-tools";
 import { registerTargetTools } from "./target-tools";
 import {
+  AgentLifecycleCheckpointRequestV1Schema,
   AttestationRequestV1Schema,
   ArchitectureDeltaSchema,
   ArchitectureSnapshotSchema,
@@ -51,6 +53,7 @@ import {
   TraversalDirectionSchema,
   type ArchitectureDelta,
   type ArchitectureSnapshot,
+  type AgentLifecycleCheckpointRequestV1,
   type QualifiedCoordinateId,
   type SemanticLevel,
 } from "@semantic-context/control-model";
@@ -60,6 +63,12 @@ import { ToolRegistrar, type ToolRegistrarOptions } from "./tool-contract";
 import { registerControlExplorerApp } from "./control-explorer-app";
 
 const MCP_ATTESTATION_REQUEST_V1 = mcpSchema(AttestationRequestV1Schema);
+const MCP_AGENT_LIFECYCLE_CHECKPOINT_REQUEST_V1 = mcpSchema(
+  AgentLifecycleCheckpointRequestV1Schema,
+).refine(
+  (request) => AgentLifecycleCheckpointRequestV1Schema.safeParse(request).success,
+  "invalid agent lifecycle checkpoint request",
+);
 const MCP_ARCHITECTURE_DELTA = mcpSchema(ArchitectureDeltaSchema);
 const MCP_ARCHITECTURE_SNAPSHOT = mcpSchema(ArchitectureSnapshotSchema);
 const MCP_EXECUTION_STATE = mcpSchema(ExecutionStateSchema);
@@ -363,6 +372,25 @@ export function createSemctxServer(
       inputSchema: { repositoryRoot: REPOSITORY_ROOT },
     },
     ({ repositoryRoot }) => ok(controlStatusTool(rootResolver.resolve(repositoryRoot))),
+  );
+
+  tools.registerTool(
+    "semctx_control_agent_lifecycle",
+    {
+      title: "Record an advisory agent lifecycle checkpoint",
+      description:
+        "Read-only advisory lifecycle checkpoint in shadow mode. It records stage presence and caller-observed coordinate identifiers, evaluates neither outcomes nor admissibility, blocks nothing, collects no source content, and grants no execution authority.",
+      inputSchema: {
+        repositoryRoot: REPOSITORY_ROOT,
+        request: MCP_AGENT_LIFECYCLE_CHECKPOINT_REQUEST_V1,
+      },
+      strictInput: true,
+    },
+    ({ repositoryRoot, request }) =>
+      ok(controlAgentLifecycleTool(
+        rootResolver.resolve(repositoryRoot),
+        request as AgentLifecycleCheckpointRequestV1,
+      )),
   );
 
   tools.registerTool(

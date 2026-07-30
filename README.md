@@ -131,6 +131,27 @@ semctx verify diff --format json --output report.json   # stable, versioned mach
 A documented **pre-commit gate** (`docs/examples/pre-commit-hook.md`) runs `verify diff
 --staged` and blocks the commit only on `BLOCK`.
 
+### Shared lifecycle checkpoint (MCP-only foundation)
+
+Codex and Claude Code expose the same read-only `semctx_control_agent_lifecycle` MCP tool. Agents
+must invoke it explicitly at `before_implementation_write` before the first eligible L2+ write,
+`after_repository_edits` after edits, `before_completion` before claiming completion, and
+`before_compaction` before compaction or owner transfer. The request carries `requiredAltitude`; a
+pre-write request at L0-L1 has no stage-presence obligation.
+
+The report is presence-only: `NO_OP` means no stage-presence obligation applies, `RECORDED` means
+all required stage ids were recorded, and `INCOMPLETE` means required stage ids are missing. These
+values evaluate neither stage outcomes nor admissibility. A non-Semctx repository returns an
+explicit `non_semctx` no-op; a Semctx repository whose index is not ready remains
+`semctx_unready`.
+
+Touched coordinates carry `caller_observed_advisory` evidence. The tool folds prior and newly
+observed ids as `stateless_caller_reinjected_unbound`: the caller must reinject prior ids, and
+Semctx persists or binds none of them to a task, session, diff, commit, or handoff. This foundation
+runs in `shadow` mode, blocks nothing, grants no execution authority, and collects no source
+content. It adds no automatic lifecycle hooks, measured or persisted telemetry, Handoff v2, or
+enforcement.
+
 ### Claude Code
 
 The plugin ([`plugins/claude-code`](plugins/claude-code)) exposes the same shared
@@ -276,7 +297,8 @@ verdict; `semctx_inspect` queries the graph. The semantic layer adds advisory to
 `semctx_handoff` / `semctx_resume`) — see
 [`docs/integrations/claude-code-semantic-layer.md`](docs/integrations/claude-code-semantic-layer.md).
 Plane C adds the read-only `semctx_control_status`, `semctx_control_trace`, and
-`semctx_control_plan`, `semctx_control_plan_change` and `semctx_control_reconcile_diff` tools.
+`semctx_control_plan`, `semctx_control_plan_change`, `semctx_control_reconcile_diff`, and the
+MCP-only advisory `semctx_control_agent_lifecycle` checkpoint tool.
 CLI and MCP use the same strict versioned schemas, reason precedence and canonical serialization.
 The easiest path is the Codex or Claude Code plugin above; to register the server directly (stdio):
 
@@ -373,6 +395,8 @@ Implemented and tested (full suite via `bun test`):
 - **control plane (Plane C)**: sealed TaskEnvelope/ChangeSet planning, immutable reviewed target
   identities, five refinement profiles and actual-worktree reconciliation with canonical
   CLI/MCP parity and no execution authority.
+- **agent lifecycle foundation**: one shared MCP-only stage-presence policy/report for four explicit
+  checkpoints; shadow-only, stateless, non-blocking, non-authorizing and source-non-collecting.
 
 ### Known limitations
 
@@ -384,6 +408,8 @@ Implemented and tested (full suite via `bun test`):
   proof is obtained only when you run the test and record the evidence status (static, not dynamic).
 - `.sem` statements are single-line (like `@markers`); the semantic slice does not do content
   retrieval (explicit scopes only); no SQLite index for Plane B in v1 (Git is the source of truth).
+- Lifecycle checkpoints require explicit agent calls. They provide no automatic host hooks,
+  persisted or measured telemetry, Handoff v2, or enforcement.
 
 See [`ROADMAP.md`](ROADMAP.md) for the shipping vs research split.
 

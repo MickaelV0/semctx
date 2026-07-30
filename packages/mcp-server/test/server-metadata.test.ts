@@ -38,6 +38,7 @@ describe("semctx MCP tool metadata", () => {
       "semctx_resume",
       "semctx_index_health",
       "semctx_control_status",
+      "semctx_control_agent_lifecycle",
       "semctx_control_trace",
       "semctx_control_plan",
       "semctx_control_bind_scope",
@@ -51,6 +52,11 @@ describe("semctx MCP tool metadata", () => {
         openWorldHint: false,
       });
     }
+
+    const lifecycleTool = byName.get("semctx_control_agent_lifecycle");
+    expect(lifecycleTool?.description).toContain("advisory");
+    expect(lifecycleTool?.description).toContain("shadow");
+    expect(lifecycleTool?.description).toContain("no execution authority");
 
     expect(byName.get("semctx_change_open")?.annotations?.readOnlyHint).not.toBe(true);
     expect(byName.get("semctx_change_update")?.annotations?.readOnlyHint).not.toBe(true);
