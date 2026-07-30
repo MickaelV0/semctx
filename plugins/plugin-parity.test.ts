@@ -1,11 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
-import { AGENT_WORKFLOW_CONTRACT_V1 } from "@semantic-context/control-model";
+import {
+  AGENT_LIFECYCLE_POLICY_V1,
+  AGENT_WORKFLOW_CONTRACT_V1,
+} from "@semantic-context/control-model";
 import {
   HOST_CLI_STRIP,
   hostCliLadder,
   renderControlSkill,
+  renderSharedLifecycleContract,
   type SkillHost,
 } from "../scripts/build-plugin-runtime.ts";
 
@@ -38,6 +42,14 @@ function sharedContractBody(skill: string): string {
   return stripped;
 }
 
+function sharedLifecycleBody(skill: string): string {
+  const match = skill.match(
+    /<!-- BEGIN shared-lifecycle-contract:v1 -->\n[\s\S]*?<!-- END shared-lifecycle-contract -->/,
+  );
+  expect(match).not.toBeNull();
+  return match![0];
+}
+
 describe("Codex and Claude Code plugin parity", () => {
   test("renders the machine workflow contract into both host adapters", () => {
     const template = read("plugins/shared/skills/semctx-control/SKILL.md");
@@ -66,8 +78,15 @@ describe("Codex and Claude Code plugin parity", () => {
     )).toThrow(/SHARED_WORKFLOW_CONTRACT/);
   });
 
+  test("renderControlSkill rejects a template without the machine lifecycle marker", () => {
+    expect(() => renderControlSkill(
+      "claude-code",
+      "# incomplete\n{{SHARED_WORKFLOW_CONTRACT}}\n{{HOST_CLI_LADDER}}\n",
+    )).toThrow(/SHARED_LIFECYCLE_CONTRACT/);
+  });
+
   test("renderControlSkill rejects a template that embeds CLAUDE_PLUGIN_ROOT", () => {
-    const bad = "# x\n{{SHARED_WORKFLOW_CONTRACT}}\n{{HOST_CLI_LADDER}}\n${CLAUDE_PLUGIN_ROOT}\n";
+    const bad = "# x\n{{SHARED_WORKFLOW_CONTRACT}}\n{{SHARED_LIFECYCLE_CONTRACT}}\n{{HOST_CLI_LADDER}}\n${CLAUDE_PLUGIN_ROOT}\n";
     expect(() => renderControlSkill("claude-code", bad)).toThrow(/CLAUDE_PLUGIN_ROOT/);
   });
 
@@ -153,6 +172,40 @@ describe("Codex and Claude Code plugin parity", () => {
     const codexFence = codex.match(/```text\n([\s\S]*?)```/)?.[1] ?? "";
     expect(codexFence).not.toMatch(/bun\s+["']?\.\/dist\/semctx\.js/);
     expect(codex).toContain("does **not** substitute a plugin-root path");
+  });
+
+  test("ships one generated advisory lifecycle contract byte-identically across hosts", () => {
+    const template = read("plugins/shared/skills/semctx-control/SKILL.md");
+    expect(template).toContain("{{SHARED_LIFECYCLE_CONTRACT}}");
+
+    const claude = read(skillPath("claude-code"));
+    const codex = read(skillPath("semctx-control"));
+    const lifecycle = sharedLifecycleBody(claude);
+
+    expect(lifecycle).toBe(sharedLifecycleBody(codex));
+    expect(renderSharedLifecycleContract()).toBe(renderSharedLifecycleContract());
+    expect(lifecycle).toBe(renderSharedLifecycleContract());
+
+    expect(lifecycle).toContain(AGENT_LIFECYCLE_POLICY_V1.mcpTool);
+    for (const checkpoint of AGENT_LIFECYCLE_POLICY_V1.checkpoints) {
+      expect(lifecycle).toContain(checkpoint.id);
+    }
+    for (const verdict of ["NO_OP", "RECORDED", "INCOMPLETE"]) {
+      expect(lifecycle).toContain(verdict);
+    }
+    for (const stage of AGENT_LIFECYCLE_POLICY_V1.checkpoints[2].requiredStageIds.implementation) {
+      expect(lifecycle).toContain(stage);
+    }
+    expect(lifecycle).toContain("L2");
+    expect(lifecycle).toContain("handoff");
+    expect(lifecycle).toContain("caller_observed_advisory");
+    expect(lifecycle).toContain("stateless_caller_reinjected_unbound");
+    expect(lifecycle).toContain("stage outcomes remain unevaluated");
+    expect(lifecycle).toContain("shadow");
+    expect(lifecycle).toContain("blocking is disabled");
+    expect(lifecycle).toContain("execution authority is `none`");
+    expect(lifecycle).toContain("hosts are instructed to invoke");
+    expect(lifecycle).toContain("not automatic hooks");
   });
 
   // Claude Code substitutes ${CLAUDE_PLUGIN_ROOT} into skill/agent content, hook and monitor
@@ -337,6 +390,18 @@ describe("Codex and Claude Code plugin parity", () => {
       expect(document).toContain("semctx_control_status");
       expect(document).toContain("semctx_control_trace");
       expect(document).toContain("semctx_control_plan");
+      expect(document).toContain("semctx_control_agent_lifecycle");
+      expect(document).toContain("before_implementation_write");
+      expect(document).toContain("after_repository_edits");
+      expect(document).toContain("before_completion");
+      expect(document).toContain("before_compaction");
+      expect(document).toContain("requiredAltitude");
+      expect(document).toContain("NO_OP");
+      expect(document).toContain("RECORDED");
+      expect(document).toContain("INCOMPLETE");
+      expect(document).toContain("caller_observed_advisory");
+      expect(document).toContain("stateless_caller_reinjected_unbound");
+      expect(document).toContain("no automatic lifecycle hooks");
       expect(document).toContain("READY");
       expect(document).toContain("execution authority");
     }

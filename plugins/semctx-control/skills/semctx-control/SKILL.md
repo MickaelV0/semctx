@@ -89,6 +89,39 @@ Completion requires: `reconcile_diff` → `verify_change` → `change_verify`.
 The bounded transfer stage is `handoff`.
 <!-- END shared-workflow-contract -->
 
+## Shared lifecycle checkpoints
+
+<!-- BEGIN shared-lifecycle-contract:v1 -->
+Codex and Claude Code expose `semctx_control_agent_lifecycle` through the same Semctx MCP runtime.
+Both hosts are instructed to invoke these checkpoints; these instructions are not automatic hooks
+and do not prove that a host event ran.
+
+This is a presence-only advisory contract. `NO_OP` means no stage-presence obligation applies,
+`RECORDED` means every required stage id was caller-recorded, and `INCOMPLETE` means required
+stage ids are missing. Recorded stage outcomes remain unevaluated and admissibility is not evaluated.
+Enforcement is `shadow`, blocking is disabled, and execution authority is `none`.
+
+Invoke the checkpoints in policy order:
+- **before_implementation_write** — minimum altitude L2. Eligible from L2 through L6; L0-L1 is `NO_OP`.
+  Implementation stages: `inspect_repository` → `semantic_check` → `status` → `frame_task` → `bind_scope` → `trace_impact` → `authority` → `refine` → `change_contract`.
+  Migration stages: `inspect_repository` → `semantic_check` → `status` → `frame_task` → `bind_scope` → `trace_impact` → `authority` → `target_propose` → `refine` → `change_contract`.
+- **after_repository_edits** — minimum altitude L0.
+  Implementation stages: no stage-presence requirement.
+  Migration stages: no stage-presence requirement.
+- **before_completion** — minimum altitude L0.
+  Implementation stages: `reconcile_diff` → `verify_change` → `change_verify`.
+  Migration stages: `reconcile_diff` → `verify_change` → `change_verify`.
+- **before_compaction** — minimum altitude L0.
+  Implementation stages: `handoff`.
+  Migration stages: `handoff`.
+
+After repository edits, fold prior and newly observed touched coordinate ids as
+`caller_observed_advisory` evidence. Accumulation is
+`stateless_caller_reinjected_unbound`: the caller must reinject prior ids, and Semctx binds them to
+no task, session, diff, commit, or handoff. Before completion, record the required completion
+stages; before compaction or owner transfer, record `handoff`.
+<!-- END shared-lifecycle-contract -->
+
 ## Verdict namespaces
 
 - **Plane A — diff impact:** `PASS`, `WARN`, `BLOCK`. `PASS` is a static policy result, not runtime proof. `WARN` needs attention but is not a failure. `BLOCK` must be resolved or explicitly disabled by user-owned policy.

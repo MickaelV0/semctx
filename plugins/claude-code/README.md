@@ -13,7 +13,8 @@ runtime behaviour. The analysis is local and deterministic; semctx itself needs 
   `semctx_resume` — authored intent, invariants, decisions, evidence and unknowns (Plane B).
 - **Control-plane tools**: read-only `semctx_control_status`, `semctx_control_trace`, and
   `semctx_control_plan` for freshness preflight, bounded L0-L6 reconstruction, and fail-closed
-  migration planning (Plane C).
+  migration planning (Plane C), plus the MCP-only advisory
+  `semctx_control_agent_lifecycle` checkpoint.
 - **Bundled CLI** (`dist/semctx.js`): the full Bun CLI committed next to `dist/semctx-mcp.js` so a
   plugin update keeps agent MCP and CLI in lockstep. Agent sessions get its absolute path for free:
   Claude Code substitutes the `${CLAUDE_PLUGIN_ROOT}` placeholder into the skills at load time, and
@@ -46,6 +47,26 @@ The verdict namespaces stay distinct:
 
 `READY` is never execution authority. Claude Code may edit only inside the user's write scope, and
 Plane C never performs a cutover, deployment or deletion.
+
+### MCP-only lifecycle foundation
+
+Codex and Claude Code expose the same strict lifecycle policy and report through
+`semctx_control_agent_lifecycle`. Agents must invoke it explicitly at
+`before_implementation_write` before the first eligible L2+ write, `after_repository_edits` after
+edits, `before_completion` before claiming completion, and `before_compaction` before compaction or
+owner transfer. The request carries `requiredAltitude`; pre-write L0-L1 is `NO_OP`.
+
+`NO_OP` means no stage-presence obligation applies, `RECORDED` means all required stage ids were
+recorded, and `INCOMPLETE` means required ids are missing. The report evaluates neither stage
+outcomes nor admissibility. It also distinguishes a non-Semctx no-op from an explicit
+`semctx_unready` repository.
+
+Touched coordinates are `caller_observed_advisory`. Their fold is
+`stateless_caller_reinjected_unbound`: the caller must reinject prior ids, and Semctx persists or
+binds none of them. The tool is read-only and source-non-collecting; `shadow` mode blocks nothing
+and grants no execution authority. This slice adds no automatic lifecycle hooks, persisted or
+measured telemetry, Handoff v2, or enforcement. Claude's existing optional commit/push guard is
+separate and does not invoke this lifecycle tool.
 
 ## Two profiles
 

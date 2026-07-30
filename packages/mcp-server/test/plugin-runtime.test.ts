@@ -122,7 +122,8 @@ describe("packaged MCP runtime", () => {
     try {
       await client.connect(transport);
       const { tools } = await client.listTools();
-      expect(tools).toHaveLength(32);
+      expect(tools).toHaveLength(33);
+      expect(tools.some((tool) => tool.name === "semctx_control_agent_lifecycle")).toBe(true);
       expect(tools.some((tool) => tool.name === "semctx_control_explorer")).toBe(true);
       expect(tools.some((tool) => tool.name === "semctx_semantic_check")).toBe(true);
       expect(tools.some((tool) => tool.name === "semctx_control_authority")).toBe(true);
