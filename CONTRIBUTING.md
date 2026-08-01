@@ -37,10 +37,22 @@ bun ../../apps/cli/src/index.ts bench
   case (and ideally a `semctx-bench.json` golden expectation) that would fail before your
   change and passes after.
 
+## Lint and invariants
+
+```bash
+bun run lint              # Biome (static)
+bun run lint:invariants   # ADR / review mechanical checks
+bun run lint:all
+```
+
+See [docs/contributing/biome-and-invariants.md](docs/contributing/biome-and-invariants.md) for
+which rules map to CONTRIBUTING, ADRs (e.g. 0012), and past PR review lessons.
+
 ## Commit / PR conventions
 
 - Work on a branch. Small, cohesive commits with explicit messages.
 - Do not commit if `bun test` or `bun run build` fails.
+- Prefer `bun run lint:all` before opening a PR when you touch public MCP / setup contracts.
 - Update the relevant docs in the same PR.
 
 ## Adding a semantic marker or authority policy

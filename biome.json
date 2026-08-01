@@ -1,0 +1,96 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.6/schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
+  "files": {
+    "ignoreUnknown": true,
+    "includes": [
+      "packages/**/*.ts",
+      "apps/**/*.ts",
+      "scripts/**/*.ts",
+      "plugins/**/*.ts"
+    ]
+  },
+  "formatter": {
+    "enabled": false
+  },
+  "assist": {
+    "enabled": false
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": true,
+      "complexity": {
+        "noForEach": "off",
+        "noExcessiveCognitiveComplexity": "off",
+        "useLiteralKeys": "off",
+        "noUselessSwitchCase": "warn"
+      },
+      "correctness": {
+        "noUnusedVariables": "warn",
+        "noUnusedImports": "warn",
+        "noUnusedFunctionParameters": "off",
+        "useExhaustiveDependencies": "off",
+        "noUnsafeOptionalChaining": "warn"
+      },
+      "style": {
+        "noNonNullAssertion": "off",
+        "useConst": "warn",
+        "noParameterAssign": "off",
+        "useTemplate": "off",
+        "noUselessElse": "off",
+        "useDefaultParameterLast": "warn",
+        "useNodejsImportProtocol": "warn",
+        "useNumberNamespace": "off",
+        "noInferrableTypes": "off"
+      },
+      "suspicious": {
+        "noEmptyBlockStatements": "error",
+        "noExplicitAny": "off",
+        "noImplicitAnyLet": "off",
+        "noControlCharactersInRegex": "off",
+        "noAssignInExpressions": "off",
+        "noConfusingVoidType": "off",
+        "noThenProperty": "off",
+        "useIterableCallbackReturn": "off",
+        "noShadowRestrictedNames": "warn",
+        "noGlobalIsNan": "off",
+        "noTemplateCurlyInString": "warn"
+      },
+      "performance": {
+        "noAccumulatingSpread": "off",
+        "noDelete": "off"
+      },
+      "security": {
+        "noDangerouslySetInnerHtml": "error",
+        "noGlobalEval": "error"
+      }
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["**/*.test.ts", "**/test/**/*.ts"],
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "noEmptyBlockStatements": "warn"
+          },
+          "correctness": {
+            "noUnusedVariables": "off",
+            "noUnusedImports": "warn"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["plugins/**/dist/**", "**/corpus/**", "**/typescript-lib/**"],
+      "linter": {
+        "enabled": false
+      }
+    }
+  ]
+}
