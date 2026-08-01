@@ -20,7 +20,7 @@ cat <<'EOF'
 
 semctx dev container ready. Common tasks:
 
-  bun run typecheck                              # strict TypeScript
+  bun run quality                                # strict maintained TS + ESLint (typed TS, syntax-only JS)
   bun run build                                  # tsc build
   bun test                                       # full suite (packages, apps, plugins)
 
