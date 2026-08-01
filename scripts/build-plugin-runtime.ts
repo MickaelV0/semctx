@@ -259,11 +259,10 @@ export async function buildPortableBundle(spec: BundleSpec): Promise<Uint8Array>
     target: "bun",
     minify: true,
     packages: "bundle",
-    write: false,
   });
 
   if (!result.success || result.outputs.length !== 1) {
-    for (const log of result.logs) process.stderr.write(`${log}\n`);
+    for (const log of result.logs) process.stderr.write(`${log.message}\n`);
     throw new Error(`failed to build the ${spec.label}`);
   }
 

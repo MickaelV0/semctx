@@ -33,7 +33,7 @@ export interface EvidenceState {
   id: string;
   statement: string;
   proved: boolean;
-  status: string | "missing";
+  status: string;
 }
 
 export interface UnknownState {

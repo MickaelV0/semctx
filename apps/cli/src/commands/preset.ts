@@ -124,8 +124,8 @@ export function runPreset(root: string, preset: string, args: ParsedArgs): numbe
   const force = flagBool(args, "force");
   // github-claude enables the action + claude config by default; devcontainer is opt-in.
   const opts: PresetOptions = {
-    githubAction: true || flagBool(args, "with-github-action"),
-    claudeCode: true || flagBool(args, "with-claude-code"),
+    githubAction: true,
+    claudeCode: true,
     devcontainer: flagBool(args, "with-devcontainer"),
   };
 

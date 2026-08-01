@@ -41,7 +41,8 @@ One-time npm configuration: register `hoklims/semctx`, workflow filename `releas
 environment name `npm` as the package's GitHub Actions trusted publisher. Protect the GitHub
 `npm` environment for `v*` tags and protect matching tags from update/deletion. The workflow uses
 short-lived OIDC credentials; no long-lived `NPM_TOKEN` is stored. It has `id-token: write`, uses
-current npm on Node 24, verifies typecheck/tests/plugin artifacts, and accepts only an annotated
+current npm on Node 24, verifies the canonical quality gate (typecheck + lint), tests, and plugin
+artifacts, and accepts only an annotated
 version-matching tag whose commit is already on `origin/main`.
 
 After that one-time registry setting, push the annotated release tag:

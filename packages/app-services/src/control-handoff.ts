@@ -498,7 +498,6 @@ function persistRecord(
 
   const temporary = `${target}.${process.pid}.${crypto.randomUUID()}.tmp`;
   let descriptor: number | null = null;
-  let publishedByThisCall = false;
   const cleanupTemporary = () => {
     if (descriptor !== null) {
       try {
@@ -548,7 +547,6 @@ function persistRecord(
 
   try {
     linkSync(temporary, target);
-    publishedByThisCall = true;
   } catch {
     cleanupTemporary();
     return "HANDOFF_PERSISTENCE_FAILED";
@@ -562,8 +560,7 @@ function persistRecord(
     return null;
   } finally {
     if (
-      publishedByThisCall
-      && existsSync(temporary)
+      existsSync(temporary)
       && existsSync(target)
       && stillSameFile(temporary, target)
       && readRecord(root, target)?.bytes !== bytes

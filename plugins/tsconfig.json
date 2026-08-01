@@ -1,0 +1,10 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "allowImportingTsExtensions": true,
+    "allowJs": true,
+    "checkJs": false
+  },
+  "include": ["**/*.test.ts", "**/test/**/*.ts", "**/hooks/**/*.mjs"],
+  "exclude": ["**/dist"]
+}

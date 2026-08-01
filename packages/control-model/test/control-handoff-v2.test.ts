@@ -299,12 +299,18 @@ function capsule(planningBundle = bundle()) {
   };
 }
 
+// This public-export contract intentionally bypasses static imports so missing
+// runtime exports fail the test instead of TypeScript compilation.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function requiredExport(name: string): any {
   const value = (controlModel as Record<string, unknown>)[name];
   expect(value, `${name} must be publicly exported`).toBeDefined();
   return value;
 }
 
+// The dynamically selected export's signature is part of the runtime contract
+// under test, so both arguments and return value are deliberately unconstrained.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function requiredFunction(name: string): (...args: any[]) => any {
   const value = requiredExport(name);
   expect(typeof value).toBe("function");

@@ -23,12 +23,8 @@ export function runDoctor(root: string, args: ParsedArgs): number {
   const initialized = isInitialized(root);
   checks.push({ name: "workspace", ok: initialized, detail: initialized ? ".semctx/ present" : "run 'semctx init'" });
 
-  let indexed = false;
-  let nodeCount = 0;
-  let claimCount = 0;
-  let configOk = false;
-
   if (initialized) {
+    let configOk: boolean;
     try {
       loadConfig(root);
       configOk = true;
@@ -39,9 +35,9 @@ export function runDoctor(root: string, args: ParsedArgs): number {
     if (configOk) checks.push({ name: "config", ok: true, detail: "config.json valid" });
 
     const store = openStore(root);
-    indexed = store.isIndexed();
-    nodeCount = Number(store.getMeta("node_count") ?? "0");
-    claimCount = store.loadClaims().length;
+    const indexed = store.isIndexed();
+    const nodeCount = Number(store.getMeta("node_count") ?? "0");
+    const claimCount = store.loadClaims().length;
     const indexedAt = store.getMeta("indexed_at");
     store.close();
     checks.push({

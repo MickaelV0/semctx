@@ -7,8 +7,8 @@ preserve those properties.
 
 ```bash
 bun install
-bun run build   # tsc typecheck (strict, noUncheckedIndexedAccess, verbatimModuleSyntax)
-bun test        # bun:test across packages + apps
+bun run quality # strict tsc for maintained TypeScript + ESLint (typed TS, syntax-only JS)
+bun test        # bun:test across packages + apps + plugins
 ```
 
 Run the demo end-to-end:
@@ -36,11 +36,15 @@ bun ../../apps/cli/src/index.ts bench
 - **Add a test with behaviour, not just a snapshot.** For a new detector or gate, add a
   case (and ideally a `semctx-bench.json` golden expectation) that would fail before your
   change and passes after.
+- **Keep static analysis semantic.** `tsc` remains the type authority and ESLint catches
+  compiler-permitted hazards in TypeScript. JavaScript and MJS files receive syntax linting,
+  not type-aware analysis. Formatting and domain invariants stay outside the linter;
+  suppressions must be local and explain why the code is safe.
 
 ## Commit / PR conventions
 
 - Work on a branch. Small, cohesive commits with explicit messages.
-- Do not commit if `bun test` or `bun run build` fails.
+- Do not commit if `bun run quality` or `bun test` fails.
 - Update the relevant docs in the same PR.
 
 ## Adding a semantic marker or authority policy
