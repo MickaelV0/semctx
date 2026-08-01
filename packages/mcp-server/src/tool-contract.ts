@@ -115,13 +115,35 @@ const TOOL_EFFECTS = Object.fromEntries(
   ]),
 ) as Record<SemctxToolName, ToolAnnotations>;
 
-/** Handler result; isError:true is allowed only with a schema-valid structured body. */
 type ToolResult = CallToolResult & {
   isError?: boolean;
   structuredContent?: unknown;
 };
 
+/**
+ * Handler results may set isError:true only for an explicit domain-error allowlist.
+ * Schema validity alone is not trust: non-allowlisted handler-authored errors are
+ * catalogue-normalized so forged success-shaped bodies cannot cross the public wire.
+ */
 type ToolHandlerResult = ToolResult;
+
+/**
+ * Per-tool policy for retaining a schema-valid structured body with isError:true.
+ * Default deny. Only semctx_setup domain-failure discriminants are permitted today.
+ */
+export function allowsHandlerAuthoredDomainError(
+  name: SemctxToolName,
+  structuredContent: unknown,
+): boolean {
+  if (name !== "semctx_setup") return false;
+  if (typeof structuredContent !== "object" || structuredContent === null) {
+    return false;
+  }
+  const body = structuredContent as { kind?: unknown; verdict?: unknown };
+  if (body.kind === "setup_refused") return true;
+  if (body.kind === "setup" && body.verdict === "SETUP_NOT_READY") return true;
+  return false;
+}
 
 const PUBLIC_ERROR_MESSAGE_LIMIT = 512;
 const PUBLIC_INPUT_MAX_DEPTH = 64;
@@ -481,18 +503,22 @@ export class ToolRegistrar {
             parsedArgs,
             ctx,
           );
-          // Domain failures may set isError:true only with a schema-valid structured body
-          // (e.g. setup_refused). Opaque handler isError without a valid body is still rejected
-          // so forged secrets cannot cross the public wire (see mcp-2026-contract tests).
+          // Handler-authored isError is denied by default. Only allowlisted domain
+          // failures (semctx_setup refuse / NOT_READY) may keep a schema-valid body;
+          // every other isError is catalogue-normalized (see mcp-2026-contract tests).
           if ((result as ToolResult).isError === true) {
             phase = "output_validation";
             try {
-              return withStructuredContent(name, outputSchema, result);
+              const validated = withStructuredContent(name, outputSchema, result);
+              if (allowsHandlerAuthoredDomainError(name, validated.structuredContent)) {
+                return validated;
+              }
             } catch {
-              throw new ToolPublicError("INTERNAL_ERROR", {
-                cause: "tool callback returned isError without a schema-valid structured body",
-              });
+              // Invalid body still falls through to catalogue INTERNAL_ERROR.
             }
+            throw new ToolPublicError("INTERNAL_ERROR", {
+              cause: "tool callback returned isError without an allowlisted domain-error body",
+            });
           }
           phase = "output_validation";
           return withStructuredContent(

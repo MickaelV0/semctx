@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { resolve } from "node:path";
-import { initWorkspace } from "@semantic-context/repository-store";
+import { join, resolve } from "node:path";
+import { createDefaultConfig, createGlobSelectionConfig } from "@semantic-context/core";
+import { initWorkspace, saveConfig } from "@semantic-context/repository-store";
 import { indexRepository } from "@semantic-context/app-services";
 import { SAMPLE_REPO } from "@semantic-context/test-fixtures";
 import packageJson from "../../../apps/cli/package.json";
@@ -129,6 +130,7 @@ describe("packaged MCP runtime", () => {
       expect(tools.some((tool) => tool.name === "semctx_semantic_check")).toBe(true);
       expect(tools.some((tool) => tool.name === "semctx_control_authority")).toBe(true);
       expect(tools.some((tool) => tool.name === "semctx_index_health")).toBe(true);
+      expect(tools.some((tool) => tool.name === "semctx_setup")).toBe(true);
       expect(tools.some((tool) => tool.name === "semctx_control_frame_task")).toBe(true);
       expect(tools.some((tool) => tool.name === "semctx_control_bind_scope")).toBe(true);
       expect(tools.some((tool) => tool.name === "semctx_control_target_propose")).toBe(true);
@@ -195,6 +197,126 @@ describe("packaged MCP runtime", () => {
       await client.close();
     }
   },
+    PACKAGED_SMOKE_TIMEOUT_MS,
+  );
+
+  test(
+    "packaged semctx_setup: preflight no-write, confirm bootstrap, structured NOT_READY and refuse",
+    async () => {
+      // Server pins the first repositoryRoot per process — use one MCP child per fixture.
+      const cache = mkdtempSync(resolve(tmpdir(), "semctx-setup-smoke-cache-"));
+      const fresh = mkdtempSync(resolve(tmpdir(), "semctx-setup-smoke-fresh-"));
+      const notReady = mkdtempSync(resolve(tmpdir(), "semctx-setup-smoke-nr-"));
+      const refuse = mkdtempSync(resolve(tmpdir(), "semctx-setup-smoke-refuse-"));
+      temporary.push(cache, fresh, notReady, refuse);
+      const packagedDist = resolve(cache, "dist");
+      cpSync(pluginDist, packagedDist, { recursive: true });
+      const bundle = resolve(packagedDist, "semctx-mcp.js");
+
+      cpSync(SAMPLE_REPO, fresh, {
+        recursive: true,
+        filter: (src) => !src.includes(".semctx") && !src.includes("node_modules"),
+      });
+      git(fresh, "init");
+      git(fresh, "add", ".");
+      git(fresh, "-c", "user.name=Semctx Test", "-c", "user.email=semctx@example.test", "commit", "-m", "fixture");
+
+      mkdirSync(join(notReady, "src"), { recursive: true });
+      writeFileSync(join(notReady, "src", "value.py"), "def value():\n    return 1\n");
+      writeFileSync(join(notReady, ".gitignore"), ".semctx/\n");
+      git(notReady, "init");
+      git(notReady, "add", ".");
+      git(notReady, "-c", "user.name=Semctx Test", "-c", "user.email=semctx@example.test", "commit", "-m", "fixture");
+      const base = createGlobSelectionConfig(notReady);
+      saveConfig(notReady, {
+        ...base,
+        languages: { ...base.languages, python: "off" },
+      });
+
+      mkdirSync(join(refuse, "src"), { recursive: true });
+      writeFileSync(join(refuse, "src", "value.ts"), "export const value = 1;\n");
+      writeFileSync(join(refuse, ".gitignore"), ".semctx/\n");
+      git(refuse, "init");
+      git(refuse, "add", ".");
+      git(refuse, "-c", "user.name=Semctx Test", "-c", "user.email=semctx@example.test", "commit", "-m", "fixture");
+      saveConfig(refuse, createDefaultConfig(refuse));
+
+      const environment = Object.fromEntries(
+        Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
+      );
+      delete environment["SEMCTX_ROOT"];
+
+      async function withPackagedClient<T>(
+        fn: (client: Client) => Promise<T>,
+      ): Promise<T> {
+        const transport = new StdioClientTransport({
+          command: "bun",
+          args: [bundle],
+          cwd: cache,
+          env: environment,
+          stderr: "pipe",
+        });
+        const client = new Client({ name: "semctx-setup-packaged-smoke", version: "0.1.0" });
+        await client.connect(transport);
+        try {
+          return await fn(client);
+        } finally {
+          await client.close();
+        }
+      }
+
+      await withPackagedClient(async (client) => {
+        const preflight = await client.callTool({
+          name: "semctx_setup",
+          arguments: { repositoryRoot: fresh },
+        });
+        expect(preflight.isError).not.toBe(true);
+        expect((preflight.structuredContent as { kind?: string }).kind).toBe("setup_preflight");
+        expect(existsSync(join(fresh, ".semctx"))).toBe(false);
+
+        const applied = await client.callTool({
+          name: "semctx_setup",
+          arguments: { repositoryRoot: fresh, confirm: true },
+        });
+        expect(applied.isError).not.toBe(true);
+        const ready = applied.structuredContent as {
+          kind?: string;
+          verdict?: string;
+          indexHealth?: { coverage?: { status?: string } };
+        };
+        expect(ready.kind).toBe("setup");
+        expect(ready.verdict).toBe("SETUP_READY");
+        expect(ready.indexHealth?.coverage?.status).not.toBe("insufficient");
+        expect(existsSync(join(fresh, ".semctx", "config.json"))).toBe(true);
+      });
+
+      await withPackagedClient(async (client) => {
+        const nr = await client.callTool({
+          name: "semctx_setup",
+          arguments: { repositoryRoot: notReady, confirm: true },
+        });
+        expect(nr.isError).toBe(true);
+        const nrBody = nr.structuredContent as { kind?: string; verdict?: string };
+        expect(nrBody.kind).toBe("setup");
+        expect(nrBody.verdict).toBe("SETUP_NOT_READY");
+      });
+
+      await withPackagedClient(async (client) => {
+        const refused = await client.callTool({
+          name: "semctx_setup",
+          arguments: { repositoryRoot: refuse, confirm: true, polyglot: true },
+        });
+        expect(refused.isError).toBe(true);
+        const refusedBody = refused.structuredContent as {
+          kind?: string;
+          verdict?: string;
+          nextSteps?: string[];
+        };
+        expect(refusedBody.kind).toBe("setup_refused");
+        expect(refusedBody.verdict).toBe("SETUP_REFUSED");
+        expect((refusedBody.nextSteps ?? []).length).toBeGreaterThan(0);
+      });
+    },
     PACKAGED_SMOKE_TIMEOUT_MS,
   );
 });

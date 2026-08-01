@@ -9,6 +9,16 @@ GitHub Release advance together through the tag-driven lockstep workflow documen
 
 ## [Unreleased]
 
+### Changed
+
+- **MCP error boundary stay fail-closed by default** ([#73](https://github.com/hoklims/semctx/pull/73)):
+  handler-authored `isError: true` is catalogue-normalized unless the tool is `semctx_setup` and
+  the schema-valid body is an allowlisted domain failure (`setup_refused` or
+  `setup` + `SETUP_NOT_READY`). Schema-valid forged errors on other tools no longer leak.
+- **`SETUP_READY` is fail-closed for all config versions**: the legacy v1 short-circuit that
+  treated analysis as ready regardless of coverage/freshness is removed. Agents must not see
+  `SETUP_READY` when `indexHealth.coverage.status === "insufficient"`.
+
 ### Added
 
 - **Plugin-native workspace bootstrap over MCP** ([#73](https://github.com/hoklims/semctx/pull/73)):
@@ -18,10 +28,10 @@ GitHub Release advance together through the tag-driven lockstep workflow documen
   scaffold + index + check. Policy refusals (e.g. polyglot against an existing v1 config) return
   structured `setup_refused` with `nextSteps`. Readiness uses namespaced `verdict` values
   (`SETUP_READY` / `SETUP_NOT_READY` / `SETUP_REFUSED`) distinct from Plane C `READY`/`BLOCKED`.
-  Domain failures set MCP `isError: true` while retaining the structured body. CLI `--json`
-  emits the same envelope; live phase progress uses a shared `onPhase` port. The shared control
-  skill documents the fail-closed agent policy. Global CLI remains optional for CI and non-plugin
-  shells.
+  Domain failures set MCP `isError: true` while retaining the structured body for allowlisted
+  setup discriminants only. CLI `--json` emits the same envelope; live phase progress uses a
+  shared `onPhase` port. The shared control skill documents the fail-closed agent policy. Global
+  CLI remains optional for CI and non-plugin shells.
 - **Offline global CLI compatibility advisory** ([#35](https://github.com/hoklims/semctx/issues/35)):
   one shared bounded probe now powers `doctor --json` and the path-free
   `semctx_cli_compatibility` MCP preflight. Exact pre-1.0 version drift, absence, malformed output,

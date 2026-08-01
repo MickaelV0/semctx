@@ -86,8 +86,35 @@ describe("published npm CLI package", () => {
       recursive: true,
       filter: (source) => !source.includes(".semctx") && !source.includes("node_modules"),
     });
+    // Git seal required: SETUP_READY is fail-closed (no v1 short-circuit on insufficient).
+    const gitInit = run(["git", "init", "-q"], target);
+    expect(gitInit.code, gitInit.err).toBe(0);
+    const gitAdd = run(["git", "add", "."], target);
+    expect(gitAdd.code, gitAdd.err).toBe(0);
+    const gitCommit = run(
+      [
+        "git",
+        "-c",
+        "user.name=Semctx Test",
+        "-c",
+        "user.email=semctx@example.test",
+        "commit",
+        "-q",
+        "-m",
+        "fixture",
+      ],
+      target,
+    );
+    expect(gitCommit.code, gitCommit.err).toBe(0);
     const setup = run([semctxBin, "setup", "--root", target, "--json"], installRoot);
     expect(setup.code, setup.err).toBe(0);
-    expect(JSON.parse(setup.out).check.ok).toBe(true);
+    const setupReport = JSON.parse(setup.out) as {
+      check: { ok: boolean };
+      verdict?: string;
+      indexHealth?: { coverage?: { status?: string } };
+    };
+    expect(setupReport.check.ok).toBe(true);
+    expect(setupReport.verdict).toBe("SETUP_READY");
+    expect(setupReport.indexHealth?.coverage?.status).not.toBe("insufficient");
   }, 30_000);
 });

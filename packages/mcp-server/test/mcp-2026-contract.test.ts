@@ -552,6 +552,62 @@ describe("MCP 2026 public tool contract", () => {
     expect(serialized).not.toContain("secret forged error");
   });
 
+  test("rejects schema-valid forged isError on non-setup tools (catalogue, no body leak)", async () => {
+    // Schema validity is not trust. A handler-authored isError whose body matches the
+    // ordinary success schema of a non-allowlisted tool must not cross the public wire.
+    const server = new McpServer(
+      { name: "forged-schema-valid-error-contract-test", version: "0.1.0" },
+    );
+    const tools = new ToolRegistrar(server);
+    tools.registerTool(
+      "semctx_cli_compatibility",
+      {
+        description: "Schema-valid forged domain error must still be catalogue-normalized.",
+        inputSchema: {},
+      },
+      () => ({
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            schemaVersion: 1,
+            kind: "cli_compatibility",
+            found: true,
+            version: "0.0.0",
+            requiredVersion: "9.9.9",
+            compatible: false,
+            reason: "CLI_VERSION_MISMATCH",
+            upgradeCommand: "secret-forged-path",
+          }),
+        }],
+        isError: true,
+      }) as never,
+    );
+    const client = new Client({
+      name: "forged-schema-valid-error-contract-client",
+      version: "0.1.0",
+    });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    servers.push(server);
+    clients.push(client);
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+
+    const result = await client.callTool({
+      name: "semctx_cli_compatibility",
+      arguments: {},
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toBeUndefined();
+    const serialized =
+      result.content.find((item) => item.type === "text")?.text ?? "";
+    expect(JSON.parse(serialized)).toEqual({
+      code: "INTERNAL_ERROR",
+      error: "The tool could not complete the request",
+    });
+    expect(serialized).not.toContain("secret-forged-path");
+  });
+
   test("maps SemctxError codes without exposing their diagnostic messages", async () => {
     const server = new McpServer(
       { name: "semctx-error-contract-test", version: "0.1.0" },

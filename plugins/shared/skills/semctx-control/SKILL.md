@@ -61,10 +61,10 @@ If the workspace is **not initialized** (no `.semctx/` / preflight `initialized:
    `{ repositoryRoot, confirm: true }` (optional `polyglot: true` **only** for a **fresh**
    multi-language config; on an existing v1 config this returns `kind: "setup_refused"`).
 3. Treat the confirm:true result as success **only** when
-   `kind === "setup"` **and** `verdict === "SETUP_READY"` **and** `isError` is not true.  
-   - `setup_refused` / `verdict: "SETUP_REFUSED"` → failure (`isError` true; read `reason` + `nextSteps`).  
+   `kind === "setup"` **and** `verdict === "SETUP_READY"` **and** `isError` is not true.
+   - `setup_refused` / `verdict: "SETUP_REFUSED"` → failure (`isError` true; read `reason` + `nextSteps`).
    - `verdict: "SETUP_NOT_READY"` → failure (`isError` true; inspect `check` / `indexHealth`;
-     re-check with `semctx_index_health`).  
+     re-check with `semctx_index_health`).
    Domain failures keep the structured body on the wire so agents can act on `nextSteps`.
 4. Re-check with `semctx_control_status` / `semctx_index_health`.
 

@@ -49,6 +49,9 @@ describe("semctx_setup MCP tool", () => {
       recursive: true,
       filter: (src) => !src.includes(".semctx") && !src.includes("node_modules"),
     });
+    git(dir, "init", "-q");
+    git(dir, "add", ".");
+    git(dir, "commit", "-q", "-m", "fixture");
     return dir;
   }
 
@@ -213,19 +216,17 @@ describe("semctx_setup MCP tool", () => {
     expect((ready.nodes ?? 0)).toBeGreaterThan(0);
     expect(TOOL_OUTPUT_SCHEMAS.semctx_setup.safeParse(ready).success).toBe(true);
 
-    // Polyglot refuse on same (now initialized, typically v1 sample) workspace over the wire
+    // Default fresh setup writes v1; polyglot against that workspace must refuse on the wire.
     const refused = await client.callTool({
       name: "semctx_setup",
       arguments: { repositoryRoot: root, confirm: true, polyglot: true },
     });
-    // Sample repo setup writes v1-ish or v2 depending on layout — if not refused, skip strict kind
-    if ((refused.structuredContent as { kind?: string }).kind === "setup_refused") {
-      expect(refused.isError).toBe(true);
-      const body = refused.structuredContent as { verdict?: string; nextSteps?: string[] };
-      expect(body.verdict).toBe("SETUP_REFUSED");
-      expect((body.nextSteps ?? []).length).toBeGreaterThan(0);
-      expect(TOOL_OUTPUT_SCHEMAS.semctx_setup.safeParse(refused.structuredContent).success).toBe(true);
-    }
+    expect((refused.structuredContent as { kind?: string }).kind).toBe("setup_refused");
+    expect(refused.isError).toBe(true);
+    const refusedBody = refused.structuredContent as { verdict?: string; nextSteps?: string[] };
+    expect(refusedBody.verdict).toBe("SETUP_REFUSED");
+    expect((refusedBody.nextSteps ?? []).length).toBeGreaterThan(0);
+    expect(TOOL_OUTPUT_SCHEMAS.semctx_setup.safeParse(refused.structuredContent).success).toBe(true);
   });
 
   test("MCP wire: SETUP_NOT_READY is isError true with structured body", async () => {

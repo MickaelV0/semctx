@@ -234,13 +234,13 @@ export function setupRepository(
   onPhase?.({ phase: "check", ok: check.ok, errors: check.counts.errors });
 
   const health = indexHealth(root);
+  // Fail-closed for every config version (including legacy v1). SETUP_READY is the
+  // agent/MCP success gate and must not short-circuit past insufficient coverage or
+  // an index that cannot run high-risk control. CLI exit codes use the same signal.
   const analysisReady =
-    config.version !== 2
-    || (
-      health.binding.status === "valid"
-      && health.freshness.canRunHighRiskControl
-      && health.coverage.status !== "insufficient"
-    );
+    health.binding.status === "valid"
+    && health.freshness.canRunHighRiskControl
+    && health.coverage.status !== "insufficient";
   const setupReady = check.ok && analysisReady;
   const coverageStatus =
     typeof health.coverage === "object" && health.coverage !== null && "status" in health.coverage

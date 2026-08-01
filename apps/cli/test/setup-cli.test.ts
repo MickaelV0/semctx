@@ -31,6 +31,20 @@ function git(repositoryRoot: string, ...args: string[]): void {
 beforeAll(() => {
   root = mkdtempSync(join(tmpdir(), "semctx-setup-"));
   cpSync(SAMPLE_REPO, root, { recursive: true, filter: (src) => !src.includes(".semctx") && !src.includes("node_modules") });
+  // Git seal required so fail-closed analysis readiness is not UNSEALED/insufficient.
+  git(root, "init", "-q");
+  git(root, "add", ".");
+  git(
+    root,
+    "-c",
+    "user.name=Semctx Test",
+    "-c",
+    "user.email=semctx@example.test",
+    "commit",
+    "-q",
+    "-m",
+    "fixture",
+  );
 });
 
 afterAll(() => rmSync(root, { recursive: true, force: true }));

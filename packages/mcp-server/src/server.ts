@@ -202,7 +202,8 @@ export function createSemctxServer(
       const payload = {
         content: [{ type: "text" as const, text: JSON.stringify(body, null, 2) }],
       };
-      // Schema-valid domain failure: isError true + full structured body (ToolRegistrar allows this).
+      // Domain failure: isError true + structured body. ToolRegistrar allowlists only
+      // setup_refused / setup+SETUP_NOT_READY; other tools stay catalogue-normalized.
       if (isSetupDomainFailure(body)) {
         return { ...payload, isError: true as const };
       }
