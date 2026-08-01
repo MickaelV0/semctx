@@ -62,6 +62,7 @@ import { mcpSchema } from "./schema-boundary";
 import { createRepositoryRootResolver } from "./repository-root";
 import { ToolRegistrar, type ToolRegistrarOptions } from "./tool-contract";
 import { registerControlExplorerApp } from "./control-explorer-app";
+import { cliCompatibilityTool } from "./cli-compatibility-tools";
 
 const MCP_ATTESTATION_REQUEST_V1 = mcpSchema(AttestationRequestV1Schema);
 const MCP_AGENT_LIFECYCLE_CHECKPOINT_REQUEST_V1 = mcpSchema(
@@ -356,6 +357,20 @@ export function createSemctxServer(
     },
     ({ repositoryRoot }) =>
       ok(indexHealthTool(rootResolver.resolve(repositoryRoot))),
+  );
+
+  tools.registerTool(
+    "semctx_cli_compatibility",
+    {
+      title: "Check global CLI compatibility",
+      description:
+        "Read-only offline advisory comparing the plugin/MCP runtime version with the global semctx CLI. It never installs, contacts a registry, blocks MCP-only workflows, or grants execution authority.",
+      inputSchema: { repositoryRoot: REPOSITORY_ROOT },
+    },
+    ({ repositoryRoot }) => {
+      rootResolver.resolve(repositoryRoot);
+      return ok(cliCompatibilityTool());
+    },
   );
 
   tools.registerTool(

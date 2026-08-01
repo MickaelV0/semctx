@@ -104,6 +104,10 @@ unavailable verdicts are reported as `not run` or `not applicable`.
 
 Typical tool sequence:
 
+Before relying on a global `semctx` shell fallback, call `semctx_cli_compatibility`. A mismatch is
+an offline advisory: report its `reason` and `upgradeCommand`, keep using the MCP surface, and never
+install or upgrade automatically.
+
 1. Use normal Git/code search to find the implementation surface.
 2. Frame the top-down diagnosis and record `HIGHEST_BROKEN_LEVEL`, `WHY_NOT_HIGHER`,
    `WHY_NOT_LOWER`, and `PROOF_PLAN` before substantial edits.
