@@ -7,8 +7,10 @@ import { info, heading, success, warn, fail, json, c } from "../output";
 /**
  * `semctx setup` — one command that makes a repository ready: config + graph index + semantic
  * scaffold + validation. Idempotent and non-destructive (never overwrites an existing config or
- * authored `.sem` files). Emits live, phase-by-phase progress so the (potentially slow) index step
- * is never a silent black box.
+ * authored `.sem` files).
+ *
+ * Progress: a short banner, then a blocking setup run (config · semantic · index · check), then a
+ * phase summary. Live mid-index streaming is not yet re-exposed via a shared progress port.
  *
  * The core mutation lives in `@semantic-context/app-services` (`setupRepository`) so the plugin MCP
  * tool can call the same path without a global package install.
@@ -30,8 +32,19 @@ export function runSetup(root: string, args: ParsedArgs): number {
   if (!asJson) info(c.dim("  running setup (config · semantic · index · check)…"));
   const report = setupRepository(root, { polyglot });
 
+  if (report.kind === "setup_refused") {
+    if (asJson) {
+      json(report);
+      return 1;
+    }
+    fail(report.reason);
+    for (const step of report.nextSteps) info(c.dim(`  → ${step}`));
+    return 1;
+  }
+
   if (asJson) {
-    // Preserve the historical CLI JSON shape; MCP exposes the richer SetupRepositoryReport.
+    // Historical CLI JSON projection (not the full MCP envelope). Readiness = exit code.
+    // Canonical versioned report fields (verdict, setupReady, analysisReady) live on MCP / SetupResult.
     json({
       configWritten: report.configWritten || preset !== undefined,
       preset: preset ?? null,
@@ -46,6 +59,10 @@ export function runSetup(root: string, args: ParsedArgs): number {
       semanticFilesCreated: report.semanticFilesCreated,
       gitignore: report.gitignore,
       check: report.check,
+      // Additive readiness keys (safe for older consumers that ignore unknown fields).
+      setupReady: report.setupReady,
+      analysisReady: report.analysisReady,
+      verdict: report.verdict,
     });
     return report.setupReady ? 0 : 1;
   }

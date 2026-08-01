@@ -178,7 +178,7 @@ export function createSemctxServer(
     {
       title: "Bootstrap repository workspace",
       description:
-        "PLUGIN-NATIVE SETUP. Initialise .semctx/ (config + semantic scaffold + deterministic graph index + validation) without installing a global semctx package. Default is a dry preflight (confirm omitted/false). Set confirm:true only after the user authorises writing workspace files. Idempotent: keeps an existing config and authored .sem files. Prefer this over shelling out to `semctx setup` when the plugin MCP is available.",
+        "PLUGIN-NATIVE SETUP. Initialise .semctx/ (config + semantic scaffold + deterministic graph index + validation) without a global semctx package. Default is dry preflight (confirm omitted/false). Set confirm:true only after the user authorises writes. Idempotent for existing config and authored .sem files. After confirm:true, hosts/agents MUST treat the call as success only when kind==='setup' AND verdict==='READY'; setup_refused (e.g. polyglot on v1 config) and verdict==='NOT_READY' are failures even though isError is false so the structured report is retained. Prefer this over shelling out to `semctx setup` when the plugin MCP is available.",
       inputSchema: {
         repositoryRoot: REPOSITORY_ROOT,
         confirm: z
@@ -188,7 +188,9 @@ export function createSemctxServer(
         polyglot: z
           .boolean()
           .optional()
-          .describe("when writing a fresh config, use polyglot v2 glob selection (ignored if a config already exists)"),
+          .describe(
+            "when writing a FRESH config, use polyglot v2 glob selection. If a v1 config already exists, polyglot:true is REFUSED (kind setup_refused / CONFIG_INVALID) — migrate .semctx/config.json to v2 explicitly; it does not silently ignore or overwrite",
+          ),
       },
     },
     ({ repositoryRoot, confirm, polyglot }) =>

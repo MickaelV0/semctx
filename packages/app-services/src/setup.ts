@@ -1,7 +1,6 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import {
-  SemctxError,
   createDefaultConfig,
   createGlobSelectionConfig,
   type SemctxConfig,
@@ -18,7 +17,11 @@ import {
   checkSemanticModel,
   type RepositoryFacts,
 } from "@semantic-context/semantic-engine";
-import { countTypeScriptFiles, discoverRepository } from "@semantic-context/ts-analyzer";
+import {
+  countTypeScriptFiles,
+  discoverRepository,
+  sourceLanguage,
+} from "@semantic-context/ts-analyzer";
 import { indexHealth } from "./index-health";
 import { indexRepository } from "./indexing";
 import { openReadyRepository } from "./readiness";
@@ -30,6 +33,9 @@ export interface SetupRepositoryOptions {
   /** Capture timestamp; defaults to now. */
   now?: string;
 }
+
+/** Loud readiness signal for transports (CLI exit code / MCP agent policy). */
+export type SetupVerdict = "READY" | "NOT_READY" | "REFUSED";
 
 export interface SetupRepositoryReport {
   schemaVersion: 1;
@@ -66,7 +72,32 @@ export interface SetupRepositoryReport {
   check: { ok: boolean; nodes: number; changes: number; errors: number };
   setupReady: boolean;
   analysisReady: boolean;
+  /** READY only when check.ok && analysisReady; agents must treat any other value as failure. */
+  verdict: "READY" | "NOT_READY";
 }
+
+/**
+ * Policy refusal before mutation (e.g. polyglot against an existing v1 config).
+ * Returned instead of throwing so MCP can surface actionable guidance in structuredContent
+ * (public SemctxError messages are stripped at the MCP catalogue boundary).
+ */
+export interface SetupRefusedReport {
+  schemaVersion: 1;
+  kind: "setup_refused";
+  repositoryRoot: string;
+  reasonCode: "CONFIG_INVALID";
+  reason: string;
+  configVersion: number;
+  polyglot: boolean;
+  alreadyInitialized: true;
+  setupReady: false;
+  analysisReady: false;
+  verdict: "REFUSED";
+  /** Safe migration guidance for agents/hosts. */
+  nextSteps: string[];
+}
+
+export type SetupResult = SetupRepositoryReport | SetupRefusedReport;
 
 /** Layout-aware default config: monorepos also index package sources. */
 function smartConfig(root: string, polyglot: boolean): SemctxConfig {
@@ -88,11 +119,14 @@ function nowIso(override?: string): string {
  * Idempotent and non-destructive for existing config / authored `.sem` files.
  * Shared by the CLI (`semctx setup`) and the plugin MCP tool (`semctx_setup`) so agents
  * do not need a global package install.
+ *
+ * Policy refusals (e.g. polyglot on v1 config) return `kind: "setup_refused"` instead of
+ * throwing, so transports can fail closed with structured guidance.
  */
 export function setupRepository(
   root: string,
   options: SetupRepositoryOptions = {},
-): SetupRepositoryReport {
+): SetupResult {
   const polyglot = options.polyglot === true;
   const already = isInitialized(root);
   let configWritten = false;
@@ -104,11 +138,25 @@ export function setupRepository(
 
   const config = loadConfig(root);
   if (already && polyglot && config.version !== 2) {
-    throw new SemctxError(
-      "INVALID_TASK_INPUT",
-      "--polyglot does not overwrite an existing v1 config; migrate .semctx/config.json explicitly",
-      { configVersion: config.version },
-    );
+    return {
+      schemaVersion: 1,
+      kind: "setup_refused",
+      repositoryRoot: root,
+      reasonCode: "CONFIG_INVALID",
+      reason:
+        "polyglot does not overwrite an existing v1 config; migrate .semctx/config.json explicitly to config version 2",
+      configVersion: config.version,
+      polyglot: true,
+      alreadyInitialized: true,
+      setupReady: false,
+      analysisReady: false,
+      verdict: "REFUSED",
+      nextSteps: [
+        "Open .semctx/config.json and migrate to config version 2 (polyglot / glob selection), or remove .semctx/ and re-run setup with polyglot on a fresh workspace",
+        "Do not pass polyglot:true against a v1 workspace expecting an in-place overwrite",
+        "After migration, re-run setup without expecting config overwrite of authored .sem files",
+      ],
+    };
   }
 
   const scaffold = initSemanticScaffold(root, {});
@@ -120,11 +168,8 @@ export function setupRepository(
   const selectedByLanguage = Object.fromEntries(
     ["typescript", "python", "markdown", "sql"].map((language) => [
       language,
-      discovery.files.filter((file) =>
-        (file.language ?? (/\.(?:ts|tsx|mts|cts)$/.test(file.relPath) ? "typescript"
-          : /\.mdx?$/.test(file.relPath) ? "markdown"
-            : /\.sql$/.test(file.relPath) ? "sql"
-              : "unknown")) === language
+      discovery.files.filter(
+        (file) => (file.language ?? sourceLanguage(file.relPath)) === language,
       ).length,
     ]),
   );
@@ -200,5 +245,6 @@ export function setupRepository(
     },
     setupReady,
     analysisReady,
+    verdict: setupReady ? "READY" : "NOT_READY",
   };
 }

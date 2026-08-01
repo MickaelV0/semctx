@@ -681,6 +681,23 @@ export const TOOL_OUTPUT_SCHEMAS = {
       }).strict(), "Suggested next MCP call."),
     }).strict(),
     z.object({
+      schemaVersion: described(z.literal(1), "Setup refused schema version."),
+      kind: described(
+        z.literal("setup_refused"),
+        "Policy refusal before mutation (e.g. polyglot against existing v1 config). Treat as failure.",
+      ),
+      repositoryRoot: described(z.string(), "Absolute repository root."),
+      reasonCode: described(z.literal("CONFIG_INVALID"), "Stable public reason code."),
+      reason: described(z.string(), "Actionable refusal reason."),
+      configVersion: described(z.number().int(), "Existing config version that blocked the request."),
+      polyglot: described(z.boolean(), "Whether polyglot was requested."),
+      alreadyInitialized: described(z.literal(true), "Workspace was already initialized."),
+      setupReady: described(z.literal(false), "Never ready on refusal."),
+      analysisReady: described(z.literal(false), "Never analysis-ready on refusal."),
+      verdict: described(z.literal("REFUSED"), "Loud failure signal for agents."),
+      nextSteps: described(z.array(z.string()), "Safe migration / next-action guidance."),
+    }).strict(),
+    z.object({
       schemaVersion: described(z.literal(1), "Setup report schema version."),
       kind: described(z.literal("setup"), "Full setup report after confirm:true."),
       repositoryRoot: described(z.string(), "Absolute repository root."),
@@ -709,9 +726,12 @@ export const TOOL_OUTPUT_SCHEMAS = {
         coverage: described(z.unknown(), "Coverage status."),
         workspaceDiagnostics: described(z.array(z.unknown()), "Workspace diagnostics."),
         reasonSummary: described(z.array(z.unknown()), "Canonical health reasons."),
-      }).strict(), "Index health projection."),
+      }).strict(), "Index health projection (full contract on semctx_index_health)."),
       semanticFilesCreated: described(z.number().int().nonnegative(), "Scaffolded semantic files count."),
-      gitignore: described(z.string(), "Gitignore scaffold action."),
+      gitignore: described(
+        z.enum(["create", "update", "present"]),
+        "Gitignore scaffold action.",
+      ),
       check: described(z.object({
         ok: described(z.boolean(), "Whether the semantic model check passed."),
         nodes: described(z.number().int().nonnegative(), "Semantic node count."),
@@ -720,6 +740,10 @@ export const TOOL_OUTPUT_SCHEMAS = {
       }).strict(), "Semantic model check summary."),
       setupReady: described(z.boolean(), "Whether setup completed in a ready state."),
       analysisReady: described(z.boolean(), "Whether Plane A analysis is ready for high-risk control."),
+      verdict: described(
+        z.enum(["READY", "NOT_READY"]),
+        "Loud readiness: agents MUST treat NOT_READY as failure even when isError is false.",
+      ),
     }).strict(),
   ]),
   semctx_cli_compatibility: z.object({

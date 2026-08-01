@@ -91,14 +91,24 @@ The bounded transfer stage is `handoff`.
 
 ## Workspace bootstrap (plugin-native)
 
-If `semctx_control_status` reports `UNSEALED` / not initialized, **do not** require a global
-`semctx` package install. Prefer the plugin MCP tool:
+If the workspace is **not initialized** (no `.semctx/` / preflight `initialized: false`),
+**do not** require a global `semctx` package install. Prefer the plugin MCP tool:
 
 1. Call `semctx_setup` with `{ repositoryRoot }` (preflight only — no writes).
 2. After explicit user authorisation, call `semctx_setup` with
-   `{ repositoryRoot, confirm: true }` (optional `polyglot: true` for a fresh multi-language
-   config).
-3. Re-check with `semctx_control_status` / `semctx_index_health`.
+   `{ repositoryRoot, confirm: true }` (optional `polyglot: true` **only** for a **fresh**
+   multi-language config; on an existing v1 config this returns `kind: "setup_refused"`).
+3. Treat the confirm:true result as success **only** when
+   `kind === "setup"` **and** `verdict === "READY"`.  
+   - `setup_refused` / `verdict: "REFUSED"` → failure (read `reason` + `nextSteps`).  
+   - `verdict: "NOT_READY"` → failure even if `isError` is false (inspect `check` /
+     `indexHealth`; re-check with `semctx_index_health`).  
+   Do **not** treat soft MCP success (`isError: false`) alone as ready.
+4. Re-check with `semctx_control_status` / `semctx_index_health`.
+
+Do **not** auto-run setup merely because control status is `UNSEALED` or `STALE` when
+`.semctx/` already exists — that may be a seal/freshness issue; use `semctx_index_health`
+and an explicit re-index policy instead of silent re-setup.
 
 Never auto-setup silently. CLI fallbacks (`bun "<plugin-root>/dist/semctx.js" setup` or global
 `semctx setup`) remain valid when MCP is unavailable.
