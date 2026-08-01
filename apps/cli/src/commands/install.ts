@@ -796,7 +796,7 @@ function workspaceReport(
     return {
       status: "skipped",
       root,
-      next: `run 'semctx setup --root "${root}"' when you want to prepare the repository`,
+      next: `run MCP semctx_setup (confirm:true) or 'semctx setup --root "${root}"' when you want to prepare the repository`,
     };
   }
   const repositoryRoot = resolveGitRoot(root, runtime);
@@ -804,7 +804,7 @@ function workspaceReport(
     return {
       status: "not-a-repository",
       root,
-      next: "open a Git repository and run 'semctx setup' once",
+      next: "open a Git repository and run MCP semctx_setup (confirm:true) or 'semctx setup' once",
     };
   }
   if (flagBool(args, "dry-run")) {
@@ -817,7 +817,7 @@ function workspaceReport(
       status: "failed",
       root: repositoryRoot,
       error: result.err || "semctx setup failed without a structured report",
-      next: `fix the reported issue, then run 'semctx setup --root "${repositoryRoot}"'`,
+      next: `fix the reported issue, then run MCP semctx_setup (confirm:true) or 'semctx setup --root "${repositoryRoot}"'`,
     };
   }
   return { status: "ready", root: repositoryRoot, report: result.report };

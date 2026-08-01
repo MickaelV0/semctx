@@ -9,6 +9,7 @@ export type {
 } from "./cli-compatibility";
 export { setupRepository } from "./setup";
 export type {
+  SetupPhaseEvent,
   SetupRepositoryOptions,
   SetupRepositoryReport,
   SetupRefusedReport,

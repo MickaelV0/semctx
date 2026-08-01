@@ -115,15 +115,13 @@ const TOOL_EFFECTS = Object.fromEntries(
   ]),
 ) as Record<SemctxToolName, ToolAnnotations>;
 
+/** Handler result; isError:true is allowed only with a schema-valid structured body. */
 type ToolResult = CallToolResult & {
   isError?: boolean;
   structuredContent?: unknown;
 };
 
-type ToolSuccessResult = CallToolResult & {
-  isError?: false;
-  structuredContent?: unknown;
-};
+type ToolHandlerResult = ToolResult;
 
 const PUBLIC_ERROR_MESSAGE_LIMIT = 512;
 const PUBLIC_INPUT_MAX_DEPTH = 64;
@@ -233,7 +231,7 @@ type ToolConfig<InputArgs extends z.ZodRawShape> = {
 type ToolCallback<InputArgs extends z.ZodRawShape> = (
   args: z.infer<z.ZodObject<InputArgs>>,
   ctx: ServerContext,
-) => ToolSuccessResult | Promise<ToolSuccessResult>;
+) => ToolHandlerResult | Promise<ToolHandlerResult>;
 
 function outputValidationError(
   issues: ReadonlyArray<unknown>,
@@ -244,7 +242,7 @@ function outputValidationError(
 function withStructuredContent(
   name: SemctxToolName,
   outputSchema: z.ZodType,
-  result: ToolSuccessResult,
+  result: ToolHandlerResult,
 ): ToolResult {
   const text = result.content.find((item) => item.type === "text");
   let structuredContent = result.structuredContent;
@@ -253,10 +251,18 @@ function withStructuredContent(
     try {
       structuredContent = JSON.parse(text.text);
     } catch {
-      throw new Error(`${name} produced a successful result without valid JSON text`);
+      throw new Error(
+        result.isError === true
+          ? `${name} produced an error result without valid JSON text`
+          : `${name} produced a successful result without valid JSON text`,
+      );
     }
   } else if (structuredContent === undefined) {
-    throw new Error(`${name} produced a successful result without structured content`);
+    throw new Error(
+      result.isError === true
+        ? `${name} produced an error result without structured content`
+        : `${name} produced a successful result without structured content`,
+    );
   }
 
   const validation = outputSchema.safeParse(structuredContent);
@@ -264,7 +270,11 @@ function withStructuredContent(
     throw outputValidationError(validation.error.issues);
   }
 
-  return { ...result, structuredContent };
+  return {
+    ...result,
+    structuredContent,
+    ...(result.isError === true ? { isError: true as const } : {}),
+  };
 }
 
 export interface ToolRegistrarOptions {
@@ -471,10 +481,18 @@ export class ToolRegistrar {
             parsedArgs,
             ctx,
           );
+          // Domain failures may set isError:true only with a schema-valid structured body
+          // (e.g. setup_refused). Opaque handler isError without a valid body is still rejected
+          // so forged secrets cannot cross the public wire (see mcp-2026-contract tests).
           if ((result as ToolResult).isError === true) {
-            throw new ToolPublicError("INTERNAL_ERROR", {
-              cause: "tool callback returned isError",
-            });
+            phase = "output_validation";
+            try {
+              return withStructuredContent(name, outputSchema, result);
+            } catch {
+              throw new ToolPublicError("INTERNAL_ERROR", {
+                cause: "tool callback returned isError without a schema-valid structured body",
+              });
+            }
           }
           phase = "output_validation";
           return withStructuredContent(

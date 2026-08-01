@@ -694,7 +694,10 @@ export const TOOL_OUTPUT_SCHEMAS = {
       alreadyInitialized: described(z.literal(true), "Workspace was already initialized."),
       setupReady: described(z.literal(false), "Never ready on refusal."),
       analysisReady: described(z.literal(false), "Never analysis-ready on refusal."),
-      verdict: described(z.literal("REFUSED"), "Loud failure signal for agents."),
+      verdict: described(
+        z.literal("SETUP_REFUSED"),
+        "Namespaced failure signal (not Plane C READY/BLOCKED).",
+      ),
       nextSteps: described(z.array(z.string()), "Safe migration / next-action guidance."),
     }).strict(),
     z.object({
@@ -741,8 +744,8 @@ export const TOOL_OUTPUT_SCHEMAS = {
       setupReady: described(z.boolean(), "Whether setup completed in a ready state."),
       analysisReady: described(z.boolean(), "Whether Plane A analysis is ready for high-risk control."),
       verdict: described(
-        z.enum(["READY", "NOT_READY"]),
-        "Loud readiness: agents MUST treat NOT_READY as failure even when isError is false.",
+        z.enum(["SETUP_READY", "SETUP_NOT_READY"]),
+        "Namespaced readiness (not Plane C). SETUP_NOT_READY is a domain failure (isError true + body).",
       ),
     }).strict(),
   ]),

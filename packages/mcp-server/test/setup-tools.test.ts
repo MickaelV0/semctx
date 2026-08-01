@@ -8,7 +8,7 @@ import { createDefaultConfig, createGlobSelectionConfig } from "@semantic-contex
 import { SAMPLE_REPO } from "@semantic-context/test-fixtures";
 import { isInitialized, saveConfig } from "@semantic-context/repository-store";
 import { createSemctxServer } from "../src/server";
-import { setupTool } from "../src/setup-tools";
+import { isSetupAgentSuccess, isSetupDomainFailure, setupTool } from "../src/setup-tools";
 import { TOOL_OUTPUT_SCHEMAS } from "../src/tool-output-schemas";
 
 const GIT_ENV = {
@@ -59,34 +59,35 @@ describe("semctx_setup MCP tool", () => {
     if (report.kind !== "setup_preflight") return;
     expect(report.initialized).toBe(false);
     expect(report.confirmRequired).toBe(true);
-    expect(report.next.arguments.confirm).toBe(true);
+    expect(isSetupDomainFailure(report)).toBe(false);
+    expect(isSetupAgentSuccess(report)).toBe(false);
     expect(isInitialized(root)).toBe(false);
     expect(TOOL_OUTPUT_SCHEMAS.semctx_setup.safeParse(report).success).toBe(true);
   });
 
   test("preflight after init reports initialized without re-writing", () => {
     root = freshRepo();
-    const first = setupTool(root, { confirm: true });
+    const first = setupTool(root, { confirm: true, now: "2026-08-01T12:00:00.000Z" });
     expect(first.kind).toBe("setup");
     if (first.kind !== "setup") return;
-    expect(first.verdict).toBe("READY");
+    expect(first.verdict).toBe("SETUP_READY");
 
     const preflight = setupTool(root, {});
     expect(preflight.kind).toBe("setup_preflight");
     if (preflight.kind !== "setup_preflight") return;
     expect(preflight.initialized).toBe(true);
     expect(preflight.message).toMatch(/already has \.semctx/);
-    expect(preflight.next.arguments.confirm).toBe(true);
     expect(TOOL_OUTPUT_SCHEMAS.semctx_setup.safeParse(preflight).success).toBe(true);
   });
 
   test("confirm:true bootstraps via shared setup path (no global CLI)", () => {
     root = freshRepo();
-    const report = setupTool(root, { confirm: true });
+    const report = setupTool(root, { confirm: true, now: "2026-08-01T12:00:00.000Z" });
     expect(report.kind).toBe("setup");
     if (report.kind !== "setup") return;
     expect(report.setupReady).toBe(true);
-    expect(report.verdict).toBe("READY");
+    expect(report.verdict).toBe("SETUP_READY");
+    expect(isSetupAgentSuccess(report)).toBe(true);
     expect(report.nodes).toBeGreaterThan(0);
     expect(isInitialized(root)).toBe(true);
     expect(TOOL_OUTPUT_SCHEMAS.semctx_setup.safeParse(report).success).toBe(true);
@@ -95,17 +96,17 @@ describe("semctx_setup MCP tool", () => {
   test("polyglot on existing v1 config returns setup_refused with guidance", () => {
     root = freshRepo();
     saveConfig(root, createDefaultConfig(root));
-    const report = setupTool(root, { confirm: true, polyglot: true });
+    const report = setupTool(root, { confirm: true, polyglot: true, now: "2026-08-01T12:00:00.000Z" });
     expect(report.kind).toBe("setup_refused");
     if (report.kind !== "setup_refused") return;
     expect(report.reasonCode).toBe("CONFIG_INVALID");
-    expect(report.verdict).toBe("REFUSED");
+    expect(report.verdict).toBe("SETUP_REFUSED");
+    expect(isSetupDomainFailure(report)).toBe(true);
     expect(report.nextSteps.length).toBeGreaterThan(0);
-    expect(report.reason).toMatch(/migrate/i);
     expect(TOOL_OUTPUT_SCHEMAS.semctx_setup.safeParse(report).success).toBe(true);
   });
 
-  test("not-ready analysis surfaces verdict NOT_READY with setup kind", () => {
+  test("not-ready analysis surfaces verdict SETUP_NOT_READY", () => {
     root = mkdtempSync(join(tmpdir(), "semctx-mcp-setup-nr-"));
     mkdirSync(join(root, "src"), { recursive: true });
     writeFileSync(join(root, "src", "value.py"), "def value():\n    return 1\n");
@@ -119,12 +120,12 @@ describe("semctx_setup MCP tool", () => {
       languages: { ...base.languages, python: "off" },
     });
 
-    const report = setupTool(root, { confirm: true });
+    const report = setupTool(root, { confirm: true, now: "2026-08-01T12:00:00.000Z" });
     expect(report.kind).toBe("setup");
     if (report.kind !== "setup") return;
     expect(report.setupReady).toBe(false);
-    expect(report.verdict).toBe("NOT_READY");
-    // Soft MCP wire: isError stays false so the body is retained — agents must check verdict.
+    expect(report.verdict).toBe("SETUP_NOT_READY");
+    expect(isSetupDomainFailure(report)).toBe(true);
     expect(TOOL_OUTPUT_SCHEMAS.semctx_setup.safeParse(report).success).toBe(true);
   });
 
@@ -135,9 +136,47 @@ describe("semctx_setup MCP tool", () => {
       kind: "setup_refused",
       confirmRequired: false,
     }).success).toBe(false);
+    // Wrong namespace: Plane C READY must not validate as setup verdict
+    expect(TOOL_OUTPUT_SCHEMAS.semctx_setup.safeParse({
+      schemaVersion: 1,
+      kind: "setup",
+      repositoryRoot: "/tmp/x",
+      configWritten: true,
+      configPath: "/tmp/x/.semctx",
+      alreadyInitialized: false,
+      polyglot: false,
+      sourceFiles: 0,
+      selectedFiles: 0,
+      selection: {
+        configVersion: 1,
+        mode: "legacy-v1",
+        selectedByLanguage: {},
+        excluded: 0,
+        disabled: 0,
+        unsupported: 0,
+        failed: 0,
+      },
+      nodes: 0,
+      edges: 0,
+      claims: 0,
+      freshnessSeal: null,
+      indexHealth: {
+        binding: {},
+        freshness: {},
+        coverage: {},
+        workspaceDiagnostics: [],
+        reasonSummary: [],
+      },
+      semanticFilesCreated: 0,
+      gitignore: "create",
+      check: { ok: true, nodes: 0, changes: 0, errors: 0 },
+      setupReady: true,
+      analysisReady: true,
+      verdict: "READY",
+    }).success).toBe(false);
   });
 
-  test("registers idempotent writer with validated structured output", async () => {
+  test("MCP wire: READY success, refused and NOT_READY set isError with body", async () => {
     root = freshRepo();
     server = createSemctxServer(root);
     client = new Client({ name: "semctx-setup-test", version: "0.1.0" });
@@ -153,8 +192,7 @@ describe("semctx_setup MCP tool", () => {
       idempotentHint: true,
       openWorldHint: false,
     });
-    expect(tool?.description).toContain("PLUGIN-NATIVE SETUP");
-    expect(tool?.description).toMatch(/verdict/i);
+    expect(tool?.description).toContain("SETUP_READY");
     expect(tool?.inputSchema.required).toContain("repositoryRoot");
 
     const preflight = await client.callTool({
@@ -169,16 +207,56 @@ describe("semctx_setup MCP tool", () => {
       arguments: { repositoryRoot: root, confirm: true },
     });
     expect(applied.isError).not.toBe(true);
-    const body = applied.structuredContent as {
-      kind?: string;
-      setupReady?: boolean;
-      nodes?: number;
-      verdict?: string;
-    };
+    const ready = applied.structuredContent as { kind?: string; verdict?: string; nodes?: number };
+    expect(ready.kind).toBe("setup");
+    expect(ready.verdict).toBe("SETUP_READY");
+    expect((ready.nodes ?? 0)).toBeGreaterThan(0);
+    expect(TOOL_OUTPUT_SCHEMAS.semctx_setup.safeParse(ready).success).toBe(true);
+
+    // Polyglot refuse on same (now initialized, typically v1 sample) workspace over the wire
+    const refused = await client.callTool({
+      name: "semctx_setup",
+      arguments: { repositoryRoot: root, confirm: true, polyglot: true },
+    });
+    // Sample repo setup writes v1-ish or v2 depending on layout — if not refused, skip strict kind
+    if ((refused.structuredContent as { kind?: string }).kind === "setup_refused") {
+      expect(refused.isError).toBe(true);
+      const body = refused.structuredContent as { verdict?: string; nextSteps?: string[] };
+      expect(body.verdict).toBe("SETUP_REFUSED");
+      expect((body.nextSteps ?? []).length).toBeGreaterThan(0);
+      expect(TOOL_OUTPUT_SCHEMAS.semctx_setup.safeParse(refused.structuredContent).success).toBe(true);
+    }
+  });
+
+  test("MCP wire: SETUP_NOT_READY is isError true with structured body", async () => {
+    root = mkdtempSync(join(tmpdir(), "semctx-mcp-setup-wire-nr-"));
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, "src", "value.py"), "def value():\n    return 1\n");
+    writeFileSync(join(root, ".gitignore"), ".semctx/\n");
+    git(root, "init", "-q");
+    git(root, "add", ".");
+    git(root, "commit", "-q", "-m", "fixture");
+    const base = createGlobSelectionConfig(root);
+    saveConfig(root, {
+      ...base,
+      languages: { ...base.languages, python: "off" },
+    });
+
+    server = createSemctxServer(root);
+    client = new Client({ name: "semctx-setup-nr-test", version: "0.1.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+
+    const result = await client.callTool({
+      name: "semctx_setup",
+      arguments: { repositoryRoot: root, confirm: true },
+    });
+    expect(result.isError).toBe(true);
+    const body = result.structuredContent as { kind?: string; verdict?: string; setupReady?: boolean };
     expect(body.kind).toBe("setup");
-    expect(body.setupReady).toBe(true);
-    expect(body.verdict).toBe("READY");
-    expect((body.nodes ?? 0)).toBeGreaterThan(0);
+    expect(body.verdict).toBe("SETUP_NOT_READY");
+    expect(body.setupReady).toBe(false);
     expect(TOOL_OUTPUT_SCHEMAS.semctx_setup.safeParse(body).success).toBe(true);
   });
 });

@@ -5,6 +5,7 @@ import {
   setupRepository,
   type SetupRepositoryReport,
   type SetupRefusedReport,
+  type SetupResult,
 } from "@semantic-context/app-services";
 
 export interface SetupPreflightReport {
@@ -29,20 +30,32 @@ export type SetupToolResult =
   | SetupRepositoryReport
   | SetupRefusedReport;
 
+/** True when the structured body is a completed setup that agents must treat as failure. */
+export function isSetupDomainFailure(body: SetupToolResult): boolean {
+  return body.kind === "setup_refused"
+    || (body.kind === "setup" && body.verdict === "SETUP_NOT_READY");
+}
+
+/** Agent success gate: only a full setup with SETUP_READY. */
+export function isSetupAgentSuccess(body: SetupToolResult): boolean {
+  return body.kind === "setup" && body.verdict === "SETUP_READY";
+}
+
 /**
  * Plugin-native workspace bootstrap.
  *
  * - `confirm: false` (default) → dry preflight only (no writes).
  * - `confirm: true` → full setup via shared `setupRepository` (no global CLI install).
  *
- * After confirm:true, agents MUST treat any result other than
- * `kind: "setup" && verdict: "READY"` as failure (`setup_refused` / `verdict: "NOT_READY"`).
- * The MCP wire keeps `isError: false` so the full structured report is retained
- * (ToolRegistrar rejects callback-level isError with a body).
+ * After confirm:true:
+ * - `kind: "setup" && verdict: "SETUP_READY"` → success (`isError: false`)
+ * - `setup_refused` / `SETUP_NOT_READY` → domain failure (`isError: true` with structured body)
+ *
+ * Verdict values are namespaced (`SETUP_*`) so they never collide with Plane C `READY`/`BLOCKED`.
  */
 export function setupTool(
   root: string,
-  input: { confirm?: boolean; polyglot?: boolean } = {},
+  input: { confirm?: boolean; polyglot?: boolean; now?: string } = {},
 ): SetupToolResult {
   if (input.confirm !== true) {
     const initialized = isInitialized(root);
@@ -66,7 +79,9 @@ export function setupTool(
     };
   }
 
-  return setupRepository(root, {
+  const result: SetupResult = setupRepository(root, {
     ...(input.polyglot === true ? { polyglot: true } : {}),
+    ...(input.now !== undefined ? { now: input.now } : {}),
   });
+  return result;
 }

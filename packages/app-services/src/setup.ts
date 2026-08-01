@@ -26,16 +26,34 @@ import { indexHealth } from "./index-health";
 import { indexRepository } from "./indexing";
 import { openReadyRepository } from "./readiness";
 
+/**
+ * Bootstrap readiness — namespaced away from Plane C migration `READY`/`BLOCKED`
+ * so agents never conflate workspace bootstrap with plan admission / execution authority.
+ */
+export type SetupVerdict = "SETUP_READY" | "SETUP_NOT_READY" | "SETUP_REFUSED";
+
+/** Progress events for transports that want live phase output (CLI). MCP may ignore. */
+export type SetupPhaseEvent =
+  | { phase: "config"; detail: "written" | "kept" }
+  | { phase: "semantic"; created: number }
+  | { phase: "index"; stage: "start"; selectedFiles: number; selectedByLanguage: Record<string, number> }
+  | { phase: "index"; stage: "done"; nodes: number; edges: number; claims: number }
+  | { phase: "check"; ok: boolean; errors: number }
+  | { phase: "analysis"; ready: boolean; coverageStatus?: string };
+
 /** Options for repository bootstrap (CLI + MCP share this path). */
 export interface SetupRepositoryOptions {
   /** Prefer a polyglot v2 glob selection when writing a fresh config. */
   polyglot?: boolean;
-  /** Capture timestamp; defaults to now. */
+  /**
+   * Capture timestamp for the index seal.
+   * Prefer injecting an explicit ISO-8601 value (CLI/MCP) so ambient clock use stays at the transport edge.
+   * When omitted, a wall-clock ISO string is used once for this run.
+   */
   now?: string;
+  /** Optional phase callback (CLI live progress). Never required for correctness. */
+  onPhase?: (event: SetupPhaseEvent) => void;
 }
-
-/** Loud readiness signal for transports (CLI exit code / MCP agent policy). */
-export type SetupVerdict = "READY" | "NOT_READY" | "REFUSED";
 
 export interface SetupRepositoryReport {
   schemaVersion: 1;
@@ -68,12 +86,12 @@ export interface SetupRepositoryReport {
     reasonSummary: readonly unknown[];
   };
   semanticFilesCreated: number;
-  gitignore: string;
+  gitignore: "create" | "update" | "present";
   check: { ok: boolean; nodes: number; changes: number; errors: number };
   setupReady: boolean;
   analysisReady: boolean;
-  /** READY only when check.ok && analysisReady; agents must treat any other value as failure. */
-  verdict: "READY" | "NOT_READY";
+  /** SETUP_READY only when check.ok && analysisReady. Distinct from Plane C READY. */
+  verdict: "SETUP_READY" | "SETUP_NOT_READY";
 }
 
 /**
@@ -92,7 +110,7 @@ export interface SetupRefusedReport {
   alreadyInitialized: true;
   setupReady: false;
   analysisReady: false;
-  verdict: "REFUSED";
+  verdict: "SETUP_REFUSED";
   /** Safe migration guidance for agents/hosts. */
   nextSteps: string[];
 }
@@ -109,8 +127,9 @@ function smartConfig(root: string, polyglot: boolean): SemctxConfig {
   };
 }
 
-function nowIso(override?: string): string {
-  return override ?? new Date().toISOString();
+function resolveIndexedAt(now: string | undefined): string {
+  if (now !== undefined) return now;
+  return new Date().toISOString();
 }
 
 /**
@@ -128,6 +147,7 @@ export function setupRepository(
   options: SetupRepositoryOptions = {},
 ): SetupResult {
   const polyglot = options.polyglot === true;
+  const onPhase = options.onPhase;
   const already = isInitialized(root);
   let configWritten = false;
 
@@ -150,7 +170,7 @@ export function setupRepository(
       alreadyInitialized: true,
       setupReady: false,
       analysisReady: false,
-      verdict: "REFUSED",
+      verdict: "SETUP_REFUSED",
       nextSteps: [
         "Open .semctx/config.json and migrate to config version 2 (polyglot / glob selection), or remove .semctx/ and re-run setup with polyglot on a fresh workspace",
         "Do not pass polyglot:true against a v1 workspace expecting an in-place overwrite",
@@ -159,8 +179,11 @@ export function setupRepository(
     };
   }
 
+  onPhase?.({ phase: "config", detail: configWritten ? "written" : "kept" });
+
   const scaffold = initSemanticScaffold(root, {});
   const created = scaffold.plan.filter((p) => p.action === "create").length;
+  onPhase?.({ phase: "semantic", created });
 
   const discovery = discoverRepository(config);
   const fileCount = countTypeScriptFiles(config);
@@ -173,8 +196,14 @@ export function setupRepository(
       ).length,
     ]),
   );
+  onPhase?.({
+    phase: "index",
+    stage: "start",
+    selectedFiles: selectedCount,
+    selectedByLanguage,
+  });
 
-  const { analysis, claims, freshnessSeal } = indexRepository(root, nowIso(options.now));
+  const { analysis, claims, freshnessSeal } = indexRepository(root, resolveIndexedAt(options.now));
   const reader = openReadyRepository(root);
   let facts: RepositoryFacts;
   try {
@@ -186,6 +215,13 @@ export function setupRepository(
   } finally {
     reader.close();
   }
+  onPhase?.({
+    phase: "index",
+    stage: "done",
+    nodes: analysis.graph.nodes.length,
+    edges: analysis.graph.edges.length,
+    claims: claims.length,
+  });
 
   const loaded = loadSemanticModel(root);
   const check = checkSemanticModel({
@@ -195,6 +231,8 @@ export function setupRepository(
     facts,
     graphIndexed: true,
   });
+  onPhase?.({ phase: "check", ok: check.ok, errors: check.counts.errors });
+
   const health = indexHealth(root);
   const analysisReady =
     config.version !== 2
@@ -204,6 +242,15 @@ export function setupRepository(
       && health.coverage.status !== "insufficient"
     );
   const setupReady = check.ok && analysisReady;
+  const coverageStatus =
+    typeof health.coverage === "object" && health.coverage !== null && "status" in health.coverage
+      ? String((health.coverage as { status: string }).status)
+      : undefined;
+  onPhase?.({
+    phase: "analysis",
+    ready: analysisReady,
+    ...(coverageStatus !== undefined ? { coverageStatus } : {}),
+  });
 
   return {
     schemaVersion: 1,
@@ -245,6 +292,6 @@ export function setupRepository(
     },
     setupReady,
     analysisReady,
-    verdict: setupReady ? "READY" : "NOT_READY",
+    verdict: setupReady ? "SETUP_READY" : "SETUP_NOT_READY",
   };
 }

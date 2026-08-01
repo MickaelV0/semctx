@@ -57,10 +57,58 @@ describe("semctx setup — one-command bootstrap", () => {
     }
     expect(code).toBe(0);
     const report = JSON.parse(out);
+    expect(report.schemaVersion).toBe(1);
+    expect(report.kind).toBe("setup");
+    expect(report.verdict).toBe("SETUP_READY");
     expect(report.check.ok).toBe(true);
     expect(report.semanticFilesCreated).toBe(0);
     expect(report.nodes).toBeGreaterThan(0);
     expect(report.indexHealth.binding.status).toBe("valid");
+  });
+
+  it("refuses polyglot against an existing v1 config with setup_refused envelope", () => {
+    const polyRoot = mkdtempSync(join(tmpdir(), "semctx-setup-poly-v1-"));
+    try {
+      mkdirSync(join(polyRoot, "src"), { recursive: true });
+      writeFileSync(join(polyRoot, "src", "value.ts"), "export const value = 1;\n");
+      writeFileSync(join(polyRoot, ".gitignore"), ".semctx/\n");
+      git(polyRoot, "init", "-q");
+      git(polyRoot, "add", ".");
+      git(
+        polyRoot,
+        "-c",
+        "user.name=Semctx Test",
+        "-c",
+        "user.email=semctx@example.test",
+        "commit",
+        "-q",
+        "-m",
+        "fixture",
+      );
+      // First setup writes default (v1) config
+      expect(runSetup(polyRoot, parseArgs(["setup", "--root", polyRoot]))).toBe(0);
+
+      const originalWrite = process.stdout.write.bind(process.stdout);
+      let out = "";
+      (process.stdout.write as unknown) = (chunk: string): boolean => ((out += chunk), true);
+      let code: number;
+      try {
+        code = runSetup(
+          polyRoot,
+          parseArgs(["setup", "--polyglot", "--json", "--root", polyRoot]),
+        );
+      } finally {
+        process.stdout.write = originalWrite;
+      }
+      expect(code).toBe(1);
+      const report = JSON.parse(out);
+      expect(report.kind).toBe("setup_refused");
+      expect(report.verdict).toBe("SETUP_REFUSED");
+      expect(report.reasonCode).toBe("CONFIG_INVALID");
+      expect(report.nextSteps.length).toBeGreaterThan(0);
+    } finally {
+      rmSync(polyRoot, { recursive: true, force: true });
+    }
   });
 
   it("reports honest partial Plane A readiness for a successful polyglot setup", () => {

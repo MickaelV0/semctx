@@ -2,15 +2,12 @@ import { setupRepository } from "@semantic-context/app-services";
 import { runPreset } from "./preset";
 import type { ParsedArgs } from "../args";
 import { flagBool, flagString } from "../args";
-import { info, heading, success, warn, fail, json, c } from "../output";
+import { info, heading, success, warn, fail, json, c, nowIso } from "../output";
 
 /**
  * `semctx setup` — one command that makes a repository ready: config + graph index + semantic
  * scaffold + validation. Idempotent and non-destructive (never overwrites an existing config or
- * authored `.sem` files).
- *
- * Progress: a short banner, then a blocking setup run (config · semantic · index · check), then a
- * phase summary. Live mid-index streaming is not yet re-exposed via a shared progress port.
+ * authored `.sem` files). Live phase progress is emitted via the shared `onPhase` port.
  *
  * The core mutation lives in `@semantic-context/app-services` (`setupRepository`) so the plugin MCP
  * tool can call the same path without a global package install.
@@ -29,12 +26,81 @@ export function runSetup(root: string, args: ParsedArgs): number {
     if (code !== 0) return code;
   }
 
-  if (!asJson) info(c.dim("  running setup (config · semantic · index · check)…"));
-  const report = setupRepository(root, { polyglot });
+  const report = setupRepository(root, {
+    polyglot,
+    now: nowIso(),
+    onPhase: asJson
+      ? undefined
+      : (event) => {
+        switch (event.phase) {
+          case "config":
+            info(
+              `  ${c.green("ok")} config    ${
+                event.detail === "written" ? c.dim("written") : c.dim("existing, kept")
+              }`,
+            );
+            return;
+          case "semantic":
+            info(
+              `  ${c.green("ok")} semantic  ${
+                event.created > 0
+                  ? `${event.created} file(s) scaffolded ${c.dim("(.semctx/semantic/, versioned)")}`
+                  : c.dim("already present")
+              }`,
+            );
+            return;
+          case "index":
+            if (event.stage === "start") {
+              if (event.selectedFiles === 0) {
+                info(`  ${c.yellow("!!")} index     ${c.yellow("no analyzable files selected")} under ${root}`);
+              } else {
+                const langs = Object.entries(event.selectedByLanguage)
+                  .filter(([, n]) => n > 0)
+                  .map(([language, n]) => `${language}:${n}`)
+                  .join(", ");
+                info(
+                  `  ${c.dim("··")} index     analyzing ${c.bold(String(event.selectedFiles))} selected file(s)`
+                  + `${langs.length > 0 ? c.dim(` (${langs})`) : ""}…`,
+                );
+              }
+              return;
+            }
+            info(
+              `  ${c.green("ok")} index     ${c.bold(String(event.nodes))} nodes, `
+              + `${c.bold(String(event.edges))} edges, ${c.bold(String(event.claims))} claims`,
+            );
+            return;
+          case "check":
+            info(
+              `  ${event.ok ? c.green("ok") : c.red("!!")} check     ${
+                event.ok ? "model consistent" : `${event.errors} error(s)`
+              }`,
+            );
+            return;
+          case "analysis":
+            if (event.coverageStatus !== undefined) {
+              const healthColor = !event.ready
+                ? c.red
+                : event.coverageStatus === "complete"
+                  ? c.green
+                  : c.yellow;
+              info(
+                `  ${!event.ready
+                  ? c.red("!!")
+                  : event.coverageStatus === "complete"
+                    ? c.green("ok")
+                    : c.yellow("!!")} analysis  ${healthColor(event.coverageStatus)}`,
+              );
+            }
+            return;
+        }
+      },
+  });
 
   if (report.kind === "setup_refused") {
     if (asJson) {
-      json(report);
+      // Canonical SetupResult envelope (same fields as MCP structured content).
+      json({ ...report, preset: preset ?? null });
       return 1;
     }
     fail(report.reason);
@@ -43,74 +109,13 @@ export function runSetup(root: string, args: ParsedArgs): number {
   }
 
   if (asJson) {
-    // Historical CLI JSON projection (not the full MCP envelope). Readiness = exit code.
-    // Canonical versioned report fields (verdict, setupReady, analysisReady) live on MCP / SetupResult.
+    // Canonical SetupRepositoryReport + CLI-only preset annotation.
     json({
+      ...report,
       configWritten: report.configWritten || preset !== undefined,
       preset: preset ?? null,
-      sourceFiles: report.sourceFiles,
-      selectedFiles: report.selectedFiles,
-      selection: report.selection,
-      nodes: report.nodes,
-      edges: report.edges,
-      claims: report.claims,
-      freshnessSeal: report.freshnessSeal,
-      indexHealth: report.indexHealth,
-      semanticFilesCreated: report.semanticFilesCreated,
-      gitignore: report.gitignore,
-      check: report.check,
-      // Additive readiness keys (safe for older consumers that ignore unknown fields).
-      setupReady: report.setupReady,
-      analysisReady: report.analysisReady,
-      verdict: report.verdict,
     });
     return report.setupReady ? 0 : 1;
-  }
-
-  const configNote = preset !== undefined
-    ? c.dim(`preset "${preset}"`)
-    : report.configWritten
-      ? c.dim("written to " + report.configPath)
-      : c.dim("existing, kept");
-  info(`  ${c.green("ok")} config    ${configNote}`);
-  info(
-    `  ${c.green("ok")} semantic  ${
-      report.semanticFilesCreated > 0
-        ? `${report.semanticFilesCreated} file(s) scaffolded ${c.dim("(.semctx/semantic/, versioned)")}`
-        : c.dim("already present")
-    }`,
-  );
-  if (report.selectedFiles === 0) {
-    info(`  ${c.yellow("!!")} index     ${c.yellow("no analyzable files selected")} under ${root}`);
-  }
-  info(
-    `  ${c.green("ok")} index     ${c.bold(String(report.nodes))} nodes, `
-    + `${c.bold(String(report.edges))} edges, ${c.bold(String(report.claims))} claims`,
-  );
-  info(
-    `  ${report.check.ok ? c.green("ok") : c.red("!!")} check     ${
-      report.check.ok ? "model consistent" : `${report.check.errors} error(s)`
-    }`,
-  );
-
-  const coverage = report.indexHealth.coverage as { status?: string } | undefined;
-  const coverageStatus = coverage?.status;
-  if (report.selection.configVersion === 2 && coverageStatus !== undefined) {
-    const healthColor = !report.analysisReady
-      ? c.red
-      : coverageStatus === "complete"
-        ? c.green
-        : c.yellow;
-    const reasons = (report.indexHealth.reasonSummary as unknown[]).map(String);
-    info(
-      `  ${!report.analysisReady
-        ? c.red("!!")
-        : coverageStatus === "complete"
-          ? c.green("ok")
-          : c.yellow("!!")} analysis  `
-      + `${healthColor(coverageStatus)}`
-      + `${reasons.length === 0 ? "" : c.dim(` (${reasons.join(", ")})`)}`,
-    );
   }
 
   info("");
@@ -121,6 +126,9 @@ export function runSetup(root: string, args: ParsedArgs): number {
         : "index found 0 nodes — review v2 include/exclude globs and language modes, then re-run 'semctx setup'.",
     );
   }
+
+  const coverage = report.indexHealth.coverage as { status?: string } | undefined;
+  const coverageStatus = coverage?.status;
   if (report.setupReady) {
     const analysisQualification =
       report.selection.configVersion === 2 && coverageStatus !== "complete"
@@ -136,6 +144,7 @@ export function runSetup(root: string, args: ParsedArgs): number {
     info(c.dim("Next: open a change and verify it —"));
     info(c.dim("  semctx change open change.my-change --preserves <invariant-ids>"));
     info(c.dim("  # edit code, then:  semctx change verify change.my-change --base origin/main"));
+    info(c.dim("Plugin path: MCP semctx_setup { repositoryRoot, confirm: true }"));
   } else if (!report.check.ok) {
     fail("setup completed with model issues — run 'semctx semantic check' for details");
   } else {
