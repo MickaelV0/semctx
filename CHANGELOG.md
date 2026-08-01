@@ -15,6 +15,14 @@ GitHub Release advance together through the tag-driven lockstep workflow documen
   the legacy v1 short-circuit that treated analysis as ready regardless of coverage/freshness is
   removed. Agents must not see `SETUP_READY` when `indexHealth.coverage.status === "insufficient"`.
 
+### Documentation
+
+- **Public MCP contract review guide** ([#73](https://github.com/hoklims/semctx/pull/73)):
+  `docs/contributing/public-mcp-contracts.md` (linked from CONTRIBUTING) implements ADR 0012 for
+  contributors — PUBLIC_CONTRACT / DOMAIN_FEATURE / TRANSPORT_DX tiers (not Plane A/B/C), domain
+  outcomes as structured results without handler-authored `isError`, and a self-check with
+  common vs conditional sections.
+
 ### Added
 
 - **Plugin-native workspace bootstrap over MCP** ([#73](https://github.com/hoklims/semctx/pull/73)):

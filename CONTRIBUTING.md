@@ -42,6 +42,11 @@ bun ../../apps/cli/src/index.ts bench
 - Work on a branch. Small, cohesive commits with explicit messages.
 - Do not commit if `bun test` or `bun run build` fails.
 - Update the relevant docs in the same PR.
+- Changes to the **public MCP surface** (tool registration, error catalogue, structured
+  schemas, agent success gates, annotations, visibility, root confinement, plugin parity)
+  should follow [docs/contributing/public-mcp-contracts.md](docs/contributing/public-mcp-contracts.md)
+  and [ADR 0012](docs/adr/0012-mcp-2026-stable-surface.md). Include the PR self-check from that
+  guide when the blast radius is PUBLIC_CONTRACT (use `N/A — reason` for conditional rows).
 
 ## Adding a semantic marker or authority policy
 
