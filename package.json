@@ -29,7 +29,11 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json",
+    "typecheck": "bun run typecheck:product && bun run typecheck:tooling",
+    "typecheck:product": "tsc -p tsconfig.json",
+    "typecheck:tooling": "tsc -p scripts/tsconfig.json && tsc -p plugins/tsconfig.json",
+    "lint": "eslint . --max-warnings 0",
+    "quality": "bun run typecheck && bun run lint",
     "test": "bun test --timeout 60000 packages apps plugins",
     "plugin:build": "bun scripts/build-plugin-runtime.ts",
     "plugin:check": "bun scripts/build-plugin-runtime.ts --check",
@@ -37,7 +41,11 @@
     "semctx": "bun apps/cli/src/index.ts"
   },
   "devDependencies": {
+    "@eslint/js": "10.0.1",
     "@types/bun": "^1.1.14",
-    "typescript": "^5.6.3"
+    "eslint": "10.8.0",
+    "globals": "17.8.0",
+    "typescript": "^5.6.3",
+    "typescript-eslint": "8.65.0"
   }
 }

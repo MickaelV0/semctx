@@ -12,7 +12,7 @@ Claude Code, require an API key, publish anything, or run the private benchmark.
    (`bun install`). When it finishes:
 
    ```bash
-   bun run typecheck
+   bun run quality
    bun run build
    bun test
    ```
@@ -36,7 +36,7 @@ devcontainer exec --workspace-folder . bun test
 
 ```bash
 bun test                 # packages, apps and plugins
-bun run typecheck        # strict tsc
+bun run quality          # strict tsc for maintained TS + ESLint (typed TS, syntax-only JS)
 ```
 
 ## Testing the GitHub Action locally
