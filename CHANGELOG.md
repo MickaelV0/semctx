@@ -11,6 +11,14 @@ GitHub Release advance together through the tag-driven lockstep workflow documen
 
 ### Added
 
+- **Plugin-native workspace bootstrap over MCP** ([#73](https://github.com/hoklims/semctx/pull/73)):
+  shared `setupRepository` in `@semantic-context/app-services` powers both `semctx setup` and the
+  new confirm-gated `semctx_setup` tool, so agents can initialise `.semctx/` without a global
+  package install. Default MCP calls are dry preflight; `confirm: true` runs config + semantic
+  scaffold + index + check. Policy refusals (e.g. polyglot against an existing v1 config) return
+  structured `setup_refused` with `nextSteps`; readiness is loud via `verdict`
+  (`READY` / `NOT_READY` / `REFUSED`). The shared control skill documents the fail-closed agent
+  policy. Global CLI remains optional for CI and non-plugin shells.
 - **Offline global CLI compatibility advisory** ([#35](https://github.com/hoklims/semctx/issues/35)):
   one shared bounded probe now powers `doctor --json` and the path-free
   `semctx_cli_compatibility` MCP preflight. Exact pre-1.0 version drift, absence, malformed output,

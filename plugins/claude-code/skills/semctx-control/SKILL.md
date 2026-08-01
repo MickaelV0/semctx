@@ -161,6 +161,7 @@ stages; before compaction or owner transfer, record `handoff`.
 - **Plane A index health:** binding is `valid`, `invalid`, or `absent`; coverage is `complete`, `partial`, or `insufficient`; freshness retains its own verdict and reasons. Use `semctx_index_health` before relying on negative evidence, and never let one field replace or upgrade another or the independent control-freshness verdict.
 - **CLI compatibility:** `CLI_VERSION_COMPATIBLE` confirms exact lockstep; all other reasons are advisory. They never grant authority and never block an MCP-only workflow.
 - **Plane C — migration plan:** `READY`, `BLOCKED`. `READY` means the plan satisfies its admission rules; it is never execution authority.
+- **Workspace bootstrap (`semctx_setup`):** `verdict` is `READY` / `NOT_READY` / `REFUSED` (or preflight without a verdict). Agent success requires `kind === "setup"` and `verdict === "READY"`; do not treat MCP `isError: false` alone as ready. Distinct from Plane C `READY` (migration admission, never execution authority).
 
 ## Safety contract
 
