@@ -53,6 +53,7 @@ describe("shared agent workflow contract", () => {
         "semantic_check",
         [
           "semctx_semantic_check",
+          "semctx_control_resume",
           "semctx_resume",
           "semctx_semantic_inspect",
           "semctx_semantic_slice",
@@ -103,7 +104,13 @@ describe("shared agent workflow contract", () => {
       ],
       ["verify_change", ["semctx_verify_change"], "read_only", false, "after_edits"],
       ["change_verify", ["semctx_change_verify"], "read_only", false, "after_edits"],
-      ["handoff", ["semctx_handoff"], "working_state_write", true, "before_handoff"],
+      [
+        "handoff",
+        ["semctx_control_handoff", "semctx_handoff"],
+        "working_state_write",
+        true,
+        "before_handoff",
+      ],
     ]);
     expect(
       contract.stages.find((stage) => stage.id === "inspect_repository")?.instruction,
@@ -117,6 +124,27 @@ describe("shared agent workflow contract", () => {
     expect(
       contract.stages.find((stage) => stage.id === "status")?.instruction,
     ).toContain("control-freshness");
+    expect(
+      contract.stages.find((stage) => stage.id === "semantic_check")?.instruction,
+    ).toContain("exact task-bound Control Handoff v2 capsule");
+    expect(
+      contract.stages.find((stage) => stage.id === "handoff")?.instruction,
+    ).toContain("requested proof-bearing boundary, never execution history");
+    expect(
+      contract.stages.find((stage) => stage.id === "handoff")?.instruction,
+    ).toContain("skip only those explicit labels");
+    expect(
+      contract.stages.find((stage) => stage.id === "handoff")?.instruction,
+    ).toContain("legacy empty steps");
+    expect(
+      contract.stages.find((stage) => stage.id === "handoff")?.instruction,
+    ).toContain("UNPROVEN migration obligations");
+    expect(
+      contract.stages.find((stage) => stage.id === "handoff")?.instruction,
+    ).toContain("sealed observed hunk SHA-256 node at L0");
+    expect(
+      contract.stages.find((stage) => stage.id === "handoff")?.instruction,
+    ).toContain("grants no execution authority");
   });
 
   test("rejects stage drift, duplicate tool ownership and dishonest write effects", () => {

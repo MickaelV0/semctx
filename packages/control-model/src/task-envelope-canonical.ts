@@ -189,6 +189,13 @@ export function normalizeSemanticChangeSetV1(value: SemanticChangeSetV1): Semant
       fromExpectationIds: sortedUnique(step.fromExpectationIds),
       toExpectationIds: sortedUnique(step.toExpectationIds),
       repositoryEditIds: sortedUnique(step.repositoryEditIds),
+      ...(step.completionEvidenceRequirementIds === undefined
+        ? {}
+        : {
+            completionEvidenceRequirementIds: sortedUnique(
+              step.completionEvidenceRequirementIds,
+            ),
+          }),
     })).sort((a, b) => a.order - b.order || compareCodeUnits(a.stepId, b.stepId)),
     semanticExpectations: [...value.semanticExpectations].map((expectation) => ({
       ...expectation,

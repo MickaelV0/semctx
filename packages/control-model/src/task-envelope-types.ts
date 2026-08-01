@@ -171,6 +171,7 @@ export interface SemanticRefinementStepV1 {
   fromExpectationIds: readonly string[];
   toExpectationIds: readonly string[];
   repositoryEditIds: readonly string[];
+  completionEvidenceRequirementIds?: readonly string[];
 }
 
 export interface SemanticChangeSetV1 {

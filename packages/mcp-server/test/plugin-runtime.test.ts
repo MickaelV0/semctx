@@ -122,7 +122,7 @@ describe("packaged MCP runtime", () => {
     try {
       await client.connect(transport);
       const { tools } = await client.listTools();
-      expect(tools).toHaveLength(33);
+      expect(tools).toHaveLength(35);
       expect(tools.some((tool) => tool.name === "semctx_control_agent_lifecycle")).toBe(true);
       expect(tools.some((tool) => tool.name === "semctx_control_explorer")).toBe(true);
       expect(tools.some((tool) => tool.name === "semctx_semantic_check")).toBe(true);
@@ -134,6 +134,8 @@ describe("packaged MCP runtime", () => {
       expect(tools.some((tool) => tool.name === "semctx_change_close")).toBe(true);
       expect(tools.some((tool) => tool.name === "semctx_control_plan_change")).toBe(true);
       expect(tools.some((tool) => tool.name === "semctx_control_reconcile_diff")).toBe(true);
+      expect(tools.some((tool) => tool.name === "semctx_control_handoff")).toBe(true);
+      expect(tools.some((tool) => tool.name === "semctx_control_resume")).toBe(true);
       expect(tools.some((tool) => tool.name === "control_authorize_transition")).toBe(true);
       expect(tools.some((tool) => tool.name === "control_authorize_step")).toBe(true);
       expect(tools.some((tool) => tool.name === "control_authorize_deletion")).toBe(true);

@@ -18,8 +18,9 @@ one injected timestamp) and **inspectable**. After installation, the analysis pi
 
 > **Main vs release.** This README tracks `main`, whose release-bearing package and plugin
 > manifests are currently `0.1.17`. The latest npm package and Git tag are still `0.1.16`; the
-> polyglot Plane A runtime and agent-lifecycle foundation described below are therefore present on
-> `main` but not yet in `bunx semctx@latest`. Pin a release when reproducibility matters.
+> polyglot Plane A runtime, agent-lifecycle foundation, and manual Control Handoff v2 described
+> below are therefore present on `main` but not yet in `bunx semctx@latest`. Pin a release when
+> reproducibility matters.
 
 **What semctx does**
 
@@ -41,9 +42,9 @@ one injected timestamp) and **inspectable**. After installation, the analysis pi
 | Plane A change-impact verification | implemented and tested; TypeScript is the compatibility baseline |
 | Config-v2 polyglot runtime | implemented and tested for TypeScript, bounded Python-through-3.12 facts, Markdown documents, and SQL migrations; adapter boundary remains private/provisional |
 | Plane B authored intent | implemented; Git-versioned declarations and proof-carrying change contracts |
-| Plane C reconstruction/control | implemented as read-only planning, authority reporting, and diff reconciliation; no executor |
+| Plane C reconstruction/control | implemented as read-only planning, authority reporting, and diff reconciliation, plus content-addressed local Control Handoff v2 capture/resume; no executor |
 | Codex/Claude MCP and workflow parity | implemented for shared tools, contracts, and generated workflow instructions |
-| Agent lifecycle | explicit MCP checkpoint tool only, in manual shadow mode; automatic host hooks, Handoff v2, telemetry, and enforcement remain open in [#28](https://github.com/hoklims/semctx/issues/28) |
+| Agent lifecycle | explicit MCP checkpoint and machine-validated Control Handoff v2 are manual and shadow-only; automatic host hooks, persisted/measured telemetry, and enforcement remain open in [#28](https://github.com/hoklims/semctx/issues/28) |
 | P4 competitive evidence/replay gate / P5 persisted executor | not shipped; the committed 16-change retrieval benchmark is historical negative evidence, not the P4 competitive gate |
 
 > **Static, not dynamic — a scope selector for runtime checks.** semctx is a *static* impact
@@ -182,7 +183,7 @@ semctx verify diff --format json --output report.json   # stable, versioned mach
 A documented **pre-commit gate** (`docs/examples/pre-commit-hook.md`) runs `verify diff
 --staged` and blocks the commit only on `BLOCK`.
 
-### Shared lifecycle checkpoint (MCP-only foundation)
+### Shared lifecycle checkpoint and manual Control Handoff v2
 
 Codex and Claude Code expose the same read-only `semctx_control_agent_lifecycle` MCP tool. Agents
 must invoke it explicitly at `before_implementation_write` before the first eligible L2+ write,
@@ -196,19 +197,44 @@ values evaluate neither stage outcomes nor admissibility. A non-Semctx repositor
 explicit `non_semctx` no-op; a Semctx repository whose index is not ready remains
 `semctx_unready`.
 
-Touched coordinates carry `caller_observed_advisory` evidence. The tool folds prior and newly
-observed ids as `stateless_caller_reinjected_unbound`: the caller must reinject prior ids, and
-Semctx persists or binds none of them to a task, session, diff, commit, or handoff. This foundation
-runs in `shadow` mode, blocks nothing, grants no execution authority, and collects no source
-content. It adds no automatic lifecycle hooks, measured or persisted telemetry, Handoff v2, or
-enforcement.
+Touched coordinates in the lifecycle checkpoint carry `caller_observed_advisory` evidence. The
+tool folds prior and newly observed ids as `stateless_caller_reinjected_unbound`: the caller must
+reinject prior ids, and this checkpoint persists or binds none of them to a task, session, diff,
+commit, or handoff.
+
+The separate manual Control Handoff v2 surface is available as `semctx control handoff
+<input.json>` / `resume-handoff <capsule-hash>` and the MCP tools `semctx_control_handoff` /
+`semctx_control_resume`. A `step_completed` pointer requests validation of one proof-bearing
+boundary from the current worktree; it is never an execution-history assertion. Fresh
+reconciliation accepts that boundary only when every proof-bearing step through it is currently
+provable. The exact sealed observed hunk SHA-256 coordinate is a valid L0 focus for an edit-only
+step.
+
+Planner phases with explicit zero obligations are reported separately as
+`descriptiveRefinementStepIds`. They are labels, never completed steps, and
+`nextValidTransition` may skip only those explicit descriptive phases. An empty legacy step without
+the explicit completion-evidence field is `legacy_ambiguous` and fails closed. Canonical migration
+step obligations remain load-bearing; evidence that cannot currently be derived or otherwise
+satisfied leaves reconciliation `UNPROVEN`.
+
+The content-addressed record stays under ignored local working state; exact-hash resume re-runs
+reconciliation and returns no stale capsule.
+
+Both surfaces run in `shadow` mode, block nothing, grant `executionAuthority: "none"`, and collect
+no source content in the canonical capsule. A non-Semctx repository returns a write-free `NO_OP`.
+Normal post-edit changes can make global control freshness `STALE`; Handoff v2 therefore uses fresh
+task/diff reconciliation as its validation basis instead of treating global freshness as post-edit
+proof or execution authority.
+There are no automatic lifecycle hooks. Codex/Claude hook integration, persisted or measured
+telemetry, enforcement, and an executor remain open.
 
 ### Claude Code
 
 The plugin ([`plugins/claude-code`](plugins/claude-code)) exposes the same shared
 `semctx-control` workflow as Codex: `semctx_control_status`, `semctx_control_trace`,
-`semctx_control_plan`, `semctx_control_plan_change`, `semctx_control_reconcile_diff`,
-proof-carrying change contracts, and `semctx_verify_change`. The narrower `semctx-semantic` and
+`semctx_control_plan`, `semctx_control_plan_change`, `semctx_control_reconcile_diff`, manual
+`semctx_control_handoff` / `semctx_control_resume`, proof-carrying change contracts, and
+`semctx_verify_change`. The narrower `semctx-semantic` and
 `semctx-verify` skills remain available for focused Plane B or Plane A work. Planning bundles carry
 `executionAuthority: "none"`; `READY` and `REALIZED` are verdicts, never execution authority. An
 opt-in **guarded mode** blocks `git commit`/`git push` until the diff is verified; advisory mode is
@@ -224,9 +250,11 @@ its resolved absolute path. A global `semctx` remains optional for CI and non-pl
 The repo-local [`semctx-control`](plugins/semctx-control) plugin gives Codex the full semctx MCP
 surface plus the same proof-honest workflow shipped for Claude Code. It uses
 `semctx_control_status`, `semctx_control_trace`, `semctx_control_plan`,
-`semctx_control_plan_change` and `semctx_control_reconcile_diff`, maintains proof-carrying change
-contracts on write-scoped tasks, and verifies the resulting diff. It never treats a planning or
-reconciliation verdict as execution authority and Plane C remains read-only. It ships the same
+`semctx_control_plan_change`, `semctx_control_reconcile_diff`, and the manual
+`semctx_control_handoff` / `semctx_control_resume` pair; it maintains proof-carrying change
+contracts on write-scoped tasks and verifies the resulting diff. It never treats a planning or
+reconciliation verdict as execution authority. Plane C planning and reconciliation remain
+read-only; Control Handoff v2 writes only ignored local working state. It ships the same
 portable `dist/semctx.js` CLI, though Codex has no placeholder substitution to hand the agent its
 path — shell fallbacks there use a global `semctx`. Install and usage guide:
 [`docs/integrations/codex-control-plane.md`](docs/integrations/codex-control-plane.md).
@@ -348,7 +376,7 @@ application. See
 
 ## MCP server (agents)
 
-Current `main` registers **33 schema-declared tools with validated structured outputs**. Individual
+Current `main` registers **35 schema-declared tools with validated structured outputs**. Individual
 machine reports remain versioned where their public contract defines a schema version. The
 [authoritative catalogue](packages/mcp-server/src/tool-contract.ts) groups them into these
 surfaces:
@@ -357,7 +385,7 @@ surfaces:
 | --- | --- | --- |
 | Plane A | `semctx_index_health`, `semctx_inspect`, `semctx_verify_change` | separate index binding/freshness/coverage, query observed facts, and verify a diff |
 | Plane B | `semctx_semantic_check`, `semctx_semantic_slice`, `semctx_change_open`, `semctx_change_update`, `semctx_change_verify`, `semctx_change_close`, `semctx_handoff`, `semctx_resume` | preserve authored intent, proof-carrying change contracts, and resumable state |
-| Plane C | status, authority, trace, graph, traversal, coverage, impact, explanation, architecture comparison, target proposal, scope binding, planning, and reconciliation tools | produce bounded, fail-closed reports with `executionAuthority: "none"` |
+| Plane C | status, authority, trace, graph, traversal, coverage, impact, explanation, architecture comparison, target proposal, scope binding, planning, reconciliation, and manual Control Handoff v2 tools | produce bounded, fail-closed reports and resumable local capsules with `executionAuthority: "none"` |
 | Lifecycle | `semctx_control_agent_lifecycle` | record explicit shadow checkpoint presence without hooks, telemetry, enforcement, or authority |
 | Explorer | `semctx_control_explorer` | return a bounded read-only snapshot for model clients and the Control Explorer MCP App |
 
@@ -461,7 +489,7 @@ Implemented and tested (full suite via `bun run test`):
 - `verify diff` — impact analysis + strict/advisory PASS/WARN/BLOCK, with provenance;
   `--base/--head` merge-base ranges, `text/json/github` formats (versioned JSON contract),
   `--fail-on`, `--output`, `--record`, and fail-closed config-v2 analysis-health preflight;
-- MCP 2026-07-28 stdio server (33 schema-declared tools with validated structured results and a
+- MCP 2026-07-28 stdio server (35 schema-declared tools with validated structured results and a
   bounded Control Explorer App)
   + aligned Codex/Claude Code plugins (shared control workflow; Claude advisory + guarded profiles);
 - composite GitHub Action (annotations, summary, PASS/WARN/BLOCK gate);
@@ -472,7 +500,8 @@ Implemented and tested (full suite via `bun run test`):
   handoff/resume, CLI (`semantic`/`change`), MCP tools + skill (ADR 0009).
 - **control plane (Plane C)**: sealed TaskEnvelope/ChangeSet planning, immutable reviewed target
   identities, five refinement profiles and actual-worktree reconciliation with canonical
-  CLI/MCP parity and no execution authority.
+  CLI/MCP parity, plus manual content-addressed Control Handoff v2 capture/resume; no execution
+  authority.
 - **agent lifecycle foundation**: one shared MCP-only stage-presence policy/report for four explicit
   checkpoints; shadow-only, stateless, non-blocking, non-authorizing and source-non-collecting.
 
@@ -496,8 +525,9 @@ Implemented and tested (full suite via `bun run test`):
 - Authored symbol links currently use exact node ids that include source lines. Harmless line shifts
   can produce `STALE_REPOSITORY_LINK`; stable anchors and an explicit relink workflow remain open
   in [#37](https://github.com/hoklims/semctx/issues/37).
-- Lifecycle checkpoints require explicit agent calls. They provide no automatic host hooks,
-  persisted or measured telemetry, Handoff v2, or enforcement.
+- Lifecycle checkpoints and Control Handoff v2 require explicit agent calls. They provide no
+  automatic host hooks, persisted or measured telemetry, enforcement, or proof that a host
+  lifecycle event invoked them.
 
 See [`ROADMAP.md`](ROADMAP.md) for the shipping vs research split.
 

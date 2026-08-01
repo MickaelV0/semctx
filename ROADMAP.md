@@ -197,9 +197,19 @@ before the first eligible L2+ implementation write, after repository edits, befo
 before compaction or owner transfer. It distinguishes a non-Semctx `NO_OP` from
 `semctx_unready`, reports `RECORDED` / `INCOMPLETE` for stage-id presence only, and folds
 `caller_observed_advisory` coordinates with `stateless_caller_reinjected_unbound` semantics.
-Outcomes and admissibility remain unevaluated. The tool is shadow-only, read-only, non-blocking,
-non-authorizing, and source-non-collecting. It adds no automatic lifecycle hooks, persisted or
-measured telemetry, Handoff v2, or enforcement; the rollout items below therefore remain open.
+Outcomes and admissibility remain unevaluated. The checkpoint is shadow-only, read-only,
+non-blocking, non-authorizing, source-non-collecting, and does not invoke Handoff v2 automatically.
+
+The separate manual Control Handoff v2 CLI/MCP surface is now machine-validated and
+content-addressed. Capture treats its progress pointer as a requested current-state proof boundary,
+never execution history, and re-runs actual-diff reconciliation. It counts only proved
+proof-bearing steps as complete, lists explicit zero-obligation planner labels separately as
+`descriptiveRefinementStepIds`, and lets the next transition skip only those descriptive labels.
+Empty legacy steps fail closed. Canonical migration step obligations remain load-bearing and stay
+`UNPROVEN` when their evidence cannot be derived or otherwise satisfied. Exact-hash resume re-runs
+the same reconciliation and returns no stale capsule. This closes the standalone manual shadow
+surface, not the automatic host integrations, persisted/measured telemetry, enforcement, or
+executor rollout below.
 
 - [ ] **Codex lifecycle integration** — route eligible prompts, preflight before the first L2+
       write, accumulate touched coordinates after edits, capture a sealed pre-compaction handoff,
@@ -207,8 +217,16 @@ measured telemetry, Handoff v2, or enforcement; the rollout items below therefor
 - [ ] **Claude Code lifecycle integration** — preserve the same verdicts and envelope semantics
       using the host surfaces actually available; keep the existing commit/push diff-hash guard as
       a Plane A gate rather than presenting it as a Plane C executor.
-- [ ] **Handoff v2** — carry TaskEnvelope id, current abstraction level, completed refinement step,
-      seals, touched coordinates, diff hash, proofs obtained and next valid transition.
+- [x] **Handoff v2 — manual shadow surface** — the additive `control handoff` /
+      `resume-handoff` and
+      `semctx_control_handoff` / `semctx_control_resume` surfaces carry TaskEnvelope identity,
+      a requested current-state proof boundary, machine-validated completed proof-bearing progress,
+      explicit descriptive step ids, reconciliation seals, touched coordinates, observed diff hash,
+      satisfied proofs, and the next valid transition. The transition skips only explicit
+      descriptive phases; empty legacy steps fail closed and unsupported migration obligations stay
+      `UNPROVEN`. Legacy Plane-B Handoff v1 remains separate and compatible. Capsules are local,
+      ignored, content-addressed, shadow-only, non-blocking, non-authorizing, and refuse stale
+      exact-hash resume. This checkbox does not close issue #28.
 - [ ] **Shadow enforcement rollout** — emit advisories and telemetry first; enable blocking only
       after replay demonstrates an acceptable false-block rate.
 

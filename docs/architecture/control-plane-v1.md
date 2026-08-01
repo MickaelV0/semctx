@@ -243,6 +243,65 @@ then violation codes, then proof-insufficiency codes. Violations include `SCOPE_
 `UNPLANNED_COORDINATE` and `TARGET_NOT_REALIZED`. Insufficient proof remains `UNPROVEN`, never a
 false `REALIZED`; advisory diagnostics cannot upgrade the terminal status.
 
+## Manual Control Handoff v2
+
+Control Handoff v2 is an additive Plane C surface. It does not replace the legacy Plane-B
+`semctx_handoff` / `semctx_resume` Handoff v1 contract or its working files.
+
+Capture accepts one strict object:
+
+```text
+{
+  schemaVersion: 2,
+  planningBundle: PlanningBundleV1,
+  progress:
+    | { state: "not_started", currentCoordinateId }
+    | { state: "step_completed", completedRefinementStepId, currentCoordinateId }
+}
+```
+
+The progress object requests a current-state proof boundary; it is never an execution log. The
+caller cannot provide the current abstraction level, proof-bearing progress receipts, seals, observed
+commit/diff, touched coordinates, proofs, or next transition. The application service runs a fresh
+actual-diff reconciliation and derives those fields from the sealed candidate analysis.
+
+`step_completed` may name only a proof-bearing refinement step. Semctx accepts it only when that
+step and every earlier proof-bearing step have their required edits, required outputs and certified
+round trips, and step-specific evidence satisfied. For an edit-only step, the current focus may be
+the exact sealed observed hunk SHA-256 coordinate at L0. A caller assertion is not a receipt.
+
+A planner step with no required edit, output, or evidence is descriptive only when the planner
+explicitly emits `completionEvidenceRequirementIds: []`. The capsule lists all such labels in
+`descriptiveRefinementStepIds`; they never populate `completedRefinementStep`. An older empty step
+without that field is `legacy_ambiguous` and fails closed.
+
+The capsule binds the PlanningBundle, TaskEnvelope, ChangeSet, planning commit, repository identity,
+reconciliation hashes, observed working-diff hash, machine-derived proof-bearing progress,
+`descriptiveRefinementStepIds`, satisfied proof evaluations, and one next valid transition. That
+transition selects the first later non-descriptive step: it may skip only explicitly descriptive
+labels and never jumps over a proof-bearing or `legacy_ambiguous` step. The capsule fixes
+`enforcementMode: "shadow"`,
+`blockingEnabled: false`, `executionAuthority: "none"`, and `sourceContentCollected: false`. Its
+canonical content includes no timestamp, absolute path, source bytes, host/session id, or free-form
+note.
+
+Canonical migration steps retain their per-step proof obligations. Several obligations have no
+automatic derivation. Unless supplied sealed evidence satisfies them, reconciliation remains
+`UNPROVEN`; Handoff v2 neither completes nor skips those steps.
+
+Capture stores the canonical record under the ignored local directory
+`.semctx/working/handoffs/v2/`, keyed by capsule hash. Resume requires that exact hash, reloads the
+original request, re-runs reconciliation, rebuilds the capsule, and returns `capsule: null` when
+HEAD, diff, seals, repository identity, record bytes, or rebuilt hash no longer match. It never
+returns stored facts as current merely because a file exists. A repository without Semctx returns a
+write-free `NO_OP`; an unready Semctx repository refuses.
+
+Global `semctx status` freshness is not the post-edit handoff validation basis. Normal edits can
+make the global seal `STALE / WORKING_DIFF_MISMATCH`; Handoff v2 instead relies on the task-bound,
+double-captured reconciliation described above. `REALIZED`, `VIOLATED`, and `UNPROVEN` are all
+resumable when their exact state remains valid; the capsule preserves the reconciliation result and
+does not turn it into completion or execution authority.
+
 ## State and risk
 
 Only adjacent forward transitions are legal:
@@ -327,9 +386,10 @@ is source-non-collecting: it does not collect source content or read source file
 coordinate ids.
 
 Every report fixes `enforcementMode` to `shadow`, `blockingEnabled` to `false`, and
-`executionAuthority` to `none`. This foundation adds no automatic host lifecycle hooks, persisted
-or measured telemetry, Handoff v2, enforcement, executor, or CLI equivalent. The generated host
-instructions establish shared exposure and invocation guidance, not proof that a host event ran.
+`executionAuthority` to `none`. The lifecycle checkpoint adds no automatic host lifecycle hooks,
+persisted or measured telemetry, enforcement, executor, or CLI equivalent. Manual Control Handoff
+v2 is a separate CLI/MCP surface; the checkpoint does not invoke it. The generated host instructions
+establish shared exposure and invocation guidance, not proof that a host event ran.
 
 ## Agent transports
 
@@ -341,30 +401,35 @@ semctx control target-propose --input <proposal.json> [--json]
 semctx control bind-scope <change-id> --task-id <task-id> [--input <bindings.json>] [--json]
 semctx control plan-change <change-id> --task-id <task-id> --input <planner.json> [--json]
 semctx control reconcile-diff <input.json> [--json]
+semctx control handoff <input.json> [--json]
+semctx control resume-handoff <capsule-hash> [--json]
 ```
 
 MCP exposes the equivalent `semctx_control_status`, `semctx_control_trace`, and
 `semctx_control_plan` tools, plus `semctx_control_target_propose`, `semctx_control_bind_scope`,
-`semctx_control_plan_change`, `semctx_control_reconcile_diff`, and the MCP-only
-`semctx_control_agent_lifecycle` checkpoint. The older
+`semctx_control_plan_change`, `semctx_control_reconcile_diff`, `semctx_control_handoff`,
+`semctx_control_resume`, and the MCP-only `semctx_control_agent_lifecycle` checkpoint. The older
 `frame-task`/`semctx_control_frame_task` surfaces retain their wider framing contract and are
 byte-compatible when given binding-only inputs. CLI and MCP call the same application services,
 validate the same strict schemas and serialize successful results with the same canonical byte
 representation.
 
-`target-propose` is the only mutating primitive in this set: from a `FRESH` state it creates one new
-immutable, hypothetical Plane-B artifact and never overwrites a revision. `reconcile-diff` reads the
-current worktree only and rejects caller-selected base/head refs. None of these surfaces applies a
-patch, schedules a command, accepts a target or grants execution authority.
+`target-propose` is the only primitive in this set that writes Git-versioned authored state: from a
+`FRESH` state it creates one new immutable, hypothetical Plane-B artifact and never overwrites a
+revision. `control handoff` writes only a content-addressed ignored local record; non-Semctx is
+write-free. `reconcile-diff` and exact-hash resume read the current worktree and reject
+caller-selected base/head refs. None of these surfaces applies a patch, schedules a command, accepts
+a target or grants execution authority.
 
 ## Public output contract
 
-Plane C reports use `schemaVersion: 1`: freshness status, coordinate graph, traversal, impact,
+Most Plane C reports use `schemaVersion: 1`: freshness status, coordinate graph, traversal, impact,
 explanation, architecture comparison, migration plan, planning bundle, reconciliation report,
 transition authorization, step authorization and deletion authorization.
 Trace and plan envelopes may additionally carry a `ControlFreshnessSeal` with its independent
 `sealSchemaVersion: 1`. Fields may be added compatibly; a semantic break requires a new schema
-version.
+version. Manual Control Handoff capture/resume and capsules use the separate strict
+`schemaVersion: 2` contract.
 
 ## Non-goals
 

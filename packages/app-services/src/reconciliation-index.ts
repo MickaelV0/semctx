@@ -342,6 +342,24 @@ export function reconcileWorkingTree(
   root: string,
   input: ReconcileWorkingTreeInputV1,
 ): ReconcileDiffReportV1 {
+  return reconcileWorkingTreeDetailed(root, input).report;
+}
+
+export interface DetailedReconciliationSnapshotV1 {
+  report: ReconcileDiffReportV1;
+  sealedAnalysis: ReconciliationAnalysisV1;
+  candidateGraph: CoordinateGraphReportV2;
+  stateToken: Sha256Hash;
+}
+
+/**
+ * Internal proof-bearing reconciliation snapshot used by application services
+ * that must derive state from the same observation as the public report.
+ */
+export function reconcileWorkingTreeDetailed(
+  root: string,
+  input: ReconcileWorkingTreeInputV1,
+): DetailedReconciliationSnapshotV1 {
   const parsed = ReconcileWorkingTreeInputV1Schema.parse(input) as ReconcileWorkingTreeInputV1;
   const before = captureReconciliationInputs(root, parsed.planningBundle);
   runReconciliationTestHook("after_initial_capture", root);
@@ -380,11 +398,26 @@ export function reconcileWorkingTree(
       : null,
     reconciliationAnalysisHash: sealedAnalysis.analysisHash,
   };
-  return reconcileDiff({
+  const report = reconcileDiff({
     planningBundle: parsed.planningBundle,
     capture,
     sealedAnalysis,
   });
+  return {
+    report,
+    sealedAnalysis,
+    candidateGraph: candidate.candidateGraph,
+    stateToken: reconciliationStateToken(after),
+  };
+}
+
+/** Re-capture the exact state identity bound by a detailed reconciliation. */
+export function captureReconciliationStateToken(
+  root: string,
+  planningBundle: PlanningBundleV1,
+): Sha256Hash {
+  const parsed = PlanningBundleV1Schema.parse(planningBundle) as PlanningBundleV1;
+  return reconciliationStateToken(captureReconciliationInputs(root, parsed));
 }
 
 function buildSealedReconciliationAnalysis(
@@ -1876,6 +1909,13 @@ function captureToken(value: ReconciliationInputs): string {
     analysisInputHash: value.analysisInputHash,
     analyzerConfigHash: value.analyzerConfigHash,
     indexedSnapshot: value.indexedSnapshot,
+  });
+}
+
+function reconciliationStateToken(value: ReconciliationInputs): Sha256Hash {
+  return sha256HashCanonicalJson({
+    domain: "SEMCTX_RECONCILIATION_STATE_V1",
+    capture: JSON.parse(captureToken(value)) as unknown,
   });
 }
 

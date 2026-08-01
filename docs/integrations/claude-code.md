@@ -101,7 +101,7 @@ preservation, or a generic project demonstration.
 | --- | --- | --- |
 | A | `semctx_index_health`, `semctx_inspect`, `semctx_verify_change` | index binding, freshness, and coverage; observed graph, impact, recommended tests, `PASS/WARN/BLOCK` |
 | B | `semctx_semantic_check`, `semctx_semantic_slice`, `semctx_semantic_inspect`, `semctx_change_open`, `semctx_change_update`, `semctx_change_verify`, `semctx_handoff`, `semctx_resume` | authored intent, lifecycle integrity, proof-carrying contracts and rehydration |
-| C | `semctx_control_status`, `semctx_control_trace`, `semctx_control_plan` | read-only freshness preflight, L0-L6 trace and fail-closed migration planning |
+| C | `semctx_control_status`, `semctx_control_trace`, `semctx_control_plan`, `semctx_control_handoff`, `semctx_control_resume` | read-only freshness, trace, planning, and resume; manual capture writes only ignored local working state and grants no execution authority |
 
 `semctx_prepare_task` remains experimental and is not a code-search replacement.
 
@@ -120,7 +120,9 @@ unavailable verdicts are reported as `not run` or `not applicable`.
    `WHY_NOT_LOWER`, and `PROOF_PLAN` before substantial edits.
 3. Call `semctx_index_health`; keep binding, index freshness, coverage, candidate outcomes, workspace
    diagnostics, and reasons separate.
-4. Resume or slice existing authored intent when it exists.
+4. Resume an exact Control Handoff v2 hash with `semctx_control_resume` when one exists. Use
+   `semctx_resume` only for legacy Plane-B Handoff v1 intent; otherwise inspect or slice existing
+   authored intent.
 5. Call `semctx_control_status`. Keep its control-freshness verdict separate from index health and
    continue high-risk control work only for `FRESH` or `DIRTY_KNOWN`.
 6. Call `semctx_control_trace` for bounded L0-L6 reconstruction.
@@ -130,7 +132,11 @@ unavailable verdicts are reported as `not run` or `not applicable`.
 10. Make the smallest coherent change.
 11. Call `semctx_verify_change`, run the selected runtime tests, record only obtained evidence, and
    compose `semctx_change_verify` when a contract exists.
-12. Write a handoff only for write-scoped work; read-only work remains mutation-free.
+12. For write-scoped work that needs a manual machine-validated Plane C handoff, call
+    `semctx_control_handoff` with the `PlanningBundleV1` and a requested current-state proof
+    boundary; resume the exact hash with `semctx_control_resume`. This pointer is never execution
+    history. The older `semctx_handoff` / `semctx_resume` pair remains the separate Plane-B Handoff
+    v1 compatibility surface. Read-only work remains mutation-free.
 
 ## MCP-only lifecycle foundation
 
@@ -148,13 +154,26 @@ required stage ids were recorded, and `INCOMPLETE` means required ids are missin
 evaluate neither stage outcomes nor admissibility. The report also distinguishes a non-Semctx
 `non_semctx` no-op from an explicit `semctx_unready` repository.
 
-Touched coordinates are `caller_observed_advisory`. Their fold is
+Touched coordinates in this lifecycle checkpoint are `caller_observed_advisory`. Their fold is
 `stateless_caller_reinjected_unbound`: the caller must reinject prior ids, and Semctx persists or
 binds none of them to a task, session, diff, commit, or handoff. The tool is read-only and
-source-non-collecting; `shadow` mode blocks nothing and grants no execution authority. This slice
-adds no automatic lifecycle hooks, persisted or measured telemetry, Handoff v2, or enforcement.
-Claude's existing optional commit/push guard remains separate and does not invoke this lifecycle
-tool.
+source-non-collecting; `shadow` mode blocks nothing and grants no execution authority.
+
+The separate manual `semctx_control_handoff` / `semctx_control_resume` pair implements Control
+Handoff v2. Its progress pointer requests a proof-bearing boundary from the current repository
+state; it never records execution history. The capsule lists explicit zero-obligation planner
+labels in `descriptiveRefinementStepIds`, never counts them complete, and lets the next transition
+skip only those labels. Empty legacy steps fail closed. Canonical migration obligations stay
+load-bearing and remain `UNPROVEN` when sealed evidence cannot derive or otherwise satisfy them.
+For an edit-only step, the exact sealed observed hunk SHA-256 node is a valid L0 current focus.
+Exact-hash resume re-runs reconciliation and returns no stale capsule. Capture writes only a
+content-addressed ignored local record; a non-Semctx repository is a write-free `NO_OP`. This manual
+surface is shadow-only, non-blocking, grants `executionAuthority: "none"`, and does not prove that a
+Claude lifecycle event invoked it.
+
+There are no automatic lifecycle hooks for Claude. Persisted or measured telemetry and enforcement
+remain open. Claude's existing optional commit/push guard remains separate and does not invoke
+either lifecycle surface.
 
 ## Decision semantics
 
@@ -173,6 +192,11 @@ upgrades the independent control-freshness verdict.
 `ControlFreshnessSeal` remains a local input attestation rather than an authenticity signature.
 `semctx_control_status` owns the `FRESH` / `DIRTY_KNOWN` / `STALE` / `UNSEALED` decision; Claude
 Code preserves its reasons and current/indexed evidence verbatim.
+
+Global control freshness is not the post-edit handoff validation basis. Normal edits may produce
+`STALE / WORKING_DIFF_MISMATCH`; Control Handoff v2 uses a fresh task-bound reconciliation and
+preserves its `REALIZED`, `VIOLATED`, or `UNPROVEN` result without upgrading it or granting
+execution authority.
 
 ## Generic demonstration objective
 
