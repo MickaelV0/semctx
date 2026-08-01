@@ -58,8 +58,8 @@ export interface SetupRepositoryReport {
     binding: unknown;
     freshness: unknown;
     coverage: unknown;
-    workspaceDiagnostics: unknown[];
-    reasonSummary: unknown[];
+    workspaceDiagnostics: readonly unknown[];
+    reasonSummary: readonly unknown[];
   };
   semanticFilesCreated: number;
   gitignore: string;
@@ -187,7 +187,7 @@ export function setupRepository(
       binding: health.binding,
       freshness: health.freshness,
       coverage: health.coverage,
-      workspaceDiagnostics: health.workspace?.diagnostics ?? [],
+      workspaceDiagnostics: health.workspace?.diagnostics ?? ([] as const),
       reasonSummary: health.reasonSummary,
     },
     semanticFilesCreated: created,
