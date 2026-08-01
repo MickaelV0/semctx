@@ -437,6 +437,8 @@ describe("MCP 2026 public tool contract", () => {
       },
       ({ variant }) => {
         if (variant === "primitive") {
+          // Deliberately hostile non-Error throw: the transport must sanitize it.
+          // eslint-disable-next-line @typescript-eslint/only-throw-error
           throw "primitive failure";
         }
         if (variant === "non_string_message") {
@@ -445,6 +447,8 @@ describe("MCP 2026 public tool contract", () => {
           throw malformed;
         }
         if (variant === "proxy_prototype_trap") {
+          // Deliberately hostile non-Error throw: even prototype inspection traps.
+          // eslint-disable-next-line @typescript-eslint/only-throw-error
           throw new Proxy({}, {
             getPrototypeOf(): never {
               throw new Error(
@@ -462,6 +466,8 @@ describe("MCP 2026 public tool contract", () => {
           });
           throw malformed;
         }
+        // Deliberately hostile non-Error throw: even string conversion traps.
+        // eslint-disable-next-line @typescript-eslint/only-throw-error
         throw {
           toString(): string {
             throw new Error("hidden conversion failure");

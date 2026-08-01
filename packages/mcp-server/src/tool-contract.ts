@@ -182,7 +182,7 @@ type PublicFailure = {
 };
 
 function publicFailure(error: unknown): PublicFailure {
-  let candidate: unknown = "INTERNAL_ERROR";
+  let candidate: unknown;
   try {
     candidate = error instanceof ToolPublicError
       ? error.code

@@ -143,7 +143,7 @@ function gitCPath(token, nextToken) {
 }
 
 function pathRequiresShellExpansion(token) {
-  return /[$~*?{}\[\]]/.test(stripQuotes(token));
+  return /[$~*?{}[\]]/.test(stripQuotes(token));
 }
 
 function isRetargetingEnvironmentName(name) {

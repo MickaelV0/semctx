@@ -178,7 +178,6 @@ function createImmutableArtifact(root: string, artifact: TargetArchitectureArtif
   const tmp = `${path}.tmp-${process.pid}-${randomUUID()}`;
   let created = false;
   let destinationIdentityVerified = false;
-  let writeSucceeded = false;
   try {
     runTargetArtifactWriteTestHook("before_temp_open", path);
     assertSafeArtifactDestination(root, artifact.targetId, path);
@@ -205,7 +204,6 @@ function createImmutableArtifact(root: string, artifact: TargetArchitectureArtif
     if (reloaded.artifactHash !== artifact.artifactHash) {
       throw new SemctxError("IO_ERROR", "post-write target validation failed", { path });
     }
-    writeSucceeded = true;
   } catch (error) {
     if (
       created
@@ -225,7 +223,6 @@ function createImmutableArtifact(root: string, artifact: TargetArchitectureArtif
   } finally {
     if (existsSync(tmp)) unlinkSync(tmp);
   }
-  if (!writeSucceeded) throw new SemctxError("IO_ERROR", "failed to create immutable target artifact", { path });
 }
 
 function readTargetArtifact(location: TargetArtifactLocationV1): TargetArchitectureArtifactV1 {
