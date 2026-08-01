@@ -69,6 +69,9 @@ only in the final CLI ladder.
 - Never authorize cutover or legacy deletion from LLM-only, hypothetical, historical-only, or stale evidence.
 - Never claim completion on `BLOCK`, `BLOCKED`, or `STALE`.
 - Never upgrade declared evidence to obtained evidence without running or observing the corresponding check.
+- Never treat Control Handoff v2 progress as execution history. `completedRefinementStepId` requests a current-state proof-bearing boundary; count only machine-proved proof-bearing steps as complete.
+- Keep `descriptiveRefinementStepIds` separate from completed progress. Skip only those explicit zero-obligation labels, fail closed on an empty legacy step whose completion-evidence field is absent, and keep unsupported migration obligations `UNPROVEN`.
+- For an edit-only completed step, accept only the exact sealed observed hunk SHA-256 coordinate as the L0 current focus. Manual Handoff v2 remains shadow-only, non-blocking, and grants no execution authority.
 - Never treat a freshness seal as an authenticity signature or invent a verdict from it. Use `semctx_control_status` and preserve its reasons, nulls, and current/indexed mismatches verbatim.
 - Never collapse index freshness and analysis coverage into one health claim. Preserve the `semctx_index_health` binding, freshness, coverage, workspace diagnostics, outcome counts, and reasons as separate report fields.
 - Preserve the separation of authority: repository facts are observed, semantic intent is authored, and control reports are projections over both.

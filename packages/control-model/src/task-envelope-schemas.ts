@@ -376,10 +376,18 @@ export const SemanticRefinementStepV1Schema = z.object({
   fromExpectationIds: z.array(NonEmptyIdSchema),
   toExpectationIds: z.array(NonEmptyIdSchema),
   repositoryEditIds: z.array(NonEmptyIdSchema),
+  completionEvidenceRequirementIds: z.array(NonEmptyIdSchema).optional(),
 }).strict().superRefine((value, context) => {
   requireCanonicalStrings(value.fromExpectationIds, context, ["fromExpectationIds"]);
   requireCanonicalStrings(value.toExpectationIds, context, ["toExpectationIds"]);
   requireCanonicalStrings(value.repositoryEditIds, context, ["repositoryEditIds"]);
+  if (value.completionEvidenceRequirementIds !== undefined) {
+    requireCanonicalStrings(
+      value.completionEvidenceRequirementIds,
+      context,
+      ["completionEvidenceRequirementIds"],
+    );
+  }
 });
 
 const SemanticChangeSetV1Shape = {
@@ -415,6 +423,7 @@ export const SemanticChangeSetV1Schema = z.object(SemanticChangeSetV1Shape).stri
     ] as const) requireCanonicalStrings(values, context, [field]);
     const expectationIds = new Set(value.semanticExpectations.map((item) => item.expectationId));
     const editIds = new Set(value.repositoryEditExpectations.map((item) => item.editId));
+    const proofObligationIds = new Set(value.proofObligationIds);
     value.repositoryEditExpectations.forEach((edit, index) => {
       for (const expectationId of edit.expectedLiftedExpectationIds) {
         if (!expectationIds.has(expectationId)) {
@@ -448,6 +457,15 @@ export const SemanticChangeSetV1Schema = z.object(SemanticChangeSetV1Shape).stri
             code: z.ZodIssueCode.custom,
             path: ["refinementSteps", index],
             message: `unknown repository edit ${editId}`,
+          });
+        }
+      }
+      for (const requirementId of step.completionEvidenceRequirementIds ?? []) {
+        if (!proofObligationIds.has(requirementId)) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["refinementSteps", index, "completionEvidenceRequirementIds"],
+            message: `unknown proof obligation ${requirementId}`,
           });
         }
       }

@@ -11,6 +11,7 @@ import type {
   SourceKindLevelMapping,
 } from "./types";
 import { compareCodeUnits } from "./ordering";
+import { RECONCILIATION_MIGRATION_STEP_PROFILES_V1 } from "./reconciliation-migration";
 
 export const SEMANTIC_LEVELS = [0, 1, 2, 3, 4, 5, 6] as const satisfies readonly SemanticLevel[];
 
@@ -119,29 +120,23 @@ export const PROOF_OBLIGATIONS = [
   "deletion_approved",
 ] as const satisfies readonly ProofObligation[];
 
-export const DELETION_PREREQUISITE_OBLIGATIONS = [
-  "replacement_present",
-  "shadow_equivalent",
-  "cutover_approved",
-  "observation_window_passed",
-  "static_dependencies_zero",
-  "runtime_dependencies_zero",
-  "invariants_preserved",
-  "data_migration_complete",
-  "rollback_ready",
-] as const satisfies readonly ProofObligation[];
+const deletionReadinessProfile = RECONCILIATION_MIGRATION_STEP_PROFILES_V1.at(-1)!;
+
+export const DELETION_PREREQUISITE_OBLIGATIONS = Object.freeze(
+  deletionReadinessProfile.completionEvidenceRequirementIds
+    .filter((obligation) => obligation !== "deletion_approved"),
+) as readonly ProofObligation[];
 
 /** The only eight migration transition profiles accepted by Plane C. */
-export const MIGRATION_STEP_PROFILES: readonly Readonly<MigrationStepProfileDefinition>[] = Object.freeze([
-  profile("capture_baseline", "capture", "OBSERVED", "MODELED", "R0", ["baseline_captured"]),
-  profile("characterize_behavior", "characterize", "MODELED", "TARGET_PROPOSED", "R0", ["behavior_characterized"]),
-  profile("define_target_proofs", "introduce", "TARGET_PROPOSED", "PROOFS_DEFINED", "R1", ["target_reviewed"]),
-  profile("introduce_parallel", "introduce", "PROOFS_DEFINED", "PARALLEL_IMPLEMENTATION", "R1", ["replacement_present"]),
-  profile("shadow_validate", "shadow_compare", "PARALLEL_IMPLEMENTATION", "SHADOW_VALIDATED", "R2", ["shadow_equivalent", "invariants_preserved", "rollback_ready"]),
-  profile("cutover_replacement", "cutover", "SHADOW_VALIDATED", "CUTOVER", "R3", ["cutover_approved", "invariants_preserved", "rollback_ready"]),
-  profile("observe_cutover", "observe", "CUTOVER", "LEGACY_REMOVABLE", "R2", ["observation_window_passed", "rollback_ready"]),
-  profile("authorize_deletion", "deletion_check", "LEGACY_REMOVABLE", "DELETED", "R3", [...DELETION_PREREQUISITE_OBLIGATIONS, "deletion_approved"]),
-]);
+export const MIGRATION_STEP_PROFILES: readonly Readonly<MigrationStepProfileDefinition>[] =
+  Object.freeze(RECONCILIATION_MIGRATION_STEP_PROFILES_V1.map((entry) => profile(
+    entry.phase === "deletion_readiness" ? "authorize_deletion" : entry.phase,
+    entry.kind,
+    entry.fromState,
+    entry.toState,
+    entry.risk,
+    [...entry.completionEvidenceRequirementIds],
+  )));
 
 export const PROOF_SUFFICIENCY_MATRIX: Readonly<Record<ProofObligation, ProofObligationPolicy>> = {
   baseline_captured: policy("baseline_captured", [["statically_observed", "dynamically_observed"]]),

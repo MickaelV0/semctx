@@ -56,8 +56,8 @@ without Semctx follow `no_op`, and execution authority is
 
 1. **inspect_repository** — Establish the repository state with normal code search and Git inspection. Before substantial edits, frame the top-down diagnosis from the highest potentially broken L6-L0 contract and record HIGHEST_BROKEN_LEVEL, WHY_NOT_HIGHER, WHY_NOT_LOWER and PROOF_PLAN without promoting that diagnostic into authored truth. Determine semantic_context_present only from repository evidence or an explicit user-provided identity, without initializing state. Do not use Semctx as a substitute for reading the code.
    - Surface: host-local; effect: `read_only`; condition: `always`.
-2. **semantic_check** — Check the semantic model and preserve its canonical reason codes. Rehydrate existing intent with semctx_resume, semctx_semantic_inspect or semctx_semantic_slice when an identity exists; absent context stays unknown.
-   - Surface: `semctx_semantic_check`, `semctx_resume`, `semctx_semantic_inspect`, `semctx_semantic_slice`; effect: `read_only`; condition: `semantic_context_present`.
+2. **semantic_check** — Check the semantic model and preserve its canonical reason codes. Resume an exact task-bound Control Handoff v2 capsule with semctx_control_resume when its hash exists; use semctx_resume only for legacy semantic-intent handoffs, and semctx_semantic_inspect or semctx_semantic_slice for repository intent identities. A refused or stale task capsule stays unavailable, and absent context stays unknown.
+   - Surface: `semctx_semantic_check`, `semctx_control_resume`, `semctx_resume`, `semctx_semantic_inspect`, `semctx_semantic_slice`; effect: `read_only`; condition: `semantic_context_present`.
 3. **status** — Run index health as a distinct binding, index-freshness and analysis-coverage diagnostic, then run the control-freshness preflight before governed work. Never collapse those four fields into one health claim. Continue only for a control-freshness verdict of FRESH or DIRTY_KNOWN, preserve every invalid-binding, incomplete-coverage, STALE or UNSEALED reason verbatim, and record seals and bindings as attestations rather than authority.
    - Surface: `semctx_index_health`, `semctx_control_status`; effect: `read_only`; condition: `semantic_context_present`.
 4. **frame_task** — Frame the task without promoting task prose, candidates or hypotheses into normative repository scope.
@@ -82,8 +82,8 @@ without Semctx follow `no_op`, and execution authority is
    - Surface: `semctx_verify_change`; effect: `read_only`; condition: `after_edits`.
 14. **change_verify** — Compose Plane A evidence with the change contract. Resolve an unknown only after proved_by links it to proven evidence; completion requires a derived verified lifecycle, not a caller assertion.
    - Surface: `semctx_change_verify`; effect: `read_only`; condition: `after_edits`.
-15. **handoff** — Capture the bounded handoff before compaction or owner transfer. A fresh context must return through semantic_check and resume the capsule before continuing.
-   - Surface: `semctx_handoff`; effect: `working_state_write`; condition: `before_handoff`.
+15. **handoff** — Capture a manual task-bound Control Handoff v2 capsule from the current reconciled state before compaction or owner transfer. Treat the progress pointer as a requested proof-bearing boundary, never execution history. Descriptive refinement ids are non-completable planner labels; skip only those explicit labels, fail closed on legacy empty steps, and preserve UNPROVEN migration obligations. An edit-only step may focus the exact sealed observed hunk SHA-256 node at L0. Use semctx_handoff only for the legacy semantic-intent handoff. A fresh context must return through semantic_check and resume the exact capsule hash before continuing. This shadow surface is non-blocking and grants no execution authority.
+   - Surface: `semctx_control_handoff`, `semctx_handoff`; effect: `working_state_write`; condition: `before_handoff`.
 
 Completion requires: `reconcile_diff` → `verify_change` → `change_verify`.
 The bounded transfer stage is `handoff`.
@@ -136,6 +136,9 @@ stages; before compaction or owner transfer, record `handoff`.
 - Never authorize cutover or legacy deletion from LLM-only, hypothetical, historical-only, or stale evidence.
 - Never claim completion on `BLOCK`, `BLOCKED`, or `STALE`.
 - Never upgrade declared evidence to obtained evidence without running or observing the corresponding check.
+- Never treat Control Handoff v2 progress as execution history. `completedRefinementStepId` requests a current-state proof-bearing boundary; count only machine-proved proof-bearing steps as complete.
+- Keep `descriptiveRefinementStepIds` separate from completed progress. Skip only those explicit zero-obligation labels, fail closed on an empty legacy step whose completion-evidence field is absent, and keep unsupported migration obligations `UNPROVEN`.
+- For an edit-only completed step, accept only the exact sealed observed hunk SHA-256 coordinate as the L0 current focus. Manual Handoff v2 remains shadow-only, non-blocking, and grants no execution authority.
 - Never treat a freshness seal as an authenticity signature or invent a verdict from it. Use `semctx_control_status` and preserve its reasons, nulls, and current/indexed mismatches verbatim.
 - Never collapse index freshness and analysis coverage into one health claim. Preserve the `semctx_index_health` binding, freshness, coverage, workspace diagnostics, outcome counts, and reasons as separate report fields.
 - Preserve the separation of authority: repository facts are observed, semantic intent is authored, and control reports are projections over both.
@@ -178,11 +181,19 @@ bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" control trace repo:<graph-id> --direc
 bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" control plan change.<slug> --target target-architecture.json --json
 bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" verify diff --base origin/main
 bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" change verify change.<slug> --base origin/main
+
+# Control Handoff v2 — manual shadow surface
+bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" control handoff <input.json> --json
+bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" control resume-handoff <capsule-hash> --json
+
+# Legacy Plane-B Handoff v1 compatibility
 bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" semantic handoff
 bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" semantic resume
 
 # Global / CI fallback — same subcommands, no path
 semctx --version
 semctx status --json
+semctx control handoff <input.json> --json
+semctx control resume-handoff <capsule-hash> --json
 ```
 <!-- END host-cli-ladder -->

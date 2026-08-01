@@ -44,6 +44,7 @@ describe("semctx MCP tool metadata", () => {
       "semctx_control_bind_scope",
       "semctx_control_plan_change",
       "semctx_control_reconcile_diff",
+      "semctx_control_resume",
     ]) {
       expect(byName.get(name)?.annotations).toEqual({
         readOnlyHint: true,
@@ -62,6 +63,12 @@ describe("semctx MCP tool metadata", () => {
     expect(byName.get("semctx_change_update")?.annotations?.readOnlyHint).not.toBe(true);
     expect(byName.get("semctx_change_close")?.annotations?.readOnlyHint).not.toBe(true);
     expect(byName.get("semctx_handoff")?.annotations?.readOnlyHint).not.toBe(true);
+    expect(byName.get("semctx_control_handoff")?.annotations).toEqual({
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    });
     expect(byName.get("semctx_control_target_propose")?.annotations).toEqual({
       readOnlyHint: false,
       destructiveHint: false,
@@ -90,5 +97,15 @@ describe("semctx MCP tool metadata", () => {
       },
     });
     expect(invalidReconciliation.isError).toBe(true);
+
+    const invalidControlResume = await client.callTool({
+      name: "semctx_control_resume",
+      arguments: {
+        repositoryRoot: process.cwd(),
+        request: { schemaVersion: 2, capsuleHash: `sha256:${"a".repeat(64)}` },
+        extra: true,
+      },
+    });
+    expect(invalidControlResume.isError).toBe(true);
   });
 });
