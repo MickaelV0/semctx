@@ -66,7 +66,7 @@ function readJsonObject(root: string, file: string): Record<string, unknown> {
   try {
     value = JSON.parse(readFileSync(path, "utf8"));
   } catch (cause) {
-    throw new Error(`target proposal input file is not valid JSON: ${String(cause)}`);
+    throw new Error(`target proposal input file is not valid JSON: ${String(cause)}`, { cause });
   }
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("target proposal input must be a JSON object");

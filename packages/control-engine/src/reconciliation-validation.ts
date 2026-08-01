@@ -159,7 +159,7 @@ function parseNode(value: unknown, index: number): string {
   }
   if (
     (node.plane === "observed" && !HASH.test(String(node.id)))
-    || (node.plane !== "observed" && !String(node.id).startsWith(`${node.plane}:`))
+    || (node.plane !== "observed" && !String(node.id).startsWith(`${String(node.plane)}:`))
   ) throw new Error(`nodes[${index}] id does not match plane`);
   if (!isNonEmpty(node.sourceId) || !isNonEmpty(node.sourceKind)
     || typeof node.label !== "string"

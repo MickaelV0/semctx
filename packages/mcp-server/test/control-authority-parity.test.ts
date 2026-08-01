@@ -49,9 +49,9 @@ describe("required-altitude authority across hosts", () => {
     expect(report.reasons).toContain("freshness_verdict:FRESH");
   });
 
-  it("withdraws autonomous write once the repository's inputs stop being trusted", () => {
+  it("withdraws autonomous write once the repository's inputs stop being trusted", async () => {
     // Drift the authored lifecycle so the preflight degrades to UNSEALED without touching the index.
-    Bun.write(join(root, ".semctx", "working", "active-change.sem"), "not a semantic block\n");
+    await Bun.write(join(root, ".semctx", "working", "active-change.sem"), "not a semantic block\n");
 
     const report = controlAuthorityTool(root, 0);
 

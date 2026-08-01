@@ -355,7 +355,7 @@ function isIndexed(db: Database): boolean {
 }
 
 function parseJsonArray(text: string): unknown[] {
-  const value = JSON.parse(text);
+  const value = JSON.parse(text) as unknown;
   if (!Array.isArray(value)) throw new SemctxError("STORE_ERROR", "expected JSON array", { text });
   return value;
 }

@@ -154,7 +154,7 @@ function parseFileHeaderPath(
   if (!line.startsWith(marker)) return { matched: false };
   const rawWithMetadata = line.slice(marker.length);
   const expectedPrefix = rawWithMetadata.startsWith(side)
-    || rawWithMetadata.startsWith(`\"${side}`)
+    || rawWithMetadata.startsWith(`"${side}`)
     || rawWithMetadata === "/dev/null"
     || rawWithMetadata.startsWith("/dev/null\t");
   if (!expectedPrefix) return { matched: false };
