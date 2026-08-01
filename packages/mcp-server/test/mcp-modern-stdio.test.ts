@@ -60,7 +60,7 @@ describe("MCP dual-era stdio negotiation", () => {
 
         expect(discovery?.ttlMs).toBe(300_000);
         expect(discovery?.cacheScope).toBe("private");
-        expect(result.tools).toHaveLength(36);
+        expect(result.tools).toHaveLength(37);
         expect(result.tools.some((tool) => tool.name === "semctx_index_health")).toBe(true);
         expect(result.tools.some((tool) => tool.name === "semctx_cli_compatibility")).toBe(true);
         expect(cacheable.ttlMs).toBe(300_000);
@@ -94,7 +94,7 @@ describe("MCP dual-era stdio negotiation", () => {
         const serialized =
           invalid.content.find((item) => item.type === "text")?.text ?? "";
 
-        expect(result.tools).toHaveLength(36);
+        expect(result.tools).toHaveLength(37);
         expect(result.tools.some((tool) => tool.name === "semctx_index_health")).toBe(true);
         expect(result.tools.some((tool) => tool.name === "semctx_cli_compatibility")).toBe(true);
         expect(result.tools.some((tool) => tool.name === "semctx_control_explorer")).toBe(true);

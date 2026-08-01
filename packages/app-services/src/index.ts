@@ -7,6 +7,8 @@ export type {
   CliCompatibilityReason,
   CliCompatibilityReport,
 } from "./cli-compatibility";
+export { setupRepository } from "./setup";
+export type { SetupRepositoryOptions, SetupRepositoryReport } from "./setup";
 export { openReadyRepository } from "./readiness";
 export type { RepositoryAnalysis, RepositoryIndex } from "./indexing";
 export { indexHealth } from "./index-health";

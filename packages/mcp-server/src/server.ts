@@ -63,6 +63,7 @@ import { createRepositoryRootResolver } from "./repository-root";
 import { ToolRegistrar, type ToolRegistrarOptions } from "./tool-contract";
 import { registerControlExplorerApp } from "./control-explorer-app";
 import { cliCompatibilityTool } from "./cli-compatibility-tools";
+import { setupTool } from "./setup-tools";
 
 const MCP_ATTESTATION_REQUEST_V1 = mcpSchema(AttestationRequestV1Schema);
 const MCP_AGENT_LIFECYCLE_CHECKPOINT_REQUEST_V1 = mcpSchema(
@@ -169,6 +170,32 @@ export function createSemctxServer(
     },
     async ({ repositoryRoot, task, mode }) =>
       ok(await prepareTaskTool(rootResolver.resolve(repositoryRoot), mode !== undefined ? { task, mode } : { task })),
+  );
+
+  // --- Workspace bootstrap (plugin-native; no global package install required).
+  tools.registerTool(
+    "semctx_setup",
+    {
+      title: "Bootstrap repository workspace",
+      description:
+        "PLUGIN-NATIVE SETUP. Initialise .semctx/ (config + semantic scaffold + deterministic graph index + validation) without installing a global semctx package. Default is a dry preflight (confirm omitted/false). Set confirm:true only after the user authorises writing workspace files. Idempotent: keeps an existing config and authored .sem files. Prefer this over shelling out to `semctx setup` when the plugin MCP is available.",
+      inputSchema: {
+        repositoryRoot: REPOSITORY_ROOT,
+        confirm: z
+          .boolean()
+          .optional()
+          .describe("must be true to write .semctx/ and index; false/omitted returns a dry preflight only"),
+        polyglot: z
+          .boolean()
+          .optional()
+          .describe("when writing a fresh config, use polyglot v2 glob selection (ignored if a config already exists)"),
+      },
+    },
+    ({ repositoryRoot, confirm, polyglot }) =>
+      ok(setupTool(rootResolver.resolve(repositoryRoot), {
+        ...(confirm !== undefined ? { confirm } : {}),
+        ...(polyglot !== undefined ? { polyglot } : {}),
+      })),
   );
 
   // --- Semantic layer (Plane B): authored intent, invariants, decisions, evidence, change contracts.

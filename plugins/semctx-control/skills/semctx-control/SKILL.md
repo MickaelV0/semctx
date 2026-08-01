@@ -89,6 +89,20 @@ Completion requires: `reconcile_diff` → `verify_change` → `change_verify`.
 The bounded transfer stage is `handoff`.
 <!-- END shared-workflow-contract -->
 
+## Workspace bootstrap (plugin-native)
+
+If `semctx_control_status` reports `UNSEALED` / not initialized, **do not** require a global
+`semctx` package install. Prefer the plugin MCP tool:
+
+1. Call `semctx_setup` with `{ repositoryRoot }` (preflight only — no writes).
+2. After explicit user authorisation, call `semctx_setup` with
+   `{ repositoryRoot, confirm: true }` (optional `polyglot: true` for a fresh multi-language
+   config).
+3. Re-check with `semctx_control_status` / `semctx_index_health`.
+
+Never auto-setup silently. CLI fallbacks (`bun "<plugin-root>/dist/semctx.js" setup` or global
+`semctx setup`) remain valid when MCP is unavailable.
+
 ## CLI compatibility preflight
 
 Before relying on a global `semctx` shell fallback, call `semctx_cli_compatibility` with the same

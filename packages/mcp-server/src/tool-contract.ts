@@ -26,6 +26,7 @@ const TOOL_NAMES = [
   "semctx_verify_change",
   "semctx_inspect",
   "semctx_prepare_task",
+  "semctx_setup",
   "semctx_semantic_check",
   "semctx_semantic_slice",
   "semctx_change_open",
@@ -99,6 +100,7 @@ const WRITER_NAMES = new Set<SemctxToolName>([
 ]);
 
 const IDEMPOTENT_WRITER_NAMES = new Set<SemctxToolName>([
+  "semctx_setup",
   "semctx_control_handoff",
 ]);
 
