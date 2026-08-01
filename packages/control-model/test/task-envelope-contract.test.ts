@@ -773,6 +773,36 @@ describe("canonicalization, domain hashes, and artifact binding", () => {
     expect(SemanticChangeSetV1Schema.safeParse(permutedSet).success).toBe(false);
   });
 
+  it("preserves absent versus explicit empty completion evidence in canonical hashes", () => {
+    const absent = changeSet();
+    const explicitEmpty = rehashChangeSet({
+      ...absent,
+      refinementSteps: absent.refinementSteps.map((step) => ({
+        ...step,
+        completionEvidenceRequirementIds: [],
+      })),
+    });
+    const unsorted = {
+      ...explicitEmpty,
+      refinementSteps: explicitEmpty.refinementSteps.map((step) => ({
+        ...step,
+        completionEvidenceRequirementIds: ["proof.z", "proof.round_trip", "proof.z"],
+      })),
+      proofObligationIds: ["proof.round_trip", "proof.z"],
+    };
+
+    expect(absent.refinementSteps[0]!.completionEvidenceRequirementIds).toBeUndefined();
+    expect(normalizeSemanticChangeSetV1(absent).refinementSteps[0]!)
+      .not.toHaveProperty("completionEvidenceRequirementIds");
+    expect(normalizeSemanticChangeSetV1(explicitEmpty).refinementSteps[0]!.completionEvidenceRequirementIds)
+      .toEqual([]);
+    expect(absent.changeSetHash).not.toBe(explicitEmpty.changeSetHash);
+    expect(normalizeSemanticChangeSetV1(unsorted).refinementSteps[0]!.completionEvidenceRequirementIds)
+      .toEqual(["proof.round_trip", "proof.z"]);
+    expect(SemanticChangeSetV1Schema.safeParse(explicitEmpty).success).toBe(true);
+    expect(SemanticChangeSetV1Schema.safeParse(unsorted).success).toBe(false);
+  });
+
   it("checks every object hash and separates hash domains", () => {
     expect(TaskEnvelopeV1Schema.safeParse(envelope()).success).toBe(true);
     expect(SemanticChangeSetV1Schema.safeParse(changeSet()).success).toBe(true);
@@ -975,6 +1005,18 @@ describe("change-set referential integrity and scope coverage", () => {
     });
     expect(SemanticChangeSetV1Schema.safeParse(unknownLift).success).toBe(false);
     expect(SemanticChangeSetV1Schema.safeParse(danglingStep).success).toBe(false);
+  });
+
+  it("rejects completion evidence requirements outside the change-set proof obligations", () => {
+    const valid = changeSet();
+    const unknownProof = rehashChangeSet({
+      ...valid,
+      refinementSteps: valid.refinementSteps.map((step) => ({
+        ...step,
+        completionEvidenceRequirementIds: ["proof.unknown"],
+      })),
+    });
+    expect(SemanticChangeSetV1Schema.safeParse(unknownProof).success).toBe(false);
   });
 
   it("enforces exact-file and exact-coordinate coverage", () => {

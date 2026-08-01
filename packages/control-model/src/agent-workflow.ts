@@ -167,6 +167,7 @@ export const AGENT_WORKFLOW_CONTRACT_V1 = AgentWorkflowContractV1Schema.parse({
       id: "semantic_check",
       mcpTools: [
         "semctx_semantic_check",
+        "semctx_control_resume",
         "semctx_resume",
         "semctx_semantic_inspect",
         "semctx_semantic_slice",
@@ -175,7 +176,7 @@ export const AGENT_WORKFLOW_CONTRACT_V1 = AgentWorkflowContractV1Schema.parse({
       requiresUserWriteScope: false,
       condition: "semantic_context_present",
       instruction:
-        "Check the semantic model and preserve its canonical reason codes. Rehydrate existing intent with semctx_resume, semctx_semantic_inspect or semctx_semantic_slice when an identity exists; absent context stays unknown.",
+        "Check the semantic model and preserve its canonical reason codes. Resume an exact task-bound Control Handoff v2 capsule with semctx_control_resume when its hash exists; use semctx_resume only for legacy semantic-intent handoffs, and semctx_semantic_inspect or semctx_semantic_slice for repository intent identities. A refused or stale task capsule stays unavailable, and absent context stays unknown.",
     },
     {
       id: "status",
@@ -287,12 +288,12 @@ export const AGENT_WORKFLOW_CONTRACT_V1 = AgentWorkflowContractV1Schema.parse({
     },
     {
       id: "handoff",
-      mcpTools: ["semctx_handoff"],
+      mcpTools: ["semctx_control_handoff", "semctx_handoff"],
       effect: "working_state_write",
       requiresUserWriteScope: true,
       condition: "before_handoff",
       instruction:
-        "Capture the bounded handoff before compaction or owner transfer. A fresh context must return through semantic_check and resume the capsule before continuing.",
+        "Capture a manual task-bound Control Handoff v2 capsule from the current reconciled state before compaction or owner transfer. Treat the progress pointer as a requested proof-bearing boundary, never execution history. Descriptive refinement ids are non-completable planner labels; skip only those explicit labels, fail closed on legacy empty steps, and preserve UNPROVEN migration obligations. An edit-only step may focus the exact sealed observed hunk SHA-256 node at L0. Use semctx_handoff only for the legacy semantic-intent handoff. A fresh context must return through semantic_check and resume the exact capsule hash before continuing. This shadow surface is non-blocking and grants no execution authority.",
     },
   ],
   completion: {

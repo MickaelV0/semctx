@@ -6,7 +6,6 @@ import {
   testId,
 } from "@semantic-context/core";
 import {
-  MIGRATION_STEP_PROFILES,
   PlanningBundleV1Schema,
   SemanticChangeSetV1Schema,
   type RefinementProfileV1,
@@ -14,6 +13,9 @@ import {
   type SemanticExpectationV1,
   type WorkspaceBaselineSnapshotV1,
 } from "@semantic-context/control-model";
+import {
+  RECONCILIATION_MIGRATION_STEP_PROFILES_V1,
+} from "@semantic-context/control-model/reconciliation-migration";
 import * as publicPlanning from "../src/planning";
 import {
   compileSemanticChangeSet,
@@ -378,6 +380,12 @@ describe("refinement planner", () => {
         repositoryEditExpectations: profile === "feature" ? [] : [modifyEdit(`edit.${profile}`)],
         rollbackDescription: `Rollback ${profile}.`,
       });
+      expect(changeSet.refinementSteps.every((step) =>
+        Object.hasOwn(step, "completionEvidenceRequirementIds")
+      )).toBe(true);
+      expect(changeSet.refinementSteps.filter(isExplicitlyDescriptive).map(stepPhase)).toEqual(
+        [...EXPECTED_DESCRIPTIVE_PHASES[profile]],
+      );
       templates.set(profile, changeSet.refinementSteps.map((step) => step.stepId));
     }
 
@@ -396,13 +404,29 @@ describe("refinement planner", () => {
           ? [modifyEdit("edit.migration")]
           : [],
         rollbackDescription: `Rollback ${profile}.`,
+        acceptanceEvidenceIds: profile === "migration" ? ["baseline_captured"] : [],
       });
+      expect(changeSet.refinementSteps.every((step) =>
+        Object.hasOwn(step, "completionEvidenceRequirementIds")
+      )).toBe(true);
+      expect(changeSet.refinementSteps.filter(isExplicitlyDescriptive).map(stepPhase)).toEqual(
+        [...EXPECTED_DESCRIPTIVE_PHASES[profile]],
+      );
       templates.set(profile, changeSet.refinementSteps.map((step) => step.stepId));
       if (profile === "migration") {
         const adapter = describeMigrationRefinementAdapter(envelope);
         expect(adapter).toHaveLength(8);
         expect(adapter.map((step) => step.legacyProfile)).toEqual(
-          MIGRATION_STEP_PROFILES.map((step) => step.profile),
+          [
+            "capture_baseline",
+            "characterize_behavior",
+            "define_target_proofs",
+            "introduce_parallel",
+            "shadow_validate",
+            "cutover_replacement",
+            "observe_cutover",
+            "authorize_deletion",
+          ],
         );
         expect(adapter.every((step) => step.executionAuthority === "none")).toBe(true);
         expect(adapter.every((step) =>
@@ -412,11 +436,21 @@ describe("refinement planner", () => {
           step.dependsOnProfile === adapter[index]!.legacyProfile
         )).toBe(true);
         expect(changeSet.refinementSteps).toHaveLength(8);
+        expect(stepPhase(changeSet.refinementSteps.at(-1)!)).toBe("deletion_readiness");
+        expect(changeSet.refinementSteps.map((step) => ({
+          phase: step.stepId.split(":").at(-1),
+          completionEvidenceRequirementIds: step.completionEvidenceRequirementIds,
+        }))).toEqual(RECONCILIATION_MIGRATION_STEP_PROFILES_V1.map((step) => ({
+          phase: step.phase,
+          completionEvidenceRequirementIds: [...step.completionEvidenceRequirementIds].sort(),
+        })));
         expect(changeSet.proofObligationIds).toEqual(
-          [...new Set(MIGRATION_STEP_PROFILES.flatMap(
-            (step) => step.minimumProofObligations,
+          [...new Set(RECONCILIATION_MIGRATION_STEP_PROFILES_V1.flatMap(
+            (step) => step.completionEvidenceRequirementIds,
           ))].sort(),
         );
+        expect(changeSet.acceptanceEvidenceIds).toContain("baseline_captured");
+        expect(changeSet.proofObligationIds).toContain("baseline_captured");
         expect(changeSet.executionAuthority).toBe("none");
       }
     }
@@ -624,6 +658,29 @@ function targetReference() {
 
 function profileRank(profile: RefinementProfileV1): number {
   return ["local_patch", "refactor", "feature", "redesign", "migration"].indexOf(profile);
+}
+
+const EXPECTED_DESCRIPTIVE_PHASES: Readonly<Record<RefinementProfileV1, readonly string[]>> = {
+  local_patch: ["localize", "verify"],
+  refactor: ["characterize", "preserve"],
+  feature: [],
+  redesign: ["capture_baseline", "define_target", "refine_architecture", "bind_repository"],
+  migration: [],
+};
+
+function isExplicitlyDescriptive(
+  step: ReturnType<typeof compileSemanticChangeSet>["refinementSteps"][number],
+): boolean {
+  return Object.hasOwn(step, "completionEvidenceRequirementIds")
+    && step.repositoryEditIds.length === 0
+    && step.toExpectationIds.length === 0
+    && (step.completionEvidenceRequirementIds?.length ?? 0) === 0;
+}
+
+function stepPhase(
+  step: ReturnType<typeof compileSemanticChangeSet>["refinementSteps"][number],
+): string {
+  return step.stepId.split(":").at(-1)!;
 }
 
 function hash(character: string): `sha256:${string}` {

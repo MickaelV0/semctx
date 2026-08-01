@@ -11,6 +11,10 @@ export {
   controlPlanChangeTool,
   controlReconcileDiffTool,
 } from "./reconciliation-tools";
+export {
+  controlHandoffTool,
+  controlResumeHandoffTool,
+} from "./control-handoff-tools";
 export { controlTargetProposeTool } from "./target-tools";
 
 /** Entry point: serve semctx over stdio, optionally pre-bound by SEMCTX_ROOT. */

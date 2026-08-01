@@ -15,12 +15,17 @@ import {
   prepareTaskEnvelope,
   reconcileWorkingTree,
 } from "@semantic-context/app-services/reconciliation";
+import {
+  captureControlHandoffV2,
+  resumeControlHandoffV2,
+} from "@semantic-context/app-services/control-handoff";
 import { indexRepository } from "@semantic-context/app-services";
 import { initWorkspace, openStore } from "@semantic-context/repository-store";
 import {
   initSemanticScaffold,
   newChangeContract,
   writeChangeFile,
+  writeKindFile,
 } from "@semantic-context/semantic-engine";
 import {
   inspectReconciliationAuthorityClosure,
@@ -36,9 +41,14 @@ import {
   controlPlanChangeTool,
   controlReconcileDiffTool,
 } from "@semantic-context/mcp-server/reconciliation";
+import {
+  controlHandoffTool,
+  controlResumeHandoffTool,
+} from "@semantic-context/mcp-server";
 import { createSemctxServer } from "../src/server";
 
 const roots: string[] = [];
+const CLI = resolve(import.meta.dir, "../../../apps/cli/src/index.ts");
 const GIT_ENV = {
   ...process.env,
   GIT_AUTHOR_NAME: "semctx-test",
@@ -265,6 +275,81 @@ describe("task reconciliation MCP adapters", () => {
     }
   });
 
+  it("keeps Control Handoff v2 app-service, CLI, and MCP bytes identical", async () => {
+    const fixture = preparedRepository();
+    const expectation = handoffExpectation();
+    const planningBundle = buildPlanningBundle(fixture.root, {
+      ...fixture.command,
+      rollbackDescription: "Restore the committed implementation.",
+      semanticExpectations: [expectation],
+      repositoryEditExpectations: [fixture.edit],
+    });
+    const currentCoordinateId = `semantic:${expectation.subjectId}` as const;
+    const request = {
+      schemaVersion: 2 as const,
+      planningBundle,
+      progress: { state: "not_started" as const, currentCoordinateId },
+    };
+    const expected = captureControlHandoffV2(fixture.root, request);
+    expect(expected.status, serializeControlReport(expected)).toBe("CAPTURED");
+    expect(controlHandoffTool(fixture.root, request)).toEqual(expected);
+    const inputFile = temporaryJson("mcp-control-handoff-v2.json", request);
+    const cli = runCli(fixture.root, ["control", "handoff", inputFile, "--json"]);
+    expect(cli.code, cli.err).toBe(0);
+    expect(cli.out).toBe(`${serializeControlReport(expected)}\n`);
+    if (expected.capsule === null) throw new Error("capture must return a capsule");
+    const resumeRequest = {
+      schemaVersion: 2 as const,
+      capsuleHash: expected.capsule.capsuleHash,
+    };
+    const resumed = resumeControlHandoffV2(fixture.root, resumeRequest);
+    expect(resumed.status).toBe("RESUMED");
+    expect(controlResumeHandoffTool(fixture.root, resumeRequest)).toEqual(resumed);
+
+    const server = createSemctxServer(fixture.root);
+    const client = new Client({ name: "semctx-control-handoff-parity", version: "0.1.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      const result = await client.callTool({
+        name: "semctx_control_handoff",
+        arguments: { repositoryRoot: fixture.root, request },
+      });
+      expect(result.isError, JSON.stringify(result)).not.toBe(true);
+      expect(textContent(result)).toBe(serializeControlReport(expected));
+      expect(`${textContent(result)}\n`).toBe(cli.out);
+
+      const resumeResult = await client.callTool({
+        name: "semctx_control_resume",
+        arguments: { repositoryRoot: fixture.root, request: resumeRequest },
+      });
+      expect(resumeResult.isError, JSON.stringify(resumeResult)).not.toBe(true);
+      expect(textContent(resumeResult)).toBe(serializeControlReport(resumed));
+
+      const invalid = await client.callTool({
+        name: "semctx_control_handoff",
+        arguments: { repositoryRoot: fixture.root, request, extra: true },
+      });
+      expect(invalid.isError).toBe(true);
+
+      writeFileSync(join(fixture.root, fixture.path), "export const stale = true;\n", "utf8");
+      const staleResume = await client.callTool({
+        name: "semctx_control_resume",
+        arguments: { repositoryRoot: fixture.root, request: resumeRequest },
+      });
+      expect(staleResume.isError, JSON.stringify(staleResume)).not.toBe(true);
+      expect(JSON.parse(textContent(staleResume))).toMatchObject({
+        operation: "resume",
+        status: "REFUSED",
+        capsule: null,
+      });
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  }, 30_000);
+
   it("keeps the actual MCP reconciliation export outside authority and writer modules", () => {
     const root = resolve(import.meta.dir, "..", "..", "..");
     const entry = resolve(root, "packages", "mcp-server", "src", "reconciliation-tools.ts");
@@ -299,6 +384,7 @@ function preparedRepository() {
   git(root, "init", "-q");
   initWorkspace(root);
   initSemanticScaffold(root);
+  writeKindFile(root, "goal", [handoffGoal()]);
   const path = "src/local-patch.ts";
   writeFileSync(
     join(root, path),
@@ -367,6 +453,34 @@ function preparedRepository() {
   return { root, path, command, edit };
 }
 
+function handoffExpectation() {
+  return {
+    schemaVersion: 1 as const,
+    expectationId: "expectation.control-handoff",
+    kind: "behavior" as const,
+    level: 2 as const,
+    required: true,
+    subjectId: "goal.control-handoff",
+    statement: "Control handoff state remains reproducible.",
+    acceptanceEvidenceIds: [],
+  };
+}
+
+function handoffGoal() {
+  return {
+    id: "goal.control-handoff",
+    kind: "goal" as const,
+    statement: "Control handoff state remains reproducible.",
+    status: "declared" as const,
+    provenance: "author" as const,
+    sourceRefs: [],
+    repositoryLinks: [],
+    relations: [],
+    tags: [],
+    appliesAtLevel: 2 as const,
+  };
+}
+
 function git(root: string, ...args: string[]): string {
   const process = Bun.spawnSync(["git", ...args], {
     cwd: root,
@@ -376,4 +490,27 @@ function git(root: string, ...args: string[]): string {
   });
   if (process.exitCode !== 0) throw new Error(new TextDecoder().decode(process.stderr));
   return new TextDecoder().decode(process.stdout).trim();
+}
+
+function temporaryJson(name: string, value: unknown): string {
+  const directory = mkdtempSync(join(tmpdir(), "semctx-mcp-handoff-input-"));
+  roots.push(directory);
+  const file = join(directory, name);
+  writeFileSync(file, JSON.stringify(value), "utf8");
+  return file;
+}
+
+function runCli(
+  root: string,
+  argv: readonly string[],
+): { code: number; out: string; err: string } {
+  const process = Bun.spawnSync(
+    ["bun", "run", CLI, ...argv, "--root", root],
+    { stdout: "pipe", stderr: "pipe" },
+  );
+  return {
+    code: process.exitCode ?? 1,
+    out: new TextDecoder().decode(process.stdout),
+    err: new TextDecoder().decode(process.stderr),
+  };
 }

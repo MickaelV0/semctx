@@ -286,10 +286,84 @@ Status precedence is `REFUSED → VIOLATED → UNPROVEN → REALIZED`; reason co
 canonical order. Exit code 0 means `REALIZED`; every other valid reconciliation result exits 3.
 Advisory diagnostics never upgrade the result.
 
+## `control handoff`
+
+Capture one machine-validated Control Handoff v2 capsule for the current task and worktree:
+
+```text
+semctx control handoff <input.json> [--json]
+```
+
+The strict input contains the complete `PlanningBundleV1` emitted by `control plan-change` and only
+a requested current-state progress pointer. The following is a schema sketch, not a standalone
+input file:
+
+```text
+{
+  "schemaVersion": 2,
+  "planningBundle": <complete PlanningBundleV1>,
+  "progress": {
+    "state": "not_started",
+    "currentCoordinateId": "semantic:goal.example"
+  }
+}
+```
+
+To request a current-state proof boundary, `progress` uses `state: "step_completed"` and adds a
+`completedRefinementStepId` that names a proof-bearing step. This never asserts that the host
+executed the step. Semctx re-evaluates the current worktree and accepts the boundary only when every
+proof-bearing step through it has its required edits, required outputs and round trips, and
+step-specific evidence satisfied. For an edit-only step, `currentCoordinateId` may be the exact
+sealed observed hunk SHA-256 node at L0.
+
+The caller does not supply `currentAbstractionLevel`, completion receipts, seals, observed diff,
+touched coordinates, proofs, `descriptiveRefinementStepIds`, or `nextValidTransition`. Explicit
+zero-obligation planner labels appear in `descriptiveRefinementStepIds`; they are never counted as
+completed, and the next transition may skip only those labels. An empty legacy step without the
+explicit completion-evidence field is `legacy_ambiguous` and fails closed. Canonical migration
+proof obligations remain load-bearing. When sealed evidence cannot derive or otherwise satisfy one,
+reconciliation stays `UNPROVEN` and cannot promote that step into completed progress.
+
+`CAPTURED` returns the canonical capsule and writes its canonical record under ignored local state,
+`.semctx/working/handoffs/v2/<hash>.json`. The record is keyed by `capsuleHash`; the canonical
+capsule contains no timestamp, absolute path, source bytes, host/session id, or free-form note. It
+is shadow-only, non-blocking, source-non-collecting, and carries `executionAuthority: "none"`.
+A repository without Semctx returns a write-free `NO_OP`. Invalid/unready input, incomplete or
+mismatched progress, refused reconciliation, capture drift, or invalid existing record returns
+`REFUSED` with `capsule: null`.
+
+Exit code 3 means `REFUSED`; `CAPTURED` and `NO_OP` exit 0. Schema and usage errors remain CLI
+errors rather than typed capture results.
+
+## `control resume-handoff`
+
+Resume exactly one Control Handoff v2 capsule by its canonical hash:
+
+```text
+semctx control resume-handoff <capsule-hash> [--json]
+```
+
+Resume loads the content-addressed record, re-runs current reconciliation from the stored request,
+rebuilds the capsule, and requires the same hash. It never returns stale stored facts. Changed HEAD,
+working diff, seals, repository identity, record bytes, or rebuilt content returns `REFUSED` with
+`capsule: null`. A missing v2 record returns `EMPTY`; `LEGACY_HANDOFF_ONLY` distinguishes a
+repository that has only the separate Plane-B Handoff v1 record. Non-Semctx remains a write-free
+`NO_OP`.
+
+Exit code 3 means `REFUSED`; `RESUMED`, `EMPTY`, and `NO_OP` exit 0. Normal post-edit changes may
+make `semctx status` report `STALE / WORKING_DIFF_MISMATCH`; resume validation comes from the fresh,
+task-bound reconciliation. It neither upgrades that global freshness verdict nor grants execution
+authority.
+
+These commands are additive. The legacy Plane-B `semantic handoff` / `semantic resume` and MCP
+`semctx_handoff` / `semctx_resume` retain their version-1 compatibility contract and files.
+
 The equivalent MCP tools are `semctx_control_target_propose`, `semctx_control_bind_scope`,
-`semctx_control_plan_change` and `semctx_control_reconcile_diff`. `semctx_control_frame_task`
-remains a wider compatibility framing surface. They validate the same schemas, call the same
-application services and serialize successful results to the same canonical bytes.
+`semctx_control_plan_change`, `semctx_control_reconcile_diff`, `semctx_control_handoff`, and
+`semctx_control_resume`. `semctx_control_frame_task` remains a wider compatibility framing surface.
+They validate the same schemas, call the same application services and serialize successful results
+to the same canonical bytes. MCP capture is idempotent and non-destructive but writes ignored local
+state; MCP resume is read-only and idempotent.
 
 ## Experimental
 

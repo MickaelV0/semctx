@@ -23,6 +23,10 @@ import {
   WorkspaceBaselineSnapshotV1Schema,
 } from "@semantic-context/control-model";
 import {
+  ControlHandoffCaptureResultV2Schema,
+  ControlHandoffResumeResultV2Schema,
+} from "@semantic-context/control-model/control-handoff";
+import {
   ChangeContractSchema as SemanticChangeContractSchema,
   RepositoryLinkSchema,
   SemanticNodeSchema,
@@ -677,6 +681,8 @@ export const TOOL_OUTPUT_SCHEMAS = {
   semctx_control_frame_task: PreparedTaskEnvelopeSchema,
   semctx_control_plan_change: mcpSchema(PlanningBundleV1Schema),
   semctx_control_reconcile_diff: mcpSchema(ReconcileDiffReportV1Schema),
+  semctx_control_handoff: mcpSchema(ControlHandoffCaptureResultV2Schema),
+  semctx_control_resume: mcpSchema(ControlHandoffResumeResultV2Schema),
   semctx_control_target_propose: TargetProposalSchema,
   semctx_control_explorer: ControlExplorerOutputSchema,
 } satisfies Record<SemctxToolName, z.ZodType>;

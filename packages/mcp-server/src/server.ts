@@ -34,6 +34,7 @@ import {
 import {
   registerReconciliationTools,
 } from "./reconciliation-tools";
+import { registerControlHandoffTools } from "./control-handoff-tools";
 import { registerTargetTools } from "./target-tools";
 import {
   AgentLifecycleCheckpointRequestV1Schema,
@@ -666,6 +667,7 @@ export function createSemctxServer(
   );
 
   registerReconciliationTools(tools, rootResolver);
+  registerControlHandoffTools(tools, rootResolver);
   registerTargetTools(tools, rootResolver);
   registerControlExplorerApp(server, tools, rootResolver);
 

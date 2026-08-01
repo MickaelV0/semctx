@@ -54,6 +54,8 @@ const TOOL_NAMES = [
   "semctx_control_frame_task",
   "semctx_control_plan_change",
   "semctx_control_reconcile_diff",
+  "semctx_control_handoff",
+  "semctx_control_resume",
   "semctx_control_target_propose",
   "semctx_control_explorer",
 ] as const;
@@ -79,6 +81,12 @@ const WRITER: ToolAnnotations = {
   idempotentHint: false,
   openWorldHint: false,
 };
+const IDEMPOTENT_WRITER: ToolAnnotations = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+};
 
 const WRITER_NAMES = new Set<SemctxToolName>([
   "semctx_prepare_task",
@@ -89,8 +97,19 @@ const WRITER_NAMES = new Set<SemctxToolName>([
   "semctx_control_target_propose",
 ]);
 
+const IDEMPOTENT_WRITER_NAMES = new Set<SemctxToolName>([
+  "semctx_control_handoff",
+]);
+
 const TOOL_EFFECTS = Object.fromEntries(
-  TOOL_NAMES.map((name) => [name, WRITER_NAMES.has(name) ? WRITER : READ_ONLY]),
+  TOOL_NAMES.map((name) => [
+    name,
+    IDEMPOTENT_WRITER_NAMES.has(name)
+      ? IDEMPOTENT_WRITER
+      : WRITER_NAMES.has(name)
+        ? WRITER
+        : READ_ONLY,
+  ]),
 ) as Record<SemctxToolName, ToolAnnotations>;
 
 type ToolResult = CallToolResult & {
