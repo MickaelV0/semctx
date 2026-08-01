@@ -286,7 +286,7 @@ describe("packaged MCP runtime", () => {
         };
         expect(ready.kind).toBe("setup");
         expect(ready.verdict).toBe("SETUP_READY");
-        expect(ready.indexHealth?.coverage?.status).not.toBe("insufficient");
+        expect(ready.indexHealth?.coverage?.status).toMatch(/^(complete|partial)$/);
         expect(existsSync(join(fresh, ".semctx", "config.json"))).toBe(true);
       });
 

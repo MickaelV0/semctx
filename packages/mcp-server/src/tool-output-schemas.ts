@@ -687,7 +687,10 @@ export const TOOL_OUTPUT_SCHEMAS = {
         "Policy refusal before mutation (e.g. polyglot against existing v1 config). Treat as failure.",
       ),
       repositoryRoot: described(z.string(), "Absolute repository root."),
-      reasonCode: described(z.literal("CONFIG_INVALID"), "Stable public reason code."),
+      reasonCode: described(
+        z.literal("POLYGLOT_REQUIRES_CONFIG_V2"),
+        "Domain policy refuse code (not an MCP catalogue error code).",
+      ),
       reason: described(z.string(), "Actionable refusal reason."),
       configVersion: described(z.number().int(), "Existing config version that blocked the request."),
       polyglot: described(z.boolean(), "Whether polyglot was requested."),
@@ -705,7 +708,10 @@ export const TOOL_OUTPUT_SCHEMAS = {
       kind: described(z.literal("setup"), "Full setup report after confirm:true."),
       repositoryRoot: described(z.string(), "Absolute repository root."),
       configWritten: described(z.boolean(), "Whether a fresh config was written."),
-      configPath: described(z.string(), "Path to .semctx directory."),
+      semctxDir: described(
+        z.string(),
+        "Absolute path to the .semctx/ workspace directory (not config.json).",
+      ),
       alreadyInitialized: described(z.boolean(), "Whether the workspace was already initialized."),
       polyglot: described(z.boolean(), "Whether polyglot selection was requested."),
       sourceFiles: described(z.number().int().nonnegative(), "TypeScript source file count (legacy metric)."),
@@ -724,12 +730,36 @@ export const TOOL_OUTPUT_SCHEMAS = {
       claims: described(z.number().int().nonnegative(), "Claim count."),
       freshnessSeal: described(z.unknown(), "Control freshness seal payload."),
       indexHealth: described(z.object({
-        binding: described(z.unknown(), "Index binding status."),
-        freshness: described(z.unknown(), "Freshness status."),
-        coverage: described(z.unknown(), "Coverage status."),
+        binding: described(
+          z.object({
+            status: described(
+              z.enum(["valid", "invalid", "absent"]),
+              "Index binding status.",
+            ),
+          }).passthrough(),
+          "Index binding projection.",
+        ),
+        freshness: described(
+          z.object({
+            canRunHighRiskControl: described(
+              z.boolean(),
+              "Whether high-risk control is admitted by freshness.",
+            ),
+          }).passthrough(),
+          "Freshness projection.",
+        ),
+        coverage: described(
+          z.object({
+            status: described(
+              z.enum(["complete", "partial", "insufficient"]),
+              "Analysis coverage status.",
+            ),
+          }).passthrough(),
+          "Coverage projection.",
+        ),
         workspaceDiagnostics: described(z.array(z.unknown()), "Workspace diagnostics."),
         reasonSummary: described(z.array(z.unknown()), "Canonical health reasons."),
-      }).strict(), "Index health projection (full contract on semctx_index_health)."),
+      }).strict(), "Index health projection (subset required for agent gate consistency)."),
       semanticFilesCreated: described(z.number().int().nonnegative(), "Scaffolded semantic files count."),
       gitignore: described(
         z.enum(["create", "update", "present"]),
@@ -748,9 +778,16 @@ export const TOOL_OUTPUT_SCHEMAS = {
         "Namespaced readiness (not Plane C). SETUP_NOT_READY is a domain failure in the body (isError stays false; agents must read verdict).",
       ),
     }).strict().superRefine((report, ctx) => {
-      // Agent success gate must be internally consistent on the public wire.
-      // SETUP_READY is not trustworthy if flags/health contradict it.
+      // Agent success gate must match domain analysisReady / setupReady invariants.
       const ready = report.verdict === "SETUP_READY";
+      const derivedSetupReady = report.check.ok && report.analysisReady;
+      if (report.setupReady !== derivedSetupReady) {
+        ctx.addIssue({
+          code: "custom",
+          message: "setupReady must equal (check.ok && analysisReady)",
+          path: ["setupReady"],
+        });
+      }
       if (report.setupReady !== ready) {
         ctx.addIssue({
           code: "custom",
@@ -758,28 +795,36 @@ export const TOOL_OUTPUT_SCHEMAS = {
           path: ["setupReady"],
         });
       }
-      if (ready && report.analysisReady !== true) {
-        ctx.addIssue({
-          code: "custom",
-          message: "SETUP_READY requires analysisReady true",
-          path: ["analysisReady"],
-        });
-      }
-      if (ready && report.check.ok !== true) {
-        ctx.addIssue({
-          code: "custom",
-          message: "SETUP_READY requires check.ok true",
-          path: ["check", "ok"],
-        });
-      }
       if (ready) {
-        const coverage = report.indexHealth.coverage;
-        if (
-          typeof coverage === "object"
-          && coverage !== null
-          && "status" in coverage
-          && (coverage as { status: unknown }).status === "insufficient"
-        ) {
+        if (report.analysisReady !== true) {
+          ctx.addIssue({
+            code: "custom",
+            message: "SETUP_READY requires analysisReady true",
+            path: ["analysisReady"],
+          });
+        }
+        if (report.check.ok !== true) {
+          ctx.addIssue({
+            code: "custom",
+            message: "SETUP_READY requires check.ok true",
+            path: ["check", "ok"],
+          });
+        }
+        if (report.indexHealth.binding.status !== "valid") {
+          ctx.addIssue({
+            code: "custom",
+            message: "SETUP_READY requires indexHealth.binding.status valid",
+            path: ["indexHealth", "binding", "status"],
+          });
+        }
+        if (report.indexHealth.freshness.canRunHighRiskControl !== true) {
+          ctx.addIssue({
+            code: "custom",
+            message: "SETUP_READY requires freshness.canRunHighRiskControl true",
+            path: ["indexHealth", "freshness", "canRunHighRiskControl"],
+          });
+        }
+        if (report.indexHealth.coverage.status === "insufficient") {
           ctx.addIssue({
             code: "custom",
             message: "SETUP_READY forbids indexHealth.coverage.status === insufficient",

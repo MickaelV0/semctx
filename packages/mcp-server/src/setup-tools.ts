@@ -1,5 +1,6 @@
 import {
   isInitialized,
+  loadConfig,
 } from "@semantic-context/repository-store";
 import {
   setupRepository,
@@ -63,6 +64,35 @@ export function setupTool(
 ): SetupToolResult {
   if (input.confirm !== true) {
     const initialized = isInitialized(root);
+    // Non-mutating policy preview: polyglot against existing non-v2 is refused without writes.
+    if (initialized && input.polyglot === true) {
+      try {
+        const config = loadConfig(root);
+        if (config.version !== 2) {
+          return {
+            schemaVersion: 1,
+            kind: "setup_refused",
+            repositoryRoot: root,
+            reasonCode: "POLYGLOT_REQUIRES_CONFIG_V2",
+            reason:
+              "polyglot does not overwrite an existing v1 config; migrate .semctx/config.json explicitly to config version 2",
+            configVersion: config.version,
+            polyglot: true,
+            alreadyInitialized: true,
+            setupReady: false,
+            analysisReady: false,
+            verdict: "SETUP_REFUSED",
+            nextSteps: [
+              "Open .semctx/config.json and migrate to config version 2 (polyglot / glob selection), or remove .semctx/ and re-run setup with polyglot on a fresh workspace",
+              "Do not pass polyglot:true against a v1 workspace expecting an in-place overwrite",
+              "After migration, re-run setup without expecting config overwrite of authored .sem files",
+            ],
+          };
+        }
+      } catch {
+        // Unreadable config: fall through to ordinary preflight (confirm path will fail closed).
+      }
+    }
     return {
       schemaVersion: 1,
       kind: "setup_preflight",
@@ -72,6 +102,7 @@ export function setupTool(
       message: initialized
         ? "Workspace already has .semctx/. Re-run with confirm:true to re-index and re-validate (idempotent; does not overwrite authored .sem files or an existing config). Preflight only — no writes performed."
         : "Workspace is not initialized. Re-run with confirm:true to write .semctx/, scaffold semantic files, and build the deterministic index. No global semctx package install is required when using the plugin MCP.",
+      // Suggest confirm without auto-firing polyglot when policy is unknown to the host UI.
       next: {
         tool: "semctx_setup",
         arguments: {

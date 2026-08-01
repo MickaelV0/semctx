@@ -115,6 +115,6 @@ describe("published npm CLI package", () => {
     };
     expect(setupReport.check.ok).toBe(true);
     expect(setupReport.verdict).toBe("SETUP_READY");
-    expect(setupReport.indexHealth?.coverage?.status).not.toBe("insufficient");
+    expect(setupReport.indexHealth?.coverage?.status).toMatch(/^(complete|partial)$/);
   }, 30_000);
 });

@@ -12,7 +12,13 @@ import { join } from "node:path";
 import { createDefaultConfig, createGlobSelectionConfig } from "@semantic-context/core";
 import { isInitialized, loadConfig, saveConfig } from "@semantic-context/repository-store";
 import { SAMPLE_REPO } from "@semantic-context/test-fixtures";
-import { setupRepository, type SetupPhaseEvent } from "../src/setup";
+import {
+  setupRepository,
+  type SetupPhaseEvent,
+  type SetupRepositoryReport,
+  type SetupRefusedReport,
+  type SetupResult,
+} from "../src/setup";
 
 const GIT_ENV = {
   ...process.env,
@@ -47,6 +53,34 @@ function freshSample(): string {
   return root;
 }
 
+function asSetup(report: SetupResult): SetupRepositoryReport {
+  expect(report.kind).toBe("setup");
+  return report as SetupRepositoryReport;
+}
+
+function asRefused(report: SetupResult): SetupRefusedReport {
+  expect(report.kind).toBe("setup_refused");
+  return report as SetupRefusedReport;
+}
+
+function coverageStatus(report: SetupRepositoryReport): string {
+  const coverage = report.indexHealth.coverage as { status?: unknown };
+  expect(typeof coverage?.status).toBe("string");
+  return String(coverage.status);
+}
+
+function freshnessCanHigh(report: SetupRepositoryReport): boolean {
+  const freshness = report.indexHealth.freshness as { canRunHighRiskControl?: unknown };
+  expect(typeof freshness?.canRunHighRiskControl).toBe("boolean");
+  return freshness.canRunHighRiskControl === true;
+}
+
+function bindingStatus(report: SetupRepositoryReport): string {
+  const binding = report.indexHealth.binding as { status?: unknown };
+  expect(typeof binding?.status).toBe("string");
+  return String(binding.status);
+}
+
 describe("setupRepository (shared SSoT)", () => {
   let root: string | undefined;
 
@@ -58,21 +92,18 @@ describe("setupRepository (shared SSoT)", () => {
   it("bootstraps a fresh workspace to SETUP_READY", () => {
     root = freshSample();
     const phases: SetupPhaseEvent[] = [];
-    const report = setupRepository(root, {
+    const report = asSetup(setupRepository(root, {
       now: "2026-08-01T12:00:00.000Z",
       onPhase: (event) => phases.push(event),
-    });
-    expect(report.kind).toBe("setup");
-    if (report.kind !== "setup") return;
+    }));
     expect(report.configWritten).toBe(true);
     expect(report.alreadyInitialized).toBe(false);
     expect(report.setupReady).toBe(true);
     expect(report.analysisReady).toBe(true);
     expect(report.verdict).toBe("SETUP_READY");
     expect(report.nodes).toBeGreaterThan(0);
-    // Agent gate must not claim READY while coverage is insufficient (any config version).
-    const coverage = report.indexHealth.coverage as { status?: string };
-    expect(coverage.status).not.toBe("insufficient");
+    expect(report.semctxDir).toContain(".semctx");
+    expect(coverageStatus(report)).toMatch(/^(complete|partial)$/);
     expect(isInitialized(root)).toBe(true);
     expect(existsSync(join(root, ".semctx", "config.json"))).toBe(true);
     expect(existsSync(join(root, ".semctx", "semantic", "goals.sem"))).toBe(true);
@@ -86,19 +117,42 @@ describe("setupRepository (shared SSoT)", () => {
     ]);
   });
 
-  it("fail-closes SETUP_READY on v1 when coverage is insufficient (no v1 short-circuit)", () => {
-    // No git seal → UNSEALED + insufficient on the default v1 path.
-    root = mkdtempSync(join(tmpdir(), "semctx-setup-v1-insuff-"));
+  it("fail-closes SETUP_READY on unsealed v1 (no version short-circuit)", () => {
+    // Multi-cause NOT_READY (UNSEALED + typically insufficient). Restoring
+    // `config.version !== 2 || …` would flip this fixture to SETUP_READY.
+    root = mkdtempSync(join(tmpdir(), "semctx-setup-v1-unsealed-"));
     cpSync(SAMPLE_REPO, root, {
       recursive: true,
       filter: (src) => !src.includes(".semctx") && !src.includes("node_modules"),
     });
-    const report = setupRepository(root, { now: "2026-08-01T12:00:00.000Z" });
-    expect(report.kind).toBe("setup");
-    if (report.kind !== "setup") return;
+    const report = asSetup(setupRepository(root, { now: "2026-08-01T12:00:00.000Z" }));
     expect(report.selection.configVersion).toBe(1);
-    const coverage = report.indexHealth.coverage as { status?: string };
-    expect(coverage.status).toBe("insufficient");
+    expect(coverageStatus(report)).toBe("insufficient");
+    expect(freshnessCanHigh(report)).toBe(false);
+    expect(report.analysisReady).toBe(false);
+    expect(report.setupReady).toBe(false);
+    expect(report.verdict).toBe("SETUP_NOT_READY");
+  });
+
+  it("fail-closes when only coverage is insufficient (sealed, high-risk freshness true)", () => {
+    // Isolates the coverage conjunct: binding valid + canRunHighRiskControl true.
+    root = mkdtempSync(join(tmpdir(), "semctx-setup-cov-only-"));
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, "src", "value.py"), "def value():\n    return 1\n");
+    writeFileSync(join(root, ".gitignore"), ".semctx/\n");
+    git(root, "init", "-q");
+    git(root, "add", ".");
+    git(root, "commit", "-q", "-m", "fixture");
+    const base = createGlobSelectionConfig(root);
+    saveConfig(root, {
+      ...base,
+      languages: { ...base.languages, python: "off" },
+    });
+
+    const report = asSetup(setupRepository(root, { now: "2026-08-01T12:00:00.000Z" }));
+    expect(bindingStatus(report)).toBe("valid");
+    expect(freshnessCanHigh(report)).toBe(true);
+    expect(coverageStatus(report)).toBe("insufficient");
     expect(report.analysisReady).toBe(false);
     expect(report.setupReady).toBe(false);
     expect(report.verdict).toBe("SETUP_NOT_READY");
@@ -106,11 +160,8 @@ describe("setupRepository (shared SSoT)", () => {
 
   it("is idempotent on a second run", () => {
     root = freshSample();
-    const first = setupRepository(root, { now: "2026-08-01T12:00:00.000Z" });
-    expect(first.kind).toBe("setup");
-    const second = setupRepository(root, { now: "2026-08-01T12:00:01.000Z" });
-    expect(second.kind).toBe("setup");
-    if (second.kind !== "setup") return;
+    asSetup(setupRepository(root, { now: "2026-08-01T12:00:00.000Z" }));
+    const second = asSetup(setupRepository(root, { now: "2026-08-01T12:00:01.000Z" }));
     expect(second.configWritten).toBe(false);
     expect(second.alreadyInitialized).toBe(true);
     expect(second.semanticFilesCreated).toBe(0);
@@ -123,10 +174,8 @@ describe("setupRepository (shared SSoT)", () => {
     saveConfig(root, createDefaultConfig(root));
     expect(isInitialized(root)).toBe(true);
 
-    const report = setupRepository(root, { polyglot: true, now: "2026-08-01T12:00:00.000Z" });
-    expect(report.kind).toBe("setup_refused");
-    if (report.kind !== "setup_refused") return;
-    expect(report.reasonCode).toBe("CONFIG_INVALID");
+    const report = asRefused(setupRepository(root, { polyglot: true, now: "2026-08-01T12:00:00.000Z" }));
+    expect(report.reasonCode).toBe("POLYGLOT_REQUIRES_CONFIG_V2");
     expect(report.verdict).toBe("SETUP_REFUSED");
     expect(report.setupReady).toBe(false);
     expect(report.configVersion).toBe(1);
@@ -153,11 +202,10 @@ describe("setupRepository (shared SSoT)", () => {
       },
     });
 
-    const report = setupRepository(root, { now: "2026-08-01T12:00:00.000Z" });
-    expect(report.kind).toBe("setup");
-    if (report.kind !== "setup") return;
+    const report = asSetup(setupRepository(root, { now: "2026-08-01T12:00:00.000Z" }));
     expect(report.setupReady).toBe(false);
     expect(report.analysisReady).toBe(false);
     expect(report.verdict).toBe("SETUP_NOT_READY");
+    expect(coverageStatus(report)).toBe("insufficient");
   });
 });

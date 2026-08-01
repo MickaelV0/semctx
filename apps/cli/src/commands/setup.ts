@@ -129,13 +129,14 @@ export function runSetup(root: string, args: ParsedArgs): number {
 
   const coverage = report.indexHealth.coverage as { status?: string } | undefined;
   const coverageStatus = coverage?.status;
+  const reasons = report.indexHealth.reasonSummary as readonly unknown[] | undefined;
   if (report.setupReady) {
     const analysisQualification =
-      report.selection.configVersion === 2 && coverageStatus !== "complete"
+      coverageStatus !== undefined && coverageStatus !== "complete"
         ? ` (analysis ${coverageStatus})`
         : "";
     success(`ready${analysisQualification}`);
-    if (report.selection.configVersion === 2 && coverageStatus !== "complete") {
+    if (coverageStatus !== undefined && coverageStatus !== "complete") {
       warn(
         "setup succeeded, but incomplete analysis cannot justify negative conclusions; "
         + "run 'semctx index-health --json' for the exact gates and reasons.",
@@ -152,6 +153,9 @@ export function runSetup(root: string, args: ParsedArgs): number {
       "setup completed, but analysis is not ready — "
       + "run 'semctx index-health --json' for the exact gates and reasons.",
     );
+    if (reasons !== undefined && reasons.length > 0) {
+      info(c.dim(`  reasons: ${reasons.map(String).join(", ")}`));
+    }
   }
   return report.setupReady ? 0 : 1;
 }

@@ -57,9 +57,10 @@ Illustrative only — not every MCP change involves setup.
 
 `SETUP_READY` must stay fail-closed for all config versions (no legacy short-circuit past
 insufficient coverage / non-high-risk freshness). That readiness rule is independent of the
-error-boundary rule above. The public setup **output schema** also rejects inconsistent
-bodies (`SETUP_READY` with `setupReady: false`, `analysisReady: false`, `check.ok: false`,
-or `indexHealth.coverage.status === "insufficient"`).
+error-boundary rule above. The public setup **output schema** also rejects inconsistent bodies: `setupReady` must equal
+`check.ok && analysisReady` and `verdict === SETUP_READY`; `SETUP_READY` requires
+`binding.status === "valid"`, `freshness.canRunHighRiskControl === true`, and
+`coverage.status ∈ {complete, partial}` (typed health subset, not open `unknown`).
 
 ## Prefer local exceptions over global openings
 

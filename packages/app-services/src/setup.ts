@@ -9,7 +9,7 @@ import {
   isInitialized,
   loadConfig,
   saveConfig,
-  semctxDir,
+  semctxDir as resolveSemctxDir,
 } from "@semantic-context/repository-store";
 import {
   initSemanticScaffold,
@@ -60,7 +60,11 @@ export interface SetupRepositoryReport {
   kind: "setup";
   repositoryRoot: string;
   configWritten: boolean;
-  configPath: string;
+  /**
+   * Absolute path to the `.semctx/` workspace directory (`semctxDir(root)`).
+   * Not the config file path — use repository-store `configPath(root)` for `…/config.json`.
+   */
+  semctxDir: string;
   alreadyInitialized: boolean;
   polyglot: boolean;
   sourceFiles: number;
@@ -99,11 +103,14 @@ export interface SetupRepositoryReport {
  * Returned instead of throwing so MCP can surface actionable guidance in structuredContent
  * (public SemctxError messages are stripped at the MCP catalogue boundary).
  */
+/** Domain policy refuse codes (structured success path — not MCP catalogue error codes). */
+export type SetupRefuseReasonCode = "POLYGLOT_REQUIRES_CONFIG_V2";
+
 export interface SetupRefusedReport {
   schemaVersion: 1;
   kind: "setup_refused";
   repositoryRoot: string;
-  reasonCode: "CONFIG_INVALID";
+  reasonCode: SetupRefuseReasonCode;
   reason: string;
   configVersion: number;
   polyglot: boolean;
@@ -162,7 +169,7 @@ export function setupRepository(
       schemaVersion: 1,
       kind: "setup_refused",
       repositoryRoot: root,
-      reasonCode: "CONFIG_INVALID",
+      reasonCode: "POLYGLOT_REQUIRES_CONFIG_V2",
       reason:
         "polyglot does not overwrite an existing v1 config; migrate .semctx/config.json explicitly to config version 2",
       configVersion: config.version,
@@ -257,7 +264,7 @@ export function setupRepository(
     kind: "setup",
     repositoryRoot: root,
     configWritten,
-    configPath: semctxDir(root),
+    semctxDir: resolveSemctxDir(root),
     alreadyInitialized: already,
     polyglot,
     sourceFiles: fileCount,

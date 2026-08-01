@@ -118,7 +118,7 @@ describe("semctx setup — one-command bootstrap", () => {
       const report = JSON.parse(out);
       expect(report.kind).toBe("setup_refused");
       expect(report.verdict).toBe("SETUP_REFUSED");
-      expect(report.reasonCode).toBe("CONFIG_INVALID");
+      expect(report.reasonCode).toBe("POLYGLOT_REQUIRES_CONFIG_V2");
       expect(report.nextSteps.length).toBeGreaterThan(0);
     } finally {
       rmSync(polyRoot, { recursive: true, force: true });
