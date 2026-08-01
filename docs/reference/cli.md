@@ -118,7 +118,20 @@ contradictions, files to read. `--json` for machine output.
 
 ## `doctor`
 
-Workspace health check.
+Workspace health check plus an offline compatibility advisory for the global `semctx` executable.
+The probe resolves the executable locally, runs only `semctx --version` with a bounded timeout, and
+compares it with the running package version using exact pre-1.0 lockstep. It never contacts a
+registry or installs anything.
+
+`doctor --json` includes a top-level `cliCompatibility` object with `found`, `path`, `version`,
+`requiredVersion`, `compatible`, `reason`, and the explicit manual `upgradeCommand`. A missing,
+stale, malformed, failed, or timed-out global CLI remains advisory: it is not added to `checks`,
+does not change `healthy`, and does not change the exit code determined by workspace health.
+
+Agents can request the same path-free advisory through `semctx_cli_compatibility`. The MCP result
+omits the local executable path and does not block MCP-only workflows. A global CLI running its
+own `doctor` knows only its own package version and therefore cannot prove plugin parity; use the
+MCP preflight or a plugin-bundled CLI for that comparison.
 
 ## `status`
 

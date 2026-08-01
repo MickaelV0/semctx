@@ -1,3 +1,4 @@
+import { probeCliCompatibility } from "@semantic-context/app-services";
 import { isInitialized, loadConfig, openStore } from "@semantic-context/repository-store";
 import packageJson from "../../package.json";
 import type { ParsedArgs } from "../args";
@@ -13,9 +14,10 @@ interface Check {
 /** `semctx doctor` — verify the workspace is healthy and indexed. */
 export function runDoctor(root: string, args: ParsedArgs): number {
   const checks: Check[] = [];
+  const cliCompatibility = probeCliCompatibility(packageJson.version);
 
-  // Informational row, like `runtime` below: reports the version, never fails. Detecting a
-  // plugin/CLI version mismatch is the separate `doctor` work tracked on #35.
+  // Informational row, like `runtime` below: reports the running version, never fails. The global
+  // CLI compatibility probe is an advisory and therefore stays outside the authoritative checks.
   checks.push({ name: "cli", ok: true, detail: `semctx ${packageJson.version}` });
 
   const initialized = isInitialized(root);
@@ -54,7 +56,7 @@ export function runDoctor(root: string, args: ParsedArgs): number {
   const healthy = checks.every((chk) => chk.ok);
 
   if (flagBool(args, "json")) {
-    json({ healthy, version: packageJson.version, checks });
+    json({ healthy, version: packageJson.version, cliCompatibility, checks });
     return healthy ? 0 : 1;
   }
 
@@ -63,6 +65,11 @@ export function runDoctor(root: string, args: ParsedArgs): number {
     const mark = chk.ok ? c.green("ok ") : c.red("bad");
     info(`  [${mark}] ${chk.name.padEnd(10)} ${c.dim(chk.detail)}`);
   }
+  const globalCliMark = cliCompatibility.compatible ? c.green("ok  ") : c.yellow("warn");
+  const globalCliDetail = cliCompatibility.compatible
+    ? `${cliCompatibility.version ?? "unknown"}${cliCompatibility.path === null ? "" : ` (${cliCompatibility.path})`}`
+    : `${cliCompatibility.reason}; ${cliCompatibility.upgradeCommand}`;
+  info(`  [${globalCliMark}] global cli ${c.dim(globalCliDetail)}`);
   info("");
   if (healthy) success("workspace healthy");
   else fail("workspace has issues (see above)");
