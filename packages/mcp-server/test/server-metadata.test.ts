@@ -37,6 +37,7 @@ describe("semctx MCP tool metadata", () => {
       "semctx_semantic_slice",
       "semctx_resume",
       "semctx_index_health",
+      "semctx_cli_compatibility",
       "semctx_control_status",
       "semctx_control_agent_lifecycle",
       "semctx_control_trace",

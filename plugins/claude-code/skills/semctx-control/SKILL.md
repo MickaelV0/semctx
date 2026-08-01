@@ -89,6 +89,13 @@ Completion requires: `reconcile_diff` → `verify_change` → `change_verify`.
 The bounded transfer stage is `handoff`.
 <!-- END shared-workflow-contract -->
 
+## CLI compatibility preflight
+
+Before relying on a global `semctx` shell fallback, call `semctx_cli_compatibility` with the same
+absolute `repositoryRoot`. Treat `compatible: false` as an offline advisory: report the canonical
+`reason` and `upgradeCommand`, continue using MCP, and never install or upgrade automatically. The
+public MCP report intentionally omits the local executable path.
+
 ## Shared lifecycle checkpoints
 
 <!-- BEGIN shared-lifecycle-contract:v1 -->
@@ -128,6 +135,7 @@ stages; before compaction or owner transfer, record `handoff`.
 - **Plane B — change contract:** `VERIFIED`, `PARTIAL`, `BLOCKED`, `STALE`. `PARTIAL` must name every missing proof or open unknown. `STALE` requires re-linking before the model can be trusted.
 - **Control freshness preflight:** `FRESH`, `DIRTY_KNOWN`, `STALE`, `UNSEALED`. Only the first two admit high-risk control work.
 - **Plane A index health:** binding is `valid`, `invalid`, or `absent`; coverage is `complete`, `partial`, or `insufficient`; freshness retains its own verdict and reasons. Use `semctx_index_health` before relying on negative evidence, and never let one field replace or upgrade another or the independent control-freshness verdict.
+- **CLI compatibility:** `CLI_VERSION_COMPATIBLE` confirms exact lockstep; all other reasons are advisory. They never grant authority and never block an MCP-only workflow.
 - **Plane C — migration plan:** `READY`, `BLOCKED`. `READY` means the plan satisfies its admission rules; it is never execution authority.
 
 ## Safety contract
@@ -142,6 +150,7 @@ stages; before compaction or owner transfer, record `handoff`.
 - Never treat a freshness seal as an authenticity signature or invent a verdict from it. Use `semctx_control_status` and preserve its reasons, nulls, and current/indexed mismatches verbatim.
 - Never collapse index freshness and analysis coverage into one health claim. Preserve the `semctx_index_health` binding, freshness, coverage, workspace diagnostics, outcome counts, and reasons as separate report fields.
 - Preserve the separation of authority: repository facts are observed, semantic intent is authored, and control reports are projections over both.
+- Never install or upgrade the global CLI automatically from a compatibility advisory.
 
 ## Completion report
 
@@ -155,7 +164,11 @@ evidence, unknowns, and `PROOF_PLAN`.
 
 ## Local equivalents when MCP is unavailable
 
-Run `semctx index-health --json` for the same index-health report before using the host-specific fallback ladder below.
+Never use a global CLI's own `doctor` output to certify plugin parity: that process knows only its
+own package version. If the host-specific ladder below provides a plugin-bundled CLI rung, use that
+rung with `doctor --json` before falling back globally. Otherwise report CLI compatibility as
+unverified. Then use the selected rung with `index-health --json`; a missing `cliCompatibility`
+field remains uncertainty, never evidence of compatibility.
 
 <!-- BEGIN host-cli-ladder:claude-code -->
 Prefer MCP tools when they are connected. For shell fallbacks, resolve the CLI in this order

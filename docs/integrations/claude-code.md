@@ -99,6 +99,7 @@ preservation, or a generic project demonstration.
 
 | plane | tools | role |
 | --- | --- | --- |
+| Host | `semctx_cli_compatibility` | offline advisory comparing the plugin/MCP runtime with the global CLI; never installs or blocks MCP-only work |
 | A | `semctx_index_health`, `semctx_inspect`, `semctx_verify_change` | index binding, freshness, and coverage; observed graph, impact, recommended tests, `PASS/WARN/BLOCK` |
 | B | `semctx_semantic_check`, `semctx_semantic_slice`, `semctx_semantic_inspect`, `semctx_change_open`, `semctx_change_update`, `semctx_change_verify`, `semctx_handoff`, `semctx_resume` | authored intent, lifecycle integrity, proof-carrying contracts and rehydration |
 | C | `semctx_control_status`, `semctx_control_trace`, `semctx_control_plan`, `semctx_control_handoff`, `semctx_control_resume` | read-only freshness, trace, planning, and resume; manual capture writes only ignored local working state and grants no execution authority |
@@ -114,6 +115,10 @@ automatic reindex or reseal. For a diagnosis-only task, write-conditioned stages
 unavailable verdicts are reported as `not run` or `not applicable`.
 
 ## Agent workflow
+
+Before relying on a global `semctx` shell fallback, call `semctx_cli_compatibility`. Report a
+mismatch and its explicit `upgradeCommand`, but continue through MCP and never upgrade
+automatically.
 
 1. Use normal repository search and Git inspection first.
 2. Frame the top-down diagnosis and record `HIGHEST_BROKEN_LEVEL`, `WHY_NOT_HIGHER`,
