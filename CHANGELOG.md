@@ -11,13 +11,9 @@ GitHub Release advance together through the tag-driven lockstep workflow documen
 
 ### Changed
 
-- **MCP error boundary stay fail-closed by default** ([#73](https://github.com/hoklims/semctx/pull/73)):
-  handler-authored `isError: true` is catalogue-normalized unless the tool is `semctx_setup` and
-  the schema-valid body is an allowlisted domain failure (`setup_refused` or
-  `setup` + `SETUP_NOT_READY`). Schema-valid forged errors on other tools no longer leak.
-- **`SETUP_READY` is fail-closed for all config versions**: the legacy v1 short-circuit that
-  treated analysis as ready regardless of coverage/freshness is removed. Agents must not see
-  `SETUP_READY` when `indexHealth.coverage.status === "insufficient"`.
+- **`SETUP_READY` is fail-closed for all config versions** ([#73](https://github.com/hoklims/semctx/pull/73)):
+  the legacy v1 short-circuit that treated analysis as ready regardless of coverage/freshness is
+  removed. Agents must not see `SETUP_READY` when `indexHealth.coverage.status === "insufficient"`.
 
 ### Added
 
@@ -25,13 +21,13 @@ GitHub Release advance together through the tag-driven lockstep workflow documen
   shared `setupRepository` in `@semantic-context/app-services` powers both `semctx setup` and the
   new confirm-gated `semctx_setup` tool, so agents can initialise `.semctx/` without a global
   package install. Default MCP calls are dry preflight; `confirm: true` runs config + semantic
-  scaffold + index + check. Policy refusals (e.g. polyglot against an existing v1 config) return
-  structured `setup_refused` with `nextSteps`. Readiness uses namespaced `verdict` values
-  (`SETUP_READY` / `SETUP_NOT_READY` / `SETUP_REFUSED`) distinct from Plane C `READY`/`BLOCKED`.
-  Domain failures set MCP `isError: true` while retaining the structured body for allowlisted
-  setup discriminants only. CLI `--json` emits the same envelope; live phase progress uses a
-  shared `onPhase` port. The shared control skill documents the fail-closed agent policy. Global
-  CLI remains optional for CI and non-plugin shells.
+  scaffold + index + check. Policy refusals (e.g. polyglot against an existing v1 config) and
+  not-ready analysis return ordinary schema-valid structured results (`setup_refused` /
+  `SETUP_NOT_READY`) with guidance — **not** handler-authored `isError` (ADR 0012). Agent success
+  requires `kind === "setup"` and `verdict === "SETUP_READY"`. Readiness uses namespaced `verdict`
+  values distinct from Plane C `READY`/`BLOCKED`. CLI `--json` emits the same envelope; live phase
+  progress uses a shared `onPhase` port. The shared control skill documents the fail-closed agent
+  policy. Global CLI remains optional for CI and non-plugin shells.
 - **Offline global CLI compatibility advisory** ([#35](https://github.com/hoklims/semctx/issues/35)):
   one shared bounded probe now powers `doctor --json` and the path-free
   `semctx_cli_compatibility` MCP preflight. Exact pre-1.0 version drift, absence, malformed output,

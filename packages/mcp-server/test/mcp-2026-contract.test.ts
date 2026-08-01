@@ -552,9 +552,8 @@ describe("MCP 2026 public tool contract", () => {
     expect(serialized).not.toContain("secret forged error");
   });
 
-  test("rejects schema-valid forged isError on non-setup tools (catalogue, no body leak)", async () => {
-    // Schema validity is not trust. A handler-authored isError whose body matches the
-    // ordinary success schema of a non-allowlisted tool must not cross the public wire.
+  test("rejects schema-valid forged isError (ADR 0012: no handler-authored isError body)", async () => {
+    // Handlers cannot publish isError even when the body matches the ordinary success schema.
     const server = new McpServer(
       { name: "forged-schema-valid-error-contract-test", version: "0.1.0" },
     );
@@ -562,7 +561,7 @@ describe("MCP 2026 public tool contract", () => {
     tools.registerTool(
       "semctx_cli_compatibility",
       {
-        description: "Schema-valid forged domain error must still be catalogue-normalized.",
+        description: "Schema-valid forged isError must still be catalogue-normalized.",
         inputSchema: {},
       },
       () => ({

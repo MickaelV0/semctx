@@ -94,16 +94,17 @@ The bounded transfer stage is `handoff`.
 If the workspace is **not initialized** (no `.semctx/` / preflight `initialized: false`),
 **do not** require a global `semctx` package install. Prefer the plugin MCP tool:
 
-1. Call `semctx_setup` with `{ repositoryRoot }` (preflight only — no writes; `isError` false).
+1. Call `semctx_setup` with `{ repositoryRoot }` (preflight only — no writes).
 2. After explicit user authorisation, call `semctx_setup` with
    `{ repositoryRoot, confirm: true }` (optional `polyglot: true` **only** for a **fresh**
    multi-language config; on an existing v1 config this returns `kind: "setup_refused"`).
 3. Treat the confirm:true result as success **only** when
-   `kind === "setup"` **and** `verdict === "SETUP_READY"` **and** `isError` is not true.
-   - `setup_refused` / `verdict: "SETUP_REFUSED"` → failure (`isError` true; read `reason` + `nextSteps`).
-   - `verdict: "SETUP_NOT_READY"` → failure (`isError` true; inspect `check` / `indexHealth`;
-     re-check with `semctx_index_health`).
-   Domain failures keep the structured body on the wire so agents can act on `nextSteps`.
+   `kind === "setup"` **and** `verdict === "SETUP_READY"`.
+   Domain outcomes are ordinary structured results (`isError` false per ADR 0012):
+   - `setup_refused` / `verdict: "SETUP_REFUSED"` → agent failure; read `reason` + `nextSteps`.
+   - `verdict: "SETUP_NOT_READY"` → agent failure; inspect `check` / `indexHealth`;
+     re-check with `semctx_index_health`.
+   Do **not** treat `isError` false alone as bootstrap success — always read `kind`/`verdict`.
 4. Re-check with `semctx_control_status` / `semctx_index_health`.
 
 Do **not** auto-run setup merely because control status is `UNSEALED` or `STALE` when
@@ -161,7 +162,7 @@ stages; before compaction or owner transfer, record `handoff`.
 - **Plane A index health:** binding is `valid`, `invalid`, or `absent`; coverage is `complete`, `partial`, or `insufficient`; freshness retains its own verdict and reasons. Use `semctx_index_health` before relying on negative evidence, and never let one field replace or upgrade another or the independent control-freshness verdict.
 - **CLI compatibility:** `CLI_VERSION_COMPATIBLE` confirms exact lockstep; all other reasons are advisory. They never grant authority and never block an MCP-only workflow.
 - **Plane C — migration plan:** `READY`, `BLOCKED`. `READY` means the plan satisfies its admission rules; it is never execution authority.
-- **Workspace bootstrap (`semctx_setup`):** `verdict` is `SETUP_READY` / `SETUP_NOT_READY` / `SETUP_REFUSED` (or preflight without a verdict). Agent success requires `kind === "setup"` and `verdict === "SETUP_READY"` with `isError` not true. Domain failures use `isError: true` **with** structured body. Namespaced `SETUP_*` values are **not** Plane C `READY`/`BLOCKED` (migration admission, never execution authority).
+- **Workspace bootstrap (`semctx_setup`):** `verdict` is `SETUP_READY` / `SETUP_NOT_READY` / `SETUP_REFUSED` (or preflight without a verdict). Agent success requires `kind === "setup"` and `verdict === "SETUP_READY"`. Domain refuse/not-ready are structured results with `isError` false (ADR 0012: catalogue errors have no `structuredContent`; handlers do not author `isError`). Namespaced `SETUP_*` values are **not** Plane C `READY`/`BLOCKED` (migration admission, never execution authority).
 
 ## Safety contract
 

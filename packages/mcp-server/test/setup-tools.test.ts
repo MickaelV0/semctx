@@ -179,7 +179,7 @@ describe("semctx_setup MCP tool", () => {
     }).success).toBe(false);
   });
 
-  test("MCP wire: READY success, refused and NOT_READY set isError with body", async () => {
+  test("MCP wire: READY success; refuse/NOT_READY are structured domain results (isError false)", async () => {
     root = freshRepo();
     server = createSemctxServer(root);
     client = new Client({ name: "semctx-setup-test", version: "0.1.0" });
@@ -221,15 +221,16 @@ describe("semctx_setup MCP tool", () => {
       name: "semctx_setup",
       arguments: { repositoryRoot: root, confirm: true, polyglot: true },
     });
+    // ADR 0012: domain refuse is an ordinary structured result, not handler isError.
+    expect(refused.isError).not.toBe(true);
     expect((refused.structuredContent as { kind?: string }).kind).toBe("setup_refused");
-    expect(refused.isError).toBe(true);
     const refusedBody = refused.structuredContent as { verdict?: string; nextSteps?: string[] };
     expect(refusedBody.verdict).toBe("SETUP_REFUSED");
     expect((refusedBody.nextSteps ?? []).length).toBeGreaterThan(0);
     expect(TOOL_OUTPUT_SCHEMAS.semctx_setup.safeParse(refused.structuredContent).success).toBe(true);
   });
 
-  test("MCP wire: SETUP_NOT_READY is isError true with structured body", async () => {
+  test("MCP wire: SETUP_NOT_READY is structured body with isError false (ADR 0012)", async () => {
     root = mkdtempSync(join(tmpdir(), "semctx-mcp-setup-wire-nr-"));
     mkdirSync(join(root, "src"), { recursive: true });
     writeFileSync(join(root, "src", "value.py"), "def value():\n    return 1\n");
@@ -253,7 +254,7 @@ describe("semctx_setup MCP tool", () => {
       name: "semctx_setup",
       arguments: { repositoryRoot: root, confirm: true },
     });
-    expect(result.isError).toBe(true);
+    expect(result.isError).not.toBe(true);
     const body = result.structuredContent as { kind?: string; verdict?: string; setupReady?: boolean };
     expect(body.kind).toBe("setup");
     expect(body.verdict).toBe("SETUP_NOT_READY");

@@ -745,7 +745,7 @@ export const TOOL_OUTPUT_SCHEMAS = {
       analysisReady: described(z.boolean(), "Whether Plane A analysis is ready for high-risk control."),
       verdict: described(
         z.enum(["SETUP_READY", "SETUP_NOT_READY"]),
-        "Namespaced readiness (not Plane C). SETUP_NOT_READY is a domain failure (isError true + body).",
+        "Namespaced readiness (not Plane C). SETUP_NOT_READY is a domain failure in the body (isError stays false; agents must read verdict).",
       ),
     }).strict(),
   ]),

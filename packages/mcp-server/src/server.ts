@@ -63,7 +63,7 @@ import { createRepositoryRootResolver } from "./repository-root";
 import { ToolRegistrar, type ToolRegistrarOptions } from "./tool-contract";
 import { registerControlExplorerApp } from "./control-explorer-app";
 import { cliCompatibilityTool } from "./cli-compatibility-tools";
-import { isSetupDomainFailure, setupTool } from "./setup-tools";
+import { setupTool } from "./setup-tools";
 
 const MCP_ATTESTATION_REQUEST_V1 = mcpSchema(AttestationRequestV1Schema);
 const MCP_AGENT_LIFECYCLE_CHECKPOINT_REQUEST_V1 = mcpSchema(
@@ -178,7 +178,7 @@ export function createSemctxServer(
     {
       title: "Bootstrap repository workspace",
       description:
-        "PLUGIN-NATIVE SETUP. Initialise .semctx/ (config + semantic scaffold + deterministic graph index + validation) without a global semctx package. Default is dry preflight (confirm omitted/false). Set confirm:true only after the user authorises writes. Idempotent for existing config and authored .sem files. After confirm:true, success is only kind==='setup' AND verdict==='SETUP_READY' (isError false). Domain failures return isError true WITH the structured body retained: setup_refused (verdict SETUP_REFUSED, e.g. polyglot on v1) or SETUP_NOT_READY. Verdict values are namespaced SETUP_* so they never mean Plane C migration READY. Prefer this over shelling out to `semctx setup` when the plugin MCP is available.",
+        "PLUGIN-NATIVE SETUP. Initialise .semctx/ (config + semantic scaffold + deterministic graph index + validation) without a global semctx package. Default is dry preflight (confirm omitted/false). Set confirm:true only after the user authorises writes. Idempotent for existing config and authored .sem files. After confirm:true, treat as agent success ONLY when kind==='setup' AND verdict==='SETUP_READY'. Domain outcomes setup_refused (verdict SETUP_REFUSED, e.g. polyglot on v1) and SETUP_NOT_READY are ordinary schema-valid structured results (isError false per ADR 0012) — agents must read kind/verdict, not isError. Catalogue isError is reserved for true transport/input failures without structured setup bodies. Verdict values are namespaced SETUP_* so they never mean Plane C migration READY. Prefer this over shelling out to `semctx setup` when the plugin MCP is available.",
       inputSchema: {
         repositoryRoot: REPOSITORY_ROOT,
         confirm: z
@@ -194,20 +194,13 @@ export function createSemctxServer(
       },
     },
     ({ repositoryRoot, confirm, polyglot }) => {
-      const body = setupTool(rootResolver.resolve(repositoryRoot), {
+      // Always a schema-valid structured result (ADR 0012). Domain refuse / NOT_READY
+      // are negative outcomes in the body; they are not handler-authored isError.
+      return ok(setupTool(rootResolver.resolve(repositoryRoot), {
         ...(confirm !== undefined ? { confirm } : {}),
         ...(polyglot !== undefined ? { polyglot } : {}),
         now: new Date().toISOString(),
-      });
-      const payload = {
-        content: [{ type: "text" as const, text: JSON.stringify(body, null, 2) }],
-      };
-      // Domain failure: isError true + structured body. ToolRegistrar allowlists only
-      // setup_refused / setup+SETUP_NOT_READY; other tools stay catalogue-normalized.
-      if (isSetupDomainFailure(body)) {
-        return { ...payload, isError: true as const };
-      }
-      return payload;
+      }));
     },
   );
 

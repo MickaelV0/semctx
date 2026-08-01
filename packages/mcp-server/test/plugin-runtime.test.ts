@@ -295,7 +295,8 @@ describe("packaged MCP runtime", () => {
           name: "semctx_setup",
           arguments: { repositoryRoot: notReady, confirm: true },
         });
-        expect(nr.isError).toBe(true);
+        // Domain not-ready: structured result, isError false (ADR 0012).
+        expect(nr.isError).not.toBe(true);
         const nrBody = nr.structuredContent as { kind?: string; verdict?: string };
         expect(nrBody.kind).toBe("setup");
         expect(nrBody.verdict).toBe("SETUP_NOT_READY");
@@ -306,7 +307,7 @@ describe("packaged MCP runtime", () => {
           name: "semctx_setup",
           arguments: { repositoryRoot: refuse, confirm: true, polyglot: true },
         });
-        expect(refused.isError).toBe(true);
+        expect(refused.isError).not.toBe(true);
         const refusedBody = refused.structuredContent as {
           kind?: string;
           verdict?: string;

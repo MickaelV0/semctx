@@ -121,29 +121,13 @@ type ToolResult = CallToolResult & {
 };
 
 /**
- * Handler results may set isError:true only for an explicit domain-error allowlist.
- * Schema validity alone is not trust: non-allowlisted handler-authored errors are
- * catalogue-normalized so forged success-shaped bodies cannot cross the public wire.
+ * Successful handler results only (ADR 0012). Handlers must not publish isError;
+ * domain refusals are ordinary schema-valid results with a negative verdict/kind.
  */
-type ToolHandlerResult = ToolResult;
-
-/**
- * Per-tool policy for retaining a schema-valid structured body with isError:true.
- * Default deny. Only semctx_setup domain-failure discriminants are permitted today.
- */
-export function allowsHandlerAuthoredDomainError(
-  name: SemctxToolName,
-  structuredContent: unknown,
-): boolean {
-  if (name !== "semctx_setup") return false;
-  if (typeof structuredContent !== "object" || structuredContent === null) {
-    return false;
-  }
-  const body = structuredContent as { kind?: unknown; verdict?: unknown };
-  if (body.kind === "setup_refused") return true;
-  if (body.kind === "setup" && body.verdict === "SETUP_NOT_READY") return true;
-  return false;
-}
+type ToolSuccessResult = CallToolResult & {
+  isError?: false;
+  structuredContent?: unknown;
+};
 
 const PUBLIC_ERROR_MESSAGE_LIMIT = 512;
 const PUBLIC_INPUT_MAX_DEPTH = 64;
@@ -253,7 +237,7 @@ type ToolConfig<InputArgs extends z.ZodRawShape> = {
 type ToolCallback<InputArgs extends z.ZodRawShape> = (
   args: z.infer<z.ZodObject<InputArgs>>,
   ctx: ServerContext,
-) => ToolHandlerResult | Promise<ToolHandlerResult>;
+) => ToolSuccessResult | Promise<ToolSuccessResult>;
 
 function outputValidationError(
   issues: ReadonlyArray<unknown>,
@@ -264,7 +248,7 @@ function outputValidationError(
 function withStructuredContent(
   name: SemctxToolName,
   outputSchema: z.ZodType,
-  result: ToolHandlerResult,
+  result: ToolSuccessResult,
 ): ToolResult {
   const text = result.content.find((item) => item.type === "text");
   let structuredContent = result.structuredContent;
@@ -273,18 +257,10 @@ function withStructuredContent(
     try {
       structuredContent = JSON.parse(text.text);
     } catch {
-      throw new Error(
-        result.isError === true
-          ? `${name} produced an error result without valid JSON text`
-          : `${name} produced a successful result without valid JSON text`,
-      );
+      throw new Error(`${name} produced a successful result without valid JSON text`);
     }
   } else if (structuredContent === undefined) {
-    throw new Error(
-      result.isError === true
-        ? `${name} produced an error result without structured content`
-        : `${name} produced a successful result without structured content`,
-    );
+    throw new Error(`${name} produced a successful result without structured content`);
   }
 
   const validation = outputSchema.safeParse(structuredContent);
@@ -292,11 +268,7 @@ function withStructuredContent(
     throw outputValidationError(validation.error.issues);
   }
 
-  return {
-    ...result,
-    structuredContent,
-    ...(result.isError === true ? { isError: true as const } : {}),
-  };
+  return { ...result, structuredContent };
 }
 
 export interface ToolRegistrarOptions {
@@ -503,21 +475,12 @@ export class ToolRegistrar {
             parsedArgs,
             ctx,
           );
-          // Handler-authored isError is denied by default. Only allowlisted domain
-          // failures (semctx_setup refuse / NOT_READY) may keep a schema-valid body;
-          // every other isError is catalogue-normalized (see mcp-2026-contract tests).
+          // ADR 0012: a handler cannot publish its own isError payload. Domain
+          // outcomes (e.g. setup_refused / SETUP_NOT_READY) are ordinary schema-valid
+          // success-shaped results; only the catalogue path may set isError:true.
           if ((result as ToolResult).isError === true) {
-            phase = "output_validation";
-            try {
-              const validated = withStructuredContent(name, outputSchema, result);
-              if (allowsHandlerAuthoredDomainError(name, validated.structuredContent)) {
-                return validated;
-              }
-            } catch {
-              // Invalid body still falls through to catalogue INTERNAL_ERROR.
-            }
             throw new ToolPublicError("INTERNAL_ERROR", {
-              cause: "tool callback returned isError without an allowlisted domain-error body",
+              cause: "tool callback returned isError",
             });
           }
           phase = "output_validation";

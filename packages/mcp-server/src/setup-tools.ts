@@ -30,13 +30,16 @@ export type SetupToolResult =
   | SetupRepositoryReport
   | SetupRefusedReport;
 
-/** True when the structured body is a completed setup that agents must treat as failure. */
+/**
+ * True when the structured body is a completed setup that agents must treat as failure.
+ * Wire transport still returns isError false (ADR 0012); agents must read kind/verdict.
+ */
 export function isSetupDomainFailure(body: SetupToolResult): boolean {
   return body.kind === "setup_refused"
     || (body.kind === "setup" && body.verdict === "SETUP_NOT_READY");
 }
 
-/** Agent success gate: only a full setup with SETUP_READY. */
+/** Agent success gate: only a full setup with SETUP_READY (ignore isError for domain outcomes). */
 export function isSetupAgentSuccess(body: SetupToolResult): boolean {
   return body.kind === "setup" && body.verdict === "SETUP_READY";
 }
@@ -47,9 +50,10 @@ export function isSetupAgentSuccess(body: SetupToolResult): boolean {
  * - `confirm: false` (default) → dry preflight only (no writes).
  * - `confirm: true` → full setup via shared `setupRepository` (no global CLI install).
  *
- * After confirm:true:
- * - `kind: "setup" && verdict: "SETUP_READY"` → success (`isError: false`)
- * - `setup_refused` / `SETUP_NOT_READY` → domain failure (`isError: true` with structured body)
+ * All outcomes are ordinary schema-valid structured results (ADR 0012: no handler-authored
+ * isError / no structuredContent on catalogue errors):
+ * - `kind: "setup" && verdict: "SETUP_READY"` → agent success
+ * - `setup_refused` / `SETUP_NOT_READY` → domain failure; read reason/nextSteps/indexHealth
  *
  * Verdict values are namespaced (`SETUP_*`) so they never collide with Plane C `READY`/`BLOCKED`.
  */
