@@ -7,6 +7,8 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
+    "./control-handoff": "./src/control-handoff-public.ts",
+    "./reconciliation-migration": "./src/reconciliation-migration.ts",
     "./reconciliation": "./src/reconciliation.ts",
     "./test/fixtures/l0-conformance": "./test/fixtures/l0-conformance.ts"
   },

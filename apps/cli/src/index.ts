@@ -62,6 +62,9 @@ Control plane (bounded semantic coordination and migration planning):
   control plan-change <change-id> --task-id <task-id> --input <planner.json> [--json]
   control reconcile-diff <input.json> [--json]
       reconciliation is read-only, accepts no Git refs, and grants no execution authority
+  control handoff <input.json> [--json]
+  control resume-handoff <capsule-hash> [--json]
+      deterministic Control Handoff v2 capture/resume; no execution authority
 
 Experimental (task -> ContextPack retriever; not a code-search replacement, see ADR 0005):
   task create --from-file <file>   create a TaskFrame (also: --text "...", --mode <m>)

@@ -39,6 +39,10 @@ import type { ParsedArgs } from "../args";
 import { flagBool, flagString } from "../args";
 import { info } from "../output";
 import {
+  CONTROL_HANDOFF_HELP,
+  runControlHandoff,
+} from "./control-handoff";
+import {
   CONTROL_RECONCILIATION_HELP,
   runControlReconciliation,
 } from "./control-reconciliation";
@@ -65,6 +69,7 @@ Usage:
   semctx control authorize-deletion --input <query.json> [--json]
   semctx control plan <change-id> [--target <snapshot.json>] [--delta <delta.json>] [--json]
 ${CONTROL_TARGET_HELP}
+${CONTROL_HANDOFF_HELP}
 ${CONTROL_RECONCILIATION_HELP}
 `;
 
@@ -133,6 +138,8 @@ export function runControl(root: string, args: ParsedArgs): number {
   }
   const targetExitCode = runControlTarget(root, args);
   if (targetExitCode !== undefined) return targetExitCode;
+  const handoffExitCode = runControlHandoff(root, args);
+  if (handoffExitCode !== undefined) return handoffExitCode;
   const reconciliationExitCode = runControlReconciliation(root, args);
   if (reconciliationExitCode !== undefined) return reconciliationExitCode;
 

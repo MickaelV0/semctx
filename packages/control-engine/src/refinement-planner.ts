@@ -21,6 +21,9 @@ import {
   type TaskRiskV1,
   type WorkspaceBaselineSnapshotV1,
 } from "@semantic-context/control-model/reconciliation";
+import {
+  RECONCILIATION_MIGRATION_STEP_PROFILES_V1,
+} from "@semantic-context/control-model/reconciliation-migration";
 
 export interface RefinementProfileSelectionInput {
   mode: TaskModeV1;
@@ -86,60 +89,6 @@ const PROFILE_ORDER: readonly RefinementProfileV1[] = [
   "migration",
 ];
 
-const MIGRATION_REFINEMENT_STEPS = [
-  {
-    phase: "capture_baseline",
-    proofObligationIds: ["baseline_captured"],
-  },
-  {
-    phase: "characterize_behavior",
-    proofObligationIds: ["behavior_characterized"],
-  },
-  {
-    phase: "define_target_proofs",
-    proofObligationIds: ["target_reviewed"],
-  },
-  {
-    phase: "introduce_parallel",
-    proofObligationIds: ["replacement_present"],
-  },
-  {
-    phase: "shadow_validate",
-    proofObligationIds: [
-      "shadow_equivalent",
-      "invariants_preserved",
-      "rollback_ready",
-    ],
-  },
-  {
-    phase: "cutover_replacement",
-    proofObligationIds: [
-      "cutover_approved",
-      "invariants_preserved",
-      "rollback_ready",
-    ],
-  },
-  {
-    phase: "observe_cutover",
-    proofObligationIds: ["observation_window_passed", "rollback_ready"],
-  },
-  {
-    phase: "deletion_readiness",
-    proofObligationIds: [
-      "replacement_present",
-      "shadow_equivalent",
-      "cutover_approved",
-      "observation_window_passed",
-      "static_dependencies_zero",
-      "runtime_dependencies_zero",
-      "invariants_preserved",
-      "data_migration_complete",
-      "rollback_ready",
-      "deletion_approved",
-    ],
-  },
-] as const;
-
 const PROFILE_TEMPLATES: Record<RefinementProfileV1, ProfileTemplate> = {
   local_patch: {
     phases: ["localize", "bind_repository", "verify"],
@@ -166,7 +115,7 @@ const PROFILE_TEMPLATES: Record<RefinementProfileV1, ProfileTemplate> = {
     concreteEditFloor: "diagnostic",
   },
   migration: {
-    phases: MIGRATION_REFINEMENT_STEPS.map((step) => step.phase),
+    phases: RECONCILIATION_MIGRATION_STEP_PROFILES_V1.map((step) => step.phase),
     expectationKind: "target_element",
     expectationLevel: 6,
     concreteEditFloor: "required",
@@ -282,12 +231,15 @@ export function compileSemanticChangeSet(
   ]);
   // Profile predicates stay structural. This channel contains only external
   // requirements that reconciliation can satisfy with sealed evidence.
+  const migrationProofObligationIds = envelope.profile === "migration"
+    ? RECONCILIATION_MIGRATION_STEP_PROFILES_V1.flatMap(
+      (step) => step.completionEvidenceRequirementIds,
+    )
+    : [];
   const proofObligationIds = sortedUnique([
-    ...(input.proofObligationIds ?? []),
-    ...(envelope.profile === "migration"
-      ? MIGRATION_REFINEMENT_STEPS.flatMap((step) => step.proofObligationIds)
-      : []),
-  ]).filter((id) => !representedEvidenceIds.has(id));
+    ...migrationProofObligationIds,
+    ...(input.proofObligationIds ?? []).filter((id) => !representedEvidenceIds.has(id)),
+  ]);
   const normalizedDraft = normalizeSemanticChangeSetV1({
     schemaVersion: 1,
     kind: "semantic_change_set",
@@ -464,6 +416,11 @@ function templateRefinementSteps(
       || phase === "introduce_parallel"
       || phase === "cutover_replacement"
       ? editIds
+      : [],
+    completionEvidenceRequirementIds: profile === "migration"
+      ? sortedUnique(
+        RECONCILIATION_MIGRATION_STEP_PROFILES_V1[index]!.completionEvidenceRequirementIds,
+      )
       : [],
   }));
 }

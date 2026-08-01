@@ -19,6 +19,10 @@ import {
   reconcileWorkingTree,
 } from "@semantic-context/app-services/reconciliation";
 import {
+  captureControlHandoffV2,
+  resumeControlHandoffV2,
+} from "@semantic-context/app-services/control-handoff";
+import {
   serializeControlReport,
   type ReconcileWorkingTreeInputV1,
 } from "@semantic-context/control-model/reconciliation";
@@ -27,6 +31,7 @@ import {
   initSemanticScaffold,
   newChangeContract,
   writeChangeFile,
+  writeKindFile,
 } from "@semantic-context/semantic-engine";
 import {
   inspectReconciliationAuthorityClosure,
@@ -34,6 +39,7 @@ import {
   must,
 } from "@semantic-context/test-fixtures";
 import { CONTROL_RECONCILIATION_HELP } from "../src/commands/control-reconciliation";
+import { CONTROL_HANDOFF_HELP } from "../src/commands/control-handoff";
 
 const roots: string[] = [];
 const CLI = join(import.meta.dir, "..", "src", "index.ts");
@@ -56,6 +62,8 @@ describe("control reconciliation CLI transport", () => {
     expect(CONTROL_RECONCILIATION_HELP).toContain("plan-change <change-id>");
     expect(CONTROL_RECONCILIATION_HELP).toContain("executionAuthority \"none\"");
     expect(CONTROL_RECONCILIATION_HELP).toContain("reconcile-diff <input.json>");
+    expect(CONTROL_HANDOFF_HELP).toContain("handoff <input.json>");
+    expect(CONTROL_HANDOFF_HELP).toContain("resume-handoff <capsule-hash>");
     expect(CONTROL_RECONCILIATION_HELP).toContain("no caller-selected Git refs");
     expect(CONTROL_RECONCILIATION_HELP).not.toContain("--base");
     expect(CONTROL_RECONCILIATION_HELP).not.toContain("--head");
@@ -272,6 +280,84 @@ describe("control reconciliation CLI transport", () => {
     expect(result.err).toContain("must not redefine CLI-bound fields");
   });
 
+  it("captures and resumes Control Handoff v2 with canonical app-service bytes", () => {
+    const fixture = preparedRepository();
+    const expectation = handoffExpectation();
+    const planningBundle = buildPlanningBundle(fixture.root, {
+      ...fixture.command,
+      semanticExpectations: [expectation],
+    });
+    const currentCoordinateId = `semantic:${expectation.subjectId}` as const;
+    const request = {
+      schemaVersion: 2 as const,
+      planningBundle,
+      progress: { state: "not_started" as const, currentCoordinateId },
+    };
+    const inputFile = temporaryJson("control-handoff-v2.json", request);
+    const expectedCapture = captureControlHandoffV2(fixture.root, request);
+    expect(expectedCapture.status, serializeControlReport(expectedCapture)).toBe("CAPTURED");
+    if (expectedCapture.capsule === null) throw new Error("capture must return a capsule");
+
+    const cliCapture = runCli(fixture.root, ["control", "handoff", inputFile, "--json"]);
+    expect(cliCapture.code, cliCapture.err).toBe(0);
+    expect(cliCapture.out).toBe(`${serializeControlReport(expectedCapture)}\n`);
+
+    const expectedResume = resumeControlHandoffV2(fixture.root, {
+      schemaVersion: 2,
+      capsuleHash: expectedCapture.capsule.capsuleHash,
+    });
+    expect(expectedResume.status).toBe("RESUMED");
+    const cliResume = runCli(fixture.root, [
+      "control",
+      "resume-handoff",
+      expectedCapture.capsule.capsuleHash,
+      "--json",
+    ]);
+    expect(cliResume.code, cliResume.err).toBe(0);
+    expect(cliResume.out).toBe(`${serializeControlReport(expectedResume)}\n`);
+
+  }, 30_000);
+
+  it("rejects non-strict capture input and propagates stale resume as null", () => {
+    const fixture = preparedRepository();
+    const expectation = handoffExpectation();
+    const planningBundle = buildPlanningBundle(fixture.root, {
+      ...fixture.command,
+      semanticExpectations: [expectation],
+    });
+    const currentCoordinateId = `semantic:${expectation.subjectId}` as const;
+    const request = {
+      schemaVersion: 2 as const,
+      planningBundle,
+      progress: { state: "not_started" as const, currentCoordinateId },
+    };
+    const invalid = runCli(fixture.root, [
+      "control",
+      "handoff",
+      temporaryJson("invalid-control-handoff-v2.json", { ...request, extra: true }),
+      "--json",
+    ]);
+    expect(invalid.code).not.toBe(0);
+
+    const captured = captureControlHandoffV2(fixture.root, request);
+    if (captured.capsule === null) {
+      throw new Error(`capture must return a capsule: ${serializeControlReport(captured)}`);
+    }
+    writeFileSync(join(fixture.root, fixture.path), "export const changed = true;\n", "utf8");
+    const resumed = runCli(fixture.root, [
+      "control",
+      "resume-handoff",
+      captured.capsule.capsuleHash,
+      "--json",
+    ]);
+    expect(resumed.code).toBe(3);
+    expect(JSON.parse(resumed.out)).toMatchObject({
+      operation: "resume",
+      status: "REFUSED",
+      capsule: null,
+    });
+  }, 30_000);
+
   it("has no recursive runtime path to authorization, writers, or execution", () => {
     const repositoryRoot = resolve(import.meta.dir, "..", "..", "..");
     const entry = resolve(
@@ -304,6 +390,7 @@ function preparedRepository() {
   git(root, "init", "-q");
   initWorkspace(root);
   initSemanticScaffold(root);
+  writeKindFile(root, "goal", [handoffGoal()]);
   const path = "src/local-patch.ts";
   writeFileSync(
     join(root, path),
@@ -379,6 +466,34 @@ function preparedRepository() {
     changeId: change.id,
     plannerInputs,
     command,
+  };
+}
+
+function handoffExpectation() {
+  return {
+    schemaVersion: 1 as const,
+    expectationId: "expectation.control-handoff",
+    kind: "behavior" as const,
+    level: 2 as const,
+    required: true,
+    subjectId: "goal.control-handoff",
+    statement: "Control handoff state remains reproducible.",
+    acceptanceEvidenceIds: [],
+  };
+}
+
+function handoffGoal() {
+  return {
+    id: "goal.control-handoff",
+    kind: "goal" as const,
+    statement: "Control handoff state remains reproducible.",
+    status: "declared" as const,
+    provenance: "author" as const,
+    sourceRefs: [],
+    repositoryLinks: [],
+    relations: [],
+    tags: [],
+    appliesAtLevel: 2 as const,
   };
 }
 

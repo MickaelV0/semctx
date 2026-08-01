@@ -1,5 +1,6 @@
 export { analyzeAndBuildClaims, indexRepository } from "./indexing";
 export { controlAgentLifecycleCheckpoint } from "./agent-lifecycle";
+export { captureControlHandoffV2, resumeControlHandoffV2 } from "./control-handoff";
 export { openReadyRepository } from "./readiness";
 export type { RepositoryAnalysis, RepositoryIndex } from "./indexing";
 export { indexHealth } from "./index-health";

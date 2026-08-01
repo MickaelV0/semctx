@@ -13,8 +13,8 @@ runtime behaviour. The analysis is local and deterministic; semctx itself needs 
   `semctx_resume` — authored intent, invariants, decisions, evidence and unknowns (Plane B).
 - **Control-plane tools**: read-only `semctx_control_status`, `semctx_control_trace`, and
   `semctx_control_plan` for freshness preflight, bounded L0-L6 reconstruction, and fail-closed
-  migration planning (Plane C), plus the MCP-only advisory
-  `semctx_control_agent_lifecycle` checkpoint.
+  migration planning (Plane C); manual content-addressed `semctx_control_handoff` /
+  `semctx_control_resume`; plus the MCP-only advisory `semctx_control_agent_lifecycle` checkpoint.
 - **Bundled CLI** (`dist/semctx.js`): the full Bun CLI committed next to `dist/semctx-mcp.js` so a
   plugin update keeps agent MCP and CLI in lockstep. Agent sessions get its absolute path for free:
   Claude Code substitutes the `${CLAUDE_PLUGIN_ROOT}` placeholder into the skills at load time, and
@@ -64,9 +64,16 @@ outcomes nor admissibility. It also distinguishes a non-Semctx no-op from an exp
 Touched coordinates are `caller_observed_advisory`. Their fold is
 `stateless_caller_reinjected_unbound`: the caller must reinject prior ids, and Semctx persists or
 binds none of them. The tool is read-only and source-non-collecting; `shadow` mode blocks nothing
-and grants no execution authority. This slice adds no automatic lifecycle hooks, persisted or
-measured telemetry, Handoff v2, or enforcement. Claude's existing optional commit/push guard is
-separate and does not invoke this lifecycle tool.
+and grants no execution authority. The separate manual Control Handoff v2 surface derives a
+task-bound capsule from fresh reconciliation and resumes only its exact hash. Its progress pointer
+requests a proof-bearing boundary from current state, never execution history. Explicit
+zero-obligation labels are reported separately and are the only phases the next transition may
+skip; empty legacy steps fail closed and unsatisfied migration obligations remain `UNPROVEN`. An
+edit-only step may focus the exact sealed observed hunk SHA-256 node at L0. Capture writes ignored
+local working state, remains manual, shadow-only, non-blocking, and grants
+`executionAuthority: "none"`. It is not invoked by the checkpoint. There are no automatic lifecycle hooks.
+Persisted or measured telemetry, enforcement, and an executor remain unshipped.
+Claude's existing optional commit/push guard is separate and invokes neither lifecycle surface.
 
 ## Two profiles
 

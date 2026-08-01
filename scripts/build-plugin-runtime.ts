@@ -95,12 +95,20 @@ bun "\${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" control trace repo:<graph-id> --dire
 bun "\${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" control plan change.<slug> --target target-architecture.json --json
 bun "\${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" verify diff --base origin/main
 bun "\${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" change verify change.<slug> --base origin/main
+
+# Control Handoff v2 — manual shadow surface
+bun "\${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" control handoff <input.json> --json
+bun "\${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" control resume-handoff <capsule-hash> --json
+
+# Legacy Plane-B Handoff v1 compatibility
 bun "\${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" semantic handoff
 bun "\${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" semantic resume
 
 # Global / CI fallback — same subcommands, no path
 semctx --version
 semctx status --json
+semctx control handoff <input.json> --json
+semctx control resume-handoff <capsule-hash> --json
 \`\`\`
 `;
   }
@@ -124,6 +132,14 @@ semctx --version
 semctx status --json
 semctx semantic check --json
 semctx verify diff --base origin/main
+
+# Control Handoff v2 — manual shadow surface
+semctx control handoff <input.json> --json
+semctx control resume-handoff <capsule-hash> --json
+
+# Legacy Plane-B Handoff v1 compatibility
+semctx semantic handoff
+semctx semantic resume
 \`\`\`
 `;
 }
