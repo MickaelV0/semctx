@@ -139,10 +139,10 @@ describe("semctx_setup MCP tool", () => {
       kind: "setup_refused",
       confirmRequired: false,
     }).success).toBe(false);
-    // Wrong namespace: Plane C READY must not validate as setup verdict
-    expect(TOOL_OUTPUT_SCHEMAS.semctx_setup.safeParse({
-      schemaVersion: 1,
-      kind: "setup",
+
+    const baseSetup = {
+      schemaVersion: 1 as const,
+      kind: "setup" as const,
       repositoryRoot: "/tmp/x",
       configWritten: true,
       configPath: "/tmp/x/.semctx",
@@ -166,16 +166,64 @@ describe("semctx_setup MCP tool", () => {
       indexHealth: {
         binding: {},
         freshness: {},
-        coverage: {},
-        workspaceDiagnostics: [],
-        reasonSummary: [],
+        coverage: { status: "partial" },
+        workspaceDiagnostics: [] as unknown[],
+        reasonSummary: [] as unknown[],
       },
       semanticFilesCreated: 0,
-      gitignore: "create",
+      gitignore: "create" as const,
       check: { ok: true, nodes: 0, changes: 0, errors: 0 },
       setupReady: true,
       analysisReady: true,
+      verdict: "SETUP_READY" as const,
+    };
+
+    // Wrong namespace: Plane C READY must not validate as setup verdict
+    expect(TOOL_OUTPUT_SCHEMAS.semctx_setup.safeParse({
+      ...baseSetup,
       verdict: "READY",
+    }).success).toBe(false);
+
+    // Agent gate consistency: SETUP_READY requires matching flags and non-insufficient coverage
+    expect(TOOL_OUTPUT_SCHEMAS.semctx_setup.safeParse(baseSetup).success).toBe(true);
+    expect(TOOL_OUTPUT_SCHEMAS.semctx_setup.safeParse({
+      ...baseSetup,
+      setupReady: false,
+      analysisReady: false,
+      verdict: "SETUP_NOT_READY",
+      indexHealth: {
+        ...baseSetup.indexHealth,
+        coverage: { status: "insufficient" },
+      },
+    }).success).toBe(true);
+    expect(TOOL_OUTPUT_SCHEMAS.semctx_setup.safeParse({
+      ...baseSetup,
+      setupReady: false,
+      verdict: "SETUP_READY",
+    }).success).toBe(false);
+    expect(TOOL_OUTPUT_SCHEMAS.semctx_setup.safeParse({
+      ...baseSetup,
+      analysisReady: false,
+      verdict: "SETUP_READY",
+    }).success).toBe(false);
+    expect(TOOL_OUTPUT_SCHEMAS.semctx_setup.safeParse({
+      ...baseSetup,
+      check: { ok: false, nodes: 0, changes: 0, errors: 1 },
+      verdict: "SETUP_READY",
+    }).success).toBe(false);
+    expect(TOOL_OUTPUT_SCHEMAS.semctx_setup.safeParse({
+      ...baseSetup,
+      indexHealth: {
+        ...baseSetup.indexHealth,
+        coverage: { status: "insufficient" },
+      },
+      verdict: "SETUP_READY",
+    }).success).toBe(false);
+    expect(TOOL_OUTPUT_SCHEMAS.semctx_setup.safeParse({
+      ...baseSetup,
+      setupReady: true,
+      analysisReady: true,
+      verdict: "SETUP_NOT_READY",
     }).success).toBe(false);
   });
 

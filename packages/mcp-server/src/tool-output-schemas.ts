@@ -747,7 +747,47 @@ export const TOOL_OUTPUT_SCHEMAS = {
         z.enum(["SETUP_READY", "SETUP_NOT_READY"]),
         "Namespaced readiness (not Plane C). SETUP_NOT_READY is a domain failure in the body (isError stays false; agents must read verdict).",
       ),
-    }).strict(),
+    }).strict().superRefine((report, ctx) => {
+      // Agent success gate must be internally consistent on the public wire.
+      // SETUP_READY is not trustworthy if flags/health contradict it.
+      const ready = report.verdict === "SETUP_READY";
+      if (report.setupReady !== ready) {
+        ctx.addIssue({
+          code: "custom",
+          message: "setupReady must equal (verdict === SETUP_READY)",
+          path: ["setupReady"],
+        });
+      }
+      if (ready && report.analysisReady !== true) {
+        ctx.addIssue({
+          code: "custom",
+          message: "SETUP_READY requires analysisReady true",
+          path: ["analysisReady"],
+        });
+      }
+      if (ready && report.check.ok !== true) {
+        ctx.addIssue({
+          code: "custom",
+          message: "SETUP_READY requires check.ok true",
+          path: ["check", "ok"],
+        });
+      }
+      if (ready) {
+        const coverage = report.indexHealth.coverage;
+        if (
+          typeof coverage === "object"
+          && coverage !== null
+          && "status" in coverage
+          && (coverage as { status: unknown }).status === "insufficient"
+        ) {
+          ctx.addIssue({
+            code: "custom",
+            message: "SETUP_READY forbids indexHealth.coverage.status === insufficient",
+            path: ["indexHealth", "coverage", "status"],
+          });
+        }
+      }
+    }),
   ]),
   semctx_cli_compatibility: z.object({
     schemaVersion: described(z.literal(1), "CLI compatibility schema version."),

@@ -67,6 +67,8 @@ If the workspace is **not initialized** (no `.semctx/` / preflight `initialized:
    - `verdict: "SETUP_NOT_READY"` → agent failure; inspect `check` / `indexHealth`;
      re-check with `semctx_index_health`.
    Do **not** treat `isError` false alone as bootstrap success — always read `kind`/`verdict`.
+   `SETUP_READY` is not coverage-complete: still call `semctx_index_health` before
+   negative-evidence or high-risk claims when coverage is only `partial`.
 4. Re-check with `semctx_control_status` / `semctx_index_health`.
 
 Do **not** auto-run setup merely because control status is `UNSEALED` or `STALE` when
