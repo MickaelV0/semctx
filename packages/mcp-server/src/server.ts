@@ -63,7 +63,7 @@ import { createRepositoryRootResolver } from "./repository-root";
 import { ToolRegistrar, type ToolRegistrarOptions } from "./tool-contract";
 import { registerControlExplorerApp } from "./control-explorer-app";
 import { cliCompatibilityTool } from "./cli-compatibility-tools";
-import { setupTool } from "./setup-tools";
+import { SETUP_POLYGLOT_INPUT_DESCRIPTION, setupTool } from "./setup-tools";
 
 const MCP_ATTESTATION_REQUEST_V1 = mcpSchema(AttestationRequestV1Schema);
 const MCP_AGENT_LIFECYCLE_CHECKPOINT_REQUEST_V1 = mcpSchema(
@@ -188,14 +188,12 @@ export function createSemctxServer(
         polyglot: z
           .boolean()
           .optional()
-          .describe(
-            "when writing a FRESH config, use polyglot v2 glob selection. If a v1 config already exists, polyglot:true is REFUSED (kind setup_refused / CONFIG_INVALID / verdict SETUP_REFUSED) — migrate .semctx/config.json to v2 explicitly; it does not silently ignore or overwrite",
-          ),
+          .describe(SETUP_POLYGLOT_INPUT_DESCRIPTION),
       },
     },
     ({ repositoryRoot, confirm, polyglot }) => {
-      // Always a schema-valid structured result (ADR 0012). Domain refuse / NOT_READY
-      // are negative outcomes in the body; they are not handler-authored isError.
+      // Domain refuse / NOT_READY are schema-valid bodies (ADR 0012). Catalogue errors
+      // (e.g. CONFIG_INVALID from loadConfig during polyglot preflight) still throw.
       return ok(setupTool(rootResolver.resolve(repositoryRoot), {
         ...(confirm !== undefined ? { confirm } : {}),
         ...(polyglot !== undefined ? { polyglot } : {}),

@@ -103,8 +103,15 @@ export interface SetupRepositoryReport {
  * Returned instead of throwing so MCP can surface actionable guidance in structuredContent
  * (public SemctxError messages are stripped at the MCP catalogue boundary).
  */
-/** Domain policy refuse codes (structured success path — not MCP catalogue error codes). */
+/**
+ * Domain policy refuse codes (structured success path — not MCP catalogue error codes).
+ * Keep MCP tool descriptions and TOOL_OUTPUT_SCHEMAS in lockstep with this union.
+ */
 export type SetupRefuseReasonCode = "POLYGLOT_REQUIRES_CONFIG_V2";
+
+/** Canonical polyglot-vs-v1 refuse code (shared with MCP metadata). */
+export const SETUP_POLYGLOT_V1_REFUSE_REASON_CODE: SetupRefuseReasonCode =
+  "POLYGLOT_REQUIRES_CONFIG_V2";
 
 export interface SetupRefusedReport {
   schemaVersion: 1;
@@ -169,7 +176,7 @@ export function setupRepository(
       schemaVersion: 1,
       kind: "setup_refused",
       repositoryRoot: root,
-      reasonCode: "POLYGLOT_REQUIRES_CONFIG_V2",
+      reasonCode: SETUP_POLYGLOT_V1_REFUSE_REASON_CODE,
       reason:
         "polyglot does not overwrite an existing v1 config; migrate .semctx/config.json explicitly to config version 2",
       configVersion: config.version,

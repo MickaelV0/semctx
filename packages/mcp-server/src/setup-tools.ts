@@ -3,11 +3,20 @@ import {
   loadConfig,
 } from "@semantic-context/repository-store";
 import {
+  SETUP_POLYGLOT_V1_REFUSE_REASON_CODE,
   setupRepository,
   type SetupRepositoryReport,
   type SetupRefusedReport,
   type SetupResult,
 } from "@semantic-context/app-services";
+
+export { SETUP_POLYGLOT_V1_REFUSE_REASON_CODE };
+
+/** Agent-facing polyglot input description (must name the exact reasonCode). */
+export const SETUP_POLYGLOT_INPUT_DESCRIPTION =
+  "when writing a FRESH config, use polyglot v2 glob selection. If a non-v2 config already exists, polyglot:true is REFUSED (kind setup_refused / reasonCode "
+  + SETUP_POLYGLOT_V1_REFUSE_REASON_CODE
+  + " / verdict SETUP_REFUSED) — migrate .semctx/config.json to v2 explicitly; it does not silently ignore or overwrite";
 
 export interface SetupPreflightReport {
   schemaVersion: 1;
@@ -45,6 +54,28 @@ export function isSetupAgentSuccess(body: SetupToolResult): boolean {
   return body.kind === "setup" && body.verdict === "SETUP_READY";
 }
 
+function polyglotV1Refused(root: string, configVersion: number): SetupRefusedReport {
+  return {
+    schemaVersion: 1,
+    kind: "setup_refused",
+    repositoryRoot: root,
+    reasonCode: SETUP_POLYGLOT_V1_REFUSE_REASON_CODE,
+    reason:
+      "polyglot does not overwrite an existing v1 config; migrate .semctx/config.json explicitly to config version 2",
+    configVersion,
+    polyglot: true,
+    alreadyInitialized: true,
+    setupReady: false,
+    analysisReady: false,
+    verdict: "SETUP_REFUSED",
+    nextSteps: [
+      "Open .semctx/config.json and migrate to config version 2 (polyglot / glob selection), or remove .semctx/ and re-run setup with polyglot on a fresh workspace",
+      "Do not pass polyglot:true against a v1 workspace expecting an in-place overwrite",
+      "After migration, re-run setup without expecting config overwrite of authored .sem files",
+    ],
+  };
+}
+
 /**
  * Plugin-native workspace bootstrap.
  *
@@ -52,7 +83,8 @@ export function isSetupAgentSuccess(body: SetupToolResult): boolean {
  * - `confirm: true` → full setup via shared `setupRepository` (no global CLI install).
  *
  * All outcomes are ordinary schema-valid structured results (ADR 0012: no handler-authored
- * isError / no structuredContent on catalogue errors):
+ * isError / no structuredContent on catalogue errors), except catalogue failures that throw
+ * (e.g. CONFIG_INVALID on unreadable config during polyglot preflight policy check):
  * - `kind: "setup" && verdict: "SETUP_READY"` → agent success
  * - `setup_refused` / `SETUP_NOT_READY` → domain failure; read reason/nextSteps/indexHealth
  *
@@ -65,32 +97,12 @@ export function setupTool(
   if (input.confirm !== true) {
     const initialized = isInitialized(root);
     // Non-mutating policy preview: polyglot against existing non-v2 is refused without writes.
+    // Unreadable / schema-invalid config must NOT fall through to a healthy preflight —
+    // rethrow so MCP maps CONFIG_INVALID via the public catalogue (ADR 0012).
     if (initialized && input.polyglot === true) {
-      try {
-        const config = loadConfig(root);
-        if (config.version !== 2) {
-          return {
-            schemaVersion: 1,
-            kind: "setup_refused",
-            repositoryRoot: root,
-            reasonCode: "POLYGLOT_REQUIRES_CONFIG_V2",
-            reason:
-              "polyglot does not overwrite an existing v1 config; migrate .semctx/config.json explicitly to config version 2",
-            configVersion: config.version,
-            polyglot: true,
-            alreadyInitialized: true,
-            setupReady: false,
-            analysisReady: false,
-            verdict: "SETUP_REFUSED",
-            nextSteps: [
-              "Open .semctx/config.json and migrate to config version 2 (polyglot / glob selection), or remove .semctx/ and re-run setup with polyglot on a fresh workspace",
-              "Do not pass polyglot:true against a v1 workspace expecting an in-place overwrite",
-              "After migration, re-run setup without expecting config overwrite of authored .sem files",
-            ],
-          };
-        }
-      } catch {
-        // Unreadable config: fall through to ordinary preflight (confirm path will fail closed).
+      const config = loadConfig(root);
+      if (config.version !== 2) {
+        return polyglotV1Refused(root, config.version);
       }
     }
     return {
@@ -102,7 +114,6 @@ export function setupTool(
       message: initialized
         ? "Workspace already has .semctx/. Re-run with confirm:true to re-index and re-validate (idempotent; does not overwrite authored .sem files or an existing config). Preflight only — no writes performed."
         : "Workspace is not initialized. Re-run with confirm:true to write .semctx/, scaffold semantic files, and build the deterministic index. No global semctx package install is required when using the plugin MCP.",
-      // Suggest confirm without auto-firing polyglot when policy is unknown to the host UI.
       next: {
         tool: "semctx_setup",
         arguments: {

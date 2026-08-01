@@ -7,12 +7,16 @@ export type {
   CliCompatibilityReason,
   CliCompatibilityReport,
 } from "./cli-compatibility";
-export { setupRepository } from "./setup";
+export {
+  SETUP_POLYGLOT_V1_REFUSE_REASON_CODE,
+  setupRepository,
+} from "./setup";
 export type {
   SetupPhaseEvent,
+  SetupRefuseReasonCode,
+  SetupRefusedReport,
   SetupRepositoryOptions,
   SetupRepositoryReport,
-  SetupRefusedReport,
   SetupResult,
   SetupVerdict,
 } from "./setup";

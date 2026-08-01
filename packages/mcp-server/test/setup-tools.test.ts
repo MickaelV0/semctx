@@ -4,11 +4,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import type { McpServer } from "@modelcontextprotocol/server";
-import { createDefaultConfig, createGlobSelectionConfig } from "@semantic-context/core";
+import { isSemctxError, createDefaultConfig, createGlobSelectionConfig } from "@semantic-context/core";
 import { SAMPLE_REPO } from "@semantic-context/test-fixtures";
-import { isInitialized, saveConfig } from "@semantic-context/repository-store";
+import {
+  configPath,
+  isInitialized,
+  saveConfig,
+  semctxDir,
+} from "@semantic-context/repository-store";
 import { createSemctxServer } from "../src/server";
 import {
+  SETUP_POLYGLOT_INPUT_DESCRIPTION,
+  SETUP_POLYGLOT_V1_REFUSE_REASON_CODE,
   isSetupAgentSuccess,
   isSetupDomainFailure,
   setupTool,
@@ -104,10 +111,46 @@ describe("semctx_setup MCP tool", () => {
       setupTool(root, { polyglot: true }),
       "setup_refused",
     );
-    expect(report.reasonCode).toBe("POLYGLOT_REQUIRES_CONFIG_V2");
+    expect(report.reasonCode).toBe(SETUP_POLYGLOT_V1_REFUSE_REASON_CODE);
     expect(report.verdict).toBe("SETUP_REFUSED");
     expect(isSetupDomainFailure(report)).toBe(true);
     expect(TOOL_OUTPUT_SCHEMAS.semctx_setup.safeParse(report).success).toBe(true);
+  });
+
+  test("preflight polyglot with malformed config fails closed (CONFIG_INVALID, no healthy preflight)", () => {
+    root = freshRepo();
+    mkdirSync(semctxDir(root), { recursive: true });
+    writeFileSync(configPath(root), "{not-json\n", "utf8");
+    expect(isInitialized(root)).toBe(true);
+    try {
+      setupTool(root, { polyglot: true });
+      expect.unreachable("expected CONFIG_INVALID throw");
+    } catch (error) {
+      expect(isSemctxError(error)).toBe(true);
+      if (isSemctxError(error)) {
+        expect(error.code).toBe("CONFIG_INVALID");
+      }
+    }
+  });
+
+  test("preflight polyglot with schema-invalid config fails closed (CONFIG_INVALID)", () => {
+    root = freshRepo();
+    mkdirSync(semctxDir(root), { recursive: true });
+    writeFileSync(
+      configPath(root),
+      `${JSON.stringify({ version: 99, not: "a valid config" }, null, 2)}\n`,
+      "utf8",
+    );
+    expect(isInitialized(root)).toBe(true);
+    try {
+      setupTool(root, { polyglot: true });
+      expect.unreachable("expected CONFIG_INVALID throw");
+    } catch (error) {
+      expect(isSemctxError(error)).toBe(true);
+      if (isSemctxError(error)) {
+        expect(error.code).toBe("CONFIG_INVALID");
+      }
+    }
   });
 
   test("confirm:true bootstraps via shared setup path (no global CLI)", () => {
@@ -132,7 +175,7 @@ describe("semctx_setup MCP tool", () => {
       setupTool(root, { confirm: true, polyglot: true, now: "2026-08-01T12:00:00.000Z" }),
       "setup_refused",
     );
-    expect(report.reasonCode).toBe("POLYGLOT_REQUIRES_CONFIG_V2");
+    expect(report.reasonCode).toBe(SETUP_POLYGLOT_V1_REFUSE_REASON_CODE);
     expect(report.verdict).toBe("SETUP_REFUSED");
     expect(isSetupDomainFailure(report)).toBe(true);
     expect(report.nextSteps.length).toBeGreaterThan(0);
@@ -330,9 +373,48 @@ describe("semctx_setup MCP tool", () => {
       nextSteps?: string[];
     };
     expect(refusedBody.verdict).toBe("SETUP_REFUSED");
-    expect(refusedBody.reasonCode).toBe("POLYGLOT_REQUIRES_CONFIG_V2");
+    expect(refusedBody.reasonCode).toBe(SETUP_POLYGLOT_V1_REFUSE_REASON_CODE);
     expect((refusedBody.nextSteps ?? []).length).toBeGreaterThan(0);
     expect(TOOL_OUTPUT_SCHEMAS.semctx_setup.safeParse(refused.structuredContent).success).toBe(true);
+  });
+
+  test("MCP metadata: polyglot description names canonical refuse reasonCode (no CONFIG_INVALID drift)", async () => {
+    root = freshRepo();
+    server = createSemctxServer(root);
+    client = new Client({ name: "semctx-setup-meta", version: "0.1.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    const { tools } = await client.listTools();
+    const tool = tools.find((candidate) => candidate.name === "semctx_setup");
+    const polyglotProp = (tool?.inputSchema as {
+      properties?: { polyglot?: { description?: string } };
+    })?.properties?.polyglot;
+    expect(polyglotProp?.description).toBe(SETUP_POLYGLOT_INPUT_DESCRIPTION);
+    expect(polyglotProp?.description).toContain(SETUP_POLYGLOT_V1_REFUSE_REASON_CODE);
+    expect(polyglotProp?.description).not.toContain("CONFIG_INVALID");
+  });
+
+  test("MCP wire: malformed config + polyglot preflight is catalogue CONFIG_INVALID (not setup_preflight)", async () => {
+    root = freshRepo();
+    mkdirSync(semctxDir(root), { recursive: true });
+    writeFileSync(configPath(root), "{not-json\n", "utf8");
+    server = createSemctxServer(root);
+    client = new Client({ name: "semctx-setup-bad-cfg", version: "0.1.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    const result = await client.callTool({
+      name: "semctx_setup",
+      arguments: { repositoryRoot: root, polyglot: true },
+    });
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toBeUndefined();
+    const text = result.content.find((item) => item.type === "text")?.text ?? "";
+    expect(JSON.parse(text)).toEqual({
+      code: "CONFIG_INVALID",
+      error: "Semctx configuration is invalid",
+    });
   });
 
   test("MCP wire: SETUP_NOT_READY is structured body with isError false (ADR 0012)", async () => {

@@ -32,6 +32,7 @@ import {
   SemanticNodeSchema,
 } from "@semantic-context/semantic-model";
 import { TargetArchitectureArtifactV1Schema } from "@semantic-context/semantic-engine";
+import { SETUP_POLYGLOT_V1_REFUSE_REASON_CODE } from "@semantic-context/app-services";
 import { ControlExplorerOutputSchema } from "./control-explorer";
 import { mcpSchema } from "./schema-boundary";
 import type { SemctxToolName } from "./tool-contract";
@@ -688,7 +689,7 @@ export const TOOL_OUTPUT_SCHEMAS = {
       ),
       repositoryRoot: described(z.string(), "Absolute repository root."),
       reasonCode: described(
-        z.literal("POLYGLOT_REQUIRES_CONFIG_V2"),
+        z.literal(SETUP_POLYGLOT_V1_REFUSE_REASON_CODE),
         "Domain policy refuse code (not an MCP catalogue error code).",
       ),
       reason: described(z.string(), "Actionable refusal reason."),
