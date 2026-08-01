@@ -1,7 +1,7 @@
 # Contributor dev container for semctx. Provides Bun, Node, Git and a minimal build toolchain,
 # plus Python for the benchmark/smoke scripts. It does NOT install Claude Code, require an API
 # key, publish anything, or run the private benchmark.
-FROM mcr.microsoft.com/devcontainers/typescript-node:20
+FROM mcr.microsoft.com/devcontainers/typescript-node:24
 
 # Python is used only by benchmarks/change-impact-eval scripts (smoke test, harness).
 RUN apt-get update \

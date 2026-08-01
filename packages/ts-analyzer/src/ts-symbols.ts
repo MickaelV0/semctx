@@ -60,7 +60,7 @@ function lineOf(sf: ts.SourceFile, pos: number): number {
   return sf.getLineAndCharacterOfPosition(pos).line + 1;
 }
 
-/** The closest preceding block-doc (`/** ... *​/`) for a node, if any. */
+/** The closest preceding JSDoc block for a node, if any. */
 function leadingJsDoc(sf: ts.SourceFile, node: ts.Node): string | undefined {
   const ranges = ts.getLeadingCommentRanges(sf.text, node.getFullStart());
   if (ranges === undefined) return undefined;

@@ -62,7 +62,7 @@ function readJsonObject(root: string, file: string, label: string): Record<strin
   try {
     value = JSON.parse(readFileSync(path, "utf8"));
   } catch (cause) {
-    throw new Error(`${label} file is not valid JSON: ${String(cause)}`);
+    throw new Error(`${label} file is not valid JSON: ${String(cause)}`, { cause });
   }
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`${label} must be a JSON object`);

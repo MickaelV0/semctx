@@ -266,15 +266,25 @@ describe("Codex and Claude Code plugin parity", () => {
 
   test("registers the same MCP server identity and compatible plugin versions", () => {
     const codexMcp = json<{
-      mcpServers: Record<string, { command: string; args: string[]; cwd?: string; default_tools_approval_mode?: string }>;
+      mcpServers: {
+        semctx: {
+          command: string;
+          args: string[];
+          cwd?: string;
+          default_tools_approval_mode?: string;
+        };
+      };
     }>(
       "plugins/semctx-control/.mcp.json",
     );
     const claudeMcp = json<{
-      mcpServers: Record<
-        string,
-        { command: string; args: string[]; env: Record<string, string> }
-      >;
+      mcpServers: {
+        semctx: {
+          command: string;
+          args: string[];
+          env: Record<string, string>;
+        };
+      };
     }>(
       "plugins/claude-code/.mcp.json",
     );
@@ -297,7 +307,12 @@ describe("Codex and Claude Code plugin parity", () => {
     );
     const codexMarketplace = json<{
       name: string;
-      plugins: Array<{ name: string; source: { source: string; path: string } }>;
+      plugins: Array<{
+        name: string;
+        source: { source: string; path: string };
+        policy?: { installation: string; authentication: string };
+        category?: string;
+      }>;
     }>(".agents/plugins/marketplace.json");
 
     expect(Object.keys(codexMcp.mcpServers)).toEqual(["semctx"]);

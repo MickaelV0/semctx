@@ -30,6 +30,20 @@ afterAll(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
+async function expectFailure(
+  action: () => unknown,
+  expectedMessage: string,
+): Promise<void> {
+  let failure: unknown;
+  try {
+    await Promise.resolve().then(action);
+  } catch (error) {
+    failure = error;
+  }
+  expect(failure).toBeInstanceOf(Error);
+  expect((failure as Error).message).toContain(expectedMessage);
+}
+
 describe("readiness policy", () => {
   it("fails closed without creating .semctx for an uninitialized repository", async () => {
     const uninitialized = mkdtempSync(join(tmpdir(), "semctx-mcp-uninitialized-"));
@@ -43,7 +57,8 @@ describe("readiness policy", () => {
       expect(() => verifyChangeTool(uninitialized, { gitDiff: "diff --git a/a.ts b/a.ts" })).toThrow(
         "run 'semctx setup' first",
       );
-      await expect(prepareTaskTool(uninitialized, { task: "reservation" })).rejects.toThrow(
+      await expectFailure(
+        () => prepareTaskTool(uninitialized, { task: "reservation" }),
         "run 'semctx setup' first",
       );
       expect(existsSync(join(uninitialized, ".semctx"))).toBe(false);
@@ -53,7 +68,7 @@ describe("readiness policy", () => {
   });
 
   it("does not create SQLite files when an initialized repository is still unindexed", async () => {
-    const calls: Array<(target: string) => unknown | Promise<unknown>> = [
+    const calls: Array<(target: string) => unknown> = [
       (target: string) => inspectTool(target, { query: "reservation" }),
       (target: string) => verifyChangeTool(target, { gitDiff: "diff --git a/a.ts b/a.ts" }),
       (target: string) => prepareTaskTool(target, { task: "reservation" }),
@@ -65,7 +80,7 @@ describe("readiness policy", () => {
         initWorkspace(unindexed);
         const database = dbPath(unindexed);
         expect(existsSync(database)).toBe(false);
-        await expect((async () => { await call(unindexed); })()).rejects.toThrow("run 'semctx setup' first");
+        await expectFailure(() => call(unindexed), "run 'semctx setup' first");
         expect(existsSync(database)).toBe(false);
         expect(existsSync(`${database}-wal`)).toBe(false);
         expect(existsSync(`${database}-shm`)).toBe(false);

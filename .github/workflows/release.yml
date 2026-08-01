@@ -27,7 +27,7 @@ jobs:
           bun-version: 1.3.13
       - run: npm install --global npm@12.0.1
       - run: bun install --frozen-lockfile
-      - run: bun run typecheck
+      - run: bun run quality
       - run: bun run test
       - run: bun run plugin:check
       - name: Verify release tag matches the package version

@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import packageJson from "../package.json";
+import type { ZodType, ZodTypeDef } from "zod";
 import { z } from "zod-v4";
 import { isAbsolute } from "node:path";
 import { prepareTaskTool, inspectTool, verifyChangeTool } from "./tools";
@@ -73,7 +74,11 @@ const MCP_AGENT_LIFECYCLE_CHECKPOINT_REQUEST_V1 = mcpSchema(
 );
 const MCP_ARCHITECTURE_DELTA = mcpSchema(ArchitectureDeltaSchema);
 const MCP_ARCHITECTURE_SNAPSHOT = mcpSchema(ArchitectureSnapshotSchema);
-const MCP_EXECUTION_STATE = mcpSchema(ExecutionStateSchema);
+// The recursive control-model schema is intentionally exported as ZodTypeAny.
+// Quarantine that erased type at the existing Zod 3 -> Zod 4 schema boundary.
+const MCP_EXECUTION_STATE = mcpSchema(
+  ExecutionStateSchema as unknown as ZodType<unknown, ZodTypeDef, unknown>,
+);
 const MCP_MIGRATION_PLAN = mcpSchema(MigrationPlanSchema);
 const MCP_MIGRATION_STATE = mcpSchema(MigrationStateSchema);
 const MCP_MIGRATION_STEP = mcpSchema(MigrationStepSchema);

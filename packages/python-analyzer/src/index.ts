@@ -416,8 +416,8 @@ function extractOne(file: PythonSource): PythonExtraction {
       const statement = file.source.slice(cursor.from, cursor.to);
       const nameMatch =
         cursor.name === "FunctionDefinition"
-          ? /^(?:async\s+)?def\s+([^\s(:\[]+)/u.exec(statement)
-          : /^class\s+([^\s(:\[]+)/u.exec(statement);
+          ? /^(?:async\s+)?def\s+([^\s(:[]+)/u.exec(statement)
+          : /^class\s+([^\s(:[]+)/u.exec(statement);
       const name = nameMatch?.[1];
       if (name !== undefined) {
         const parent = cursor.node.parent;

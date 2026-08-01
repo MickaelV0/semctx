@@ -16,6 +16,8 @@ export function slugify(text: string): string {
   const base = text
     .toLowerCase()
     .normalize("NFKD")
+    // The control-code lower bound is intentional: retain all ASCII before slug normalization.
+    // eslint-disable-next-line no-control-regex
     .replace(/[^\x00-\x7f]/g, "")
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
