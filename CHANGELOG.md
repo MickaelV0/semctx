@@ -3,14 +3,19 @@
 All notable changes to `semctx` are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project aims to follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). `0.1.0` is the first tagged release.
-`semctx` `0.1.0` and `0.1.1` are published on npm; nothing has been published to the GitHub
-Marketplace. The published CLI lags this repository — see
-[#38](https://github.com/hoklims/semctx/issues/38) for the release policy.
+Since `0.1.11`, the npm CLI, both marketplace plugins, the release-managed `stable` branch and the
+GitHub Release advance together through the tag-driven lockstep workflow documented in
+[`docs/publishing.md`](docs/publishing.md).
 
 ## [Unreleased]
 
 ### Added
 
+- **Offline global CLI compatibility advisory** ([#35](https://github.com/hoklims/semctx/issues/35)):
+  one shared bounded probe now powers `doctor --json` and the path-free
+  `semctx_cli_compatibility` MCP preflight. Exact pre-1.0 version drift, absence, malformed output,
+  timeout, and subprocess failure produce canonical non-blocking reasons plus an explicit manual
+  upgrade command; Semctx never contacts a registry or installs from the advisory.
 - **0.1.17 multi-language Plane A runtime**: config v2 can select and analyze mixed TypeScript and
   Python workspaces while preserving TypeScript compatibility. CLI/MCP `index-health` and `setup`
   report partial or insufficient analysis explicitly. Exact capability requirements, source/result

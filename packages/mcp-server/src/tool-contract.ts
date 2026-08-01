@@ -36,6 +36,7 @@ const TOOL_NAMES = [
   "semctx_handoff",
   "semctx_resume",
   "semctx_index_health",
+  "semctx_cli_compatibility",
   "semctx_control_status",
   "semctx_control_agent_lifecycle",
   "semctx_control_authority",
