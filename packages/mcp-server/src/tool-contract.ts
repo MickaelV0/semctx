@@ -26,6 +26,7 @@ const TOOL_NAMES = [
   "semctx_verify_change",
   "semctx_inspect",
   "semctx_prepare_task",
+  "semctx_setup",
   "semctx_semantic_check",
   "semctx_semantic_slice",
   "semctx_change_open",
@@ -99,6 +100,7 @@ const WRITER_NAMES = new Set<SemctxToolName>([
 ]);
 
 const IDEMPOTENT_WRITER_NAMES = new Set<SemctxToolName>([
+  "semctx_setup",
   "semctx_control_handoff",
 ]);
 
@@ -118,6 +120,10 @@ type ToolResult = CallToolResult & {
   structuredContent?: unknown;
 };
 
+/**
+ * Successful handler results only (ADR 0012). Handlers must not publish isError;
+ * domain refusals are ordinary schema-valid results with a negative verdict/kind.
+ */
 type ToolSuccessResult = CallToolResult & {
   isError?: false;
   structuredContent?: unknown;
@@ -469,6 +475,9 @@ export class ToolRegistrar {
             parsedArgs,
             ctx,
           );
+          // ADR 0012: a handler cannot publish its own isError payload. Domain
+          // outcomes (e.g. setup_refused / SETUP_NOT_READY) are ordinary schema-valid
+          // success-shaped results; only the catalogue path may set isError:true.
           if ((result as ToolResult).isError === true) {
             throw new ToolPublicError("INTERNAL_ERROR", {
               cause: "tool callback returned isError",

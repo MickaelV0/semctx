@@ -61,3 +61,8 @@ authority, design, compatibility, test, and generated-artifact requirements.
 - Record each applicable public-contract requirement in the PR evidence. Mark a requirement
   `N/A` only with a reason.
 - Do not open or update a PR while `bun run verify:pr` is failing.
+- Changes to the **public MCP surface** (tool registration, error catalogue, structured
+  schemas, agent success gates, annotations, visibility, root confinement, plugin parity)
+  should also follow
+  [docs/contributing/public-mcp-contracts.md](docs/contributing/public-mcp-contracts.md)
+  and [ADR 0012](docs/adr/0012-mcp-2026-stable-surface.md).

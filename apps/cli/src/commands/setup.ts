@@ -1,191 +1,168 @@
-import { existsSync } from "node:fs";
-import { join } from "node:path";
-import { SemctxError, createDefaultConfig, createGlobSelectionConfig } from "@semantic-context/core";
-import type { SemctxConfig } from "@semantic-context/core";
-import { isInitialized, loadConfig, saveConfig, semctxDir } from "@semantic-context/repository-store";
 import {
-  indexHealth,
-  indexRepository,
-  openReadyRepository,
+  evaluatePolyglotSetupPolicy,
+  setupRepository,
+  type SetupRefusedReport,
 } from "@semantic-context/app-services";
-import { countTypeScriptFiles, discoverRepository } from "@semantic-context/ts-analyzer";
-import { initSemanticScaffold, loadSemanticModel, checkSemanticModel, type RepositoryFacts } from "@semantic-context/semantic-engine";
-import { runPreset } from "./preset";
+import { isInitialized, loadConfig } from "@semantic-context/repository-store";
+import { runPreset, validatePreset } from "./preset";
 import type { ParsedArgs } from "../args";
 import { flagBool, flagString } from "../args";
 import { info, heading, success, warn, fail, json, c, nowIso } from "../output";
 
-/** A layout-aware default config: a monorepo also indexes package sources, so `index` finds symbols. */
-function smartConfig(root: string, polyglot: boolean): SemctxConfig {
-  if (polyglot) return createGlobSelectionConfig(root);
-  const hasPackages = existsSync(join(root, "packages"));
-  return {
-    ...createDefaultConfig(root),
-    include: hasPackages ? ["packages/*/src/**/*.ts", "src/**/*.ts"] : ["src/**/*.ts"],
-  };
-}
-
-/** Milliseconds since a start marker, as a short human string. Human output only (never persisted). */
-function elapsed(startMs: number): string {
-  const ms = Date.now() - startMs;
-  return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
-}
-
 /**
  * `semctx setup` — one command that makes a repository ready: config + graph index + semantic
  * scaffold + validation. Idempotent and non-destructive (never overwrites an existing config or
- * authored `.sem` files). Emits live, phase-by-phase progress so the (potentially slow) index step
- * is never a silent black box.
+ * authored `.sem` files). Live phase progress is emitted via the shared `onPhase` port.
+ *
+ * The core mutation lives in `@semantic-context/app-services` (`setupRepository`) so the plugin MCP
+ * tool can call the same path without a global package install.
  */
 export function runSetup(root: string, args: ParsedArgs): number {
   const preset = flagString(args, "preset");
   const asJson = flagBool(args, "json");
   const polyglot = flagBool(args, "polyglot");
-  const line = (msg: string): void => {
-    if (!asJson) info(msg);
-  };
 
   if (!asJson) heading(`semctx setup  ${c.dim("·")}  ${root}`);
-  const already = isInitialized(root);
 
-  // 1. config — respect an existing one; otherwise write a layout-aware default (or a full preset).
+  let policyRefusal: SetupRefusedReport | null = null;
+
+  // Optional host presets (GitHub Action / Claude Code files) remain CLI-only.
   if (preset !== undefined) {
-    if (!asJson) info(c.dim(`  applying preset "${preset}"…`));
-    const code = runPreset(root, preset, args);
-    if (code !== 0) return code;
-  } else if (!already) {
-    saveConfig(root, smartConfig(root, polyglot));
-  }
-  const config = loadConfig(root);
-  if (already && polyglot && config.version !== 2) {
-    throw new SemctxError(
-      "INVALID_TASK_INPUT",
-      "--polyglot does not overwrite an existing v1 config; migrate .semctx/config.json explicitly",
-      { configVersion: config.version },
-    );
-  }
-  line(`  ${c.green("ok")} config    ${already && preset === undefined ? c.dim("existing, kept") : c.dim("written to " + semctxDir(root))}`);
+    validatePreset(preset);
+    const alreadyInitialized = isInitialized(root);
+    if (alreadyInitialized) {
+      const config = loadConfig(root);
+      policyRefusal = evaluatePolyglotSetupPolicy({
+        repositoryRoot: root,
+        polyglot,
+        alreadyInitialized,
+        configVersion: config.version,
+      });
+    }
 
-  // 2. semantic scaffold — establish Plane B before the index captures its sealed snapshot.
-  const scaffold = initSemanticScaffold(root, {});
-  const created = scaffold.plan.filter((p) => p.action === "create").length;
-  line(`  ${c.green("ok")} semantic  ${created > 0 ? `${created} file(s) scaffolded ${c.dim("(.semctx/semantic/, versioned)")}` : c.dim("already present")}`);
+    if (policyRefusal === null) {
+      if (!asJson) info(c.dim(`  applying preset "${preset}"…`));
+      const code = runPreset(root, preset, args, {
+        includeConfig: false,
+        emitOutput: false,
+      });
+      if (code !== 0) return code;
+    }
+  }
 
-  // 3. index — announce the exact selected scope before the blocking analysis.
-  const discovery = discoverRepository(config);
-  const fileCount = countTypeScriptFiles(config);
-  const selectedCount = discovery.files.length;
-  const selectedByLanguage = Object.fromEntries(
-    ["typescript", "python", "markdown", "sql"].map((language) => [
-      language,
-      discovery.files.filter((file) =>
-        (file.language ?? (/\.(?:ts|tsx|mts|cts)$/.test(file.relPath) ? "typescript"
-          : /\.mdx?$/.test(file.relPath) ? "markdown"
-            : /\.sql$/.test(file.relPath) ? "sql"
-              : "unknown")) === language
-      ).length,
-    ]),
+  const report = policyRefusal ?? setupRepository(
+    root,
+    {
+      polyglot,
+      now: nowIso(),
+      onPhase: asJson
+        ? undefined
+        : (event) => {
+        switch (event.phase) {
+          case "config":
+            info(
+              `  ${c.green("ok")} config    ${
+                event.detail === "written" ? c.dim("written") : c.dim("existing, kept")
+              }`,
+            );
+            return;
+          case "semantic":
+            info(
+              `  ${c.green("ok")} semantic  ${
+                event.created > 0
+                  ? `${event.created} file(s) scaffolded ${c.dim("(.semctx/semantic/, versioned)")}`
+                  : c.dim("already present")
+              }`,
+            );
+            return;
+          case "index":
+            if (event.stage === "start") {
+              if (event.selectedFiles === 0) {
+                info(`  ${c.yellow("!!")} index     ${c.yellow("no analyzable files selected")} under ${root}`);
+              } else {
+                const langs = Object.entries(event.selectedByLanguage)
+                  .filter(([, n]) => n > 0)
+                  .map(([language, n]) => `${language}:${n}`)
+                  .join(", ");
+                info(
+                  `  ${c.dim("··")} index     analyzing ${c.bold(String(event.selectedFiles))} selected file(s)`
+                  + `${langs.length > 0 ? c.dim(` (${langs})`) : ""}…`,
+                );
+              }
+              return;
+            }
+            info(
+              `  ${c.green("ok")} index     ${c.bold(String(event.nodes))} nodes, `
+              + `${c.bold(String(event.edges))} edges, ${c.bold(String(event.claims))} claims`,
+            );
+            return;
+          case "check":
+            info(
+              `  ${event.ok ? c.green("ok") : c.red("!!")} check     ${
+                event.ok ? "model consistent" : `${event.errors} error(s)`
+              }`,
+            );
+            return;
+          case "analysis":
+            if (event.coverageStatus !== undefined) {
+              const healthColor = !event.ready
+                ? c.red
+                : event.coverageStatus === "complete"
+                  ? c.green
+                  : c.yellow;
+              info(
+                `  ${!event.ready
+                  ? c.red("!!")
+                  : event.coverageStatus === "complete"
+                    ? c.green("ok")
+                    : c.yellow("!!")} analysis  ${healthColor(event.coverageStatus)}`,
+              );
+            }
+            return;
+        }
+        },
+    },
   );
-  if (selectedCount === 0) {
-    line(`  ${c.yellow("!!")} index     ${c.yellow("no analyzable files selected")} under ${root}`);
-  } else {
-    line(
-      `  ${c.dim("··")} index     analyzing ${c.bold(String(selectedCount))} selected file(s) `
-      + `${c.dim(`(${Object.entries(selectedByLanguage).filter(([, count]) => count > 0).map(([language, count]) => `${language}:${count}`).join(", ")})`)}…`
-      + `${selectedCount > 1500 ? c.dim("  (large repo — add generated/vendor dirs to config 'exclude')") : ""}`,
-    );
-  }
-  const t0 = Date.now();
-  const { analysis, claims, freshnessSeal } = indexRepository(root, nowIso());
-  const reader = openReadyRepository(root);
-  let facts: RepositoryFacts;
-  try {
-    facts = { graph: reader.loadGraph(), claims: reader.loadClaims(), evidence: reader.loadEvidence() };
-  } finally {
-    reader.close();
-  }
-  line(`  ${c.green("ok")} index     ${c.bold(String(analysis.graph.nodes.length))} nodes, ${c.bold(String(analysis.graph.edges.length))} edges, ${c.bold(String(claims.length))} claims  ${c.dim(`(${elapsed(t0)})`)}`);
 
-  // 4. check — validate the authored model + repository links.
-  const loaded = loadSemanticModel(root);
-  const check = checkSemanticModel({ model: loaded.model, diagnostics: loaded.diagnostics, duplicateIds: loaded.duplicateIds, facts, graphIndexed: true });
-  line(`  ${check.ok ? c.green("ok") : c.red("!!")} check     ${check.ok ? "model consistent" : `${check.counts.errors} error(s)`}`);
-  const health = indexHealth(root);
-  const analysisReady =
-    config.version !== 2
-    || (
-      health.binding.status === "valid"
-      && health.freshness.canRunHighRiskControl
-      && health.coverage.status !== "insufficient"
-    );
-  const setupReady = check.ok && analysisReady;
-  if (config.version === 2) {
-    const healthColor = !analysisReady
-      ? c.red
-      : health.coverage.status === "complete"
-        ? c.green
-        : c.yellow;
-    line(
-      `  ${!analysisReady
-        ? c.red("!!")
-        : health.coverage.status === "complete"
-          ? c.green("ok")
-          : c.yellow("!!")} analysis  `
-      + `${healthColor(health.coverage.status)}`
-      + `${health.reasonSummary.length === 0
-        ? ""
-        : c.dim(` (${health.reasonSummary.join(", ")})`)}`,
-    );
+  if (report.kind === "setup_refused") {
+    if (asJson) {
+      // Canonical SetupResult envelope (same fields as MCP structured content).
+      json({ ...report, preset: preset ?? null });
+      return 1;
+    }
+    fail(report.reason);
+    for (const step of report.nextSteps) info(c.dim(`  → ${step}`));
+    return 1;
   }
 
   if (asJson) {
+    // Canonical SetupRepositoryReport + CLI-only preset annotation.
     json({
-      configWritten: preset !== undefined || !already,
+      ...report,
       preset: preset ?? null,
-      sourceFiles: fileCount,
-      selectedFiles: selectedCount,
-      selection: {
-        configVersion: config.version,
-        mode: config.version === 2 ? config.selectionMode : "legacy-v1",
-        selectedByLanguage,
-        excluded: discovery.candidates.filter((candidate) => candidate.selectionDecision === "excluded").length,
-        disabled: discovery.candidates.filter((candidate) => candidate.analysisOutcome === "disabled").length,
-        unsupported: discovery.candidates.filter((candidate) => candidate.analysisOutcome === "unsupported").length,
-        failed: discovery.candidates.filter((candidate) => candidate.analysisOutcome === "failed").length,
-      },
-      nodes: analysis.graph.nodes.length,
-      edges: analysis.graph.edges.length,
-      claims: claims.length,
-      freshnessSeal,
-      indexHealth: {
-        binding: health.binding,
-        freshness: health.freshness,
-        coverage: health.coverage,
-        workspaceDiagnostics: health.workspace?.diagnostics ?? [],
-        reasonSummary: health.reasonSummary,
-      },
-      semanticFilesCreated: created,
-      gitignore: scaffold.gitignore.action,
-      check: { ok: check.ok, nodes: check.counts.nodes, changes: check.counts.changes, errors: check.counts.errors },
     });
-    return setupReady ? 0 : 1;
+    return report.setupReady ? 0 : 1;
   }
 
   info("");
-  if (analysis.graph.nodes.length === 0) {
+  if (report.nodes === 0) {
     warn(
-      config.version === 1
+      report.selection.configVersion === 1
         ? "index found 0 nodes — config v1 keeps legacy discovery and does not apply include; use 'semctx setup --polyglot' in a new workspace or migrate explicitly to config v2."
         : "index found 0 nodes — review v2 include/exclude globs and language modes, then re-run 'semctx setup'.",
     );
   }
-  if (setupReady) {
+
+  const coverage = report.indexHealth.coverage as { status?: string } | undefined;
+  const coverageStatus = coverage?.status;
+  const reasons = report.indexHealth.reasonSummary as readonly unknown[] | undefined;
+  if (report.setupReady) {
     const analysisQualification =
-      config.version === 2 && health.coverage.status !== "complete"
-        ? ` (analysis ${health.coverage.status})`
+      coverageStatus !== undefined && coverageStatus !== "complete"
+        ? ` (analysis ${coverageStatus})`
         : "";
     success(`ready${analysisQualification}`);
-    if (config.version === 2 && health.coverage.status !== "complete") {
+    if (coverageStatus !== undefined && coverageStatus !== "complete") {
       warn(
         "setup succeeded, but incomplete analysis cannot justify negative conclusions; "
         + "run 'semctx index-health --json' for the exact gates and reasons.",
@@ -194,13 +171,17 @@ export function runSetup(root: string, args: ParsedArgs): number {
     info(c.dim("Next: open a change and verify it —"));
     info(c.dim("  semctx change open change.my-change --preserves <invariant-ids>"));
     info(c.dim("  # edit code, then:  semctx change verify change.my-change --base origin/main"));
-  } else if (!check.ok) {
+    info(c.dim("Plugin path: MCP semctx_setup { repositoryRoot, confirm: true }"));
+  } else if (!report.check.ok) {
     fail("setup completed with model issues — run 'semctx semantic check' for details");
   } else {
     fail(
       "setup completed, but analysis is not ready — "
       + "run 'semctx index-health --json' for the exact gates and reasons.",
     );
+    if (reasons !== undefined && reasons.length > 0) {
+      info(c.dim(`  reasons: ${reasons.map(String).join(", ")}`));
+    }
   }
-  return setupReady ? 0 : 1;
+  return report.setupReady ? 0 : 1;
 }

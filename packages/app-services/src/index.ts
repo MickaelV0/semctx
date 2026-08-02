@@ -7,6 +7,26 @@ export type {
   CliCompatibilityReason,
   CliCompatibilityReport,
 } from "./cli-compatibility";
+export {
+  SETUP_POLYGLOT_V1_REFUSE_NEXT_STEPS,
+  SETUP_POLYGLOT_V1_REFUSE_REASON,
+  SETUP_POLYGLOT_V1_REFUSE_REASON_CODE,
+  buildPolyglotRequiresConfigV2Report,
+  computeSetupReadiness,
+  evaluatePolyglotSetupPolicy,
+  setupRepository,
+} from "./setup";
+export type {
+  ComputeSetupReadinessInput,
+  EvaluatePolyglotSetupPolicyInput,
+  SetupPhaseEvent,
+  SetupRefuseReasonCode,
+  SetupRefusedReport,
+  SetupRepositoryOptions,
+  SetupRepositoryReport,
+  SetupResult,
+  SetupVerdict,
+} from "./setup";
 export { openReadyRepository } from "./readiness";
 export type { RepositoryAnalysis, RepositoryIndex } from "./indexing";
 export { indexHealth } from "./index-health";

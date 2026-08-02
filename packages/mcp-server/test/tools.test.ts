@@ -53,13 +53,13 @@ describe("readiness policy", () => {
         filter: (src) => !src.includes(".semctx") && !src.includes("node_modules"),
       });
 
-      expect(() => inspectTool(uninitialized, { query: "reservation" })).toThrow("run 'semctx setup' first");
+      expect(() => inspectTool(uninitialized, { query: "reservation" })).toThrow("run MCP semctx_setup (confirm:true) or 'semctx setup' first");
       expect(() => verifyChangeTool(uninitialized, { gitDiff: "diff --git a/a.ts b/a.ts" })).toThrow(
-        "run 'semctx setup' first",
+        "run MCP semctx_setup (confirm:true) or 'semctx setup' first",
       );
       await expectFailure(
         () => prepareTaskTool(uninitialized, { task: "reservation" }),
-        "run 'semctx setup' first",
+        "run MCP semctx_setup (confirm:true) or 'semctx setup' first",
       );
       expect(existsSync(join(uninitialized, ".semctx"))).toBe(false);
     } finally {
@@ -80,7 +80,10 @@ describe("readiness policy", () => {
         initWorkspace(unindexed);
         const database = dbPath(unindexed);
         expect(existsSync(database)).toBe(false);
-        await expectFailure(() => call(unindexed), "run 'semctx setup' first");
+        await expectFailure(
+          () => call(unindexed),
+          "run MCP semctx_setup (confirm:true) or 'semctx setup' first",
+        );
         expect(existsSync(database)).toBe(false);
         expect(existsSync(`${database}-wal`)).toBe(false);
         expect(existsSync(`${database}-shm`)).toBe(false);

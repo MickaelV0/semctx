@@ -32,6 +32,7 @@ import {
   SemanticNodeSchema,
 } from "@semantic-context/semantic-model";
 import { TargetArchitectureArtifactV1Schema } from "@semantic-context/semantic-engine";
+import { SETUP_POLYGLOT_V1_REFUSE_REASON_CODE } from "@semantic-context/app-services";
 import { ControlExplorerOutputSchema } from "./control-explorer";
 import { mcpSchema } from "./schema-boundary";
 import type { SemctxToolName } from "./tool-contract";
@@ -663,6 +664,180 @@ export const TOOL_OUTPUT_SCHEMAS = {
   semctx_handoff: HandoffSchema,
   semctx_resume: ResumeSchema,
   semctx_index_health: IndexHealthReportSchema,
+  semctx_setup: z.union([
+    z.object({
+      schemaVersion: described(z.literal(1), "Setup preflight schema version."),
+      kind: described(z.literal("setup_preflight"), "Dry preflight when confirm is not true."),
+      repositoryRoot: described(z.string(), "Absolute repository root."),
+      initialized: described(z.boolean(), "Whether .semctx/ already exists."),
+      confirmRequired: described(z.literal(true), "Caller must re-invoke with confirm:true to write."),
+      requiresUserAuthorization: described(
+        z.literal(true),
+        "Human authorization is required before writes; next.arguments never embeds confirm:true.",
+      ),
+      message: described(z.string(), "Human-readable next step (not an auto-follow write payload)."),
+      next: described(z.object({
+        tool: described(z.literal("semctx_setup"), "Tool to call after user authorisation."),
+        arguments: described(z.object({
+          repositoryRoot: described(z.string(), "Absolute repository root."),
+          polyglot: described(z.boolean().optional(), "Optional polyglot config for a fresh workspace."),
+        }).strict(), "Argument template without confirm — host must set confirm:true only after user yes."),
+      }).strict(), "Suggested next MCP call template (no auto-confirm)."),
+    }).strict(),
+    z.object({
+      schemaVersion: described(z.literal(1), "Setup refused schema version."),
+      kind: described(
+        z.literal("setup_refused"),
+        "Policy refusal before mutation (e.g. polyglot against existing v1 config). Treat as failure.",
+      ),
+      repositoryRoot: described(z.string(), "Absolute repository root."),
+      reasonCode: described(
+        z.literal(SETUP_POLYGLOT_V1_REFUSE_REASON_CODE),
+        "Domain policy refuse code (not an MCP catalogue error code).",
+      ),
+      reason: described(z.string(), "Actionable refusal reason."),
+      configVersion: described(z.number().int(), "Existing config version that blocked the request."),
+      polyglot: described(z.boolean(), "Whether polyglot was requested."),
+      alreadyInitialized: described(z.literal(true), "Workspace was already initialized."),
+      setupReady: described(z.literal(false), "Never ready on refusal."),
+      analysisReady: described(z.literal(false), "Never analysis-ready on refusal."),
+      verdict: described(
+        z.literal("SETUP_REFUSED"),
+        "Namespaced failure signal (not Plane C READY/BLOCKED).",
+      ),
+      nextSteps: described(z.array(z.string()), "Safe migration / next-action guidance."),
+    }).strict(),
+    z.object({
+      schemaVersion: described(z.literal(1), "Setup report schema version."),
+      kind: described(z.literal("setup"), "Full setup report after confirm:true."),
+      repositoryRoot: described(z.string(), "Absolute repository root."),
+      configWritten: described(z.boolean(), "Whether a fresh config was written."),
+      semctxDir: described(
+        z.string(),
+        "Absolute path to the .semctx/ workspace directory (not config.json).",
+      ),
+      alreadyInitialized: described(z.boolean(), "Whether the workspace was already initialized."),
+      polyglot: described(z.boolean(), "Whether polyglot selection was requested."),
+      sourceFiles: described(z.number().int().nonnegative(), "TypeScript source file count (legacy metric)."),
+      selectedFiles: described(z.number().int().nonnegative(), "Files selected for analysis."),
+      selection: described(z.object({
+        configVersion: described(z.number().int(), "Config schema version."),
+        mode: described(z.string(), "Selection mode label."),
+        selectedByLanguage: described(z.record(z.string(), z.number()), "Selected file counts by language."),
+        excluded: described(z.number().int().nonnegative(), "Excluded candidates."),
+        disabled: described(z.number().int().nonnegative(), "Disabled candidates."),
+        unsupported: described(z.number().int().nonnegative(), "Unsupported candidates."),
+        failed: described(z.number().int().nonnegative(), "Failed candidates."),
+      }).strict(), "Discovery selection summary."),
+      nodes: described(z.number().int().nonnegative(), "Graph node count."),
+      edges: described(z.number().int().nonnegative(), "Graph edge count."),
+      claims: described(z.number().int().nonnegative(), "Claim count."),
+      freshnessSeal: described(z.unknown(), "Control freshness seal payload."),
+      indexHealth: described(z.object({
+        binding: described(
+          z.object({
+            status: described(
+              z.enum(["valid", "invalid", "absent"]),
+              "Index binding status.",
+            ),
+          }).passthrough(),
+          "Index binding projection.",
+        ),
+        freshness: described(
+          z.object({
+            canRunHighRiskControl: described(
+              z.boolean(),
+              "Whether high-risk control is admitted by freshness.",
+            ),
+          }).passthrough(),
+          "Freshness projection.",
+        ),
+        coverage: described(
+          z.object({
+            status: described(
+              z.enum(["complete", "partial", "insufficient"]),
+              "Analysis coverage status.",
+            ),
+          }).passthrough(),
+          "Coverage projection.",
+        ),
+        workspaceDiagnostics: described(z.array(z.unknown()), "Workspace diagnostics."),
+        reasonSummary: described(z.array(z.unknown()), "Canonical health reasons."),
+      }).strict(), "Index health projection (subset required for agent gate consistency)."),
+      semanticFilesCreated: described(z.number().int().nonnegative(), "Scaffolded semantic files count."),
+      gitignore: described(
+        z.enum(["create", "update", "present"]),
+        "Gitignore scaffold action.",
+      ),
+      check: described(z.object({
+        ok: described(z.boolean(), "Whether the semantic model check passed."),
+        nodes: described(z.number().int().nonnegative(), "Semantic node count."),
+        changes: described(z.number().int().nonnegative(), "Change contract count."),
+        errors: described(z.number().int().nonnegative(), "Semantic check error count."),
+      }).strict(), "Semantic model check summary."),
+      setupReady: described(z.boolean(), "Whether setup completed in a ready state."),
+      analysisReady: described(z.boolean(), "Whether Plane A analysis is ready for high-risk control."),
+      verdict: described(
+        z.enum(["SETUP_READY", "SETUP_NOT_READY"]),
+        "Namespaced readiness (not Plane C). SETUP_NOT_READY is a domain failure in the body (isError stays false; agents must read verdict).",
+      ),
+    }).strict().superRefine((report, ctx) => {
+      // Agent success gate must match domain analysisReady / setupReady invariants.
+      const ready = report.verdict === "SETUP_READY";
+      const derivedSetupReady = report.check.ok && report.analysisReady;
+      if (report.setupReady !== derivedSetupReady) {
+        ctx.addIssue({
+          code: "custom",
+          message: "setupReady must equal (check.ok && analysisReady)",
+          path: ["setupReady"],
+        });
+      }
+      if (report.setupReady !== ready) {
+        ctx.addIssue({
+          code: "custom",
+          message: "setupReady must equal (verdict === SETUP_READY)",
+          path: ["setupReady"],
+        });
+      }
+      if (ready) {
+        if (report.analysisReady !== true) {
+          ctx.addIssue({
+            code: "custom",
+            message: "SETUP_READY requires analysisReady true",
+            path: ["analysisReady"],
+          });
+        }
+        if (report.check.ok !== true) {
+          ctx.addIssue({
+            code: "custom",
+            message: "SETUP_READY requires check.ok true",
+            path: ["check", "ok"],
+          });
+        }
+        if (report.indexHealth.binding.status !== "valid") {
+          ctx.addIssue({
+            code: "custom",
+            message: "SETUP_READY requires indexHealth.binding.status valid",
+            path: ["indexHealth", "binding", "status"],
+          });
+        }
+        if (report.indexHealth.freshness.canRunHighRiskControl !== true) {
+          ctx.addIssue({
+            code: "custom",
+            message: "SETUP_READY requires freshness.canRunHighRiskControl true",
+            path: ["indexHealth", "freshness", "canRunHighRiskControl"],
+          });
+        }
+        if (report.indexHealth.coverage.status === "insufficient") {
+          ctx.addIssue({
+            code: "custom",
+            message: "SETUP_READY forbids indexHealth.coverage.status === insufficient",
+            path: ["indexHealth", "coverage", "status"],
+          });
+        }
+      }
+    }),
+  ]),
   semctx_cli_compatibility: z.object({
     schemaVersion: described(z.literal(1), "CLI compatibility schema version."),
     kind: described(z.literal("cli_compatibility"), "CLI compatibility report kind."),
