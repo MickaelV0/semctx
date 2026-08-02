@@ -99,11 +99,6 @@ export interface SetupRepositoryReport {
 }
 
 /**
- * Policy refusal before mutation (e.g. polyglot against an existing v1 config).
- * Returned instead of throwing so MCP can surface actionable guidance in structuredContent
- * (public SemctxError messages are stripped at the MCP catalogue boundary).
- */
-/**
  * Domain policy refuse codes (structured success path — not MCP catalogue error codes).
  * Keep MCP tool descriptions and TOOL_OUTPUT_SCHEMAS in lockstep with this union.
  */
@@ -112,6 +107,17 @@ export type SetupRefuseReasonCode = "POLYGLOT_REQUIRES_CONFIG_V2";
 /** Canonical polyglot-vs-v1 refuse code (shared with MCP metadata). */
 export const SETUP_POLYGLOT_V1_REFUSE_REASON_CODE: SetupRefuseReasonCode =
   "POLYGLOT_REQUIRES_CONFIG_V2";
+
+/** Single source of truth for the polyglot-on-non-v2 refusal reason string. */
+export const SETUP_POLYGLOT_V1_REFUSE_REASON =
+  "polyglot does not overwrite an existing v1 config; migrate .semctx/config.json explicitly to config version 2";
+
+/** Single source of truth for migration guidance on polyglot-on-non-v2 refuse. */
+export const SETUP_POLYGLOT_V1_REFUSE_NEXT_STEPS: readonly string[] = [
+  "Open .semctx/config.json and migrate to config version 2 (polyglot / glob selection), or remove .semctx/ and re-run setup with polyglot on a fresh workspace",
+  "Do not pass polyglot:true against a v1 workspace expecting an in-place overwrite",
+  "After migration, re-run setup without expecting config overwrite of authored .sem files",
+];
 
 export interface SetupRefusedReport {
   schemaVersion: 1;
@@ -130,6 +136,59 @@ export interface SetupRefusedReport {
 }
 
 export type SetupResult = SetupRepositoryReport | SetupRefusedReport;
+
+/** Inputs for the pure polyglot-vs-config-version policy evaluator. */
+export interface EvaluatePolyglotSetupPolicyInput {
+  repositoryRoot: string;
+  /** Whether the caller requested polyglot v2 glob selection. */
+  polyglot: boolean;
+  /** Whether `.semctx/` already exists (config will not be overwritten). */
+  alreadyInitialized: boolean;
+  /**
+   * Loaded config version. Required when `alreadyInitialized` is true and policy
+   * may refuse; ignored when not initialized or polyglot is off.
+   */
+  configVersion: number;
+}
+
+/**
+ * Pure polyglot-vs-config-version policy: owns the predicate and the full
+ * `SetupRefusedReport` payload. Transports (CLI, MCP preflight, MCP confirm)
+ * must call this instead of reconstructing reason / verdict / nextSteps.
+ *
+ * Returns `null` when setup may proceed; never performs I/O.
+ */
+export function evaluatePolyglotSetupPolicy(
+  input: EvaluatePolyglotSetupPolicyInput,
+): SetupRefusedReport | null {
+  if (!input.polyglot || !input.alreadyInitialized) return null;
+  if (input.configVersion === 2) return null;
+  return buildPolyglotRequiresConfigV2Report(input.repositoryRoot, input.configVersion);
+}
+
+/**
+ * Construct the complete polyglot-on-non-v2 refusal report.
+ * Prefer `evaluatePolyglotSetupPolicy` at call sites; exported for tests/parity.
+ */
+export function buildPolyglotRequiresConfigV2Report(
+  repositoryRoot: string,
+  configVersion: number,
+): SetupRefusedReport {
+  return {
+    schemaVersion: 1,
+    kind: "setup_refused",
+    repositoryRoot,
+    reasonCode: SETUP_POLYGLOT_V1_REFUSE_REASON_CODE,
+    reason: SETUP_POLYGLOT_V1_REFUSE_REASON,
+    configVersion,
+    polyglot: true,
+    alreadyInitialized: true,
+    setupReady: false,
+    analysisReady: false,
+    verdict: "SETUP_REFUSED",
+    nextSteps: [...SETUP_POLYGLOT_V1_REFUSE_NEXT_STEPS],
+  };
+}
 
 /** Layout-aware default config: monorepos also index package sources. */
 function smartConfig(root: string, polyglot: boolean): SemctxConfig {
@@ -171,26 +230,14 @@ export function setupRepository(
   }
 
   const config = loadConfig(root);
-  if (already && polyglot && config.version !== 2) {
-    return {
-      schemaVersion: 1,
-      kind: "setup_refused",
-      repositoryRoot: root,
-      reasonCode: SETUP_POLYGLOT_V1_REFUSE_REASON_CODE,
-      reason:
-        "polyglot does not overwrite an existing v1 config; migrate .semctx/config.json explicitly to config version 2",
-      configVersion: config.version,
-      polyglot: true,
-      alreadyInitialized: true,
-      setupReady: false,
-      analysisReady: false,
-      verdict: "SETUP_REFUSED",
-      nextSteps: [
-        "Open .semctx/config.json and migrate to config version 2 (polyglot / glob selection), or remove .semctx/ and re-run setup with polyglot on a fresh workspace",
-        "Do not pass polyglot:true against a v1 workspace expecting an in-place overwrite",
-        "After migration, re-run setup without expecting config overwrite of authored .sem files",
-      ],
-    };
+  const refused = evaluatePolyglotSetupPolicy({
+    repositoryRoot: root,
+    polyglot,
+    alreadyInitialized: already,
+    configVersion: config.version,
+  });
+  if (refused !== null) {
+    return refused;
   }
 
   onPhase?.({ phase: "config", detail: configWritten ? "written" : "kept" });

@@ -89,8 +89,7 @@ const SQL_FACT_KINDS = [
   "related_to",
 ] as const;
 
-interface RegisteredCapability
-  extends Omit<PlaneACapabilityRequirement, "producerConfigurationDigest"> {}
+type RegisteredCapability = Omit<PlaneACapabilityRequirement, "producerConfigurationDigest">;
 
 interface CapabilityRegistration {
   readonly configVersions: readonly (1 | 2)[];

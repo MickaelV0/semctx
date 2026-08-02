@@ -30,7 +30,7 @@ function normalizeTag(raw: string): MarkerTag {
   return lower as MarkerTag;
 }
 
-/** Strip JSDoc framing (`/**`, `*​/`, leading `* `) so tags are easy to scan. */
+/** Strip JSDoc opening, closing, and leading-asterisk framing so tags are easy to scan. */
 export function stripJsDoc(comment: string): string {
   return comment
     .replace(/^\s*\/\*\*?/, "")

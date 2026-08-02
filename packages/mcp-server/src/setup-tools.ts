@@ -4,6 +4,7 @@ import {
 } from "@semantic-context/repository-store";
 import {
   SETUP_POLYGLOT_V1_REFUSE_REASON_CODE,
+  evaluatePolyglotSetupPolicy,
   setupRepository,
   type SetupRepositoryReport,
   type SetupRefusedReport,
@@ -54,28 +55,6 @@ export function isSetupAgentSuccess(body: SetupToolResult): boolean {
   return body.kind === "setup" && body.verdict === "SETUP_READY";
 }
 
-function polyglotV1Refused(root: string, configVersion: number): SetupRefusedReport {
-  return {
-    schemaVersion: 1,
-    kind: "setup_refused",
-    repositoryRoot: root,
-    reasonCode: SETUP_POLYGLOT_V1_REFUSE_REASON_CODE,
-    reason:
-      "polyglot does not overwrite an existing v1 config; migrate .semctx/config.json explicitly to config version 2",
-    configVersion,
-    polyglot: true,
-    alreadyInitialized: true,
-    setupReady: false,
-    analysisReady: false,
-    verdict: "SETUP_REFUSED",
-    nextSteps: [
-      "Open .semctx/config.json and migrate to config version 2 (polyglot / glob selection), or remove .semctx/ and re-run setup with polyglot on a fresh workspace",
-      "Do not pass polyglot:true against a v1 workspace expecting an in-place overwrite",
-      "After migration, re-run setup without expecting config overwrite of authored .sem files",
-    ],
-  };
-}
-
 /**
  * Plugin-native workspace bootstrap.
  *
@@ -87,6 +66,9 @@ function polyglotV1Refused(root: string, configVersion: number): SetupRefusedRep
  * (e.g. CONFIG_INVALID on unreadable config during polyglot preflight policy check):
  * - `kind: "setup" && verdict: "SETUP_READY"` → agent success
  * - `setup_refused` / `SETUP_NOT_READY` → domain failure; read reason/nextSteps/indexHealth
+ *
+ * Polyglot-vs-config-version refusal is owned by app-services (`evaluatePolyglotSetupPolicy`).
+ * This adapter may load config for no-write preflight but must not reconstruct refuse payloads.
  *
  * Verdict values are namespaced (`SETUP_*`) so they never collide with Plane C `READY`/`BLOCKED`.
  */
@@ -101,8 +83,14 @@ export function setupTool(
     // rethrow so MCP maps CONFIG_INVALID via the public catalogue (ADR 0012).
     if (initialized && input.polyglot === true) {
       const config = loadConfig(root);
-      if (config.version !== 2) {
-        return polyglotV1Refused(root, config.version);
+      const refused = evaluatePolyglotSetupPolicy({
+        repositoryRoot: root,
+        polyglot: true,
+        alreadyInitialized: true,
+        configVersion: config.version,
+      });
+      if (refused !== null) {
+        return refused;
       }
     }
     return {

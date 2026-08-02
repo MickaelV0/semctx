@@ -11,6 +11,8 @@ import {
 import type { Diagnostic } from "./diagnostics";
 
 const SHA256 = /^sha256:[0-9a-f]{64}$/;
+// The control-code lower bound is intentional: this validator accepts the full ASCII range.
+// eslint-disable-next-line no-control-regex
 const ASCII = /^[\x00-\x7f]*$/;
 const PRINTABLE_ASCII = /^[\x20-\x7e]*$/;
 const BARE_TOKEN = /^[A-Za-z0-9._:/@+-]+$/;

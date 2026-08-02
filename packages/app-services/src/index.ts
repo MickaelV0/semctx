@@ -8,10 +8,15 @@ export type {
   CliCompatibilityReport,
 } from "./cli-compatibility";
 export {
+  SETUP_POLYGLOT_V1_REFUSE_NEXT_STEPS,
+  SETUP_POLYGLOT_V1_REFUSE_REASON,
   SETUP_POLYGLOT_V1_REFUSE_REASON_CODE,
+  buildPolyglotRequiresConfigV2Report,
+  evaluatePolyglotSetupPolicy,
   setupRepository,
 } from "./setup";
 export type {
+  EvaluatePolyglotSetupPolicyInput,
   SetupPhaseEvent,
   SetupRefuseReasonCode,
   SetupRefusedReport,

@@ -182,6 +182,35 @@ describe("semctx_setup MCP tool", () => {
     expect(TOOL_OUTPUT_SCHEMAS.semctx_setup.safeParse(report).success).toBe(true);
   });
 
+  test("preflight and confirmed setup expose identical polyglot refusal contract", () => {
+    // Deep parity: MCP preflight and confirm paths must both consume app-services
+    // evaluatePolyglotSetupPolicy — no second refuse literal in the transport.
+    root = freshRepo();
+    saveConfig(root, createDefaultConfig(root));
+    const preflight = assertKind(
+      setupTool(root, { polyglot: true }),
+      "setup_refused",
+    );
+    const confirmed = assertKind(
+      setupTool(root, { confirm: true, polyglot: true, now: "2026-08-01T12:00:00.000Z" }),
+      "setup_refused",
+    );
+    expect(preflight).toEqual(confirmed);
+    expect(preflight.reasonCode).toBe(SETUP_POLYGLOT_V1_REFUSE_REASON_CODE);
+    expect(preflight.reason).toBe(confirmed.reason);
+    expect(preflight.nextSteps).toEqual(confirmed.nextSteps);
+    expect(preflight.verdict).toBe("SETUP_REFUSED");
+    expect(preflight.configVersion).toBe(1);
+    expect(preflight.setupReady).toBe(false);
+    expect(preflight.analysisReady).toBe(false);
+    expect(preflight.alreadyInitialized).toBe(true);
+    expect(preflight.polyglot).toBe(true);
+    expect(TOOL_OUTPUT_SCHEMAS.semctx_setup.safeParse(preflight).success).toBe(true);
+    expect(TOOL_OUTPUT_SCHEMAS.semctx_setup.safeParse(confirmed).success).toBe(true);
+    // No writes on either path for this refuse.
+    expect(isInitialized(root)).toBe(true);
+  });
+
   test("not-ready analysis surfaces verdict SETUP_NOT_READY", () => {
     root = mkdtempSync(join(tmpdir(), "semctx-mcp-setup-nr-"));
     mkdirSync(join(root, "src"), { recursive: true });

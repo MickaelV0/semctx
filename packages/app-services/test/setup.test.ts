@@ -13,6 +13,11 @@ import { createDefaultConfig, createGlobSelectionConfig } from "@semantic-contex
 import { isInitialized, loadConfig, saveConfig } from "@semantic-context/repository-store";
 import { SAMPLE_REPO } from "@semantic-context/test-fixtures";
 import {
+  SETUP_POLYGLOT_V1_REFUSE_NEXT_STEPS,
+  SETUP_POLYGLOT_V1_REFUSE_REASON,
+  SETUP_POLYGLOT_V1_REFUSE_REASON_CODE,
+  buildPolyglotRequiresConfigV2Report,
+  evaluatePolyglotSetupPolicy,
   setupRepository,
   type SetupPhaseEvent,
   type SetupRepositoryReport,
@@ -182,6 +187,42 @@ describe("setupRepository (shared SSoT)", () => {
     expect(report.nextSteps.length).toBeGreaterThan(0);
     expect(report.reason).toMatch(/migrate/i);
     expect(loadConfig(root).version).toBe(1);
+    // setupRepository must surface the pure policy constructor payload (no local drift).
+    expect(report).toEqual(buildPolyglotRequiresConfigV2Report(root, 1));
+  });
+
+  it("evaluatePolyglotSetupPolicy owns predicate + full refuse payload (pure, no I/O)", () => {
+    expect(evaluatePolyglotSetupPolicy({
+      repositoryRoot: "/tmp/r",
+      polyglot: false,
+      alreadyInitialized: true,
+      configVersion: 1,
+    })).toBeNull();
+    expect(evaluatePolyglotSetupPolicy({
+      repositoryRoot: "/tmp/r",
+      polyglot: true,
+      alreadyInitialized: false,
+      configVersion: 1,
+    })).toBeNull();
+    expect(evaluatePolyglotSetupPolicy({
+      repositoryRoot: "/tmp/r",
+      polyglot: true,
+      alreadyInitialized: true,
+      configVersion: 2,
+    })).toBeNull();
+
+    const refused = evaluatePolyglotSetupPolicy({
+      repositoryRoot: "/tmp/r",
+      polyglot: true,
+      alreadyInitialized: true,
+      configVersion: 1,
+    });
+    expect(refused).not.toBeNull();
+    expect(refused).toEqual(buildPolyglotRequiresConfigV2Report("/tmp/r", 1));
+    expect(refused!.reasonCode).toBe(SETUP_POLYGLOT_V1_REFUSE_REASON_CODE);
+    expect(refused!.reason).toBe(SETUP_POLYGLOT_V1_REFUSE_REASON);
+    expect(refused!.nextSteps).toEqual([...SETUP_POLYGLOT_V1_REFUSE_NEXT_STEPS]);
+    expect(refused!.verdict).toBe("SETUP_REFUSED");
   });
 
   it("reports SETUP_NOT_READY when selected v2 language is disabled", () => {

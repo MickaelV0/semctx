@@ -640,6 +640,8 @@ function verifyCodexInstall(
     if (installed?.installed !== true) error = "plugin is not installed";
     else if (installed.enabled !== true) error = "plugin is installed but not enabled";
     else if (installed.version !== packageJson.version) {
+      // Host JSON is untrusted; preserve its existing diagnostic string representation.
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string
       error = `expected plugin v${packageJson.version}, found v${String(installed.version ?? "unknown")}`;
     }
   }
@@ -752,6 +754,8 @@ function verifyClaudeInstall(
     if (installed === undefined) error = "user-scoped plugin is not installed";
     else if (installed.enabled !== true) error = "plugin is installed but not enabled";
     else if (installed.version !== packageJson.version) {
+      // Host JSON is untrusted; preserve its existing diagnostic string representation.
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string
       error = `expected plugin v${packageJson.version}, found v${String(installed.version ?? "unknown")}`;
     }
   }

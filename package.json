@@ -29,15 +29,26 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json",
-    "test": "bun test --timeout 60000 packages apps plugins",
+    "typecheck": "bun run typecheck:product && bun run typecheck:tooling",
+    "typecheck:product": "tsc -p tsconfig.json",
+    "typecheck:tooling": "tsc -p scripts/tsconfig.json && tsc -p plugins/tsconfig.json",
+    "lint": "eslint . --max-warnings 0",
+    "lint:python": "ruff check .",
+    "lint:actions": "zizmor --collect=workflows .",
+    "quality": "bun run typecheck && bun run lint && bun run lint:python && bun run lint:actions",
+    "test": "bun test --timeout 60000 packages apps plugins scripts",
+    "verify:pr": "bun scripts/verify-pr.ts",
     "plugin:build": "bun scripts/build-plugin-runtime.ts",
     "plugin:check": "bun scripts/build-plugin-runtime.ts --check",
     "cli:build": "bun scripts/build-cli-package.ts",
     "semctx": "bun apps/cli/src/index.ts"
   },
   "devDependencies": {
+    "@eslint/js": "10.0.1",
     "@types/bun": "^1.1.14",
-    "typescript": "^5.6.3"
+    "eslint": "10.8.0",
+    "globals": "17.8.0",
+    "typescript": "^5.6.3",
+    "typescript-eslint": "8.65.0"
   }
 }
