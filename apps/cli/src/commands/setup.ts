@@ -1,5 +1,10 @@
-import { setupRepository } from "@semantic-context/app-services";
-import { runPreset } from "./preset";
+import {
+  evaluatePolyglotSetupPolicy,
+  setupRepository,
+  type SetupRefusedReport,
+} from "@semantic-context/app-services";
+import { isInitialized, loadConfig } from "@semantic-context/repository-store";
+import { runPreset, validatePreset } from "./preset";
 import type { ParsedArgs } from "../args";
 import { flagBool, flagString } from "../args";
 import { info, heading, success, warn, fail, json, c, nowIso } from "../output";
@@ -19,19 +24,40 @@ export function runSetup(root: string, args: ParsedArgs): number {
 
   if (!asJson) heading(`semctx setup  ${c.dim("·")}  ${root}`);
 
+  let policyRefusal: SetupRefusedReport | null = null;
+
   // Optional host presets (GitHub Action / Claude Code files) remain CLI-only.
   if (preset !== undefined) {
-    if (!asJson) info(c.dim(`  applying preset "${preset}"…`));
-    const code = runPreset(root, preset, args);
-    if (code !== 0) return code;
+    validatePreset(preset);
+    const alreadyInitialized = isInitialized(root);
+    if (alreadyInitialized) {
+      const config = loadConfig(root);
+      policyRefusal = evaluatePolyglotSetupPolicy({
+        repositoryRoot: root,
+        polyglot,
+        alreadyInitialized,
+        configVersion: config.version,
+      });
+    }
+
+    if (policyRefusal === null) {
+      if (!asJson) info(c.dim(`  applying preset "${preset}"…`));
+      const code = runPreset(root, preset, args, {
+        includeConfig: false,
+        emitOutput: false,
+      });
+      if (code !== 0) return code;
+    }
   }
 
-  const report = setupRepository(root, {
-    polyglot,
-    now: nowIso(),
-    onPhase: asJson
-      ? undefined
-      : (event) => {
+  const report = policyRefusal ?? setupRepository(
+    root,
+    {
+      polyglot,
+      now: nowIso(),
+      onPhase: asJson
+        ? undefined
+        : (event) => {
         switch (event.phase) {
           case "config":
             info(
@@ -94,8 +120,9 @@ export function runSetup(root: string, args: ParsedArgs): number {
             }
             return;
         }
-      },
-  });
+        },
+    },
+  );
 
   if (report.kind === "setup_refused") {
     if (asJson) {
@@ -112,7 +139,6 @@ export function runSetup(root: string, args: ParsedArgs): number {
     // Canonical SetupRepositoryReport + CLI-only preset annotation.
     json({
       ...report,
-      configWritten: report.configWritten || preset !== undefined,
       preset: preset ?? null,
     });
     return report.setupReady ? 0 : 1;
