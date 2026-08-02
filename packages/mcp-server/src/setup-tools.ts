@@ -25,12 +25,17 @@ export interface SetupPreflightReport {
   repositoryRoot: string;
   initialized: boolean;
   confirmRequired: true;
+  /**
+   * Human authorization is required before any write. Structured `next` never
+   * embeds `confirm: true` so agents cannot auto-follow the preflight payload.
+   */
+  requiresUserAuthorization: true;
   message: string;
   next: {
     tool: "semctx_setup";
+    /** Arguments template without confirm — host must set confirm:true only after user yes. */
     arguments: {
       repositoryRoot: string;
-      confirm: true;
       polyglot?: boolean;
     };
   };
@@ -63,12 +68,16 @@ export function isSetupAgentSuccess(body: SetupToolResult): boolean {
  *
  * All outcomes are ordinary schema-valid structured results (ADR 0012: no handler-authored
  * isError / no structuredContent on catalogue errors), except catalogue failures that throw
- * (e.g. CONFIG_INVALID on unreadable config during polyglot preflight policy check):
+ * (e.g. CONFIG_INVALID on unreadable/schema-invalid config when `.semctx/` already exists):
  * - `kind: "setup" && verdict: "SETUP_READY"` → agent success
  * - `setup_refused` / `SETUP_NOT_READY` → domain failure; read reason/nextSteps/indexHealth
  *
  * Polyglot-vs-config-version refusal is owned by app-services (`evaluatePolyglotSetupPolicy`).
  * This adapter may load config for no-write preflight but must not reconstruct refuse payloads.
+ *
+ * Preflight never embeds `confirm: true` in `next.arguments` (human authorization is not
+ * machine-auto-followable). When initialized, config is always loaded so invalid config
+ * fails closed as catalogue CONFIG_INVALID instead of a healthy preflight.
  *
  * Verdict values are namespaced (`SETUP_*`) so they never collide with Plane C `READY`/`BLOCKED`.
  */
@@ -78,19 +87,21 @@ export function setupTool(
 ): SetupToolResult {
   if (input.confirm !== true) {
     const initialized = isInitialized(root);
-    // Non-mutating policy preview: polyglot against existing non-v2 is refused without writes.
-    // Unreadable / schema-invalid config must NOT fall through to a healthy preflight —
-    // rethrow so MCP maps CONFIG_INVALID via the public catalogue (ADR 0012).
-    if (initialized && input.polyglot === true) {
+    // When `.semctx/` exists, always load config: unreadable/schema-invalid must NOT fall
+    // through to a healthy preflight with a suggested next call. Rethrow → MCP catalogue
+    // CONFIG_INVALID (ADR 0012). Polyglot refuse is pure policy on the loaded version.
+    if (initialized) {
       const config = loadConfig(root);
-      const refused = evaluatePolyglotSetupPolicy({
-        repositoryRoot: root,
-        polyglot: true,
-        alreadyInitialized: true,
-        configVersion: config.version,
-      });
-      if (refused !== null) {
-        return refused;
+      if (input.polyglot === true) {
+        const refused = evaluatePolyglotSetupPolicy({
+          repositoryRoot: root,
+          polyglot: true,
+          alreadyInitialized: true,
+          configVersion: config.version,
+        });
+        if (refused !== null) {
+          return refused;
+        }
       }
     }
     return {
@@ -99,14 +110,15 @@ export function setupTool(
       repositoryRoot: root,
       initialized,
       confirmRequired: true,
+      requiresUserAuthorization: true,
       message: initialized
-        ? "Workspace already has .semctx/. Re-run with confirm:true to re-index and re-validate (idempotent; does not overwrite authored .sem files or an existing config). Preflight only — no writes performed."
-        : "Workspace is not initialized. Re-run with confirm:true to write .semctx/, scaffold semantic files, and build the deterministic index. No global semctx package install is required when using the plugin MCP.",
+        ? "Workspace already has .semctx/. Preflight only — no writes. After the user explicitly authorises writes, re-call semctx_setup with confirm:true to re-index and re-validate (idempotent; does not overwrite authored .sem files or an existing config). Do not auto-follow this response as a write."
+        : "Workspace is not initialized. Preflight only — no writes. After the user explicitly authorises writes, re-call semctx_setup with confirm:true to write .semctx/, scaffold semantic files, and build the deterministic index. Do not auto-follow this response as a write. No global semctx package install is required when using the plugin MCP.",
       next: {
         tool: "semctx_setup",
         arguments: {
           repositoryRoot: root,
-          confirm: true,
+          // confirm intentionally omitted — must be set by the host after user authorisation
           ...(input.polyglot === true ? { polyglot: true } : {}),
         },
       },

@@ -12,10 +12,12 @@ export {
   SETUP_POLYGLOT_V1_REFUSE_REASON,
   SETUP_POLYGLOT_V1_REFUSE_REASON_CODE,
   buildPolyglotRequiresConfigV2Report,
+  computeSetupReadiness,
   evaluatePolyglotSetupPolicy,
   setupRepository,
 } from "./setup";
 export type {
+  ComputeSetupReadinessInput,
   EvaluatePolyglotSetupPolicyInput,
   SetupPhaseEvent,
   SetupRefuseReasonCode,

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
@@ -9,6 +9,7 @@ import { SAMPLE_REPO } from "@semantic-context/test-fixtures";
 import {
   configPath,
   isInitialized,
+  loadConfig,
   saveConfig,
   semctxDir,
 } from "@semantic-context/repository-store";
@@ -75,11 +76,26 @@ describe("semctx_setup MCP tool", () => {
     return dir;
   }
 
+  function expectConfigInvalid(run: () => unknown): void {
+    try {
+      run();
+      expect.unreachable("expected CONFIG_INVALID throw");
+    } catch (error) {
+      expect(isSemctxError(error)).toBe(true);
+      expect(isSemctxError(error) && error.code).toBe("CONFIG_INVALID");
+    }
+  }
+
   test("preflight refuses writes without confirm:true", () => {
     root = freshRepo();
     const omitted = assertKind(setupTool(root, {}), "setup_preflight");
     expect(omitted.initialized).toBe(false);
     expect(omitted.confirmRequired).toBe(true);
+    expect(omitted.requiresUserAuthorization).toBe(true);
+    // No auto-follow write bait: next.arguments must not embed confirm:true.
+    expect(omitted.next.arguments).toEqual({ repositoryRoot: root });
+    expect("confirm" in omitted.next.arguments).toBe(false);
+    expect(omitted.message).toMatch(/Do not auto-follow/i);
     expect(isSetupDomainFailure(omitted)).toBe(false);
     expect(isSetupAgentSuccess(omitted)).toBe(false);
     expect(isInitialized(root)).toBe(false);
@@ -100,13 +116,16 @@ describe("semctx_setup MCP tool", () => {
 
     const preflight = assertKind(setupTool(root, {}), "setup_preflight");
     expect(preflight.initialized).toBe(true);
+    expect(preflight.requiresUserAuthorization).toBe(true);
     expect(preflight.message).toMatch(/already has \.semctx/);
+    expect("confirm" in preflight.next.arguments).toBe(false);
     expect(TOOL_OUTPUT_SCHEMAS.semctx_setup.safeParse(preflight).success).toBe(true);
   });
 
   test("preflight polyglot on existing v1 refuses without writes", () => {
     root = freshRepo();
     saveConfig(root, createDefaultConfig(root));
+    const before = loadConfig(root);
     const report = assertKind(
       setupTool(root, { polyglot: true }),
       "setup_refused",
@@ -114,43 +133,57 @@ describe("semctx_setup MCP tool", () => {
     expect(report.reasonCode).toBe(SETUP_POLYGLOT_V1_REFUSE_REASON_CODE);
     expect(report.verdict).toBe("SETUP_REFUSED");
     expect(isSetupDomainFailure(report)).toBe(true);
+    expect(isSetupAgentSuccess(report)).toBe(false);
+    expect(loadConfig(root).version).toBe(before.version);
     expect(TOOL_OUTPUT_SCHEMAS.semctx_setup.safeParse(report).success).toBe(true);
   });
 
-  test("preflight polyglot with malformed config fails closed (CONFIG_INVALID, no healthy preflight)", () => {
+  test("preflight with malformed config fails closed even without polyglot (CONFIG_INVALID)", () => {
     root = freshRepo();
-    mkdirSync(semctxDir(root), { recursive: true });
-    writeFileSync(configPath(root), "{not-json\n", "utf8");
-    expect(isInitialized(root)).toBe(true);
-    try {
-      setupTool(root, { polyglot: true });
-      expect.unreachable("expected CONFIG_INVALID throw");
-    } catch (error) {
-      expect(isSemctxError(error)).toBe(true);
-      if (isSemctxError(error)) {
-        expect(error.code).toBe("CONFIG_INVALID");
-      }
-    }
+    const dir = root;
+    mkdirSync(semctxDir(dir), { recursive: true });
+    writeFileSync(configPath(dir), "{not-json\n", "utf8");
+    expect(isInitialized(dir)).toBe(true);
+    expectConfigInvalid(() => setupTool(dir, {}));
+    expectConfigInvalid(() => setupTool(dir, { polyglot: true }));
   });
 
-  test("preflight polyglot with schema-invalid config fails closed (CONFIG_INVALID)", () => {
+  test("preflight with schema-invalid config fails closed even without polyglot (CONFIG_INVALID)", () => {
     root = freshRepo();
-    mkdirSync(semctxDir(root), { recursive: true });
+    const dir = root;
+    mkdirSync(semctxDir(dir), { recursive: true });
     writeFileSync(
-      configPath(root),
+      configPath(dir),
       `${JSON.stringify({ version: 99, not: "a valid config" }, null, 2)}\n`,
       "utf8",
     );
-    expect(isInitialized(root)).toBe(true);
-    try {
-      setupTool(root, { polyglot: true });
-      expect.unreachable("expected CONFIG_INVALID throw");
-    } catch (error) {
-      expect(isSemctxError(error)).toBe(true);
-      if (isSemctxError(error)) {
-        expect(error.code).toBe("CONFIG_INVALID");
-      }
-    }
+    expect(isInitialized(dir)).toBe(true);
+    expectConfigInvalid(() => setupTool(dir, {}));
+    expectConfigInvalid(() => setupTool(dir, { polyglot: true }));
+  });
+
+  test("confirm:true with malformed config is catalogue CONFIG_INVALID", () => {
+    root = freshRepo();
+    const dir = root;
+    mkdirSync(semctxDir(dir), { recursive: true });
+    writeFileSync(configPath(dir), "{not-json\n", "utf8");
+    expectConfigInvalid(() =>
+      setupTool(dir, { confirm: true, now: "2026-08-01T12:00:00.000Z" }),
+    );
+  });
+
+  test("confirm:true with schema-invalid config is catalogue CONFIG_INVALID", () => {
+    root = freshRepo();
+    const dir = root;
+    mkdirSync(semctxDir(dir), { recursive: true });
+    writeFileSync(
+      configPath(dir),
+      `${JSON.stringify({ version: 99, not: "a valid config" }, null, 2)}\n`,
+      "utf8",
+    );
+    expectConfigInvalid(() =>
+      setupTool(dir, { confirm: true, now: "2026-08-01T12:00:00.000Z" }),
+    );
   });
 
   test("confirm:true bootstraps via shared setup path (no global CLI)", () => {
@@ -205,10 +238,13 @@ describe("semctx_setup MCP tool", () => {
     expect(preflight.analysisReady).toBe(false);
     expect(preflight.alreadyInitialized).toBe(true);
     expect(preflight.polyglot).toBe(true);
+    expect(isSetupAgentSuccess(preflight)).toBe(false);
+    expect(isSetupDomainFailure(preflight)).toBe(true);
     expect(TOOL_OUTPUT_SCHEMAS.semctx_setup.safeParse(preflight).success).toBe(true);
     expect(TOOL_OUTPUT_SCHEMAS.semctx_setup.safeParse(confirmed).success).toBe(true);
-    // No writes on either path for this refuse.
-    expect(isInitialized(root)).toBe(true);
+    // No mutation on either refuse path: config stays v1, no graph index created.
+    expect(loadConfig(root).version).toBe(1);
+    expect(existsSync(join(semctxDir(root), "index.sqlite"))).toBe(false);
   });
 
   test("not-ready analysis surfaces verdict SETUP_NOT_READY", () => {

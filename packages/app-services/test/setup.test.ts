@@ -17,6 +17,7 @@ import {
   SETUP_POLYGLOT_V1_REFUSE_REASON,
   SETUP_POLYGLOT_V1_REFUSE_REASON_CODE,
   buildPolyglotRequiresConfigV2Report,
+  computeSetupReadiness,
   evaluatePolyglotSetupPolicy,
   setupRepository,
   type SetupPhaseEvent,
@@ -223,6 +224,87 @@ describe("setupRepository (shared SSoT)", () => {
     expect(refused!.reason).toBe(SETUP_POLYGLOT_V1_REFUSE_REASON);
     expect(refused!.nextSteps).toEqual([...SETUP_POLYGLOT_V1_REFUSE_NEXT_STEPS]);
     expect(refused!.verdict).toBe("SETUP_REFUSED");
+
+    // Non-v2 surface is not v1-only (predicate is version === 2, else refuse).
+    const refusedOther = evaluatePolyglotSetupPolicy({
+      repositoryRoot: "/tmp/r",
+      polyglot: true,
+      alreadyInitialized: true,
+      configVersion: 99,
+    });
+    expect(refusedOther).toEqual(buildPolyglotRequiresConfigV2Report("/tmp/r", 99));
+  });
+
+  it("computeSetupReadiness isolates each conjunct (falsifying pure unit cases)", () => {
+    const ready = {
+      bindingStatus: "valid" as const,
+      canRunHighRiskControl: true,
+      coverageStatus: "partial" as const,
+      checkOk: true,
+    };
+    expect(computeSetupReadiness(ready)).toEqual({
+      analysisReady: true,
+      setupReady: true,
+      verdict: "SETUP_READY",
+    });
+
+    // Freshness only: deleting canRunHighRiskControl conjunct would flip this to READY.
+    expect(computeSetupReadiness({ ...ready, canRunHighRiskControl: false })).toEqual({
+      analysisReady: false,
+      setupReady: false,
+      verdict: "SETUP_NOT_READY",
+    });
+
+    // Binding only.
+    expect(computeSetupReadiness({ ...ready, bindingStatus: "invalid" })).toEqual({
+      analysisReady: false,
+      setupReady: false,
+      verdict: "SETUP_NOT_READY",
+    });
+    expect(computeSetupReadiness({ ...ready, bindingStatus: "absent" })).toEqual({
+      analysisReady: false,
+      setupReady: false,
+      verdict: "SETUP_NOT_READY",
+    });
+
+    // Coverage only.
+    expect(computeSetupReadiness({ ...ready, coverageStatus: "insufficient" })).toEqual({
+      analysisReady: false,
+      setupReady: false,
+      verdict: "SETUP_NOT_READY",
+    });
+
+    // check.ok only: analysisReady true but setupReady false.
+    expect(computeSetupReadiness({ ...ready, checkOk: false })).toEqual({
+      analysisReady: true,
+      setupReady: false,
+      verdict: "SETUP_NOT_READY",
+    });
+  });
+
+  it("reports SETUP_NOT_READY when semantic check fails with analysis otherwise ready", () => {
+    root = freshSample();
+    asSetup(setupRepository(root, { now: "2026-08-01T12:00:00.000Z" }));
+    // Corrupt authored semantic after first READY so re-run keeps analysis green-ish but check fails.
+    writeFileSync(
+      join(root, ".semctx", "semantic", "goals.sem"),
+      "goal g.broken not a valid semantic document\n",
+      "utf8",
+    );
+    const report = asSetup(setupRepository(root, { now: "2026-08-01T12:00:01.000Z" }));
+    expect(report.check.ok).toBe(false);
+    expect(report.check.errors).toBeGreaterThan(0);
+    expect(report.setupReady).toBe(false);
+    expect(report.verdict).toBe("SETUP_NOT_READY");
+    // analysisReady may still be true if health is fine — either way setupReady must be false.
+    if (report.analysisReady) {
+      expect(computeSetupReadiness({
+        bindingStatus: bindingStatus(report) as "valid" | "invalid" | "absent",
+        canRunHighRiskControl: freshnessCanHigh(report),
+        coverageStatus: coverageStatus(report) as "complete" | "partial" | "insufficient",
+        checkOk: false,
+      }).setupReady).toBe(false);
+    }
   });
 
   it("reports SETUP_NOT_READY when selected v2 language is disabled", () => {

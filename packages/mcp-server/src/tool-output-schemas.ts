@@ -671,15 +671,18 @@ export const TOOL_OUTPUT_SCHEMAS = {
       repositoryRoot: described(z.string(), "Absolute repository root."),
       initialized: described(z.boolean(), "Whether .semctx/ already exists."),
       confirmRequired: described(z.literal(true), "Caller must re-invoke with confirm:true to write."),
-      message: described(z.string(), "Human-readable next step."),
+      requiresUserAuthorization: described(
+        z.literal(true),
+        "Human authorization is required before writes; next.arguments never embeds confirm:true.",
+      ),
+      message: described(z.string(), "Human-readable next step (not an auto-follow write payload)."),
       next: described(z.object({
-        tool: described(z.literal("semctx_setup"), "Tool to call next."),
+        tool: described(z.literal("semctx_setup"), "Tool to call after user authorisation."),
         arguments: described(z.object({
           repositoryRoot: described(z.string(), "Absolute repository root."),
-          confirm: described(z.literal(true), "Required confirmation flag."),
           polyglot: described(z.boolean().optional(), "Optional polyglot config for a fresh workspace."),
-        }).strict(), "Suggested follow-up arguments."),
-      }).strict(), "Suggested next MCP call."),
+        }).strict(), "Argument template without confirm — host must set confirm:true only after user yes."),
+      }).strict(), "Suggested next MCP call template (no auto-confirm)."),
     }).strict(),
     z.object({
       schemaVersion: described(z.literal(1), "Setup refused schema version."),

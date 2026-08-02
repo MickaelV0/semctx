@@ -95,9 +95,11 @@ If the workspace is **not initialized** (no `.semctx/` / preflight `initialized:
 **do not** require a global `semctx` package install. Prefer the plugin MCP tool:
 
 1. Call `semctx_setup` with `{ repositoryRoot }` (preflight only — no writes).
-2. After explicit user authorisation, call `semctx_setup` with
+   Preflight returns `requiresUserAuthorization: true` and a `next` **template without**
+   `confirm: true` — **never** auto-follow preflight `next.arguments` as a write.
+2. After **explicit user authorisation**, call `semctx_setup` with
    `{ repositoryRoot, confirm: true }` (optional `polyglot: true` **only** for a **fresh**
-   multi-language config; on an existing v1 config this returns `kind: "setup_refused"`).
+   multi-language config; on an existing non-v2 config this returns `kind: "setup_refused"`).
 3. Treat the confirm:true result as success **only** when
    `kind === "setup"` **and** `verdict === "SETUP_READY"`.
    Domain outcomes are ordinary structured results (`isError` false per ADR 0012):
@@ -113,8 +115,9 @@ Do **not** auto-run setup merely because control status is `UNSEALED` or `STALE`
 `.semctx/` already exists — that may be a seal/freshness issue; use `semctx_index_health`
 and an explicit re-index policy instead of silent re-setup.
 
-Never auto-setup silently. CLI fallbacks (`bun "<plugin-root>/dist/semctx.js" setup` or global
-`semctx setup`) remain valid when MCP is unavailable.
+Never auto-setup silently. Never invent `confirm: true` from a preflight payload alone.
+CLI fallbacks (`bun "<plugin-root>/dist/semctx.js" setup` or global `semctx setup`) remain
+valid when MCP is unavailable.
 
 ## CLI compatibility preflight
 

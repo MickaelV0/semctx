@@ -166,6 +166,36 @@ export function evaluatePolyglotSetupPolicy(
   return buildPolyglotRequiresConfigV2Report(input.repositoryRoot, input.configVersion);
 }
 
+/** Inputs for the pure SETUP_READY readiness formula (testable conjuncts). */
+export interface ComputeSetupReadinessInput {
+  bindingStatus: "valid" | "invalid" | "absent";
+  canRunHighRiskControl: boolean;
+  coverageStatus: "complete" | "partial" | "insufficient";
+  checkOk: boolean;
+}
+
+/**
+ * Pure agent bootstrap readiness: owns the analysisReady ∧ setupReady ∧ verdict
+ * formula used by `setupRepository`. Extracted so each conjunct has a falsifying
+ * unit case (integration fixtures couple binding invalid → coverage insufficient).
+ */
+export function computeSetupReadiness(input: ComputeSetupReadinessInput): {
+  analysisReady: boolean;
+  setupReady: boolean;
+  verdict: "SETUP_READY" | "SETUP_NOT_READY";
+} {
+  const analysisReady =
+    input.bindingStatus === "valid"
+    && input.canRunHighRiskControl
+    && input.coverageStatus !== "insufficient";
+  const setupReady = input.checkOk && analysisReady;
+  return {
+    analysisReady,
+    setupReady,
+    verdict: setupReady ? "SETUP_READY" : "SETUP_NOT_READY",
+  };
+}
+
 /**
  * Construct the complete polyglot-on-non-v2 refusal report.
  * Prefer `evaluatePolyglotSetupPolicy` at call sites; exported for tests/parity.
@@ -298,15 +328,17 @@ export function setupRepository(
   // Fail-closed for every config version (including legacy v1). SETUP_READY is the
   // agent/MCP success gate and must not short-circuit past insufficient coverage or
   // an index that cannot run high-risk control. CLI exit codes use the same signal.
-  const analysisReady =
-    health.binding.status === "valid"
-    && health.freshness.canRunHighRiskControl
-    && health.coverage.status !== "insufficient";
-  const setupReady = check.ok && analysisReady;
   const coverageStatus =
     typeof health.coverage === "object" && health.coverage !== null && "status" in health.coverage
       ? String((health.coverage as { status: string }).status)
-      : undefined;
+      : "insufficient";
+  const readiness = computeSetupReadiness({
+    bindingStatus: health.binding.status,
+    canRunHighRiskControl: health.freshness.canRunHighRiskControl,
+    coverageStatus: coverageStatus as "complete" | "partial" | "insufficient",
+    checkOk: check.ok,
+  });
+  const { analysisReady, setupReady } = readiness;
   onPhase?.({
     phase: "analysis",
     ready: analysisReady,
@@ -353,6 +385,6 @@ export function setupRepository(
     },
     setupReady,
     analysisReady,
-    verdict: setupReady ? "SETUP_READY" : "SETUP_NOT_READY",
+    verdict: readiness.verdict,
   };
 }
