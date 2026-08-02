@@ -136,7 +136,7 @@ def ccc_rank(query):
     try:
         p = subprocess.run(["ccc", "search", query], cwd=REPO, capture_output=True, text=True,
                            encoding="utf-8", errors="replace", timeout=90)
-    except Exception as e:
+    except Exception:
         return None
     seen, ranked = set(), []
     for line in p.stdout.splitlines():
