@@ -1,0 +1,18 @@
+required-version = "==0.16.1"
+target-version = "py310"
+preview = false
+force-exclude = true
+
+include = ["**/*.py"]
+
+extend-exclude = [
+  ".semctx-bench",
+  "benchmarks/change-impact-eval/data",
+  "benchmarks/change-impact-eval/output",
+  "packages/python-analyzer/test/corpus",
+]
+
+[lint]
+# Correctness-oriented baseline only. Formatting, import sorting, modernization,
+# complexity, and security rules require their own evidence-backed migrations.
+select = ["E9", "F", "B", "PLE"]

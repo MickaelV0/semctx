@@ -7,6 +7,7 @@ export default tseslint.config(
     ignores: [
       "**/dist/**",
       "**/node_modules/**",
+      "**/.venv/**",
       ".semctx/**",
       "benchmarks/change-impact-eval/.semctx-bench/**",
       "benchmarks/change-impact-eval/data/**",
