@@ -376,13 +376,14 @@ application. See
 
 ## MCP server (agents)
 
-Current `main` registers **36 schema-declared tools with validated structured outputs**. Individual
+Current `main` registers **37 schema-declared tools with validated structured outputs**. Individual
 machine reports remain versioned where their public contract defines a schema version. The
 [authoritative catalogue](packages/mcp-server/src/tool-contract.ts) groups them into these
 surfaces:
 
 | surface | representative tools | purpose |
 | --- | --- | --- |
+| Bootstrap | `semctx_setup` | plugin-native workspace init (config + scaffold + index + check); confirm-gated; no global CLI required |
 | Plane A | `semctx_index_health`, `semctx_inspect`, `semctx_verify_change` | separate index binding/freshness/coverage, query observed facts, and verify a diff |
 | Plane B | `semctx_semantic_check`, `semctx_semantic_slice`, `semctx_change_open`, `semctx_change_update`, `semctx_change_verify`, `semctx_change_close`, `semctx_handoff`, `semctx_resume` | preserve authored intent, proof-carrying change contracts, and resumable state |
 | Plane C | status, authority, trace, graph, traversal, coverage, impact, explanation, architecture comparison, target proposal, scope binding, planning, reconciliation, and manual Control Handoff v2 tools | produce bounded, fail-closed reports and resumable local capsules with `executionAuthority: "none"` |
@@ -490,7 +491,7 @@ Implemented and tested (full suite via `bun run test`):
 - `verify diff` — impact analysis + strict/advisory PASS/WARN/BLOCK, with provenance;
   `--base/--head` merge-base ranges, `text/json/github` formats (versioned JSON contract),
   `--fail-on`, `--output`, `--record`, and fail-closed config-v2 analysis-health preflight;
-- MCP 2026-07-28 stdio server (36 schema-declared tools with validated structured results and a
+- MCP 2026-07-28 stdio server (37 schema-declared tools with validated structured results and a
   bounded Control Explorer App)
   + aligned Codex/Claude Code plugins (shared control workflow; Claude advisory + guarded profiles);
 - composite GitHub Action (annotations, summary, PASS/WARN/BLOCK gate);

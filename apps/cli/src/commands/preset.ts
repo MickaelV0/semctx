@@ -17,6 +17,13 @@ interface PresetOptions {
   devcontainer: boolean;
 }
 
+interface RunPresetOptions {
+  /** Setup owns config creation; callers may request host-only preset files. */
+  includeConfig?: boolean;
+  /** Embedding commands may project the preset through their own output envelope. */
+  emitOutput?: boolean;
+}
+
 const WORKFLOW = `# semctx PR gate: BLOCK fails the check, WARN does not. Read-only, no secrets.
 # Uses the semctx GitHub Action from hoklims/semctx, pinned at v0.1.0.
 name: Semctx
@@ -83,8 +90,14 @@ function configJson(root: string): string {
   return `${JSON.stringify(config, null, 2)}\n`;
 }
 
-function presetFiles(root: string, opts: PresetOptions): PresetFile[] {
-  const files: PresetFile[] = [{ path: ".semctx/config.json", content: configJson(root) }];
+function presetFiles(
+  root: string,
+  opts: PresetOptions,
+  includeConfig: boolean,
+): PresetFile[] {
+  const files: PresetFile[] = includeConfig
+    ? [{ path: ".semctx/config.json", content: configJson(root) }]
+    : [];
   if (opts.githubAction) files.push({ path: ".github/workflows/semctx.yml", content: WORKFLOW });
   if (opts.claudeCode) files.push({ path: ".claude/semctx.md", content: CLAUDE_MD });
   if (opts.devcontainer) files.push({ path: ".devcontainer/devcontainer.json", content: DEVCONTAINER });
@@ -115,11 +128,21 @@ function ensureGitignore(root: string, dryRun: boolean): { path: string; action:
 
 const AVAILABLE_PRESETS = ["github-claude"] as const;
 
-/** `semctx init --preset <name>` — preview-first bootstrap. Never overwrites without --force. */
-export function runPreset(root: string, preset: string, args: ParsedArgs): number {
+/** Validate a preset name without planning or writing repository files. */
+export function validatePreset(preset: string): void {
   if (!AVAILABLE_PRESETS.includes(preset as (typeof AVAILABLE_PRESETS)[number])) {
     throw new SemctxError("UNSUPPORTED", `unknown preset "${preset}" (available: ${AVAILABLE_PRESETS.join(", ")})`, { preset });
   }
+}
+
+/** `semctx init --preset <name>` — preview-first bootstrap. Never overwrites without --force. */
+export function runPreset(
+  root: string,
+  preset: string,
+  args: ParsedArgs,
+  options: RunPresetOptions = {},
+): number {
+  validatePreset(preset);
   const dryRun = flagBool(args, "dry-run");
   const force = flagBool(args, "force");
   // github-claude enables the action + claude config by default; devcontainer is opt-in.
@@ -129,7 +152,7 @@ export function runPreset(root: string, preset: string, args: ParsedArgs): numbe
     devcontainer: flagBool(args, "with-devcontainer"),
   };
 
-  const files = presetFiles(root, opts);
+  const files = presetFiles(root, opts, options.includeConfig !== false);
   const planned: Array<{ path: string; action: Action }> = files.map((f) => {
     const abs = join(root, f.path);
     const exists = existsSync(abs);
@@ -138,6 +161,8 @@ export function runPreset(root: string, preset: string, args: ParsedArgs): numbe
     return { path: f.path, action };
   });
   const gi = ensureGitignore(root, dryRun);
+
+  if (options.emitOutput === false) return 0;
 
   if (flagBool(args, "json")) {
     json({ preset, dryRun, force, files: planned, gitignore: gi });

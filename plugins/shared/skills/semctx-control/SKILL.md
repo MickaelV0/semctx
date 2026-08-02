@@ -51,6 +51,36 @@ only in the final CLI ladder.
 
 {{SHARED_WORKFLOW_CONTRACT}}
 
+## Workspace bootstrap (plugin-native)
+
+If the workspace is **not initialized** (no `.semctx/` / preflight `initialized: false`),
+**do not** require a global `semctx` package install. Prefer the plugin MCP tool:
+
+1. Call `semctx_setup` with `{ repositoryRoot }` (preflight only — no writes).
+   Preflight returns `requiresUserAuthorization: true` and a `next` **template without**
+   `confirm: true` — **never** auto-follow preflight `next.arguments` as a write.
+2. After **explicit user authorisation**, call `semctx_setup` with
+   `{ repositoryRoot, confirm: true }` (optional `polyglot: true` **only** for a **fresh**
+   multi-language config; on an existing non-v2 config this returns `kind: "setup_refused"`).
+3. Treat the confirm:true result as success **only** when
+   `kind === "setup"` **and** `verdict === "SETUP_READY"`.
+   Domain outcomes are ordinary structured results (`isError` false per ADR 0012):
+   - `setup_refused` / `verdict: "SETUP_REFUSED"` → agent failure; read `reason` + `nextSteps`.
+   - `verdict: "SETUP_NOT_READY"` → agent failure; inspect `check` / `indexHealth`;
+     re-check with `semctx_index_health`.
+   Do **not** treat `isError` false alone as bootstrap success — always read `kind`/`verdict`.
+   `SETUP_READY` is not coverage-complete: still call `semctx_index_health` before
+   negative-evidence or high-risk claims when coverage is only `partial`.
+4. Re-check with `semctx_control_status` / `semctx_index_health`.
+
+Do **not** auto-run setup merely because control status is `UNSEALED` or `STALE` when
+`.semctx/` already exists — that may be a seal/freshness issue; use `semctx_index_health`
+and an explicit re-index policy instead of silent re-setup.
+
+Never auto-setup silently. Never invent `confirm: true` from a preflight payload alone.
+CLI fallbacks (`bun "<plugin-root>/dist/semctx.js" setup` or global `semctx setup`) remain
+valid when MCP is unavailable.
+
 ## CLI compatibility preflight
 
 Before relying on a global `semctx` shell fallback, call `semctx_cli_compatibility` with the same
@@ -70,6 +100,7 @@ public MCP report intentionally omits the local executable path.
 - **Plane A index health:** binding is `valid`, `invalid`, or `absent`; coverage is `complete`, `partial`, or `insufficient`; freshness retains its own verdict and reasons. Use `semctx_index_health` before relying on negative evidence, and never let one field replace or upgrade another or the independent control-freshness verdict.
 - **CLI compatibility:** `CLI_VERSION_COMPATIBLE` confirms exact lockstep; all other reasons are advisory. They never grant authority and never block an MCP-only workflow.
 - **Plane C — migration plan:** `READY`, `BLOCKED`. `READY` means the plan satisfies its admission rules; it is never execution authority.
+- **Workspace bootstrap (`semctx_setup`):** `verdict` is `SETUP_READY` / `SETUP_NOT_READY` / `SETUP_REFUSED` (or preflight without a verdict). Agent success requires `kind === "setup"` and `verdict === "SETUP_READY"`. Domain refuse/not-ready are structured results with `isError` false (ADR 0012: catalogue errors have no `structuredContent`; handlers do not author `isError`). Namespaced `SETUP_*` values are **not** Plane C `READY`/`BLOCKED` (migration admission, never execution authority).
 
 ## Safety contract
 

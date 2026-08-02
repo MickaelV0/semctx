@@ -9,8 +9,33 @@ GitHub Release advance together through the tag-driven lockstep workflow documen
 
 ## [Unreleased]
 
+### Changed
+
+- **`SETUP_READY` is fail-closed for all config versions** ([#73](https://github.com/hoklims/semctx/pull/73)):
+  the legacy v1 short-circuit that treated analysis as ready regardless of coverage/freshness is
+  removed. Agents must not see `SETUP_READY` when `indexHealth.coverage.status === "insufficient"`.
+
+### Documentation
+
+- **Public MCP contract review guide** ([#73](https://github.com/hoklims/semctx/pull/73)):
+  `docs/contributing/public-mcp-contracts.md` (linked from CONTRIBUTING) implements ADR 0012 for
+  contributors — PUBLIC_CONTRACT / DOMAIN_FEATURE / TRANSPORT_DX tiers (not Plane A/B/C), domain
+  outcomes as structured results without handler-authored `isError`, and a self-check with
+  common vs conditional sections.
+
 ### Added
 
+- **Plugin-native workspace bootstrap over MCP** ([#73](https://github.com/hoklims/semctx/pull/73)):
+  shared `setupRepository` in `@semantic-context/app-services` powers both `semctx setup` and the
+  new confirm-gated `semctx_setup` tool, so agents can initialise `.semctx/` without a global
+  package install. Default MCP calls are dry preflight; `confirm: true` runs config + semantic
+  scaffold + index + check. Policy refusals (e.g. polyglot against an existing v1 config) and
+  not-ready analysis return ordinary schema-valid structured results (`setup_refused` /
+  `SETUP_NOT_READY`) with guidance — **not** handler-authored `isError` (ADR 0012). Agent success
+  requires `kind === "setup"` and `verdict === "SETUP_READY"`. Readiness uses namespaced `verdict`
+  values distinct from Plane C `READY`/`BLOCKED`. CLI `--json` emits the same envelope; live phase
+  progress uses a shared `onPhase` port. The shared control skill documents the fail-closed agent
+  policy. Global CLI remains optional for CI and non-plugin shells.
 - **Offline global CLI compatibility advisory** ([#35](https://github.com/hoklims/semctx/issues/35)):
   one shared bounded probe now powers `doctor --json` and the path-free
   `semctx_cli_compatibility` MCP preflight. Exact pre-1.0 version drift, absence, malformed output,

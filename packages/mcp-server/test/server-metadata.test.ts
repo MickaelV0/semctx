@@ -64,6 +64,12 @@ describe("semctx MCP tool metadata", () => {
     expect(byName.get("semctx_change_update")?.annotations?.readOnlyHint).not.toBe(true);
     expect(byName.get("semctx_change_close")?.annotations?.readOnlyHint).not.toBe(true);
     expect(byName.get("semctx_handoff")?.annotations?.readOnlyHint).not.toBe(true);
+    expect(byName.get("semctx_setup")?.annotations).toEqual({
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    });
     expect(byName.get("semctx_control_handoff")?.annotations).toEqual({
       readOnlyHint: false,
       destructiveHint: false,

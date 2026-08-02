@@ -6,8 +6,9 @@ runtime behaviour. The analysis is local and deterministic; semctx itself needs 
 
 ## What it installs
 
-- **Repository MCP tools** (`.mcp.json`): `semctx_verify_change`, `semctx_inspect`, and the
-  experimental `semctx_prepare_task` (not a code-search retriever; ADR 0005).
+- **Repository MCP tools** (`.mcp.json`): `semctx_setup` (plugin-native workspace bootstrap),
+  `semctx_verify_change`, `semctx_inspect`, and the experimental `semctx_prepare_task` (not a
+  code-search retriever; ADR 0005).
 - **Semantic-layer tools**: `semctx_semantic_check`, `semctx_semantic_slice`, `semctx_change_open`,
   `semctx_change_update`, `semctx_change_verify`, `semctx_semantic_inspect`, `semctx_handoff`,
   `semctx_resume` — authored intent, invariants, decisions, evidence and unknowns (Plane B).
@@ -106,14 +107,19 @@ is rejected rather than compared against the session repository's hash.
 - **Bun** on PATH (the bundled MCP server and CLI run under Bun; no global `semctx` / `semctx-mcp`
   link is required for agent use).
 - **Node** on PATH (the guard hook runs under Node, so it works even where Bun is absent).
-- The project should be initialised and indexed once:
+- The project should be initialised and indexed once (prefer the **plugin MCP tool** — no global
+  package install):
 
 ```text
-semctx setup                                # global install
-bun "<plugin-root>/dist/semctx.js" setup    # plugin bundle; the skills carry the resolved path
+# Preferred (agent / plugin): MCP tool after user OK
+semctx_setup { "repositoryRoot": "/abs/path", "confirm": true }
+
+# Shell fallbacks
+bun "<plugin-root>/dist/semctx.js" setup    # plugin-bundled CLI (same release as MCP)
+semctx setup                                # optional global install
 ```
 
-  The legacy equivalent is `semctx init && semctx index`; `setup --preset github-claude` also
+  The legacy equivalent is `semctx init && semctx index`; CLI `setup --preset github-claude` also
   installs the preset integration files.
 
 Preferred install/update from a target repository:

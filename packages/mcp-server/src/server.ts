@@ -64,6 +64,7 @@ import { createRepositoryRootResolver } from "./repository-root";
 import { ToolRegistrar, type ToolRegistrarOptions } from "./tool-contract";
 import { registerControlExplorerApp } from "./control-explorer-app";
 import { cliCompatibilityTool } from "./cli-compatibility-tools";
+import { SETUP_POLYGLOT_INPUT_DESCRIPTION, setupTool } from "./setup-tools";
 
 const MCP_ATTESTATION_REQUEST_V1 = mcpSchema(AttestationRequestV1Schema);
 const MCP_AGENT_LIFECYCLE_CHECKPOINT_REQUEST_V1 = mcpSchema(
@@ -174,6 +175,36 @@ export function createSemctxServer(
     },
     async ({ repositoryRoot, task, mode }) =>
       ok(await prepareTaskTool(rootResolver.resolve(repositoryRoot), mode !== undefined ? { task, mode } : { task })),
+  );
+
+  // --- Workspace bootstrap (plugin-native; no global package install required).
+  tools.registerTool(
+    "semctx_setup",
+    {
+      title: "Bootstrap repository workspace",
+      description:
+        "PLUGIN-NATIVE SETUP. Initialise .semctx/ (config + semantic scaffold + deterministic graph index + validation) without a global semctx package. Default is dry preflight (confirm omitted/false). Set confirm:true only after the user authorises writes. Idempotent for existing config and authored .sem files. After confirm:true, treat as agent success ONLY when kind==='setup' AND verdict==='SETUP_READY'. Domain outcomes setup_refused (verdict SETUP_REFUSED, e.g. polyglot on v1) and SETUP_NOT_READY are ordinary schema-valid structured results (isError false per ADR 0012) — agents must read kind/verdict, not isError. Catalogue isError is reserved for true transport/input failures without structured setup bodies. Verdict values are namespaced SETUP_* so they never mean Plane C migration READY. Prefer this over shelling out to `semctx setup` when the plugin MCP is available.",
+      inputSchema: {
+        repositoryRoot: REPOSITORY_ROOT,
+        confirm: z
+          .boolean()
+          .optional()
+          .describe("must be true to write .semctx/ and index; false/omitted returns a dry preflight only"),
+        polyglot: z
+          .boolean()
+          .optional()
+          .describe(SETUP_POLYGLOT_INPUT_DESCRIPTION),
+      },
+    },
+    ({ repositoryRoot, confirm, polyglot }) => {
+      // Domain refuse / NOT_READY are schema-valid bodies (ADR 0012). Catalogue errors
+      // (e.g. CONFIG_INVALID from loadConfig during polyglot preflight) still throw.
+      return ok(setupTool(rootResolver.resolve(repositoryRoot), {
+        ...(confirm !== undefined ? { confirm } : {}),
+        ...(polyglot !== undefined ? { polyglot } : {}),
+        now: new Date().toISOString(),
+      }));
+    },
   );
 
   // --- Semantic layer (Plane B): authored intent, invariants, decisions, evidence, change contracts.
