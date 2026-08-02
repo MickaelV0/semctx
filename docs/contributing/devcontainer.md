@@ -1,8 +1,8 @@
 # Contributor dev container
 
 A ready-to-hack environment for working on `semctx` itself. It provides Bun, Node, Git and a
-minimal build toolchain, plus Python for the benchmark/smoke scripts. It does **not** install
-Claude Code, require an API key, publish anything, or run the private benchmark.
+minimal build toolchain, plus Python and pinned Ruff for the benchmark/smoke scripts. It does
+**not** install Claude Code, require an API key, publish anything, or run the private benchmark.
 
 ## Local (VS Code)
 
@@ -36,7 +36,7 @@ devcontainer exec --workspace-folder . bun test
 
 ```bash
 bun test                 # packages, apps and plugins
-bun run quality          # strict tsc for maintained TS + ESLint (typed TS, syntax-only JS)
+bun run quality          # strict tsc + ESLint + correctness-oriented Ruff
 ```
 
 ## Testing the GitHub Action locally
@@ -64,6 +64,8 @@ Guarded mode is documented in `docs/integrations/claude-code-guarded-mode.md`.
 
 - The container installs Bun via the official installer at build time (pinned to match the
   Action). If you are offline during build, provide Bun another way.
+- The container uses the base image's supported Python. Python 3.10 CI compilation and the
+  portability smoke are the compatibility-floor authority for every maintained benchmark script.
 - The private change-impact benchmark corpus is **not** included and is never fetched; only the
   portability smoke test (`benchmarks/change-impact-eval/scripts/smoke_test.py`) runs without it.
 - Python is present only for those scripts; the product itself needs only Bun.

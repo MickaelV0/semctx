@@ -3,11 +3,16 @@
 # key, publish anything, or run the private benchmark.
 FROM mcr.microsoft.com/devcontainers/typescript-node:24
 
-# Python is used only by benchmarks/change-impact-eval scripts (smoke test, harness).
+# The image's supported Python may be newer than 3.10. CI compilation and smoke
+# on Python 3.10 remain the compatibility-floor authority for the benchmark scripts.
 RUN apt-get update \
     && export DEBIAN_FRONTEND=noninteractive \
     && apt-get install -y --no-install-recommends python3 python3-venv ca-certificates \
+    && python3 -m venv /opt/semctx-quality \
+    && /opt/semctx-quality/bin/pip install --no-cache-dir ruff==0.16.1 \
     && rm -rf /var/lib/apt/lists/*
+
+ENV PATH=/opt/semctx-quality/bin:${PATH}
 
 # Bun (pinned to match the GitHub Action toolchain), installed for the non-root `node` user.
 USER node

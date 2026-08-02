@@ -7,7 +7,8 @@ preserve those properties.
 
 ```bash
 bun install
-bun run quality # strict tsc for maintained TypeScript + ESLint (typed TS, syntax-only JS)
+python -m pip install --requirement requirements-quality.txt # use an activated venv locally
+bun run quality # strict tsc, ESLint (typed TS, syntax-only JS), and Ruff
 bun test        # bun:test across packages + apps + plugins
 ```
 
@@ -38,8 +39,9 @@ bun ../../apps/cli/src/index.ts bench
   change and passes after.
 - **Keep static analysis semantic.** `tsc` remains the type authority and ESLint catches
   compiler-permitted hazards in TypeScript. JavaScript and MJS files receive syntax linting,
-  not type-aware analysis. Formatting and domain invariants stay outside the linter;
-  suppressions must be local and explain why the code is safe.
+  not type-aware analysis. Ruff covers correctness hazards in the maintained Python benchmark
+  scripts; CI compiles those scripts on Python 3.10. Formatting and domain invariants stay outside
+  the linters; suppressions must be local and explain why the code is safe.
 
 ## Commit / PR conventions
 

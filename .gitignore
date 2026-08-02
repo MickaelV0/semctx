@@ -11,6 +11,10 @@ dist/
 !plugins/semctx-control/dist/typescript-lib/
 !plugins/semctx-control/dist/typescript-lib/*.d.ts
 *.tsbuildinfo
+.ruff_cache/
+.venv/
+__pycache__/
+*.py[cod]
 .semctx/*
 !.semctx/semantic/
 .semctx/semantic/*
