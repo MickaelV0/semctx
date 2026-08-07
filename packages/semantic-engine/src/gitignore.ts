@@ -100,10 +100,10 @@ export function computeGitignore(existing: string | undefined): { content: strin
     if (!sawTrack) {
       // ignore rule present but no track rule: insert it right after the ignore rule.
       insertAfter(out, IGNORE_CHILDREN, TRACK_SEMANTIC);
-      sawTrack = true;
     }
     if (!sawConfig) {
       // Prefer config re-include immediately after the semantic re-include.
+      // TRACK_SEMANTIC is guaranteed present after the branch above or the loop.
       insertAfter(out, TRACK_SEMANTIC, TRACK_CONFIG);
     }
   }
