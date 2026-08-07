@@ -58,10 +58,19 @@ describe("init --preset github-claude", () => {
     for (const f of PRESET_FILES) expect(existsSync(join(repo, f))).toBe(true);
     // devcontainer is opt-in — not created by default
     expect(existsSync(join(repo, ".devcontainer/devcontainer.json"))).toBe(false);
-    // .gitignore preserved + .semctx appended
+    // .gitignore preserved + shareable .semctx policy (config + semantic tracked; #82)
     const gi = readFileSync(join(repo, ".gitignore"), "utf8");
     expect(gi).toContain("node_modules/");
-    expect(gi).toMatch(/^\.semctx\/$/m);
+    expect(gi).toContain(".semctx/*");
+    expect(gi).toContain("!.semctx/config.json");
+    expect(gi).toContain("!.semctx/semantic/");
+    expect(gi).not.toMatch(/^\.semctx\/$/m);
+    // config is policy-only (no machine absolute root)
+    const config = JSON.parse(readFileSync(join(repo, ".semctx", "config.json"), "utf8")) as Record<
+      string,
+      unknown
+    >;
+    expect(config).not.toHaveProperty("repositoryRoot");
     // the workflow uses least privilege and the safe trigger
     const wf = readFileSync(join(repo, ".github/workflows/semctx.yml"), "utf8");
     expect(wf).toContain("contents: read");

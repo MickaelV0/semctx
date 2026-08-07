@@ -59,4 +59,30 @@ describe("config persistence (#82)", () => {
     expect(loaded.repositoryRoot).toBe(realpathSync.native(root));
     expect(loaded.repositoryRoot).not.toBe("/some/other/machine/path");
   });
+
+  it("ignores empty-string and relative legacy repositoryRoot values", () => {
+    const root = tempRoot();
+    saveConfig(root, createDefaultConfig(root));
+    const path = join(root, ".semctx", "config.json");
+    for (const legacy of ["", "."] as const) {
+      const raw = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+      raw.repositoryRoot = legacy;
+      writeFileSync(path, `${JSON.stringify(raw, null, 2)}\n`, "utf8");
+      const loaded = loadConfig(root);
+      expect(loaded.repositoryRoot).toBe(realpathSync.native(root));
+    }
+  });
+
+  it("load then save still omits repositoryRoot", () => {
+    const root = tempRoot();
+    initWorkspace(root);
+    const loaded = loadConfig(root);
+    expect(loaded.repositoryRoot).toBe(realpathSync.native(root));
+    saveConfig(root, loaded);
+    const again = JSON.parse(readFileSync(join(root, ".semctx", "config.json"), "utf8")) as Record<
+      string,
+      unknown
+    >;
+    expect(again).not.toHaveProperty("repositoryRoot");
+  });
 });
