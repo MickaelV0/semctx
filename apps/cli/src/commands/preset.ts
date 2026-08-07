@@ -82,9 +82,10 @@ const DEVCONTAINER = `{
 function configJson(root: string): string {
   const hasPackages = existsSync(join(root, "packages"));
   const base = createDefaultConfig(".");
+  // Policy only — repositoryRoot is runtime-injected by loadConfig and never versioned (#82).
+  const { repositoryRoot: _repositoryRoot, ...policy } = base;
   const config = {
-    ...base,
-    repositoryRoot: ".", // the loader always trusts the on-disk root at runtime
+    ...policy,
     include: hasPackages ? ["packages/*/src/**/*.ts", "src/**/*.ts"] : base.include,
   };
   return `${JSON.stringify(config, null, 2)}\n`;

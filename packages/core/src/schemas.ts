@@ -57,7 +57,11 @@ export const SemanticPolicyConfigSchema = z.object({
 });
 
 const SemctxConfigBaseSchema = z.object({
-  repositoryRoot: z.string(),
+  /**
+   * Optional on disk and ignored at load: `loadConfig(root)` always injects the call/CLI root.
+   * Accepted for backward compatibility with older absolute or `"."` values.
+   */
+  repositoryRoot: z.string().optional(),
   include: z.array(z.string()),
   exclude: z.array(z.string()),
   docsDirs: z.array(z.string()),

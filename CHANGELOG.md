@@ -9,6 +9,14 @@ GitHub Release advance together through the tag-driven lockstep workflow documen
 
 ## [Unreleased]
 
+### Fixed
+
+- **Shareable `.semctx/config.json` across clones** ([#82](https://github.com/hoklims/semctx/issues/82)):
+  `repositoryRoot` is no longer persisted (optional/ignored on load; always injected from the
+  CLI/MCP call root). `.gitignore` policy now tracks `!.semctx/config.json` alongside
+  `.semctx/semantic/`, so selection policy (`include` / `exclude` / blocking rules) can be
+  versioned while `semctx.db` and other machine state stay local.
+
 ### Changed
 
 - **`SETUP_READY` is fail-closed for all config versions** ([#73](https://github.com/hoklims/semctx/pull/73)):
@@ -17,6 +25,8 @@ GitHub Release advance together through the tag-driven lockstep workflow documen
 
 ### Documentation
 
+- **Configuration reference** ([#82](https://github.com/hoklims/semctx/issues/82)): document
+  policy-only `config.json`, legacy `repositoryRoot` ignored on load, and gitignore tracking.
 - **Public MCP contract review guide** ([#73](https://github.com/hoklims/semctx/pull/73)):
   `docs/contributing/public-mcp-contracts.md` (linked from CONTRIBUTING) implements ADR 0012 for
   contributors — PUBLIC_CONTRACT / DOMAIN_FEATURE / TRANSPORT_DX tiers (not Plane A/B/C), domain

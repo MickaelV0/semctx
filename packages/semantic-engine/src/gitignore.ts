@@ -1,9 +1,15 @@
 /**
- * Keep `.semctx/semantic/**` tracked in Git while the rest of `.semctx/` stays local.
+ * Keep versionable `.semctx/` policy tracked while machine state stays local.
+ *
+ * Tracked:
+ * - `.semctx/semantic/**` — authored semantic model
+ * - `.semctx/config.json` — selection / blocking policy (shareable across clones; #82)
+ *
+ * Local (ignored): `semctx.db`, context packs, working state, etc.
  *
  * A blanket `.semctx/` rule excludes the directory itself, and Git cannot re-include a path whose
- * parent dir is excluded. So the policy is `.semctx/*` (ignore direct children) + `!.semctx/semantic/`
- * (re-include the authored source). This helper migrates a bare `.semctx/` line and is idempotent.
+ * parent dir is excluded. So the base policy is `.semctx/*` + `!.semctx/semantic/` +
+ * `!.semctx/config.json`. This helper migrates a bare `.semctx/` line and is idempotent.
  */
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -11,22 +17,34 @@ import { join } from "node:path";
 
 const IGNORE_CHILDREN = ".semctx/*";
 const TRACK_SEMANTIC = "!.semctx/semantic/";
+const TRACK_CONFIG = "!.semctx/config.json";
 const IGNORE_SEMANTIC_CHILDREN = ".semctx/semantic/*";
 const TRACK_PROJECT = "!.semctx/semantic/project/";
 const TRACK_PROJECT_DESCENDANTS = "!.semctx/semantic/project/**";
 const BLANKET_RE = /^\.semctx\/?$/;
 
+/** Complete project-only semantic + shareable config policy (early-exit when already present). */
 const PROJECT_ONLY_POLICY = [
   IGNORE_CHILDREN,
   TRACK_SEMANTIC,
   IGNORE_SEMANTIC_CHILDREN,
   TRACK_PROJECT,
   TRACK_PROJECT_DESCENDANTS,
+  TRACK_CONFIG,
 ] as const;
 
 export interface GitignoreResult {
   path: string;
   action: "create" | "update" | "present";
+}
+
+function insertAfter(out: string[], marker: string, line: string): void {
+  const at = out.indexOf(marker);
+  if (at >= 0) {
+    out.splice(at + 1, 0, line);
+    return;
+  }
+  out.push(line);
 }
 
 export function computeGitignore(existing: string | undefined): { content: string; changed: boolean } {
@@ -40,6 +58,7 @@ export function computeGitignore(existing: string | undefined): { content: strin
   const out: string[] = [];
   let sawIgnore = false;
   let sawTrack = false;
+  let sawConfig = false;
   for (const line of lines) {
     const trimmed = line.trim();
     if (BLANKET_RE.test(trimmed) || trimmed === IGNORE_CHILDREN) {
@@ -49,6 +68,10 @@ export function computeGitignore(existing: string | undefined): { content: strin
         if (!sawTrack) {
           out.push(TRACK_SEMANTIC);
           sawTrack = true;
+        }
+        if (!sawConfig) {
+          out.push(TRACK_CONFIG);
+          sawConfig = true;
         }
       }
       continue;
@@ -60,15 +83,29 @@ export function computeGitignore(existing: string | undefined): { content: strin
       }
       continue;
     }
+    if (trimmed === TRACK_CONFIG) {
+      if (!sawConfig) {
+        out.push(TRACK_CONFIG);
+        sawConfig = true;
+      }
+      continue;
+    }
     out.push(line);
   }
   if (!sawIgnore) {
     out.push(IGNORE_CHILDREN);
     out.push(TRACK_SEMANTIC);
-  } else if (!sawTrack) {
-    // ignore rule present but no track rule: insert it right after the ignore rule.
-    const at = out.indexOf(IGNORE_CHILDREN);
-    out.splice(at + 1, 0, TRACK_SEMANTIC);
+    out.push(TRACK_CONFIG);
+  } else {
+    if (!sawTrack) {
+      // ignore rule present but no track rule: insert it right after the ignore rule.
+      insertAfter(out, IGNORE_CHILDREN, TRACK_SEMANTIC);
+      sawTrack = true;
+    }
+    if (!sawConfig) {
+      // Prefer config re-include immediately after the semantic re-include.
+      insertAfter(out, TRACK_SEMANTIC, TRACK_CONFIG);
+    }
   }
   const content = `${out.join("\n")}\n`;
   return { content, changed: content !== normalizeTrailing(original) };
@@ -85,7 +122,7 @@ function removeTrailingLf(text: string): string {
   return end === text.length ? text : text.slice(0, end);
 }
 
-/** Ensure `.gitignore` tracks `.semctx/semantic/`. Non-destructive; returns the action taken. */
+/** Ensure `.gitignore` tracks `.semctx/semantic/` and `.semctx/config.json`. Non-destructive. */
 export function ensureSemanticGitignore(root: string, dryRun = false): GitignoreResult {
   const path = join(root, ".gitignore");
   const existed = existsSync(path);
