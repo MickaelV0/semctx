@@ -1,0 +1,173 @@
+import { afterEach, describe, expect, it } from "bun:test";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createDefaultConfig, createGlobSelectionConfig } from "@semantic-context/core";
+import { initWorkspace, loadConfig, saveConfig, toDiskConfig } from "../src/workspace";
+
+const roots: string[] = [];
+
+afterEach(() => {
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+function tempRoot(): string {
+  const root = mkdtempSync(join(tmpdir(), "semctx-workspace-"));
+  roots.push(root);
+  return root;
+}
+
+describe("config persistence (#82)", () => {
+  it("does not write repositoryRoot to config.json", () => {
+    const root = tempRoot();
+    initWorkspace(root);
+    const onDisk = JSON.parse(readFileSync(join(root, ".semctx", "config.json"), "utf8")) as Record<
+      string,
+      unknown
+    >;
+    expect(onDisk).not.toHaveProperty("repositoryRoot");
+    expect(onDisk.version).toBe(1);
+    expect(Array.isArray(onDisk.include)).toBe(true);
+  });
+
+  it("loads policy without repositoryRoot and injects the call root", () => {
+    const root = tempRoot();
+    const policy = createDefaultConfig(root);
+    saveConfig(root, policy);
+    const raw = JSON.parse(readFileSync(join(root, ".semctx", "config.json"), "utf8")) as Record<
+      string,
+      unknown
+    >;
+    expect(raw).not.toHaveProperty("repositoryRoot");
+    expect(raw.include).toEqual(policy.include);
+
+    const loaded = loadConfig(root);
+    expect(loaded.repositoryRoot).toBe(realpathSync.native(root));
+    expect(loaded.include).toEqual(policy.include);
+  });
+
+  it("ignores a legacy absolute repositoryRoot on disk", () => {
+    const root = tempRoot();
+    const config = createDefaultConfig(root);
+    saveConfig(root, config);
+    const path = join(root, ".semctx", "config.json");
+    const raw = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    raw.repositoryRoot = "/some/other/machine/path";
+    writeFileSync(path, `${JSON.stringify(raw, null, 2)}\n`, "utf8");
+
+    const loaded = loadConfig(root);
+    expect(loaded.repositoryRoot).toBe(realpathSync.native(root));
+    expect(loaded.repositoryRoot).not.toBe("/some/other/machine/path");
+  });
+
+  it("ignores empty-string and relative legacy repositoryRoot values", () => {
+    const root = tempRoot();
+    saveConfig(root, createDefaultConfig(root));
+    const path = join(root, ".semctx", "config.json");
+    for (const legacy of ["", "."] as const) {
+      const raw = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+      raw.repositoryRoot = legacy;
+      writeFileSync(path, `${JSON.stringify(raw, null, 2)}\n`, "utf8");
+      const loaded = loadConfig(root);
+      expect(loaded.repositoryRoot).toBe(realpathSync.native(root));
+    }
+  });
+
+  it("load then save still omits repositoryRoot", () => {
+    const root = tempRoot();
+    initWorkspace(root);
+    const loaded = loadConfig(root);
+    expect(loaded.repositoryRoot).toBe(realpathSync.native(root));
+    saveConfig(root, loaded);
+    const again = JSON.parse(readFileSync(join(root, ".semctx", "config.json"), "utf8")) as Record<
+      string,
+      unknown
+    >;
+    expect(again).not.toHaveProperty("repositoryRoot");
+  });
+
+  it("preserves version 2 selection policy while omitting repositoryRoot", () => {
+    const root = tempRoot();
+    const config = createGlobSelectionConfig(root);
+    const policy = toDiskConfig(config);
+
+    // This access also proves at compile time that the helper preserves the v2 subtype.
+    expect(policy.selectionMode).toBe("globs-v1");
+    expect(policy.languages).toEqual(config.languages);
+
+    saveConfig(root, config);
+    const onDisk = JSON.parse(
+      readFileSync(join(root, ".semctx", "config.json"), "utf8"),
+    ) as Record<string, unknown>;
+    expect(onDisk).not.toHaveProperty("repositoryRoot");
+    expect(onDisk.version).toBe(2);
+    expect(onDisk.selectionMode).toBe("globs-v1");
+    expect(onDisk.languages).toEqual(config.languages);
+  });
+});
+
+/** A clone is the same committed bytes checked out at a different absolute path. */
+describe("shareable config across clones (#82)", () => {
+  // Return type is inferred from `readFileSync` so the byte comparison below keeps its exact
+  // buffer type (an explicit `Buffer` widens to `ArrayBufferLike` and breaks `toEqual`).
+  function cloneConfig(from: string, to: string) {
+    const bytes = readFileSync(join(from, ".semctx", "config.json"));
+    mkdirSync(join(to, ".semctx"), { recursive: true });
+    writeFileSync(join(to, ".semctx", "config.json"), bytes);
+    return bytes;
+  }
+
+  it("drives two distinct repository paths from one byte-identical config", () => {
+    const alpha = tempRoot();
+    const beta = tempRoot();
+    expect(realpathSync.native(alpha)).not.toBe(realpathSync.native(beta));
+
+    initWorkspace(alpha, { include: ["packages/*/src/**/*.ts"], docsDirs: ["handbook"] });
+    const shared = cloneConfig(alpha, beta);
+    expect(readFileSync(join(beta, ".semctx", "config.json"))).toEqual(shared);
+
+    const fromAlpha = loadConfig(alpha);
+    const fromBeta = loadConfig(beta);
+
+    // Each clone resolves its own canonical root from the call, not from the file.
+    expect(fromAlpha.repositoryRoot).toBe(realpathSync.native(alpha));
+    expect(fromBeta.repositoryRoot).toBe(realpathSync.native(beta));
+    expect(fromBeta.repositoryRoot).not.toBe(fromAlpha.repositoryRoot);
+    // Everything else — the shared policy — is identical.
+    expect(toDiskConfig(fromBeta)).toEqual(toDiskConfig(fromAlpha));
+    expect(fromBeta.include).toEqual(["packages/*/src/**/*.ts"]);
+    expect(fromBeta.docsDirs).toEqual(["handbook"]);
+  });
+
+  it("recovers a legacy clone whose config still names another machine's root", () => {
+    // The exact #82 failure: the old writer persisted an absolute root that no other clone shares.
+    const alpha = tempRoot();
+    const beta = tempRoot();
+    initWorkspace(alpha);
+
+    const legacy = JSON.parse(
+      readFileSync(join(alpha, ".semctx", "config.json"), "utf8"),
+    ) as Record<string, unknown>;
+    legacy.repositoryRoot = realpathSync.native(alpha);
+    mkdirSync(join(beta, ".semctx"), { recursive: true });
+    writeFileSync(join(beta, ".semctx", "config.json"), `${JSON.stringify(legacy, null, 2)}\n`, "utf8");
+
+    const loaded = loadConfig(beta);
+    expect(loaded.repositoryRoot).toBe(realpathSync.native(beta));
+    expect(loaded.repositoryRoot).not.toBe(legacy.repositoryRoot);
+
+    // Rewriting the clone's config sheds the stale field instead of propagating it.
+    saveConfig(beta, loaded);
+    const rewritten = JSON.parse(
+      readFileSync(join(beta, ".semctx", "config.json"), "utf8"),
+    ) as Record<string, unknown>;
+    expect(rewritten).not.toHaveProperty("repositoryRoot");
+  });
+});
