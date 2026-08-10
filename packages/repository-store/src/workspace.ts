@@ -30,7 +30,7 @@ export function isInitialized(root: string): boolean {
  * Policy-only view of a config for disk. Machine `repositoryRoot` is never versioned — the
  * call/CLI root is the source of truth and is re-injected by `loadConfig`.
  */
-export function toDiskConfig(config: SemctxConfig): Omit<SemctxConfig, "repositoryRoot"> {
+export function toDiskConfig<T extends SemctxConfig>(config: T): Omit<T, "repositoryRoot"> {
   const { repositoryRoot: _repositoryRoot, ...policy } = config;
   return policy;
 }

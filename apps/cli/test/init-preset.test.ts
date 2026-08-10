@@ -105,3 +105,65 @@ describe("init --preset github-claude", () => {
     expect(r.err + r.out).toContain("unknown preset");
   });
 });
+
+/**
+ * `--root` is the only authority for which repository a call targets. Running from an unrelated
+ * directory must reach the named repo and must not treat the caller's cwd as a fallback root (#82).
+ */
+describe("CLI invoked from a foreign directory", () => {
+  let target: string;
+  let foreign: string;
+
+  beforeAll(() => {
+    target = mkdtempSync(join(tmpdir(), "semctx-target-"));
+    foreign = mkdtempSync(join(tmpdir(), "semctx-foreign-"));
+    mkdirSync(join(target, "src"), { recursive: true });
+    writeFileSync(join(target, "src", "a.ts"), "export function g(x: number): number {\n  return x * 2;\n}\n");
+    writeFileSync(join(target, "package.json"), JSON.stringify({ name: "target", version: "0.0.0" }));
+    writeFileSync(join(target, ".gitignore"), "node_modules/\n");
+    git(target, ["init", "-q"]);
+    git(target, ["add", "-A"]);
+    git(target, ["commit", "-q", "-m", "init"]);
+  });
+
+  afterAll(() => {
+    for (const dir of [target, foreign]) rmSync(dir, { recursive: true, force: true });
+  });
+
+  function fromForeign(args: string[]): { code: number; out: string; err: string } {
+    const p = Bun.spawnSync(["bun", "run", CLI, ...args, "--root", target], {
+      cwd: foreign,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    return {
+      code: p.exitCode ?? 1,
+      out: new TextDecoder().decode(p.stdout),
+      err: new TextDecoder().decode(p.stderr),
+    };
+  }
+
+  it("initializes the repository named by --root, never the caller's cwd", () => {
+    const r = fromForeign(["init"]);
+    expect(r.code).toBe(0);
+
+    expect(existsSync(join(target, ".semctx", "config.json"))).toBe(true);
+    expect(existsSync(join(foreign, ".semctx"))).toBe(false);
+
+    const config = JSON.parse(
+      readFileSync(join(target, ".semctx", "config.json"), "utf8"),
+    ) as Record<string, unknown>;
+    expect(config).not.toHaveProperty("repositoryRoot");
+  });
+
+  it("indexes and verifies the --root repository from the foreign cwd", () => {
+    expect(fromForeign(["index"]).code).toBe(0);
+
+    const v = fromForeign(["verify", "diff", "--format", "json"]);
+    expect(v.code).toBe(0);
+    expect(JSON.parse(v.out).verdict).toBe("PASS");
+    // Machine state stayed in the target repo.
+    expect(existsSync(join(target, ".semctx", "semctx.db"))).toBe(true);
+    expect(existsSync(join(foreign, ".semctx"))).toBe(false);
+  });
+});
