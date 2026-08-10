@@ -1,4 +1,8 @@
-/** Persisted project configuration (.semctx/config.json). Boundary-validated by Zod. */
+/**
+ * Runtime project configuration after `loadConfig`.
+ * On disk (`.semctx/config.json`) this is policy-only: `repositoryRoot` is never persisted and is
+ * always injected from the call/CLI root at load time (see #82).
+ */
 
 export type BlockingCondition =
   | "invariant_touched_without_test"
@@ -45,6 +49,10 @@ export interface SemanticPolicyConfig {
 }
 
 interface SemctxConfigBase {
+  /**
+   * Canonical absolute repository root for this process. Runtime-only: never written to
+   * `.semctx/config.json` (call parameter / CLI `--root` is the source of truth).
+   */
   repositoryRoot: string;
   include: string[];
   exclude: string[];

@@ -26,23 +26,33 @@ export function isInitialized(root: string): boolean {
   return existsSync(configPath(root));
 }
 
+/**
+ * Policy-only view of a config for disk. Machine `repositoryRoot` is never versioned — the
+ * call/CLI root is the source of truth and is re-injected by `loadConfig`.
+ */
+export function toDiskConfig<T extends SemctxConfig>(config: T): Omit<T, "repositoryRoot"> {
+  const { repositoryRoot: _repositoryRoot, ...policy } = config;
+  return policy;
+}
+
 /** Create `.semctx/`, write config, return the resolved config. Idempotent-ish. */
 export function initWorkspace(root: string, overrides?: Partial<SemctxConfig>): SemctxConfig {
   mkdirSync(semctxDir(root), { recursive: true });
   mkdirSync(contextPacksDir(root), { recursive: true });
   const repositoryRoot = realpathSync.native(resolve(root));
-  const config: SemctxConfig = SemctxConfigSchema.parse({
+  // Validate policy shape (repositoryRoot is optional on disk / ignored at load).
+  const policy = SemctxConfigSchema.parse({
     ...createDefaultConfig(repositoryRoot),
     ...overrides,
-    repositoryRoot,
   });
+  const config: SemctxConfig = { ...policy, repositoryRoot };
   saveConfig(root, config);
   return config;
 }
 
 export function saveConfig(root: string, config: SemctxConfig): void {
   mkdirSync(semctxDir(root), { recursive: true });
-  writeFileSync(configPath(root), `${JSON.stringify(config, null, 2)}\n`, "utf8");
+  writeFileSync(configPath(root), `${JSON.stringify(toDiskConfig(config), null, 2)}\n`, "utf8");
 }
 
 export function loadConfig(root: string): SemctxConfig {
@@ -63,7 +73,7 @@ export function loadConfig(root: string): SemctxConfig {
       issues: parsed.error.issues,
     });
   }
-  // Always trust one canonical spelling of the on-disk root at runtime (repo may have moved).
+  // Call/CLI root is authoritative; on-disk repositoryRoot (legacy) is ignored.
   return { ...parsed.data, repositoryRoot: realpathSync.native(resolve(root)) };
 }
 

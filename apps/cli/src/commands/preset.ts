@@ -1,6 +1,8 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync, renameSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { SemctxError, createDefaultConfig } from "@semantic-context/core";
+import { toDiskConfig } from "@semantic-context/repository-store";
+import { ensureSemanticGitignore } from "@semantic-context/semantic-engine";
 import type { ParsedArgs } from "../args";
 import { flagBool } from "../args";
 import { info, heading, success, c, json } from "../output";
@@ -82,12 +84,12 @@ const DEVCONTAINER = `{
 function configJson(root: string): string {
   const hasPackages = existsSync(join(root, "packages"));
   const base = createDefaultConfig(".");
+  // Policy only — repositoryRoot is runtime-injected by loadConfig and never versioned (#82).
   const config = {
     ...base,
-    repositoryRoot: ".", // the loader always trusts the on-disk root at runtime
     include: hasPackages ? ["packages/*/src/**/*.ts", "src/**/*.ts"] : base.include,
   };
-  return `${JSON.stringify(config, null, 2)}\n`;
+  return `${JSON.stringify(toDiskConfig(config), null, 2)}\n`;
 }
 
 function presetFiles(
@@ -112,19 +114,6 @@ function writeAtomic(abs: string, content: string): void {
 }
 
 type Action = "create" | "skip-exists" | "overwrite";
-
-/** Ensure `.gitignore` contains `.semctx/` without clobbering existing content. */
-function ensureGitignore(root: string, dryRun: boolean): { path: string; action: "create" | "append" | "present" } {
-  const abs = join(root, ".gitignore");
-  if (!existsSync(abs)) {
-    if (!dryRun) writeAtomic(abs, ".semctx/\n");
-    return { path: ".gitignore", action: "create" };
-  }
-  const current = readFileSync(abs, "utf8");
-  if (/^\.semctx\/?\s*$/m.test(current)) return { path: ".gitignore", action: "present" };
-  if (!dryRun) writeFileSync(abs, current + (current.endsWith("\n") ? "" : "\n") + ".semctx/\n", "utf8");
-  return { path: ".gitignore", action: "append" };
-}
 
 const AVAILABLE_PRESETS = ["github-claude"] as const;
 
@@ -160,7 +149,8 @@ export function runPreset(
     if (!dryRun && action !== "skip-exists") writeAtomic(abs, f.content);
     return { path: f.path, action };
   });
-  const gi = ensureGitignore(root, dryRun);
+  // Same shareable policy as init/setup: track config.json + semantic/, ignore machine state (#82).
+  const gi = ensureSemanticGitignore(root, dryRun);
 
   if (options.emitOutput === false) return 0;
 
@@ -176,8 +166,10 @@ export function runPreset(
     const note = p.action === "skip-exists" ? c.dim("  (exists; pass --force to overwrite)") : "";
     info(`  ${mark} ${p.path}${note}`);
   }
-  const giMark = gi.action === "present" ? c.dim("present ") : c.green(gi.action === "create" ? "create  " : "append  ");
-  info(`  ${giMark} ${gi.path}${gi.action === "append" ? c.dim("  (+ .semctx/)") : ""}`);
+  const giMark = gi.action === "present" ? c.dim("present ") : c.green(gi.action === "create" ? "create  " : "update  ");
+  info(
+    `  ${giMark} ${gi.path}${gi.action === "update" ? c.dim("  (tracks .semctx/config.json + .semctx/semantic/)") : ""}`,
+  );
 
   info("");
   if (dryRun) {
