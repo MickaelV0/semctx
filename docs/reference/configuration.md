@@ -1,8 +1,15 @@
 # Configuration reference
 
-Configuration lives at `.semctx/config.json` (created by `semctx init`). It is validated at load
-time; the on-disk `repositoryRoot` is always overridden with the actual root at runtime, so the
-file is portable.
+Configuration lives at `.semctx/config.json` (created by `semctx init` / `semctx setup`). It holds
+**shareable project policy** only (`include`, `exclude`, blocking rules, …). The file is validated
+at load time and is intended to be committed.
+
+Machine location is never part of the policy file: every CLI/MCP call supplies the absolute
+repository root, and `loadConfig` injects that root into the runtime config. A legacy on-disk
+`repositoryRoot` field is still accepted when present but is **ignored** and **not rewritten**.
+
+`semctx` updates `.gitignore` so that `.semctx/config.json` and `.semctx/semantic/` are tracked while
+local state (`.semctx/semctx.db`, context packs, working files) stays ignored.
 
 There are two configuration versions. Version 1 preserves historical discovery byte-for-byte.
 Version 2 is an explicit opt-in to deterministic glob selection and per-language analysis modes.
@@ -17,7 +24,6 @@ empty list shown here.
 ```json
 {
   "version": 1,
-  "repositoryRoot": ".",
   "include": ["src/**/*.ts"],
   "exclude": ["node_modules", "dist", ".semctx", ".git", "coverage"],
   "docsDirs": ["docs"],
@@ -30,6 +36,7 @@ empty list shown here.
 
 | field | v1 behavior |
 | --- | --- |
+| `repositoryRoot` | **Not required.** If present (legacy absolute path or `"."`), ignored at load. Runtime root comes from the CLI `--root` / MCP `repositoryRoot` argument. |
 | `include` | Accepted, validated, and persisted, but **not applied by current discovery**. Changing these globs does not change which files are discovered. |
 | `exclude` | Applied to each normalized repository-relative file path as a plain substring after removing every `*`; it is not glob matching. Built-in ignored path segments are also excluded (below). |
 | `docsDirs` | Accepted and persisted, but not applied by current discovery. Every `.md` and `.mdx` file that survives exclusion is classified as a document. |
@@ -76,7 +83,6 @@ The v2 selection fields are shown below. This remains a valid config with an emp
 ```json
 {
   "version": 2,
-  "repositoryRoot": ".",
   "selectionMode": "globs-v1",
   "include": [
     "src/**/*.{ts,tsx,mts,cts,py}",

@@ -167,10 +167,11 @@ describe("handoff capsule", () => {
 });
 
 describe("gitignore policy", () => {
-  it("migrates a blanket .semctx/ to track .semctx/semantic/", () => {
+  it("migrates a blanket .semctx/ to track semantic/ and config.json", () => {
     const { content } = computeGitignore("node_modules\n.semctx/\n");
     expect(content).toContain(".semctx/*");
     expect(content).toContain("!.semctx/semantic/");
+    expect(content).toContain("!.semctx/config.json");
     expect(content).not.toMatch(/^\.semctx\/$/m);
   });
 
@@ -181,7 +182,25 @@ describe("gitignore policy", () => {
     expect(computeGitignore(once).changed).toBe(false);
   });
 
-  it("preserves an explicit project-only semantic policy without widening it", () => {
+  it("adds config tracking to an existing project-only semantic policy", () => {
+    const projectOnlyWithoutConfig = [
+      "node_modules/",
+      ".semctx/*",
+      "!.semctx/semantic/",
+      ".semctx/semantic/*",
+      "!.semctx/semantic/project/",
+      "!.semctx/semantic/project/**",
+      "",
+    ].join("\n");
+
+    const result = computeGitignore(projectOnlyWithoutConfig);
+
+    expect(result.changed).toBe(true);
+    expect(result.content).toContain("!.semctx/config.json");
+    expect(result.content).toContain("!.semctx/semantic/project/**");
+  });
+
+  it("preserves an explicit project-only policy that already tracks config", () => {
     const projectOnly = [
       "node_modules/",
       ".semctx/*",
@@ -189,6 +208,7 @@ describe("gitignore policy", () => {
       ".semctx/semantic/*",
       "!.semctx/semantic/project/",
       "!.semctx/semantic/project/**",
+      "!.semctx/config.json",
       "",
     ].join("\n");
 
@@ -203,7 +223,7 @@ describe("gitignore policy", () => {
     const result = computeGitignore(`node_modules/${internalLfRun}.semctx/\n`);
 
     expect(result.content).toBe(
-      `node_modules/${internalLfRun}.semctx/*\n!.semctx/semantic/\n`,
+      `node_modules/${internalLfRun}.semctx/*\n!.semctx/semantic/\n!.semctx/config.json\n`,
     );
   });
 
@@ -215,6 +235,7 @@ describe("gitignore policy", () => {
       ".semctx/semantic/*",
       "!.semctx/semantic/project/",
       "!.semctx/semantic/project/**",
+      "!.semctx/config.json",
     ].join("\n");
 
     const result = computeGitignore(`${policy}${"\n".repeat(20_000)}`);

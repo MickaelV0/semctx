@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -113,6 +114,13 @@ describe("setupRepository (shared SSoT)", () => {
     expect(isInitialized(root)).toBe(true);
     expect(existsSync(join(root, ".semctx", "config.json"))).toBe(true);
     expect(existsSync(join(root, ".semctx", "semantic", "goals.sem"))).toBe(true);
+    // Policy-only on disk: machine root never versioned (#82).
+    const onDisk = JSON.parse(readFileSync(join(root, ".semctx", "config.json"), "utf8")) as Record<
+      string,
+      unknown
+    >;
+    expect(onDisk).not.toHaveProperty("repositoryRoot");
+    expect(loadConfig(root).repositoryRoot).toBeTruthy();
     expect(phases.map((p) => p.phase)).toEqual([
       "config",
       "semantic",

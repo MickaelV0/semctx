@@ -11,6 +11,7 @@ export {
   isInitialized,
   initWorkspace,
   saveConfig,
+  toDiskConfig,
   loadConfig,
   openStore,
 } from "./workspace";
