@@ -1,5 +1,14 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
 import {
   AGENT_LIFECYCLE_POLICY_V1,
   AGENT_WORKFLOW_CONTRACT_V1,
@@ -26,6 +35,15 @@ const portableTypeScriptPrelude =
   'var __dirname=import.meta.dir+"/typescript-lib",__filename=__dirname+"/typescript.js";';
 const escapedRoot = JSON.stringify(root).slice(1, -1);
 
+export const PLUGIN_BUILD_BUN_VERSION = "1.3.13";
+/** Bun's `naming.chunk` target — the only artifact allowed to carry the TypeScript path prelude. */
+const pluginRuntimeSharedChunk = "semctx-shared.js";
+const pluginRuntimeArtifactPaths = [
+  "semctx-mcp.js",
+  pluginRuntimeSharedChunk,
+  "semctx.js",
+] as const;
+
 export interface BundleSpec {
   /** Output basename under each plugin dist/ */
   name: string;
@@ -38,15 +56,6 @@ export const CLI_BUNDLE_SPEC: BundleSpec = {
   entrypoint: "apps/cli/src/index.ts",
   label: "plugin CLI",
 };
-
-const bundles: BundleSpec[] = [
-  {
-    name: "semctx-mcp.js",
-    entrypoint: "packages/mcp-server/src/index.ts",
-    label: "plugin MCP runtime",
-  },
-  CLI_BUNDLE_SPEC,
-];
 
 /** Host-specific shell ladder for the shared control skill (issue #40 option A). */
 export type SkillHost = "claude-code" | "semctx-control";
@@ -252,6 +261,14 @@ function readSkillTemplate(): string {
   return readFileSync(skillTemplatePath, "utf8").replaceAll("\r\n", "\n");
 }
 
+export function assertPluginBuildBunVersion(actualVersion: string = Bun.version): void {
+  if (actualVersion !== PLUGIN_BUILD_BUN_VERSION) {
+    throw new Error(
+      `plugin artifact generation requires Bun ${PLUGIN_BUILD_BUN_VERSION}; found Bun ${actualVersion}`,
+    );
+  }
+}
+
 export async function buildPortableBundle(spec: BundleSpec): Promise<Uint8Array> {
   const result = await Bun.build({
     entrypoints: [spec.entrypoint],
@@ -282,6 +299,157 @@ export async function buildPortableBundle(spec: BundleSpec): Promise<Uint8Array>
   return new TextEncoder().encode(portable);
 }
 
+/**
+ * `BuildMessage` declares no `toString()`, so interpolating a Bun log would
+ * stringify it as `[object Object]`. Render both shapes field by field instead,
+ * keeping the resolution detail that only `ResolveMessage` carries.
+ */
+function formatBuildLog(log: BuildMessage | ResolveMessage): string {
+  const where = log.position
+    ? ` (${log.position.file}:${log.position.line}:${log.position.column})`
+    : "";
+  const resolution =
+    log.name === "ResolveMessage"
+      ? ` [${log.code}] ${log.importKind} "${log.specifier}" from "${log.referrer}"`
+      : "";
+  return `${log.level}: ${log.message}${where}${resolution}`;
+}
+
+export interface TypeScriptPreludePair {
+  /** Checkout-bound prelude Bun emits into whichever output owns the TypeScript payload. */
+  bundled: string;
+  /** `import.meta.dir`-relative replacement shipped in the plugin artifacts. */
+  portable: string;
+}
+
+const typeScriptPreludes: TypeScriptPreludePair = {
+  bundled: absoluteTypeScriptPrelude,
+  portable: portableTypeScriptPrelude,
+};
+
+/**
+ * Fail closed on *where* the TypeScript path prelude lives, not only on how many exist. A single
+ * prelude that Bun hoisted into an entry bundle keeps the total at one while breaking the split:
+ * each entry would carry its own TypeScript payload again, which is the duplication the shared
+ * chunk exists to remove. Counting alone accepts that regression silently.
+ */
+function assertSharedTypeScriptPrelude(
+  sources: ReadonlyMap<string, string>,
+  prelude: string,
+  stage: "bundled" | "portable",
+): void {
+  let total = 0;
+  let shared = 0;
+  const located: string[] = [];
+  for (const path of [...sources.keys()].sort()) {
+    const count = sources.get(path)!.split(prelude).length - 1;
+    total += count;
+    if (path === pluginRuntimeSharedChunk) shared = count;
+    located.push(`${path}=${count}`);
+  }
+  if (total === 1 && shared === 1) return;
+
+  throw new Error(
+    `expected exactly one ${stage} TypeScript path prelude, in ${pluginRuntimeSharedChunk}; `
+      + `found ${located.join(", ")}`,
+  );
+}
+
+/**
+ * Validate and portabilise the split runtime outputs. Extracted from the `Bun.build` call because
+ * `Bun.build` cannot run inside `bun test` (see `plugins/plugin-build.test.ts`): keeping the
+ * topology rules in a pure function is what makes the generator's refusal provable rather than
+ * merely observed on today's Bun output.
+ */
+export function portablePluginRuntimeArtifacts(
+  generated: ReadonlyMap<string, string>,
+  prelude: TypeScriptPreludePair = typeScriptPreludes,
+): Map<string, Uint8Array> {
+  const actualPaths = [...generated.keys()].sort();
+  const expectedPaths = [...pluginRuntimeArtifactPaths].sort();
+  if (actualPaths.join("\n") !== expectedPaths.join("\n")) {
+    throw new Error(
+      `unexpected split plugin artifact set; expected ${expectedPaths.join(", ")}, found ${actualPaths.join(", ")}`,
+    );
+  }
+
+  assertSharedTypeScriptPrelude(generated, prelude.bundled, "bundled");
+
+  const portableSources = new Map<string, string>();
+  const built = new Map<string, Uint8Array>();
+  for (const relativePath of actualPaths) {
+    const portable = generated
+      .get(relativePath)!
+      .replace(prelude.bundled, prelude.portable)
+      .replace(/[ \t]+(?=\r?\n)/g, "");
+    if (portable.includes(escapedRoot)) {
+      throw new Error(`generated plugin artifact still contains the build checkout path: ${relativePath}`);
+    }
+    portableSources.set(relativePath, portable);
+    built.set(relativePath, new TextEncoder().encode(portable));
+  }
+
+  assertSharedTypeScriptPrelude(portableSources, prelude.portable, "portable");
+
+  return built;
+}
+
+export async function buildPortablePluginArtifacts(): Promise<Map<string, Uint8Array>> {
+  assertPluginBuildBunVersion();
+
+  const temporaryRoot = mkdtempSync(resolve(tmpdir(), "semctx-plugin-build-"));
+  const outdir = resolve(temporaryRoot, "dist");
+  const mcpEntrypoint = resolve(root, "semctx-mcp.ts");
+  const cliEntrypoint = resolve(root, "semctx.ts");
+
+  try {
+    const result = await Bun.build({
+      entrypoints: [mcpEntrypoint, cliEntrypoint],
+      files: {
+        [mcpEntrypoint]: 'import { main } from "./packages/mcp-server/src/index.ts";\nmain();\n',
+        [cliEntrypoint]: 'import "./apps/cli/src/index.ts";\n',
+      },
+      root,
+      outdir,
+      target: "bun",
+      minify: true,
+      packages: "bundle",
+      splitting: true,
+      naming: {
+        entry: "[name].[ext]",
+        chunk: "semctx-shared.[ext]",
+        asset: "[name]-[hash].[ext]",
+      },
+    });
+
+    if (!result.success) {
+      for (const log of result.logs) process.stderr.write(`${formatBuildLog(log)}\n`);
+      throw new Error("failed to build the split plugin runtimes");
+    }
+
+    const generated = new Map<string, string>();
+    for (const output of result.outputs) {
+      const relativePath = relative(outdir, output.path).replaceAll("\\", "/");
+      if (
+        relativePath.length === 0
+        || isAbsolute(relativePath)
+        || relativePath === ".."
+        || relativePath.startsWith("../")
+      ) {
+        throw new Error(`generated plugin artifact escaped its output directory: ${output.path}`);
+      }
+      if (generated.has(relativePath)) {
+        throw new Error(`generated duplicate plugin artifact: ${relativePath}`);
+      }
+      generated.set(relativePath, await output.text());
+    }
+
+    return portablePluginRuntimeArtifacts(generated);
+  } finally {
+    rmSync(temporaryRoot, { recursive: true, force: true });
+  }
+}
+
 export function writePortableTypeScriptLibs(dist: string): void {
   const typescriptLibOutput = resolve(dist, "typescript-lib");
   rmSync(typescriptLibOutput, { recursive: true, force: true });
@@ -301,15 +469,53 @@ function bytesEqual(current: Buffer, expected: Uint8Array): boolean {
   return current.length === expected.length && current.every((value, index) => value === expected[index]);
 }
 
+function listPluginRuntimeArtifacts(dist: string, directory: string = dist): string[] {
+  if (!existsSync(directory)) return [];
+
+  const artifacts: string[] = [];
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    if (directory === dist && entry.name === "typescript-lib" && entry.isDirectory()) continue;
+
+    const absolutePath = resolve(directory, entry.name);
+    const relativePath = relative(dist, absolutePath).replaceAll("\\", "/");
+    if (entry.isDirectory()) {
+      artifacts.push(...listPluginRuntimeArtifacts(dist, absolutePath));
+    } else {
+      artifacts.push(relativePath);
+    }
+  }
+  return artifacts.sort();
+}
+
+export function assertPluginRuntimeArtifactsExact(
+  dist: string,
+  expected: ReadonlyMap<string, Uint8Array>,
+): void {
+  const expectedPaths = [...expected.keys()].sort();
+  const actualPaths = listPluginRuntimeArtifacts(dist);
+  if (actualPaths.join("\n") !== expectedPaths.join("\n")) {
+    throw new Error(
+      `stale generated plugin artifact set: ${dist}; expected ${expectedPaths.join(", ")}, found ${actualPaths.join(", ")}; run 'bun run plugin:build'`,
+    );
+  }
+
+  for (const relativePath of expectedPaths) {
+    const current = readFileSync(resolve(dist, relativePath));
+    const expectedBytes = expected.get(relativePath)!;
+    if (!bytesEqual(current, expectedBytes)) {
+      throw new Error(
+        `stale generated plugin artifact: ${resolve(dist, relativePath)}; run 'bun run plugin:build'`,
+      );
+    }
+  }
+}
+
 function textEqual(current: string, expected: string): boolean {
   return current.replaceAll("\r\n", "\n") === expected.replaceAll("\r\n", "\n");
 }
 
 async function main(): Promise<void> {
-  const built = new Map<string, Uint8Array>();
-  for (const spec of bundles) {
-    built.set(spec.name, await buildPortableBundle(spec));
-  }
+  const built = await buildPortablePluginArtifacts();
 
   const skillTemplate = readSkillTemplate();
   const renderedSkills = {
@@ -333,23 +539,19 @@ async function main(): Promise<void> {
           throw new Error(`stale generated TypeScript library: ${resolve(typescriptLibOutput, lib)}; run 'bun run plugin:build'`);
         }
       }
-      for (const spec of bundles) {
-        const output = resolve(dist, spec.name);
-        if (!existsSync(output)) throw new Error(`missing generated ${spec.label}: ${output}`);
-        const current = readFileSync(output);
-        const expected = built.get(spec.name)!;
-        if (!bytesEqual(current, expected)) {
-          throw new Error(`stale generated ${spec.label}: ${output}; run 'bun run plugin:build'`);
-        }
-      }
+      assertPluginRuntimeArtifactsExact(dist, built);
       continue;
     }
 
+    rmSync(dist, { recursive: true, force: true });
     mkdirSync(dist, { recursive: true });
-    for (const spec of bundles) {
-      await Bun.write(resolve(dist, spec.name), built.get(spec.name)!);
+    for (const [relativePath, bytes] of built) {
+      const output = resolve(dist, relativePath);
+      mkdirSync(dirname(output), { recursive: true });
+      await Bun.write(output, bytes);
     }
     writePortableTypeScriptLibs(dist);
+    assertPluginRuntimeArtifactsExact(dist, built);
   }
 
   // Host-generated control skills (always build + check — independent of dist loop).
@@ -370,7 +572,7 @@ async function main(): Promise<void> {
     await Bun.write(output, expected);
   }
 
-  const sizes = bundles.map((spec) => `${spec.name}=${built.get(spec.name)!.length}`).join(", ");
+  const sizes = [...built].map(([path, bytes]) => `${path}=${bytes.length}`).join(", ");
   process.stdout.write(
     `${check ? "verified" : "built"} byte-identical plugin runtimes (${sizes}; ${typescriptLibs.length} TypeScript libraries) + host control skills\n`,
   );
