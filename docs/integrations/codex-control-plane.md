@@ -53,13 +53,26 @@ and `semctx-mcp.js`, `semctx-shared.js` and `semctx.js` are regular, non-empty f
 match the approved marketplace snapshot. Anything unproven, any error that is not exactly
 `os error 5` / `os error 32`, and any non-Windows host all keep the install failing closed.
 
-Three locations are distinct and must not be conflated:
+Five states are distinct and must not be conflated:
 
 | state | where | what it means |
 | --- | --- | --- |
+| repository | your checkout of `main` | the source you develop in; never what a host executes |
+| public release | the `stable` branch, advanced by the tag workflow | the only channel a host installs from |
 | snapshot | `<codexHome>/.tmp/marketplaces/<marketplace>/plugins/<plugin>` | what `plugin list` reports as `source.path`; the approved source |
 | installed cache | `<codexHome>/plugins/cache/<marketplace>/<plugin>/<version>` | what Codex actually executes |
 | loaded | in-process | the version a running task started with |
+
+**Merging `main` does not update an installed plugin.** `main` is the development branch and no
+host tracks it; `stable` is the public release channel, and it moves only when the tag workflow
+advances it after npm publication. A checkout can therefore sit ahead of `stable` at the *same*
+version number. Run `semctx plugin-status` to see all five states at once — it compares commits
+rather than version strings and byte-binds snapshot/cache payloads to the attested release. It never
+mutates plugin delivery state; a local `origin/stable` mirror remains informational and cannot alone authorize
+an up-to-date verdict. Add `--attest` to ask the canonical public repository what `stable` is right
+now — a non-mutating, deadline-bounded and acceptance-capped lookup that runs in a throwaway store outside your project, so no local
+Git configuration can redirect it — and `--host auto|codex|claude|all` to choose whether an absent
+host is omitted or reported as unknown.
 
 **Installed is not loaded.** A verified install describes what the *next* task will resolve. A task
 already running keeps the plugin version it started with, so its cache stays mapped — legitimately —

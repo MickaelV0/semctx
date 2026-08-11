@@ -67,6 +67,12 @@ rerunnable only for the same commit: an existing npm version must expose a `gitH
 to the tag commit before `stable` can move. An unchanged `stable` ref or GitHub Release is treated
 as already complete. npm trusted publishing also emits provenance automatically.
 
+`main` is not a channel. npm `latest` and the plugin `stable` branch are the two public channels;
+`main` is where development lands and no host tracks it, so **merging `main` does not update an
+installed plugin**. Because a merge into `main` does not bump the version either, `main` and
+`stable` routinely carry the same SemVer at different commits — compare commits, not version
+strings. `semctx plugin-status` reports that comparison read-only, and never advances `stable`.
+
 Local/manual fallback remains:
 
 ```bash

@@ -18,6 +18,7 @@ import { runControl } from "./commands/control";
 import { runStatus } from "./commands/status";
 import { runIndexHealth } from "./commands/index-health";
 import { runInstall } from "./commands/install";
+import { runPluginStatus } from "./commands/plugin-status";
 
 const HELP = `semctx — repository change-impact analyzer (v${packageJson.version})
 
@@ -27,6 +28,13 @@ Core:
   install [--host auto|codex|claude|all]
                                   install/update detected agent plugins + setup this Git repository
       --skip-setup --dry-run       machine-only install / preview without changing anything
+  plugin-status [--json]           repository vs stable vs marketplace snapshot vs installed
+                                   cache vs session; never mutates plugin delivery state, no
+                                   network by default (--attest is the one opt-in exception)
+      --host auto|codex|claude|all  auto omits an absent host; naming one keeps it in the answer
+      --attest                      ask the canonical public repository what 'stable' is now, in an
+                                    isolated store no local Git config can redirect (non-mutating,
+                                    deadline-bounded and acceptance-capped; UNKNOWN offline)
   setup [--preset github-claude]   one command: config + index + semantic scaffold + check (idempotent)
       --polyglot                    create a new workspace with config v2 glob selection
   init [--preset github-claude]    initialise .semctx/ (db + config)
@@ -107,6 +115,8 @@ async function dispatch(args: ParsedArgs): Promise<number> {
   switch (command) {
     case "install":
       return runInstall(root, args);
+    case "plugin-status":
+      return runPluginStatus(root, args);
     case "setup":
       return runSetup(root, args);
     case "init":

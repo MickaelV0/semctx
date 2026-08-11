@@ -123,6 +123,31 @@ refresh. Open a new Codex task when required; in an active Claude Code session, 
 On Windows, if a running Codex task still holds the legacy plugin cache open, the replacement stays
 installed and verified while cleanup automatically retries in the background after the task exits.
 
+To see where your plugins actually stand, without changing anything:
+
+```bash
+semctx plugin-status            # local evidence only, no network call
+semctx plugin-status --attest   # also ask the remote what 'stable' points at right now
+```
+
+Three facts that version numbers alone will not tell you:
+
+- **Merging `main` does not update an installed plugin.** `main` is the development branch. Plugins
+  are delivered only through the release-managed `stable` channel, which the tag workflow advances
+  after npm publication. A clone can sit ahead of `stable` at the *same* version number, so
+  `plugin-status` compares commits rather than version strings.
+- **`stable` is the public release channel.** Both installers register their marketplace against
+  `stable`, never `main`, and nothing else licenses an up-to-date verdict. Without `--attest` the
+  local `origin/stable` mirror is reported as evidence but stays informational — matching a
+  possibly stale mirror never produces a false green. `--attest` asks the canonical public
+  repository instead, in a throwaway store outside your project and with the ambient Git
+  configuration removed, so no local setting can decide what the release is. It works from any
+  project, writes nothing you own, and reports `unknown` when offline.
+- **A fresh installed cache does not prove a running session loaded it.** An installed version is
+  what the *next* session resolves; a session already open keeps what it started with. No host
+  exposes the loaded version, so `plugin-status` reports it as `unknown` with the activation step
+  (a new Codex task, or `/reload-plugins` in Claude Code) instead of inferring it from the cache.
+
 For CLI-only use without a coding-agent plugin:
 
 ```bash
