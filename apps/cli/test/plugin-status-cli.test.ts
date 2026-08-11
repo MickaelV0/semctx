@@ -109,11 +109,13 @@ describe("semctx plugin-status — read-only cross-host delivery report", () => 
   }, SPAWN_TIMEOUT_MS);
 
   test("prints the three delivery layers and the activation step in human output", () => {
-    const result = runPluginStatus(temporaryRoot());
+    const result = runPluginStatus(temporaryRoot(), { args: ["--host", "all"] });
 
     expect(result.out).toContain("repository");
     expect(result.out).toContain("stable");
     expect(result.out).toContain("delivery");
+    expect(result.out).toContain("Codex");
+    expect(result.out).toContain("Claude Code");
     expect(result.code).toBe(3);
   }, SPAWN_TIMEOUT_MS);
 });

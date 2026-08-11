@@ -39,12 +39,12 @@ function exitCode(report: PluginDeliveryReportV1): 0 | 2 | 3 {
 }
 
 function label(host: PluginDeliveryHost): string {
-  return host === "codex" ? "Codex" : "Claude";
+  return host === "codex" ? "Codex" : "Claude Code";
 }
 
-function mark(verdict: PluginDeliveryReportV1["verdict"]): string {
-  if (verdict === "UP_TO_DATE") return c.green("ok");
-  return verdict === "UPDATE_AVAILABLE" ? c.yellow("!!") : c.dim("??");
+function mark(delivery: PluginDeliveryReportV1["delivery"]): string {
+  if (delivery === "UP_TO_DATE") return c.green("ok");
+  return delivery === "UPDATE_AVAILABLE" ? c.yellow("!!") : c.dim("??");
 }
 
 function renderHost(host: PluginDeliveryHost, state: HostPluginDeliveryV1): void {
