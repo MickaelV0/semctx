@@ -155,6 +155,92 @@ omits the local executable path and does not block MCP-only workflows. A global 
 own `doctor` knows only its own package version and therefore cannot prove plugin parity; use the
 MCP preflight or a plugin-bundled CLI for that comparison.
 
+## `plugin-status`
+
+Report where the Semctx plugins actually stand on this machine, without changing anything.
+
+```text
+semctx plugin-status [--host auto|codex|claude|all] [--attest] [--json]
+```
+
+| option | default | description |
+| --- | --- | --- |
+| `--host` | `auto` | `auto` inspects what is installed and omits an absent host; naming a host (or `all`) keeps its absence in the answer as `UNKNOWN` |
+| `--attest` | off | ask the canonical public repository what `stable` is right now; the only step that leaves the machine, non-mutating, deadline-bounded and acceptance-capped |
+
+Five states are reported and never conflated: the repository checkout, the public `stable`
+release, each host's marketplace snapshot, the versioned cache each host executes, and the version
+a running session loaded. Per host the report carries the configured source and ref, the snapshot
+commit, the installed version and path, and `updateAvailable`.
+
+**Merging `main` does not update an installed plugin.** `main` is the development branch; plugins
+are delivered only through the release-managed `stable` channel, and `repository.conveysDelivery`
+is always `false`.
+
+Version strings are never taken as proof on their own, because `main` and `stable` can carry the
+same SemVer at different commits. Both the marketplace snapshot and executed cache are compared by
+**SHA-256 of every runtime bundle** against an immutable witness from the attested release commit.
+This prevents a mutable snapshot and cache from jointly impersonating stable.
+`installed.contentMatchesSnapshot` and `installed.contentMatchesPublicRelease` expose the two
+distinct comparisons and are `null` whenever either claim is unproven.
+
+Host-reported paths are accepted only when they are local and canonically resolve inside that host's own home.
+A UNC or device path is refused as `HOST_PATH_REJECTED` before any filesystem call, because reading
+one would be network egress from a read-only local diagnostic. Symlink and Windows-junction escapes,
+including nested plugin or bundle paths, are rejected before their payload is read.
+
+`verdict` and `delivery` are separate dimensions and neither upgrades the other. `delivery` answers
+whether the executed cache is the public `stable` release; `verdict` additionally requires a proven
+session. `UP_TO_DATE` is impossible unless the installed cache matches the public release. Because
+no supported host exposes the plugin version a running session loaded, `session.status` is
+`unknown` with the host's activation action rather than inferred from the cache — so a fresh cache
+never proves an already-open session is running it.
+
+`publicRelease.authority` types the provenance: `attested-release`, `local-mirror`, `absent`, or
+`unrecognised`. Only `attested-release` can license `UP_TO_DATE`, and an authority this build does
+not recognise fails closed with `PUBLIC_RELEASE_AUTHORITY_UNKNOWN`.
+
+The default probe makes no network call. It reports the already-fetched `refs/remotes/origin/stable`
+commit and version when `origin` is provably `hoklims/semctx`, but that `local-mirror` remains
+informational: it cannot prove no newer public release exists, so it never licenses `UP_TO_DATE`.
+A partial clone is refused there rather than allowed to answer a local read with a promisor fetch,
+and replacement objects are ignored.
+
+`--attest` closes that gap against a canonical authority — `https://github.com/hoklims/semctx.git`,
+a constant of the build, not your `origin`. It runs in a throwaway repository outside your project,
+with the ambient Git configuration removed, so no `url.*.insteadOf` rewrite, forged object,
+replacement ref or promisor can decide what the public release is. One shallow fetch brings a
+single commit into that scratch store; it has a deadline but no transfer-byte ceiling, and the
+completed store is capped before any witness is accepted. The version and every per-host bundle
+digest are read from those immutable objects and the store is deleted. **It therefore works from any project** — yours
+does not have to be a semctx clone, and none of its objects are consulted. Offline, timed-out or
+malformed attestation degrades to `absent`, never to the mirror.
+
+Each host is proven against its *own* plugin in that release, and the two payloads must agree: a
+release whose Codex and Claude bundles differ is not one artifact and fails closed with
+`PUBLIC_RELEASE_HOST_ARTIFACTS_DIVERGED`.
+
+Every probe carries a deterministic time and output budget, applied while it runs and across stdout
+and stderr alike, so a flooding host is stopped at the ceiling rather than buffered whole. A probe
+that exceeds either is refused whole rather than parsed as a prefix, yielding the stable reasons
+`HOST_QUERY_TIMEOUT` or `HOST_OUTPUT_TOO_LARGE`, so the verdict never depends on how much output
+arrived first. Local manifests and bundles are likewise refused on their size before they are read.
+Any requested but missing host, failed query, malformed JSON, unreadable cache, or unattested
+release yields an explicit `UNKNOWN` with no install or update command attached — though the
+activation step stays visible, because how a running session picks up what is already on disk does
+not become unknown just because the release could not be attested.
+
+Exit status follows `delivery`, the dimension a caller can act on: 0 for `UP_TO_DATE`, 2 for
+`UPDATE_AVAILABLE`, 3 for `UNKNOWN`.
+
+The command never installs, updates, upgrades, removes, enables or promotes anything and never
+advances `stable`. Semctx itself writes neither the inspected project nor host trees, but the
+official host inventory commands it invokes may keep host-owned process bookkeeping (Claude
+currently records `.in_use` markers). Its two modes differ in exactly one respect: **by default it
+performs no network operation at all** — host inventory queries and local reads only — while
+**`--attest` fetches** the canonical public release into a throwaway store outside your project and
+deletes it afterwards. That transfer is real, and it happens only when you ask for it by name.
+
 ## `status`
 
 Evaluate the persisted control index snapshot against the current repository without writing state.

@@ -69,6 +69,32 @@ After installation or update during an active session, run `/reload-plugins`. Re
 only if the reload reports an error or the plugin remains unavailable. Then initialise each target
 repository once with either form.
 
+Five states are distinct and must not be conflated:
+
+| state | where | what it means |
+| --- | --- | --- |
+| repository | your checkout of `main` | the source you develop in; never what a host executes |
+| public release | the `stable` branch, advanced by the tag workflow | the only channel a host installs from |
+| snapshot | `~/.claude/plugins/marketplaces/<marketplace>` | the approved marketplace source |
+| installed cache | `~/.claude/plugins/cache/<marketplace>/<plugin>/<version>` | what `plugin list` reports as `installPath`; what Claude Code executes |
+| loaded | in-session | the version the running session started with |
+
+**Merging `main` does not update an installed plugin.** `main` is the development branch and no
+host tracks it; `stable` is the public release channel, and it moves only when the tag workflow
+advances it after npm publication. A checkout can therefore sit ahead of `stable` at the *same*
+version number.
+
+**Installed is not loaded.** A verified install describes what the *next* session resolves; a
+session already open keeps the version it started with until `/reload-plugins` succeeds. Claude
+exposes no loaded-plugin version, so `semctx plugin-status` reports that state as `unknown` with
+the reload step rather than inferring it from the cache. That command never mutates plugin delivery
+state (Claude may maintain its own `.in_use` process markers while answering inventory queries) and
+compares immutable bundle digests as well as commits rather than trusting version strings. Its
+local `origin/stable` mirror is informational; run `semctx plugin-status --attest` to ask the
+canonical public repository instead — a non-mutating, deadline-bounded and acceptance-capped lookup that runs outside your project
+and cannot be redirected by local Git configuration — and without that attestation the aggregate
+stays `UNKNOWN` rather than claiming a false green.
+
 Inspect and verify tools fail closed with `CONFIG_NOT_FOUND` or `REPO_NOT_INDEXED`; they never run
 setup or mutate readiness implicitly.
 

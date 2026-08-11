@@ -27,6 +27,47 @@ export type {
   SetupResult,
   SetupVerdict,
 } from "./setup";
+export {
+  PLUGIN_DELIVERY_ATTESTATION_TIMEOUT_MS,
+  PLUGIN_DELIVERY_HOSTS,
+  PLUGIN_DELIVERY_MAX_ARTIFACT_BYTES,
+  PLUGIN_DELIVERY_MAX_BUNDLE_BYTES,
+  PLUGIN_DELIVERY_MAX_HOST_OUTPUT_BYTES,
+  PLUGIN_DELIVERY_MAX_MANIFEST_BYTES,
+  PLUGIN_DELIVERY_MAX_STORE_BYTES,
+  PLUGIN_DELIVERY_QUERY_TIMEOUT_MS,
+  PLUGIN_DELIVERY_RELEASE_REF,
+  PLUGIN_DELIVERY_RELEASE_URL,
+  PLUGIN_DELIVERY_SCHEMA_VERSION,
+  PLUGIN_RUNTIME_BUNDLES,
+  codexCacheEntryFromMarketplaceRoot,
+  pluginDeliveryStatus,
+} from "./plugin-delivery";
+export type {
+  HostInstalledStateV1,
+  HostMarketplaceStateV1,
+  HostPluginDeliveryV1,
+  HostSessionStateV1,
+  HostSnapshotStateV1,
+  InstalledPayloadProbe,
+  MarketplaceSnapshotProbe,
+  PluginDeliveryCommand,
+  PluginDeliveryDependencies,
+  PluginDeliveryHost,
+  PluginDeliveryQueryOutcome,
+  PluginDeliveryQueryLimits,
+  PluginDeliveryReason,
+  PluginDeliveryReportV1,
+  PluginDeliveryScope,
+  PluginDeliveryVerdict,
+  PublicReleaseAuthority,
+  PublicReleaseBundleWitnesses,
+  PublicReleaseProbe,
+  PublicReleaseV1,
+  RepositoryChannelProbe,
+  RepositoryChannelV1,
+  SessionVersionProbe,
+} from "./plugin-delivery";
 export { openReadyRepository } from "./readiness";
 export type { RepositoryAnalysis, RepositoryIndex } from "./indexing";
 export { indexHealth } from "./index-health";
