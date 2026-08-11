@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { spawnSync as spawnSyncChild } from "node:child_process";
 import {
   closeSync,
   existsSync,
@@ -1132,10 +1133,11 @@ function defaultRunQuery(
   },
 ): PluginDeliveryQueryOutcome {
   try {
-    const result = Bun.spawnSync([...command], {
+    const executable = command[0];
+    if (executable === undefined) return { code: 1, out: "", err: "missing executable" };
+    const result = spawnSyncChild(executable, [...command.slice(1)], {
       cwd,
-      stdout: "pipe",
-      stderr: "pipe",
+      encoding: "buffer",
       timeout: limits.timeoutMs,
       // Enforced *while* the child runs, so a flood is killed at the ceiling instead of being
       // buffered whole and inspected afterwards. The spawn applies this ceiling to each stream on
@@ -1144,28 +1146,29 @@ function defaultRunQuery(
       // halving, a probe splitting its flood across both streams would pass a limit that claims to
       // cover them.
       maxBuffer: perStreamCeiling(limits.maxBytes),
+      windowsHide: true,
       ...environmentFor(limits),
     });
     const decoder = new TextDecoder();
     const ceiling = perStreamCeiling(limits.maxBytes);
-    const bytes = result.stdout === undefined ? new Uint8Array() : new Uint8Array(result.stdout);
-    const stderrBytes = result.stderr === undefined ? new Uint8Array() : new Uint8Array(result.stderr);
-    // Both kills arrive as the same signal, so the cause is read from the reported reason rather
-    // than guessed from `SIGTERM`, which would report every oversized probe as a timeout.
-    const timedOut = result.exitedDueToTimeout === true;
+    const bytes = result.stdout === null ? new Uint8Array() : new Uint8Array(result.stdout);
+    const stderrBytes = result.stderr === null ? new Uint8Array() : new Uint8Array(result.stderr);
+    const errorCode = (result.error as NodeJS.ErrnoException | undefined)?.code;
+    // Both kills can arrive as the same signal, so the cause is read from the synchronous spawn's
+    // explicit error code rather than guessed from `SIGTERM`.
+    const timedOut = errorCode === "ETIMEDOUT";
     // A probe that outran its budget is refused whole: parsing a prefix would make the verdict a
     // function of how much arrived before the ceiling.
-    // Bun reports a max-buffer exit inconsistently across platforms: Linux may return a buffer
-    // exactly at the ceiling without setting `exitedDueToMaxBuffer`. Treat reaching the ceiling as
-    // exhaustion on either stream. That makes the effective accepted maximum one byte lower, which
-    // is the only fail-closed interpretation that remains portable.
+    // Treat reaching the ceiling as exhaustion on either stream as defence in depth around ENOBUFS.
+    // That makes the effective accepted maximum one byte lower, which is the only fail-closed
+    // interpretation if a runtime returns a truncated buffer without its documented error code.
     if (
-      result.exitedDueToMaxBuffer === true
+      errorCode === "ENOBUFS"
       || bytes.byteLength >= ceiling
       || stderrBytes.byteLength >= ceiling
     ) {
       return {
-        code: result.exitCode ?? 1,
+        code: result.status ?? 1,
         out: "",
         err: "output exceeded the allowed size",
         bytes: null,
@@ -1173,8 +1176,17 @@ function defaultRunQuery(
         timedOut,
       };
     }
+    if (result.error !== undefined) {
+      return {
+        code: result.status ?? 1,
+        out: "",
+        err: result.error.message,
+        bytes: null,
+        timedOut,
+      };
+    }
     return {
-      code: result.exitCode ?? 1,
+      code: result.status ?? 1,
       out: decoder.decode(bytes),
       err: decoder.decode(stderrBytes),
       bytes,
