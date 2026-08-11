@@ -9,6 +9,59 @@ GitHub Release advance together through the tag-driven lockstep workflow documen
 
 ## [Unreleased]
 
+### Added
+
+- **Cross-host plugin delivery observability**
+  ([#89](https://github.com/hoklims/semctx/issues/89)): `semctx plugin-status [--json]` reports the
+  five states that were previously conflated — the repository checkout, the public `stable`
+  release, each host's marketplace snapshot, the versioned cache each host executes, and the
+  version a running session loaded. Per host it carries the configured source and ref, the
+  snapshot commit, the installed version and path, and `updateAvailable`. `UP_TO_DATE` is
+  impossible unless the executed cache is proven equal to the public `stable` release; repository
+  state is informative only and `repository.conveysDelivery` is the literal `false`. A version
+  string is never proof on its own, because `main` and `stable` routinely carry the same SemVer at
+  different commits — measured 2026-08-10, `main` at `1acf1f14…` and `stable` at `0173f893…`, both
+  `0.1.17`: snapshot and cache runtime bundles are SHA-256-bound directly to immutable release
+  witnesses, so jointly altered snapshot/cache bytes cannot impersonate stable and a locked cache
+  cannot hide behind its version-keyed directory. Host-reported paths are accepted only when local
+  and canonically confined to that host's own home — UNC/device and junction/symlink escapes are refused
+  as `HOST_PATH_REJECTED` before any filesystem call, since reading one would be network egress —
+  and host strings are stripped of control characters and URL userinfo so a hostile host cannot
+  repaint a terminal verdict and a marketplace token cannot leak into `--json`. `verdict` and
+  `delivery` stay separate dimensions and neither
+  upgrades the other; exit status follows `delivery` (0 / 2 / 3). No supported host exposes the
+  plugin version a running session loaded, so that state is reported as `unknown` with the host's
+  activation action and is never inferred from the cache. The default probe performs no network
+  call: it reports the local `origin/stable` witness but treats it as informational, because an
+  unattested mirror cannot prove that no newer public release exists. Any requested missing host,
+  failed query, malformed JSON, unreadable cache, or unattested release yields explicit `UNKNOWN`
+  with a canonical reason code. The command never installs, updates, enables, promotes or advances
+  `stable`; Semctx writes neither the inspected project nor host trees, although a queried host may
+  keep its own process-usage bookkeeping. By default it performs no network operation at all,
+  running host inventory queries and local reads only, while `--attest` additionally fetches the
+  canonical release into a throwaway store it then deletes. Guidance
+  emits the exact supported convergence path, identical to what `semctx install` performs.
+  `publicRelease.authority` types the provenance as `attested-release`, `local-mirror`, `absent`
+  or `unrecognised`, and only the first licenses `UP_TO_DATE`; an authority this build does not
+  recognise fails closed. `--attest` adds the one step that leaves the machine, and its trust root
+  is canonical rather than local: it resolves `https://github.com/hoklims/semctx.git` — a constant
+  of the build, never the inspected project's `origin` — inside a throwaway repository created
+  outside that project and with the ambient Git configuration removed, so no `url.*.insteadOf`
+  rewrite, forged object, replacement ref, promisor remote or consumer repository can decide what
+  the public release is. One deadline-bounded shallow fetch brings a single commit into that scratch
+  store; transferred bytes have no hard ceiling, so the completed store is acceptance-capped before
+  the version and per-host bundle digests are read. The store is removed whatever the outcome; it
+  consequently works from any project, including one that is
+  not a semctx clone. Each host is proven against its own plugin in that release and the two
+  payloads must agree, so a release whose Codex and Claude bundles differ fails closed with
+  `PUBLIC_RELEASE_HOST_ARTIFACTS_DIVERGED`. Offline, timed-out or malformed attestation degrades to
+  `absent` rather than to the mirror. Every probe carries a deterministic time and output budget,
+  enforced while it runs and across stdout and stderr alike, and exceeding either is refused whole
+  as `HOST_QUERY_TIMEOUT` or `HOST_OUTPUT_TOO_LARGE` instead of being parsed as a prefix; local
+  manifests and bundles are refused on their size before they are read. `--host auto|codex|claude|all` separates the two questions: `auto` omits a host that is
+  not installed, while naming a host keeps its absence in the answer. Design:
+  [ADR 0014](docs/adr/0014-plugin-delivery-is-observed-across-five-states.md).
+
 ### Fixed
 
 - **Reconcile a converged Codex update behind an active-cache lock**
