@@ -575,6 +575,16 @@ function isWithin(candidate: string, root: string): boolean {
     || normalizedCandidate.startsWith(normalizedRoot.endsWith(sep) ? normalizedRoot : normalizedRoot + sep);
 }
 
+/** Compare against a trusted root's lexical and canonical spellings without accepting another tree. */
+function isWithinTrustedRoot(candidate: string, root: string): boolean {
+  if (isWithin(candidate, root)) return true;
+  try {
+    return isWithin(candidate, realpathSync.native(resolve(root)));
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Accept a host-supplied path only when it is a local absolute path confined to that host's own
  * home. The host reports these paths, but a compromised or misconfigured host must not be able to
@@ -583,7 +593,6 @@ function isWithin(candidate: string, root: string): boolean {
 function acceptHostPath(candidate: string | null, home: string | null): string | null {
   if (candidate === null || home === null) return null;
   if (!isLocalFilesystemPath(candidate) || !isLocalFilesystemPath(home)) return null;
-  if (!isWithin(candidate, home)) return null;
 
   const resolvedCandidate = resolve(candidate);
   const resolvedHome = resolve(home);
@@ -593,7 +602,7 @@ function acceptHostPath(candidate: string | null, home: string | null): string |
   try {
     lstatSync(resolvedHome);
   } catch {
-    return resolvedCandidate;
+    return isWithin(resolvedCandidate, resolvedHome) ? resolvedCandidate : null;
   }
   return walkExistingPathWithoutLinks(resolvedCandidate, resolvedHome, "any")?.path ?? null;
 }
@@ -620,8 +629,8 @@ export function codexCacheEntryFromMarketplaceRoot(
   const derivedHome = resolve(resolvedRoot, "..", "..", "..");
   // The snapshot root must sit under the Codex home we resolved independently, not merely end in
   // the right three segments: a look-alike tail anywhere on disk would otherwise be accepted.
-  if (home !== null && !isWithin(resolvedRoot, home)) return null;
-  if (home !== null && !isWithin(derivedHome, home)) return null;
+  if (home !== null && !isWithinTrustedRoot(resolvedRoot, home)) return null;
+  if (home !== null && !isWithinTrustedRoot(derivedHome, home)) return null;
   const root = resolve(join(derivedHome, ...CODEX_CACHE_SEGMENTS));
   const entry = resolve(join(root, version));
   return entry.startsWith(root + sep) ? entry : null;
@@ -1138,13 +1147,23 @@ function defaultRunQuery(
       ...environmentFor(limits),
     });
     const decoder = new TextDecoder();
+    const ceiling = perStreamCeiling(limits.maxBytes);
     const bytes = result.stdout === undefined ? new Uint8Array() : new Uint8Array(result.stdout);
+    const stderrBytes = result.stderr === undefined ? new Uint8Array() : new Uint8Array(result.stderr);
     // Both kills arrive as the same signal, so the cause is read from the reported reason rather
     // than guessed from `SIGTERM`, which would report every oversized probe as a timeout.
     const timedOut = result.exitedDueToTimeout === true;
     // A probe that outran its budget is refused whole: parsing a prefix would make the verdict a
     // function of how much arrived before the ceiling.
-    if (result.exitedDueToMaxBuffer === true || bytes.byteLength > perStreamCeiling(limits.maxBytes)) {
+    // Bun reports a max-buffer exit inconsistently across platforms: Linux may return a buffer
+    // exactly at the ceiling without setting `exitedDueToMaxBuffer`. Treat reaching the ceiling as
+    // exhaustion on either stream. That makes the effective accepted maximum one byte lower, which
+    // is the only fail-closed interpretation that remains portable.
+    if (
+      result.exitedDueToMaxBuffer === true
+      || bytes.byteLength >= ceiling
+      || stderrBytes.byteLength >= ceiling
+    ) {
       return {
         code: result.exitCode ?? 1,
         out: "",
@@ -1157,7 +1176,7 @@ function defaultRunQuery(
     return {
       code: result.exitCode ?? 1,
       out: decoder.decode(bytes),
-      err: result.stderr === undefined ? "" : decoder.decode(result.stderr),
+      err: decoder.decode(stderrBytes),
       bytes,
       timedOut,
     };
@@ -1261,10 +1280,16 @@ function walkExistingPathWithoutLinks(candidate: string, root: string, kind: Pat
   try {
     const resolvedRoot = resolve(root);
     const resolvedCandidate = resolve(candidate);
-    if (!isWithin(resolvedCandidate, resolvedRoot)) return null;
-
     const canonicalRoot = realpathSync.native(resolvedRoot);
-    const suffix = relative(resolvedRoot, resolvedCandidate);
+    // Windows runners can expose the same local tree through two absolute aliases (for example a
+    // workspace drive and its canonical runner path). Keep the independent root authoritative, but
+    // accept the candidate when it is confined under either spelling of that exact root.
+    const suffix = isWithin(resolvedCandidate, resolvedRoot)
+      ? relative(resolvedRoot, resolvedCandidate)
+      : isWithin(resolvedCandidate, canonicalRoot)
+        ? relative(canonicalRoot, resolvedCandidate)
+        : null;
+    if (suffix === null) return null;
     const segments = suffix === "" ? [] : suffix.split(/[\\/]/).filter(Boolean);
     let current = canonicalRoot;
     let stats = lstatSync(current);
@@ -1308,7 +1333,12 @@ function canonicalRegularFileWithin(file: string, root: string): ConfinedPath | 
  * not portably detectable here. The walk's link refusals and canonical confinement remain the
  * defence against that; this closes the size and identity window, not the reparse race.
  */
-function readConfinedFile(file: string, root: string, maxBytes: number): Buffer | null {
+export function readConfinedFile(
+  file: string,
+  root: string,
+  maxBytes: number,
+  afterMetadata?: () => void,
+): Buffer | null {
   const canonicalFile = canonicalRegularFileWithin(file, root);
   if (canonicalFile === null) return null;
   let descriptor: number | null = null;
@@ -1316,6 +1346,9 @@ function readConfinedFile(file: string, root: string, maxBytes: number): Buffer 
     descriptor = openSync(canonicalFile.path, "r");
     const stats = fstatSync(descriptor);
     if (!stats.isFile() || stats.size === 0 || stats.size > maxBytes) return null;
+    // Internal deterministic test seam for the post-fstat race. It is not exported from the
+    // package entrypoint and production callers never provide it.
+    afterMetadata?.();
     const buffer = Buffer.alloc(maxBytes + 1);
     let filled = 0;
     for (;;) {

@@ -1,6 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  truncateSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -10,6 +18,7 @@ import {
   PLUGIN_DELIVERY_RELEASE_URL,
   PLUGIN_RUNTIME_BUNDLES,
   pluginDeliveryStatus,
+  readConfinedFile,
   type InstalledPayloadProbe,
   type MarketplaceSnapshotProbe,
   type PluginDeliveryDependencies,
@@ -527,6 +536,34 @@ describe("plugin delivery — the cache is proven by content, not by version str
 });
 
 describe("plugin delivery — host-supplied paths are confined", () => {
+  test("the same trusted home reached through a filesystem alias stays confined", () => {
+    const root = mkdtempSync(join(tmpdir(), "semctx-plugin-delivery-home-alias-"));
+    const home = join(root, "home");
+    const alias = join(root, "home-alias");
+    const marketplaceRoot = join(home, ".tmp", "marketplaces", "semctx-stable");
+    const cachePath = join(home, "plugins", "cache", "semctx-stable", "semctx-control", RELEASE_VERSION);
+    mkdirSync(marketplaceRoot, { recursive: true });
+    mkdirSync(cachePath, { recursive: true });
+    symlinkSync(home, alias, process.platform === "win32" ? "junction" : "dir");
+    const canonicalMarketplaceRoot = realpathSync.native(marketplaceRoot);
+    const canonicalCachePath = realpathSync.native(cachePath);
+
+    try {
+      const report = statusOf({
+        hostHomes: { codex: alias },
+        codexMarketplaces: codexMarketplaces({ root: canonicalMarketplaceRoot }),
+        snapshots: { [canonicalMarketplaceRoot]: {} },
+        installed: { [canonicalCachePath]: {} },
+      });
+
+      expect(report.hosts.codex.snapshot.path).not.toBeNull();
+      expect(report.hosts.codex.installed.path).not.toBeNull();
+      expect(report.hosts.codex.reasons).not.toContain("HOST_PATH_REJECTED");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("a UNC marketplace root is rejected before any filesystem read", () => {
     const report = statusOf({
       codexMarketplaces: codexMarketplaces({ root: "\\\\10.0.0.5\\pwn\\.tmp\\marketplaces\\semctx-stable" }),
@@ -1723,6 +1760,9 @@ describe("plugin delivery — local artifacts are bounded before they are read",
       const partial: Partial<PluginDeliveryDependencies> = { ...dependencies };
       // The real payload reader runs: the ceilings under test are the ones it applies.
       delete partial.readInstalledPayload;
+      // Snapshot behavior is not under test. Keep this injected probe path-insensitive because a
+      // Windows runner may canonicalize the accepted root away from its original drive alias.
+      partial.readMarketplaceSnapshot = () => snapshotProbe();
       const report = pluginDeliveryStatus(
         { repositoryRoot: "/work/project", version: RELEASE_VERSION, hosts: ["codex", "claude"] },
         partial,
@@ -1737,83 +1777,24 @@ describe("plugin delivery — local artifacts are bounded before they are read",
     }
   });
 
-  test("a bundle enlarged after its metadata was read is never hashed past the ceiling", async () => {
-    // The window this closes: the confinement walk describes the entry, and the read happens after.
-    // If the size decision came from the earlier `stat` while the bytes came from a fresh path
-    // resolution, a file swapped in between the two would be hashed whole, past the ceiling.
-    //
-    // The assertion holds on every schedule — the artifact is either read as the small file or left
-    // unproven — so the green is stable; against a stat-then-read implementation it failed on 5 of
-    // 5 measured runs, so the window is genuinely exercised rather than merely described.
+  test("a bundle enlarged after its metadata was read is never hashed past the ceiling", () => {
+    // Deterministically enlarge the same open file after fstat and before its first read. A
+    // stat-then-read implementation would allocate or hash past the declared ceiling; the bounded
+    // descriptor reader requests one extra byte and refuses the artifact instead.
     const home = mkdtempSync(join(tmpdir(), "semctx-plugin-delivery-swap-"));
-    const cache = join(home, "plugins", "cache", "semctx-stable", "semctx-control", RELEASE_VERSION);
-    const marketplace = join(home, ".tmp", "marketplaces", "semctx-stable");
-    mkdirSync(marketplace, { recursive: true });
-    mkdirSync(join(cache, ".codex-plugin"), { recursive: true });
-    mkdirSync(join(cache, "dist"), { recursive: true });
-    writeFileSync(join(cache, ".codex-plugin", "plugin.json"), JSON.stringify({ version: RELEASE_VERSION }));
-    for (const name of PLUGIN_RUNTIME_BUNDLES) writeFileSync(join(cache, "dist", name), `bundle ${name}`);
-
-    const swapped = join(cache, "dist", "semctx.js");
-    const small = "bundle semctx.js";
-    const smallDigest = createHash("sha256").update(small).digest("hex");
-    const realDigests: Record<string, string | null> = {};
-    for (const name of PLUGIN_RUNTIME_BUNDLES) {
-      realDigests[name] = createHash("sha256").update(`bundle ${name}`).digest("hex");
-    }
-
-    // The read is fully synchronous, so an in-process swapper could never run during it: the
-    // interleaving only exists against a genuinely concurrent writer. Extending by length rather
-    // than by writing bytes keeps both states cheap, so the file flips fast enough for the window
-    // between the metadata read and the content read to actually be exercised.
-    const stop = join(home, "stop");
-    const swapper = Bun.spawn([
-      process.execPath,
-      "-e",
-      `const fs = require("node:fs");
-`
-      + `const target = ${JSON.stringify(swapped)};
-`
-      + `const stop = ${JSON.stringify(stop)};
-`
-      + `while (!fs.existsSync(stop)) {
-`
-      + `  try { fs.writeFileSync(target, ${JSON.stringify(small)}); } catch {}
-`
-      + `  try { fs.truncateSync(target, ${PLUGIN_DELIVERY_MAX_BUNDLE_BYTES + 4096}); } catch {}
-`
-      + `}
-`,
-    ], { stdout: "ignore", stderr: "ignore" });
+    const swapped = join(home, "semctx.js");
+    writeFileSync(swapped, "bundle semctx.js");
 
     try {
-      const observed = new Set<string | null>();
-      for (let attempt = 0; attempt < 60; attempt += 1) {
-        const dependencies = fakeDependencies({
-          hostHomes: { codex: home, claude: home },
-          codexMarketplaces: codexMarketplaces({ root: marketplace }),
-          claudeDetected: false,
-          // Real digests of the small files, so a match proves which bytes were actually hashed.
-          snapshots: { [marketplace]: { bundles: realDigests } },
-        });
-        const partial: Partial<PluginDeliveryDependencies> = { ...dependencies };
-        delete partial.readInstalledPayload;
-        const report = pluginDeliveryStatus(
-          { repositoryRoot: "/work/project", version: RELEASE_VERSION, hosts: ["codex"] },
-          partial,
-        );
-        observed.add(report.hosts.codex.installed.contentMatchesSnapshot === null ? null : "compared");
-        // The snapshot carries the small files' real digests, so `true` means the small file was
-        // read and `null` means the artifact stayed unproven — both honest. `false` would mean a
-        // digest was produced for content that is not the small file: the oversized swap, hashed
-        // whole or as a prefix, which is the outcome that must never appear.
-        expect(report.hosts.codex.installed.contentMatchesSnapshot).not.toBe(false);
-      }
-      expect(observed.size).toBeGreaterThan(0);
-      expect(smallDigest).toHaveLength(64);
+      let enlarged = false;
+      const bytes = readConfinedFile(swapped, home, PLUGIN_DELIVERY_MAX_BUNDLE_BYTES, () => {
+        truncateSync(swapped, PLUGIN_DELIVERY_MAX_BUNDLE_BYTES + 4096);
+        enlarged = true;
+      });
+
+      expect(enlarged).toBe(true);
+      expect(bytes).toBeNull();
     } finally {
-      writeFileSync(stop, "");
-      await swapper.exited;
       rmSync(home, { recursive: true, force: true });
     }
   });
