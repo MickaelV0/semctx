@@ -247,13 +247,17 @@ function writeHostShims(
     } else if (typeof payload === "object" && payload.kind === "noisy") {
       // Noise on the detection call only; every inventory query still answers normally, so the run
       // continues and the budget is what decides the outcome.
-      body = `const state = ${JSON.stringify(JSON.parse(payload.inventory))};\n`
+      body = `const fs = require("node:fs");\n`
+        + `const state = ${JSON.stringify(JSON.parse(payload.inventory))};\n`
         + `const argv = process.argv.slice(2).join(" ");\n`
         + `if (argv === "--version") {\n`
-        + `  const chunk = "z".repeat(1024 * 1024);\n`
-        + `  for (let i = 0; i < ${payload.stdoutMb}; i++) process.stdout.write(chunk);\n`
-        + `  for (let i = 0; i < ${payload.stderrMb}; i++) process.stderr.write(chunk);\n`
-        + `  process.stdout.write("codex 0.0.0-test\\n");\n`
+        + `  const chunk = Buffer.alloc(1024 * 1024, 0x7a);\n`
+        // Synchronous descriptor writes make every requested byte reach the pipe before exit. A
+        // loop of process.stdout.write() can leave queued chunks behind on Linux, turning this
+        // volume-boundary test into a scheduler-dependent test of stream shutdown instead.
+        + `  for (let i = 0; i < ${payload.stdoutMb}; i++) fs.writeSync(1, chunk);\n`
+        + `  for (let i = 0; i < ${payload.stderrMb}; i++) fs.writeSync(2, chunk);\n`
+        + `  fs.writeSync(1, "codex 0.0.0-test\\n");\n`
         + `  process.exit(0);\n`
         + `}\n`
         + `if (argv === "plugin marketplace list --json") { process.stdout.write(JSON.stringify(state.marketplaces)); process.exit(0); }\n`
