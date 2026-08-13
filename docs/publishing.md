@@ -73,6 +73,155 @@ installed plugin**. Because a merge into `main` does not bump the version either
 `stable` routinely carry the same SemVer at different commits — compare commits, not version
 strings. `semctx plugin-status` reports that comparison read-only, and never advances `stable`.
 
+### Proving stable delivery (`deliver`)
+
+A fourth job runs after `promote`, never before: installing from a marketplace that has not been
+advanced yet would prove the *previous* release. It stands up one throwaway home per host, installs
+through each host's own supported interface — Codex `plugin marketplace add hoklims/semctx --ref
+stable` then `plugin add semctx-control@semctx-stable`; Claude `plugin marketplace add
+hoklims/semctx@stable` then `plugin install semctx@semctx-stable --scope user` — and archives a
+versioned `stable_delivery_proof` artifact for 90 days.
+
+**What it proves, and in what order.** That a machine with nothing installed can obtain this exact
+release, and that no authority is ever relied on after the effect it was supposed to authorise. A
+global preflight runs first: the tag/version identity must agree, the checkout's own `git rev-parse
+HEAD` must equal `GITHUB_SHA`, both bundle witnesses must be complete and agree, and the `npm ls
+--global` query must have succeeded. If
+any of it fails, **neither host is installed at all** — not a marketplace add, not a plugin install.
+Then, per host, the globally resolved package and the binary's `--version` banner must both equal the
+pinned specifier before a single mutating command runs; the read-only `--version` probe is what
+establishes that identity, so it is the one thing allowed before the gate. Only then is the host
+installed, its exact marketplace source/ref/commit, resolved plugin and cache/manifest versions are
+validated, and its cache is attested bundle by bundle against a witness read from the **blobs of the
+published commit** (`git cat-file blob <sha>:plugins/<plugin>/dist/<bundle>`, immune to a working
+tree edited after Git answers correctly). Only a host for which that complete authority holds is
+executed. Both plugins are
+witnessed separately and archived separately under `witnesses`; a bundle the two disagree on enters
+no comparison at all. The executed payload then answers `doctor --json` at the released version and
+completes a real MCP stdio handshake whose `semctx_control_status` reply must be a
+`control_freshness_status` report. Its `tools/list` catalogue must be structurally valid and advertise
+that tool with an input schema before the call is attempted; a non-empty array or a callable but
+undiscoverable tool is not delivery. `isError: true` travels inside a syntactically valid response, so
+the envelope alone is not enough.
+
+**What actually executes is an orchestrator-owned copy of the attested bytes.** The host cache is *not*
+launched. Re-admitting a path proves it is still a regular file inside the sandbox; it cannot prove
+the file still holds the bytes that were digested, because a host can rewrite a regular file in place
+between the two. So each bundle is read **once**, that single buffer is digested against the witness,
+and — if the whole coherent set attests — the same buffers are written into two separately named
+directories under the sandbox. Each copy is re-digested against the witness immediately before its
+single consumer runs: the CLI copy first, then a newly created MCP copy whose path did not exist while
+the CLI was executing. `executionSnapshots.cli` and `.mcp` in the artifact name them. This closes
+cache rewrites and prevents the CLI smoke from changing what the MCP smoke consumes. It is **not** an
+immutability or secrecy claim against an unrelated process already running as the same OS user; no
+OS sandbox is present. The proof no longer asserts that the cache itself was executed, because it is
+not.
+
+**Each host is read through its own contract.** The shapes are the ones `pluginDeliveryStatus`
+already parses, not a convenient approximation: Codex nests its marketplaces under `marketplaces` and
+names the snapshot root `root` with the source under `marketplaceSource.source`; Claude returns a
+bare array and names the root `installLocation`, with the executed cache under the plugin entry's
+`installPath`. The Codex cache entry is derived by the shared authority
+`codexCacheEntryFromMarketplaceRoot`, so this proof and the diagnostic cannot drift apart on where a
+host executes from.
+
+**The marketplace authority is exact, not resemblance.** The reported source is normalised exactly as
+`normalizeGitSource` does in `packages/app-services/src/plugin-delivery.ts` — lowercased, `git@` form
+rewritten to `https://`, URL userinfo stripped, trailing slashes and `.git` removed — and then
+compared for **equality** against `hoklims/semctx` or `https://github.com/hoklims/semctx`. A matcher
+that merely looked for the slug would accept `https://evil.example/hoklims/semctx.git` and
+`attacker/hoklims/semctx`; both are refused here, and the accepted/refused contract is pinned by test.
+The helper is currently duplicated because the shared implementation is private, so future changes
+must update both until that maintenance seam is exported. The ref is its own authority: it must exist
+and be exactly `stable`. Claude reports it in the marketplace list; Codex records it as `ref_name` in
+`.codex-marketplace-install.json`. `main`, an empty ref and an unknown ref each fail closed.
+
+**Nothing a host says is a location, and nothing stays admitted.** Every path a host CLI hands back
+— Claude's `installLocation` and `installPath`, Codex's `root`, and the cache path derived from a
+host-reported version — is admitted only after it is proven absolute, canonical, local, free of UNC
+and device forms, inside the temporary sandbox, and mapped to the same resolved suffix below that
+sandbox. The sandbox's physical root is the baseline, so a runner-owned junction above it is allowed
+while a symlink, junction, reparse point or short-name alias at or below it is refused. Admission is
+a fact about a moment, so every consumed descendant — the manifest, each `dist` bundle, each
+entrypoint, the snapshot metadata — is re-admitted together with its anchor immediately before it is
+read, digested or launched. A version that is not a semver token never becomes a path segment, and an escaped path
+is refused lexically, so the filesystem is never even asked about it.
+
+**Isolation: what is imposed, what is observed, and what is not.** Three distinct claims, kept
+distinct on purpose because they are not the same strength.
+*Imposed* — the child environment inherits nothing but a small system allow-list; every home, XDG
+root, `APPDATA` and temp directory is replaced by one under the host's temporary root, and `GIT_*`,
+`npm_config_*`, `NODE_OPTIONS` and `SEMCTX_ROOT` do not survive. `PATH` is carried deliberately,
+because an environment that cannot launch the CLI under proof would make every host look broken.
+*Observed* — every path the orchestrator itself reads, digests, writes, stats or uses as a spawn
+working directory is
+recorded, and the verdict fails on any entry outside the sandbox, the release checkout, the foreign
+repository and the artifact path, or inside `~/.codex` or `~/.claude`.
+*Not covered* — there is **no OS- or syscall-level sandbox**. The ledger does not trace what Git,
+npm, a host CLI or the MCP server open once started, so an empty ledger is **not** proof that a child
+never read a user profile. The artifact says so in `syscallSandbox: "none"` rather than implying
+more. The orchestrator does not open the real profiles: reading them to prove they were not read
+would itself be the crossing this boundary forbids. This statement does not extend to child syscalls.
+
+**The MCP child's bounds are named for what they are.** `exchangeDeadlineMs` bounds the protocol
+exchange — it is deliberately not called a total, because teardown must keep a real budget of its own:
+a teardown clamped to zero would return promptly while leaving a live child behind, which is the
+opposite of the guarantee. `mcpWorstCaseMs` states the actual worst case (the exchange plus every
+bounded teardown wait). Within it: a cap on stdout *seen* (a server that floods without ever writing a
+newline is a protocol failure, not backpressure), a cap on the stderr bytes *retained* — the stream
+itself is drained continuously and without bound, which is what stops a chatty server blocking on a
+full pipe — a polite termination escalated to `SIGKILL`, and bounded waits for the child and both
+streams. A closed stream releases every pending request immediately. The outcome carries the child's
+pid so a caller can *observe* it is gone rather than assume it.
+
+**What it does not prove.** That any running session loaded it. `session.proven` is always `false`
+with reason `SESSION_VERSION_NOT_EXPOSED`, because no supported host exposes the version a live
+session holds — the same rule ADR 0014 applies to `plugin-status`. Delivery and activation stay
+separate dimensions, and the artifact carries each host's exact activation action (a new Codex task;
+`/reload-plugins` or a Claude Code restart) instead of a verdict. A green `deliver` job means the
+next session resolves this release, never that the current one did.
+
+**How it fails.** Fail-closed everywhere: a checkout that is not `GITHUB_SHA`, an incomplete or
+divergent witness, a failed `npm ls`, an absent pinned package, a CLI whose npm version or binary
+banner is not the pin, an unusable environment, a refused install, a marketplace that is not exactly
+this repository on exactly `stable`, an unknown or mismatched marketplace commit, a refused or
+re-refused host path, a ledger entry outside the allowed roots, a missing bundle, an undigestible
+bundle, a digest that differs from the committed witness, an execution copy that does not
+reproduce the attested bytes, two plugins or two hosts disagreeing on the same bundle, or a smoke
+that did not run are each a named reason that clears `ok` and exits non-zero. Absence is never a
+neutral state, and an invalid authority stops the effects it was supposed to authorise rather than
+merely being reported afterwards.
+
+**A failure always leaves an artifact, and the artifact is the authority.** The reservation step is
+the **first** step of the `deliver` job — before the checkout, before any provisioning — and writes a
+`stage: "placeholder"` JSON at the uploaded path, so a failed checkout, a failed provisioning, an
+import error, a syntax error or a crash before `main()` still uploads a parseable diagnostic. What it
+cannot cover is honest to state: a runner that dies before any step starts, or an infrastructure
+failure that prevents the upload itself, is outside the workflow's control. The script overwrites the
+placeholder with `stage: "final"`, then re-reads the bytes it just wrote and requires them to be
+**byte-identical** to the rendering of the verdict this run computed. Equality is the check rather
+than a structural re-validation, because a structural check still accepts a minimal hand-written
+document carrying only `schemaVersion`, `kind`, `stage`, `ok`, `release` and `run`. A truncated write,
+a partial rewrite, a flipped `ok`, a placeholder left in place (`PROOF_PLACEHOLDER_NOT_REPLACED`) and
+a forged minimal archive (`PROOF_ARCHIVE_MISMATCH`) therefore all exit non-zero. Identity is checked
+with `proofBelongsToRun` against both the release identity *and* the run identity
+(`GITHUB_REPOSITORY`, `GITHUB_RUN_ID`, `GITHUB_RUN_ATTEMPT`): two attempts of one tag share a release
+identity, so the attempt is what separates them, and an artifact left by an earlier attempt is a
+genuine, whole proof of the wrong run.
+
+**Host CLIs are pinned in the repository.** `HOST_CLI_SPECIFICATION` in
+`scripts/prove-stable-delivery.ts` is the authority — `@openai/codex@0.147.0` and
+`@anthropic-ai/claude-code@2.1.229` — and `plugins/plugin-parity.test.ts` fails when the workflow
+drifts from it. A repository variable would put the identity of the interface under proof outside the
+commit: an unset one is silently empty, and a changed one rewrites what a past run meant. The proof
+archives all four facts per host: the package requested, the version expected, the package npm
+actually resolved, and the normalised `--version` the binary on `PATH` prints. Both readings must
+match the pin, because a stale global install can shadow a fresh one.
+
+The hostile scenarios each carry a deterministic regression in
+`scripts/test/prove-stable-delivery.test.ts`; the decision layer is pure, so they run without a
+release. The first real post-release execution remains a live witness that no offline test replaces.
+
 Local/manual fallback remains:
 
 ```bash
