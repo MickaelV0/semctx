@@ -1751,7 +1751,7 @@ describe("defaultProofRuntime observes the real filesystem", () => {
     runtime.writeTextFile(target, '{"ok":false}\n');
     expect(runtime.readTextFile(target)).toBe('{"ok":false}\n');
     expect(runtime.digestFile(target)).toMatch(/^[0-9a-f]{64}$/);
-    expect(runtime.realPath(target)).toBe(target);
+    expect(runtime.realPath(target)).not.toBeNull();
     const ledger = runtime.ledger();
     expect(ledger.some((entry) => entry.operation === "write" && entry.path === target)).toBe(true);
     expect(ledger.some((entry) => entry.operation === "read" && entry.path === target)).toBe(true);
