@@ -179,7 +179,7 @@ function proveWith(
     witnesses: witnesses(witnessOverrides),
     isolation: isolation(isolationOverrides),
     hosts: [host("codex", overrides.codex), host("claude", overrides.claude)],
-    platform: "linux",
+    platform: process.platform,
   });
 }
 
@@ -628,6 +628,14 @@ describe("hostile 7 — a path a host returns is a claim, not a location", () =>
     expect(isLocalCanonicalPath("/tmp/sandbox/cache", "linux")).toBe(true);
   });
 
+  test("a POSIX backslash remains filename data, never a directory separator", () => {
+    expect(isWithinRoot("/tmp/sandbox\\evil", "/tmp/sandbox", "linux")).toBe(false);
+    expect(isLocalCanonicalPath("/tmp/sandbox\\evil", "linux")).toBe(true);
+    const oneLongFilename = `/tmp/${Array.from({ length: 80 }, (_value, index) => `s${index}`).join("\\")}`;
+    expect(isLocalCanonicalPath(oneLongFilename, "linux")).toBe(true);
+    expect(isWithinRoot("C:\\sandbox\\cache", "C:\\sandbox", "win32")).toBe(true);
+  });
+
   test("a Windows device name is a device wherever it appears in the path", () => {
     expect(isLocalCanonicalPath("C:/sandbox/NUL/cache", "win32")).toBe(false);
     expect(isLocalCanonicalPath("C:/sandbox/COM1.txt/cache", "win32")).toBe(false);
@@ -777,6 +785,7 @@ describe("host confinement is imposed, not inherited", () => {
     expect(codex["CODEX_HOME"]).toBe("/tmp/sandbox/codex/.codex");
     expect(codex["HOME"]).toBe("/tmp/sandbox/codex");
     expect(codex["SEMCTX_ROOT"]).toBeUndefined();
+    expect(Object.hasOwn(codex, "SEMCTX_ROOT")).toBe(false);
     expect(codex["GIT_DIR"]).toBeUndefined();
     expect(codex["GIT_CONFIG_GLOBAL"]).toBeUndefined();
     expect(codex["GIT_SSH_COMMAND"]).toBeUndefined();
@@ -786,6 +795,8 @@ describe("host confinement is imposed, not inherited", () => {
 
     const claude = hostEnvironment("claude", "/tmp/sandbox/claude", hostile);
     expect(claude["CODEX_HOME"]).toBeUndefined();
+    expect(Object.hasOwn(claude, "CODEX_HOME")).toBe(false);
+    expect(Object.hasOwn(claude, "SEMCTX_ROOT")).toBe(false);
     for (const value of Object.values({ ...codex, ...claude })) {
       expect(value ?? "").not.toContain("maintainer");
     }
@@ -1740,9 +1751,11 @@ describe("defaultProofRuntime observes the real filesystem", () => {
     runtime.writeTextFile(target, '{"ok":false}\n');
     expect(runtime.readTextFile(target)).toBe('{"ok":false}\n');
     expect(runtime.digestFile(target)).toMatch(/^[0-9a-f]{64}$/);
+    expect(runtime.realPath(target)).toBe(target);
     const ledger = runtime.ledger();
     expect(ledger.some((entry) => entry.operation === "write" && entry.path === target)).toBe(true);
     expect(ledger.some((entry) => entry.operation === "read" && entry.path === target)).toBe(true);
+    expect(ledger.some((entry) => entry.operation === "stat" && entry.path === target)).toBe(true);
   });
 
   test("the witness is read from a commit's blob, not from the working tree", () => {
