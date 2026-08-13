@@ -12,6 +12,7 @@ import {
   renderSharedLifecycleContract,
   type SkillHost,
 } from "../scripts/build-plugin-runtime.ts";
+import { HOST_CLI_SPECIFICATION } from "../scripts/prove-stable-delivery.ts";
 
 const repoRoot = resolve(import.meta.dir, "..");
 
@@ -430,6 +431,93 @@ describe("Codex and Claude Code plugin parity", () => {
     expect(confirm).toBeGreaterThan(publish);
     expect(stable).toBeGreaterThan(confirm);
     expect(release).toBeGreaterThan(stable);
+  });
+
+  test("proves stable marketplace delivery only after npm and stable carry this commit", () => {
+    const workflow = read(".github/workflows/release.yml");
+    const parsed = Bun.YAML.parse(workflow) as {
+      jobs: Record<string, {
+        needs?: string | string[];
+        steps: Array<{ name?: string; run?: string; if?: string; env?: Record<string, string>; with?: Record<string, unknown> }>;
+      }>;
+    };
+    const deliver = parsed.jobs["deliver"];
+    expect(deliver).toBeDefined();
+
+    // Ordering is the invariant: installing from a marketplace that has not been promoted would
+    // prove the previous release. `needs` is what enforces it, so it is asserted structurally.
+    expect(parsed.jobs["promote"]?.needs).toBe("publish");
+    expect(deliver?.needs).toBe("promote");
+
+    const steps = deliver?.steps ?? [];
+    const stepNames = steps.map((step) => step.name ?? "");
+    expect(stepNames).toContain("Reserve the delivery proof artifact");
+    expect(stepNames).toContain("Provision both host CLIs");
+    expect(stepNames).toContain("Prove both hosts can install the promoted release");
+    expect(stepNames).toContain("Upload the delivery proof");
+
+    // The proof must be archivable with the run that produced it, including when the run failed:
+    // a red job with no artifact cannot be diagnosed.
+    const upload = steps.find((step) => step.name === "Upload the delivery proof");
+    expect(upload?.if).toBe("always()");
+    expect(upload?.with?.["if-no-files-found"]).toBe("error");
+    expect(upload?.with?.["name"]).toBe("stable-delivery-proof");
+
+    // The placeholder is the only thing that survives a failure *before* the script can be
+    // imported — a failed checkout, a failed provisioning, an import or syntax error, a crash at
+    // startup. It must therefore be the job's very first step, before the checkout itself, and it
+    // must be a stage the read-back refuses rather than evidence.
+    const uploadedPath = upload?.with?.["path"];
+    const uploaded = typeof uploadedPath === "string" ? uploadedPath : "";
+    const reserveIndex = stepNames.indexOf("Reserve the delivery proof artifact");
+    const provisionIndex = stepNames.indexOf("Provision both host CLIs");
+    const proveIndex = stepNames.indexOf("Prove both hosts can install the promoted release");
+    expect(reserveIndex).toBe(0);
+    expect(reserveIndex).toBeLessThan(provisionIndex);
+    expect(provisionIndex).toBeLessThan(proveIndex);
+    // Nothing that can fail may precede it — including the checkout.
+    expect(steps.slice(0, reserveIndex)).toEqual([]);
+
+    const reserve = steps[reserveIndex];
+    const reserveScript = reserve?.run ?? "";
+    expect(reserveScript).toContain('"stage": "placeholder"');
+    expect(reserveScript).toContain('"ok": false');
+    expect(reserveScript).toContain('"kind": "stable_delivery_proof"');
+    // One path, shared by the reservation, the script and the upload. A placeholder written
+    // somewhere the upload does not read would guarantee nothing.
+    const reservedPath = reserve?.env?.["SEMCTX_DELIVERY_PROOF_OUTPUT"] ?? "";
+    const provedPath = steps[proveIndex]?.env?.["SEMCTX_DELIVERY_PROOF_OUTPUT"] ?? "";
+    expect(reservedPath).not.toBe("");
+    expect(reservedPath).toBe(provedPath);
+    expect(reservedPath.startsWith(uploaded)).toBe(true);
+
+    // Host CLIs are pinned in the repository, not read from a mutable repository variable: an
+    // unset variable is silently empty, and a changed one rewrites what a past run meant.
+    const provision = steps.find((step) => step.name === "Provision both host CLIs")?.run ?? "";
+    for (const host of ["codex", "claude"] as const) {
+      expect(provision).toContain(HOST_CLI_SPECIFICATION[host].specifier);
+    }
+    expect(provision).toContain("command -v codex");
+    expect(provision).toContain("command -v claude");
+    expect(provision).not.toContain("|| true");
+    // No part of the delivery job may take a host CLI identity from Actions configuration.
+    expect(workflow).not.toContain("vars.CODEX_CLI_PACKAGE");
+    expect(workflow).not.toContain("vars.CLAUDE_CLI_PACKAGE");
+
+    // The smokes run against a repository outside both the checkout and every plugin cache.
+    const proveStep = steps.find((step) => step.name === "Prove both hosts can install the promoted release");
+    const prove = proveStep?.run ?? "";
+    expect(prove).toContain("git init --quiet \"$SEMCTX_FOREIGN_REPOSITORY\"");
+    expect(prove).toContain("bun scripts/prove-stable-delivery.ts");
+    expect(prove).not.toContain("|| true");
+    expect(workflow).not.toContain("continue-on-error: true");
+
+    // The guaranteed failure artifact is only guaranteed if it is written where the upload reads.
+    // A proof path outside the uploaded directory would upload an empty folder on every abort.
+    const output = proveStep?.env?.["SEMCTX_DELIVERY_PROOF_OUTPUT"] ?? "";
+    expect(output).not.toBe("");
+    expect(uploaded).not.toBe("");
+    expect(output.startsWith(uploaded)).toBe(true);
   });
 
   test("documents the shared Plane A, B, and C workflow for both hosts", () => {
