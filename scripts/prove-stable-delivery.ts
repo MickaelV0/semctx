@@ -386,10 +386,10 @@ const VERSION_SEGMENT =
  * a legitimate deep path.
  */
 function normalisePath(value: string, platform: NodeJS.Platform): string {
+  if (platform !== "win32") return value.replace(/\/+$/, "");
   const withoutPrefix = value.replace(/^\\\\\?\\(UNC\\)?/, (_match, unc: string | undefined) =>
     unc === undefined ? "" : "\\\\");
-  const slashed = withoutPrefix.replaceAll("\\", "/").replace(/\/+$/, "");
-  return platform === "win32" ? slashed.toLowerCase() : slashed;
+  return withoutPrefix.replaceAll("\\", "/").replace(/\/+$/, "").toLowerCase();
 }
 
 /**
@@ -421,7 +421,7 @@ export function isLocalCanonicalPath(candidate: string, platform: NodeJS.Platfor
   if (/^[\\/]{2}/.test(candidate)) return false;
   const absolute = platform === "win32" ? /^[A-Za-z]:[\\/]/.test(candidate) : candidate.startsWith("/");
   if (!absolute) return false;
-  const segments = candidate.split(/[\\/]+/).slice(1);
+  const segments = candidate.split(platform === "win32" ? /[\\/]+/ : /\/+/).slice(1);
   if (segments.length > MAX_HOST_PATH_SEGMENTS) return false;
   for (const segment of segments) {
     if (segment.length === 0) continue; // A trailing separator is not a segment.
@@ -1126,7 +1126,7 @@ export function hostEnvironment(
   // platform nor host can fall back to an inherited value.
   environment["HOME"] = hostRoot;
   environment["USERPROFILE"] = hostRoot;
-  environment["CODEX_HOME"] = host === "codex" ? `${hostRoot}/.codex` : undefined;
+  if (host === "codex") environment["CODEX_HOME"] = `${hostRoot}/.codex`;
   environment["XDG_CONFIG_HOME"] = `${hostRoot}/.config`;
   environment["XDG_DATA_HOME"] = `${hostRoot}/.local/share`;
   environment["XDG_STATE_HOME"] = `${hostRoot}/.local/state`;
@@ -1137,7 +1137,6 @@ export function hostEnvironment(
   environment["TEMP"] = `${hostRoot}/tmp`;
   environment["TMP"] = `${hostRoot}/tmp`;
   // The plugin MCP resolves its target from SEMCTX_ROOT; an inherited one would retarget the smoke.
-  environment["SEMCTX_ROOT"] = undefined;
   return environment;
 }
 
@@ -2269,6 +2268,7 @@ export function defaultProofRuntime(limits: McpLimits = DEFAULT_MCP_LIMITS): Del
       }
     },
     realPath(target) {
+      note("stat", target);
       try {
         return realpathSync.native(target);
       } catch {
