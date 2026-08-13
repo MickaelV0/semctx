@@ -139,11 +139,12 @@ and be exactly `stable`. Claude reports it in the marketplace list; Codex record
 **Nothing a host says is a location, and nothing stays admitted.** Every path a host CLI hands back
 — Claude's `installLocation` and `installPath`, Codex's `root`, and the cache path derived from a
 host-reported version — is admitted only after it is proven absolute, canonical, local, free of UNC
-and device forms, inside the temporary sandbox, and identical to its own resolved real path, which is
-what refuses a symlink, junction, reparse point or short-name alias. Admission is a fact about a
-moment, so every consumed descendant — the manifest, each `dist` bundle, each entrypoint, the
-snapshot metadata — is re-admitted together with its anchor immediately before it is read, digested
-or launched. A version that is not a semver token never becomes a path segment, and an escaped path
+and device forms, inside the temporary sandbox, and mapped to the same resolved suffix below that
+sandbox. The sandbox's physical root is the baseline, so a runner-owned junction above it is allowed
+while a symlink, junction, reparse point or short-name alias at or below it is refused. Admission is
+a fact about a moment, so every consumed descendant — the manifest, each `dist` bundle, each
+entrypoint, the snapshot metadata — is re-admitted together with its anchor immediately before it is
+read, digested or launched. A version that is not a semver token never becomes a path segment, and an escaped path
 is refused lexically, so the filesystem is never even asked about it.
 
 **Isolation: what is imposed, what is observed, and what is not.** Three distinct claims, kept

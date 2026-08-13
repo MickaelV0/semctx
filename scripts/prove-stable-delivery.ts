@@ -435,8 +435,9 @@ export function isLocalCanonicalPath(candidate: string, platform: NodeJS.Platfor
  * Admit a path, or name why it is refused. Every host answer *and every descendant this proof
  * actually consumes* — manifest, each dist bundle, each executable, the marketplace metadata —
  * passes through here before it is read, digested, executed or handed to Git. The filesystem half
- * refuses a symlink, junction, reparse point or short-name alias by requiring the path's real name
- * to be itself, and to still be inside the isolated root once resolved.
+ * refuses a symlink, junction, reparse point or short-name alias below the isolated root by
+ * requiring the path's resolved suffix to match its lexical suffix. The root's own resolved path is
+ * the baseline because Windows runners may place their temporary directory below a system junction.
  */
 export function admitHostPath(
   label: string,
@@ -453,17 +454,33 @@ export function admitHostPath(
     return refuse("HOST_PATH_ESCAPED_SANDBOX");
   }
 
+  // The sandbox root is created by this proof, but its runner-owned ancestors may legitimately be
+  // junctions (GitHub's Windows runner temp directory is one example). Reject a linked root itself,
+  // then use its physical location as the baseline for every descendant.
+  const sandboxKind = runtime.pathKind(sandboxRoot);
+  if (sandboxKind === "link") return refuse("HOST_PATH_IS_LINK");
+  if (sandboxKind !== "directory") return refuse("HOST_PATH_UNREADABLE");
+  const realSandboxRoot = runtime.realPath(sandboxRoot);
+  if (!isNonEmpty(realSandboxRoot)) return refuse("HOST_PATH_UNREADABLE");
+
   const kind = runtime.pathKind(observed);
   if (kind === "link") return refuse("HOST_PATH_IS_LINK");
   if (kind === "absent" || kind === "unreadable") return refuse("HOST_PATH_UNREADABLE");
 
   const real = runtime.realPath(observed);
   if (!isNonEmpty(real)) return refuse("HOST_PATH_UNREADABLE");
-  // A junction, symlink, reparse point or 8.3 alias resolves to a name that is not the one given.
-  if (normalisePath(real, platform) !== normalisePath(observed, platform)) return refuse("HOST_PATH_IS_LINK");
-  if (!isWithinRoot(real, sandboxRoot, platform)) return refuse("HOST_PATH_ESCAPED_SANDBOX");
+  const normalisedRoot = normalisePath(sandboxRoot, platform);
+  const suffix = normalisePath(observed, platform).slice(normalisedRoot.length);
+  const expectedReal = `${normalisePath(realSandboxRoot, platform)}${suffix}`;
+  // A link or 8.3 alias at/below the sandbox changes the physical suffix. An alias above it changes
+  // both real paths equally and is therefore an accepted property of the runner, not a host escape.
+  if (normalisePath(real, platform) !== expectedReal) return refuse("HOST_PATH_IS_LINK");
+  if (!isWithinRoot(real, realSandboxRoot, platform)) return refuse("HOST_PATH_ESCAPED_SANDBOX");
 
-  return { label, candidate: observed, admitted: real, reason: null };
+  // Preserve the lexical path for subsequent operations. Its physical target has been proven above,
+  // but returning that physical spelling would make the next re-admission compare it against the
+  // still-logical sandbox root and falsely report an escape under a runner-owned ancestor junction.
+  return { label, candidate: observed, admitted: observed, reason: null };
 }
 
 /**

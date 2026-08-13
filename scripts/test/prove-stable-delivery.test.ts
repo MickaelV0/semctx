@@ -8,6 +8,7 @@ import {
   admitHostPath,
   bundlesAttested,
   cliIdentityProven,
+  ConfinedAccess,
   CONTROL_STATUS_TOOL,
   defaultMcpHandshake,
   evaluatePreflight,
@@ -52,6 +53,7 @@ import {
   type IsolationObservation,
   type LedgerEntry,
   type McpLimits,
+  type PathAdmission,
   type ProofHost,
   type ReleaseIdentity,
   type RunIdentity,
@@ -1653,6 +1655,59 @@ function receivedMethods(path: string): string[] {
 }
 
 describe("defaultProofRuntime observes the real filesystem", () => {
+  test("a real sandbox below a linked temp ancestor still admits its own descendants", () => {
+    const runtime = defaultProofRuntime();
+    const outer = temporaryRoot();
+    const physical = join(outer, "physical");
+    const logical = join(outer, "logical");
+    mkdirSync(physical);
+    symlinkSync(physical, logical, process.platform === "win32" ? "junction" : "dir");
+    const sandbox = join(logical, "sandbox");
+    const inside = join(sandbox, "codex");
+    mkdirSync(inside, { recursive: true });
+
+    expect(runtime.pathKind(sandbox)).toBe("directory");
+    expect(runtime.pathKind(inside)).toBe("directory");
+    expect(runtime.realPath(sandbox)).not.toBe(sandbox);
+    const admission = admitHostPath("codex.cache", inside, sandbox, runtime, process.platform);
+    expect(admission.reason).toBeNull();
+    expect(admission.admitted).toBe(inside);
+  });
+
+  test("a path below a linked temp ancestor remains usable through admission and re-admission", () => {
+    const runtime = defaultProofRuntime();
+    const outer = temporaryRoot();
+    const physical = join(outer, "physical");
+    const logical = join(outer, "logical");
+    mkdirSync(physical);
+    symlinkSync(physical, logical, process.platform === "win32" ? "junction" : "dir");
+    const sandbox = join(logical, "sandbox");
+    const cache = join(sandbox, "codex");
+    const manifest = join(cache, "plugin.json");
+    mkdirSync(cache, { recursive: true });
+    writeFileSync(manifest, '{"name":"semctx-control"}\n', "utf8");
+    const admissions: PathAdmission[] = [];
+    const access = new ConfinedAccess(runtime, sandbox, admissions);
+
+    const admittedCache = access.admit("codex.cache", cache);
+    expect(admittedCache).toBe(cache);
+    expect(access.read("codex.manifest", manifest, admittedCache)).toBe('{"name":"semctx-control"}\n');
+    expect(admissions.every((entry) => entry.reason === null)).toBe(true);
+  });
+
+  test("a linked sandbox root is still refused when its parent is ordinary", () => {
+    const runtime = defaultProofRuntime();
+    const outer = temporaryRoot();
+    const physical = join(outer, "physical");
+    const sandbox = join(outer, "sandbox");
+    mkdirSync(join(physical, "codex"), { recursive: true });
+    symlinkSync(physical, sandbox, process.platform === "win32" ? "junction" : "dir");
+
+    expect(runtime.pathKind(sandbox)).toBe("link");
+    expect(admitHostPath("codex.cache", join(sandbox, "codex"), sandbox, runtime, process.platform).reason)
+      .toBe("HOST_PATH_IS_LINK");
+  });
+
   test("a junction is a link to pathKind and is refused by admitHostPath", () => {
     const runtime = defaultProofRuntime();
     const sandbox = temporaryRoot();
