@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { ToolPublicError } from "../src/public-tool-error";
@@ -29,8 +29,12 @@ describe("createRepositoryRootResolver host placeholders", () => {
     const resolver = createRepositoryRootResolver("${CLAUDE_PROJECT_DIR}");
     expect(resolver.current()).toBeUndefined();
     const root = resolve(mkdtempSync(join(tmpdir(), "semctx-root-")));
-    expect(resolver.resolve(root)).toBe(root);
-    expect(resolver.current()).toBe(root);
+    // resolve() can remain on a Windows 8.3 alias (RUNNER~1); the resolver
+    // returns realpathSync.native(), same contract as loadConfig / ADR 0012.
+    const canonical = realpathSync.native(root);
+    expect(resolver.resolve(root)).toBe(canonical);
+    expect(resolver.resolve(canonical)).toBe(canonical);
+    expect(resolver.current()).toBe(canonical);
   });
 
   test("still fails closed on a real relative process root", () => {
