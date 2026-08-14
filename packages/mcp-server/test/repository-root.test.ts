@@ -1,5 +1,5 @@
-import { describe, expect, test } from "bun:test";
-import { mkdtempSync, realpathSync } from "node:fs";
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { ToolPublicError } from "../src/public-tool-error";
@@ -7,6 +7,14 @@ import {
   createRepositoryRootResolver,
   optionalProcessBoundRoot,
 } from "../src/repository-root";
+
+const temporaryRoots: string[] = [];
+
+afterEach(() => {
+  for (const root of temporaryRoots.splice(0)) {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 describe("optionalProcessBoundRoot", () => {
   test("treats missing, empty, and unsubstituted host placeholders as unset", () => {
@@ -16,6 +24,9 @@ describe("optionalProcessBoundRoot", () => {
     expect(optionalProcessBoundRoot("${CLAUDE_PROJECT_DIR}")).toBeUndefined();
     expect(optionalProcessBoundRoot("  ${CLAUDE_PROJECT_DIR}  ")).toBeUndefined();
     expect(optionalProcessBoundRoot("${CLAUDE_PROJECT_DIR}/nested")).toBeUndefined();
+    expect(optionalProcessBoundRoot("${FOO}")).toBeUndefined();
+    expect(optionalProcessBoundRoot("${GROK_WORKSPACE}")).toBeUndefined();
+    expect(optionalProcessBoundRoot("${FOO}/nested")).toBeUndefined();
   });
 
   test("keeps a concrete value for later canonicalization", () => {
@@ -26,9 +37,10 @@ describe("optionalProcessBoundRoot", () => {
 
 describe("createRepositoryRootResolver host placeholders", () => {
   test("does not bind construction on an unexpanded placeholder", () => {
-    const resolver = createRepositoryRootResolver("${CLAUDE_PROJECT_DIR}");
+    const resolver = createRepositoryRootResolver("${GROK_WORKSPACE}");
     expect(resolver.current()).toBeUndefined();
     const root = resolve(mkdtempSync(join(tmpdir(), "semctx-root-")));
+    temporaryRoots.push(root);
     // resolve() can remain on a Windows 8.3 alias (RUNNER~1); the resolver
     // returns realpathSync.native(), same contract as loadConfig / ADR 0012.
     const canonical = realpathSync.native(root);

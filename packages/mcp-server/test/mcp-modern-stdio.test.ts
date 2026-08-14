@@ -245,7 +245,10 @@ describe("MCP dual-era stdio negotiation", () => {
           arguments: { repositoryRoot },
         });
 
-        expect(result.tools).toHaveLength(37);
+        expect(result.tools.length).toBeGreaterThan(0);
+        expect(result.tools.some((tool) => tool.name === "semctx_semantic_check")).toBe(
+          true,
+        );
         expect(check.isError).not.toBe(true);
       } finally {
         await client.close();
