@@ -176,6 +176,8 @@ function fakeRuntime(
             status: "installed",
             version: "0.1.17",
             source: SEMCTX_SOURCE,
+            repo_key: "grok-test",
+            path: "/tmp/installed-plugins/grok-test",
           }];
         return ok(JSON.stringify(state));
       }
@@ -1417,7 +1419,7 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
       "grok",
       "plugin",
       "install",
-      "semctx",
+      "hoklims/semctx@stable#plugins/grok",
       "--trust",
     ]);
     expect(runtime.commands).toContainEqual(["grok", "plugin", "enable", "semctx"]);
@@ -1435,6 +1437,8 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
         status: "installed",
         version: "0.1.16",
         source: SEMCTX_SOURCE,
+        repo_key: "grok-test",
+        path: "/tmp/marketplace-cache/hoklims-semctx/plugins/grok",
       }],
     });
     const report = executeInstall(
@@ -1454,6 +1458,135 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
     ]);
     expect(runtime.commands).toContainEqual(["grok", "plugin", "update", "semctx"]);
     expect(runtime.commands).toContainEqual(["grok", "plugin", "enable", "semctx"]);
+  });
+
+  test("fails honestly when an explicitly requested Grok host is unavailable", () => {
+    const runtime = fakeRuntime({ grok: false });
+    const report = executeInstall(
+      "C:\\work\\project",
+      parseArgs(["install", "--host", "grok", "--skip-setup"]),
+      runtime,
+    );
+
+    expect(report.ok).toBe(false);
+    expect(report.hosts.grok.status).toBe("missing");
+    expect(runtime.commands.some((command) => command.includes("install"))).toBe(false);
+  });
+
+  test("fails closed when Grok remains on the leftover Claude leaf", () => {
+    const runtime = fakeRuntime({
+      grok: true,
+      grokPlugins: [{
+        name: "semctx",
+        status: "installed",
+        version: "0.1.17",
+        source: SEMCTX_SOURCE,
+        repo_key: "claude-code-e68d3aad",
+        path: "/home/mickael/.grok/installed-plugins/claude-code-e68d3aad",
+      }],
+    });
+    const report = executeInstall(
+      "C:\\work\\project",
+      parseArgs(["install", "--host", "grok", "--skip-setup"]),
+      runtime,
+    );
+
+    expect(report.ok).toBe(false);
+    expect(report.hosts.grok.status).toBe("conflict");
+    expect(report.hosts.grok.error).toContain("Grok leaf");
+    expect(runtime.commands.some((command) => command.includes("install"))).toBe(false);
+  });
+
+  test("fails closed when Grok verify cannot see the Grok leaf", () => {
+    const runtime = fakeRuntime({
+      grok: true,
+      grokPluginsAfter: [{
+        name: "semctx",
+        status: "installed",
+        version: "0.1.17",
+        source: SEMCTX_SOURCE,
+        repo_key: "claude-code-e68d3aad",
+        path: "/tmp/installed-plugins/claude-code-e68d3aad",
+      }],
+    });
+    const report = executeInstall(
+      "C:\\work\\project",
+      parseArgs(["install", "--host", "grok", "--skip-setup"]),
+      runtime,
+    );
+
+    expect(report.ok).toBe(false);
+    expect(report.hosts.grok.status).toBe("failed");
+    expect(report.hosts.grok.error).toContain("Grok leaf");
+  });
+
+  test("fails closed when Grok verify sees a missing version", () => {
+    const runtime = fakeRuntime({
+      grok: true,
+      grokPluginsAfter: [{
+        name: "semctx",
+        status: "installed",
+        source: SEMCTX_SOURCE,
+        repo_key: "grok-test",
+      }],
+    });
+    const report = executeInstall(
+      "C:\\work\\project",
+      parseArgs(["install", "--host", "grok", "--skip-setup"]),
+      runtime,
+    );
+
+    expect(report.ok).toBe(false);
+    expect(report.hosts.grok.status).toBe("failed");
+    expect(report.hosts.grok.error).toContain("vunknown");
+  });
+
+  test("does not treat a Semctx marketplace-cache Grok leaf as conflict", () => {
+    const runtime = fakeRuntime({
+      grok: true,
+      grokMarketplaces: [{
+        name: "semctx-stable",
+        source: { url: SEMCTX_SOURCE, branch: null },
+      }],
+      grokPlugins: [{
+        name: "semctx",
+        status: "installed",
+        version: "0.1.16",
+        source: "/tmp/marketplace-cache/hoklims-semctx/plugins/grok",
+        repo_key: "grok-test",
+        path: "/tmp/installed-plugins/grok-test",
+        marketplace: "semctx-stable",
+      }],
+    });
+    const report = executeInstall(
+      "C:\\work\\project",
+      parseArgs(["install", "--host", "grok", "--skip-setup"]),
+      runtime,
+    );
+
+    expect(report.ok).toBe(true);
+    expect(report.hosts.grok.status).toBe("updated");
+    expect(runtime.commands).toContainEqual(["grok", "plugin", "update", "semctx"]);
+  });
+
+  test("refuses a Grok marketplace named semctx-stable that points elsewhere", () => {
+    const runtime = fakeRuntime({
+      grok: true,
+      grokMarketplaces: [{
+        name: "semctx-stable",
+        source: { url: "https://github.com/someone-else/semctx.git", branch: null },
+      }],
+    });
+    const report = executeInstall(
+      "C:\\work\\project",
+      parseArgs(["install", "--host", "grok", "--skip-setup"]),
+      runtime,
+    );
+
+    expect(report.ok).toBe(false);
+    expect(report.hosts.grok.status).toBe("conflict");
+    expect(report.hosts.grok.error).toContain("marketplace");
+    expect(runtime.commands.some((command) => command.includes("add"))).toBe(false);
   });
 
   test("refuses a Grok plugin named semctx that points at another source", () => {

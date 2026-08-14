@@ -32,7 +32,7 @@ Or Grok-native, without the installer CLI:
 
 ```bash
 grok plugin marketplace add hoklims/semctx
-grok plugin install semctx --trust
+grok plugin install hoklims/semctx@stable#plugins/grok --trust
 grok plugin enable semctx
 ```
 

@@ -2,7 +2,7 @@ import packageJson from "../../package.json";
 import { isSemctxError, SemctxError } from "@semantic-context/core";
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
-import { lstatSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve, sep } from "node:path";
 import type { ParsedArgs } from "../args";
@@ -18,6 +18,10 @@ const CODEX_PLUGIN = "semctx-control";
 const CLAUDE_MARKETPLACE = "semctx-stable";
 const LEGACY_CLAUDE_MARKETPLACE = "semctx";
 const CLAUDE_PLUGIN = "semctx";
+const GROK_PLUGIN = "semctx";
+const GROK_MARKETPLACE_SOURCE = SEMCTX_CODEX_SOURCE;
+const GROK_PLUGIN_SOURCE = `${SEMCTX_CODEX_SOURCE}@${MARKETPLACE_REF}#plugins/grok`;
+const GROK_RESERVED_MARKETPLACE_NAMES = ["semctx-stable", "semctx"] as const;
 /** Split runtime shipped by the plugin; all three must be present for a payload to count as whole. */
 const CODEX_PLUGIN_RUNTIME_BUNDLES = ["semctx-mcp.js", "semctx-shared.js", "semctx.js"] as const;
 /**
@@ -218,6 +222,7 @@ interface GrokPlugin {
   path?: unknown;
   source?: unknown;
   marketplace?: unknown;
+  repo_key?: unknown;
 }
 
 function decode(bytes: Uint8Array | undefined): string {
@@ -1011,14 +1016,48 @@ function normalizeGitSource(value: unknown): string {
     .replace(/\.git$/, "");
 }
 
+function sourceRef(value: unknown): unknown {
+  if (value !== null && typeof value === "object" && "url" in value) {
+    return (value as { url?: unknown }).url;
+  }
+  return value;
+}
+
 function isSemctxSource(value: unknown): boolean {
-  const normalized = normalizeGitSource(value);
+  const normalized = normalizeGitSource(sourceRef(value));
   return normalized === "hoklims/semctx"
     || normalized === "https://github.com/hoklims/semctx";
 }
 
+function looksLikeGitSource(value: unknown): boolean {
+  const raw = sourceRef(value);
+  if (typeof raw !== "string") return false;
+  const trimmed = raw.trim();
+  return trimmed.includes("github.com")
+    || /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(trimmed);
+}
+
 function grokMarketplaceUrl(item: GrokMarketplace): unknown {
   return item.source?.url;
+}
+
+/** True when the installed checkout is the Grok leaf, not the Claude leftover. */
+function isGrokHostLeaf(plugin: GrokPlugin): boolean {
+  const repoKey = typeof plugin.repo_key === "string" ? plugin.repo_key : "";
+  if (repoKey.startsWith("grok-")) return true;
+  if (repoKey.startsWith("claude-code-")) return false;
+
+  const pluginPath = typeof plugin.path === "string" ? plugin.path : "";
+  if (pluginPath.includes(`${sep}plugins${sep}grok`) || pluginPath.endsWith(`${sep}grok`)) {
+    return true;
+  }
+  if (pluginPath.includes(`${sep}plugins${sep}claude-code`)) return false;
+  if (pluginPath.length === 0) return false;
+
+  const rootMcp = join(pluginPath, ".mcp.json");
+  const claudeMcp = join(pluginPath, "plugins", "claude-code", ".mcp.json");
+  if (existsSync(claudeMcp) && !existsSync(rootMcp)) return false;
+  return existsSync(rootMcp) && !existsSync(claudeMcp);
 }
 
 function installCodex(
@@ -1325,16 +1364,34 @@ function installGrok(
     return;
   }
 
-  const installedPlugin = plugins.find((item) => item.name === "semctx");
-  if (
-    installedPlugin !== undefined
-    && installedPlugin.source !== undefined
-    && installedPlugin.source !== null
-    && !isSemctxSource(installedPlugin.source)
-  ) {
+  const reserved = marketplaces.find((item) => {
+    const name = typeof item.name === "string" ? item.name : "";
+    return (GROK_RESERVED_MARKETPLACE_NAMES as readonly string[]).includes(name)
+      && !isSemctxSource(grokMarketplaceUrl(item));
+  });
+  if (reserved !== undefined) {
+    const name = typeof reserved.name === "string" ? reserved.name : "semctx-stable";
     report.status = "conflict";
-    report.error = `Grok plugin "semctx" already points to another source`;
+    report.error = `Grok marketplace "${name}" already points to another source`;
     return;
+  }
+
+  const installedPlugin = plugins.find((item) => item.name === GROK_PLUGIN);
+  if (installedPlugin !== undefined) {
+    if (
+      looksLikeGitSource(installedPlugin.source)
+      && !isSemctxSource(installedPlugin.source)
+    ) {
+      report.status = "conflict";
+      report.error = `Grok plugin "${GROK_PLUGIN}" already points to another source`;
+      return;
+    }
+    if (!isGrokHostLeaf(installedPlugin)) {
+      report.status = "conflict";
+      report.error =
+        `Grok plugin "${GROK_PLUGIN}" is not the Grok leaf (plugins/grok). Uninstall it, then rerun`;
+      return;
+    }
   }
 
   const named = marketplaces.find((item) => isSemctxSource(grokMarketplaceUrl(item)));
@@ -1344,7 +1401,7 @@ function installGrok(
       root,
       report,
       "add Semctx Grok marketplace",
-      ["grok", "plugin", "marketplace", "add", "hoklims/semctx"],
+      ["grok", "plugin", "marketplace", "add", GROK_MARKETPLACE_SOURCE],
       dryRun,
     )) return;
   } else if (typeof named.name === "string" && named.name.length > 0 && !runMutation(
@@ -1358,8 +1415,8 @@ function installGrok(
 
   const installed = installedPlugin !== undefined;
   const pluginCommand = installed
-    ? ["grok", "plugin", "update", "semctx"]
-    : ["grok", "plugin", "install", "semctx", "--trust"];
+    ? ["grok", "plugin", "update", GROK_PLUGIN]
+    : ["grok", "plugin", "install", GROK_PLUGIN_SOURCE, "--trust"];
   if (!runMutation(
     runtime,
     root,
@@ -1373,7 +1430,7 @@ function installGrok(
     root,
     report,
     "enable Semctx Grok plugin",
-    ["grok", "plugin", "enable", "semctx"],
+    ["grok", "plugin", "enable", GROK_PLUGIN],
     dryRun,
   )) return;
 
@@ -1394,16 +1451,17 @@ function verifyGrokInstall(
   if (plugins === null) {
     error = `cannot inspect final Grok plugin state: ${compactError(result)}`;
   } else {
-    const installed = plugins.find((item) => item.name === "semctx");
+    const installed = plugins.find((item) => item.name === GROK_PLUGIN);
     if (installed === undefined) error = "plugin is not installed";
     else if (installed.status !== "installed") {
       const status = typeof installed.status === "string" ? installed.status : "unknown";
       error = `plugin status is ${status}, expected installed`;
-    } else if (
-      typeof installed.version === "string"
-      && installed.version !== packageJson.version
-    ) {
+    } else if (typeof installed.version !== "string") {
+      error = `expected plugin v${packageJson.version}, found vunknown`;
+    } else if (installed.version !== packageJson.version) {
       error = `expected plugin v${packageJson.version}, found v${installed.version}`;
+    } else if (!isGrokHostLeaf(installed)) {
+      error = `plugin is not the Grok leaf (plugins/grok)`;
     }
   }
   return recordVerification(report, "verify Semctx Grok plugin", command, error);

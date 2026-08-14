@@ -14,7 +14,8 @@ semctx install [--host auto|codex|claude|grok|all] [--skip-setup] [--dry-run] [-
 
 The default `auto` mode configures every detected Codex/Claude/Grok host and ignores hosts that are
 not installed. Grok installs add or refresh a marketplace whose source is `hoklims/semctx`, then
-`grok plugin install semctx --trust` (or `update`) and `grok plugin enable semctx`. Enable and
+`grok plugin install hoklims/semctx@stable#plugins/grok --trust` (or `update` of an already-Grok
+leaf) and `grok plugin enable semctx`. A leftover Claude-leaf `semctx` is `conflict`. Enable and
 trust are required: Grok plugins stay off until enabled, and MCP stays inert until trusted. Explicitly requested missing hosts fail honestly. Codex installations using the legacy
 `personal` or interim `semctx` marketplace names are migrated to `semctx-stable`; Claude's legacy
 `semctx` marketplace is migrated the same way. A different marketplace already named

@@ -17,7 +17,7 @@ Without the installer CLI — the plugin still ships its own MCP and CLI:
 
 ```bash
 grok plugin marketplace add hoklims/semctx
-grok plugin install semctx --trust
+grok plugin install hoklims/semctx@stable#plugins/grok --trust
 grok plugin enable semctx
 ```
 
@@ -26,13 +26,11 @@ MCP stays inert until trusted.
 
 ## Launch contract
 
-`.mcp.json` starts the bundled server and does **not** set `SEMCTX_ROOT`. The process pins on the
-first absolute `repositoryRoot` argument (ADR 0012). Grok's plugin adapter substitutes
-`${CLAUDE_PLUGIN_ROOT}` in `.mcp.json` `args` (same token it already expands for Claude-compat
-plugins). `GROK_PLUGIN_ROOT` is documented for hooks only.
-
-Do not set `SEMCTX_ROOT=${CLAUDE_PROJECT_DIR}` on this leaf. Grok does not expand that template
-in plugin env.
+`.mcp.json` starts the bundled server and sets `SEMCTX_ROOT=${CLAUDE_PROJECT_DIR}` as a sentinel
+so an inherited concrete `SEMCTX_ROOT` cannot bind the process. ADR 0012 treats that unexpanded
+placeholder as unset; the first absolute `repositoryRoot` argument still pins. Grok's plugin
+adapter substitutes `${CLAUDE_PLUGIN_ROOT}` in `.mcp.json` `args`. `GROK_PLUGIN_ROOT` is
+documented for hooks only.
 
 ## Claude leaf leftover
 
@@ -48,8 +46,9 @@ Grok does not substitute a plugin-root placeholder into skill text, and those va
 in the agent shell. The generated Grok skill ladder therefore:
 
 1. prefers connected MCP tools;
-2. resolves `<plugin-root>` via `grok plugin list --json` (`name === "semctx"`,
-   `status === "installed"`) plus `grok plugin details semctx` (optional `subdir`);
+2. resolves `<plugin-root>` via `grok plugin list --json` (`name === "semctx"`, Semctx source,
+   skip the leftover Claude leaf); use `<path>/plugins/grok` when the checkout still has that
+   child, otherwise `path` when it already contains `dist/semctx.js`;
 3. runs `bun "<plugin-root>/dist/semctx.js"`;
 4. falls back to a same-version global `semctx` only if that file cannot be resolved.
 

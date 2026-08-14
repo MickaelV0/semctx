@@ -135,6 +135,8 @@ describe("Codex, Claude Code, and Grok plugin parity", () => {
     expect(grok).not.toContain("CLAUDE_PLUGIN_ROOT");
     expect(grok).not.toContain("${GROK_PLUGIN_ROOT}");
     const grokFence = grok.match(/```text\n([\s\S]*?)```/)?.[1] ?? "";
+    expect(grokFence.length).toBeGreaterThan(0);
+    expect(grokFence).toContain("<plugin-root>/dist/semctx.js");
     expect(grokFence).not.toMatch(/bun\s+["']?\.\/dist\/semctx\.js/);
     expect(grok.indexOf("Plugin-bundled CLI")).toBeLessThan(grok.indexOf("Global `semctx` on PATH"));
   });
@@ -264,6 +266,7 @@ describe("Codex, Claude Code, and Grok plugin parity", () => {
       "plugins/grok/.mcp.json",
       "plugins/grok/README.md",
       "plugins/grok/plugin.json",
+      "plugins/grok/skills/semctx-control/SKILL.md",
       "plugins/claude-code/README.md",
       "plugins/claude-code/examples/guard.json",
       "README.md",
@@ -393,8 +396,8 @@ describe("Codex, Claude Code, and Grok plugin parity", () => {
     expect(grokMcp.mcpServers.semctx).toEqual({
       command: "bun",
       args: ["${CLAUDE_PLUGIN_ROOT}/dist/semctx-mcp.js"],
+      env: { SEMCTX_ROOT: "${CLAUDE_PROJECT_DIR}" },
     });
-    expect(grokMcp.mcpServers.semctx.env).toBeUndefined();
     expect(existsSync(resolve(repoRoot, "plugins/claude-code/bin/semctx-mcp-launcher.ts"))).toBe(false);
     const codexDistFiles = distFiles("semctx-control");
     const claudeDistFiles = distFiles("claude-code");
@@ -427,9 +430,10 @@ describe("Codex, Claude Code, and Grok plugin parity", () => {
     expect(claudeManifest.skills).toBeUndefined();
     expect(claudeManifest.hooks).toBeUndefined();
     expect(claudeManifest.mcpServers).toBeUndefined();
-    expect(marketplace.plugins.find((plugin) => plugin.name === "semctx")?.version).toBe(
-      claudeManifest.version,
-    );
+    expect(marketplace.plugins.find((plugin) => plugin.name === "semctx")).toMatchObject({
+      version: claudeManifest.version,
+      source: "./plugins/claude-code",
+    });
     expect(marketplace.name).toBe("semctx-stable");
     expect(codexMarketplace.name).toBe("semctx-stable");
     expect(codexMarketplace.plugins).toContainEqual({

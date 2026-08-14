@@ -283,7 +283,7 @@ and shared `semctx-control` skill (ADR 0015). `.mcp.json` launches the bundled
 
 ```bash
 grok plugin marketplace add hoklims/semctx
-grok plugin install semctx --trust
+grok plugin install hoklims/semctx@stable#plugins/grok --trust
 grok plugin enable semctx
 ```
 

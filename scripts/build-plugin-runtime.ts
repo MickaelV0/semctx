@@ -88,9 +88,13 @@ export function hostCliLadder(host: SkillHost): string {
 CLI (same release as the MCP bundle) without a global \`semctx\` install:
 
 1. **Plugin-bundled CLI** — run \`grok plugin list --json\`. Select the entry whose \`name\` is
-   \`semctx\` and whose \`status\` is \`installed\`. Read \`path\`. Then run
-   \`grok plugin details semctx\`. If details report a \`subdir\` (for example \`plugins/grok\`),
-   the plugin root is \`<path>/<subdir>\`; otherwise the plugin root is \`path\`. Invoke
+   \`semctx\`, whose \`source\` is \`hoklims/semctx\` or \`https://github.com/hoklims/semctx\`,
+   and whose \`path\` is an absolute filesystem path with no \`..\`, dollar signs, backticks, or quotes.
+   If \`repo_key\` starts with \`claude-code-\` or \`path\` is a checkout that contains
+   \`plugins/claude-code/.mcp.json\` at a child path and no \`.mcp.json\` at its root, skip it —
+   that is the leftover Claude leaf. If \`path\` is a checkout that contains
+   \`plugins/grok/dist/semctx.js\`, the plugin root is \`<path>/plugins/grok\`; if \`path\` already
+   contains \`.mcp.json\` and \`dist/semctx.js\`, the plugin root is \`path\`. Invoke
    \`bun "<plugin-root>/dist/semctx.js"\`. Never use \`bun ./dist/semctx.js\` from the user's
    repository cwd. Do not expect \`GROK_PLUGIN_ROOT\` or a Claude plugin-root placeholder in the
    agent shell — Grok injects those only into plugin hooks, not into skills or the terminal.

@@ -3,11 +3,13 @@ dist/
 !plugins/claude-code/dist/
 !plugins/claude-code/dist/semctx-mcp.js
 !plugins/claude-code/dist/semctx.js
+!plugins/claude-code/dist/semctx-shared.js
 !plugins/claude-code/dist/typescript-lib/
 !plugins/claude-code/dist/typescript-lib/*.d.ts
 !plugins/semctx-control/dist/
 !plugins/semctx-control/dist/semctx-mcp.js
 !plugins/semctx-control/dist/semctx.js
+!plugins/semctx-control/dist/semctx-shared.js
 !plugins/semctx-control/dist/typescript-lib/
 !plugins/semctx-control/dist/typescript-lib/*.d.ts
 !plugins/grok/dist/

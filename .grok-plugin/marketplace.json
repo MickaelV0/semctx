@@ -14,7 +14,7 @@
         "name": "hoklims",
         "email": "hoklims@gmail.com"
       },
-      "category": "Development",
+      "category": "development",
       "tags": ["change-impact", "semantic-context", "migration", "verification"],
       "source": {
         "type": "local",

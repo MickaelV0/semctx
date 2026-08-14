@@ -42,12 +42,15 @@ gains `"grok"`. The host-neutral body (workflow + lifecycle) remains byte-identi
 
 ### Grok launch contract
 
-`plugins/grok/.mcp.json` launches the bundled MCP and **does not** set `SEMCTX_ROOT`. The server
-starts unbound and pins on the first absolute `repositoryRoot` argument (ADR 0012). Grok's plugin
-adapter already substitutes `${CLAUDE_PLUGIN_ROOT}` in `.mcp.json` `args` (observed on the Claude
-leaf). The Grok leaf uses that same token to address `dist/semctx-mcp.js` so no global CLI is
-required to start tools. `GROK_PLUGIN_ROOT` remains hook-only until Grok documents MCP expansion
-of that name.
+`plugins/grok/.mcp.json` launches the bundled MCP and sets `SEMCTX_ROOT=${CLAUDE_PROJECT_DIR}` as
+a sentinel so an inherited concrete `SEMCTX_ROOT` cannot bind the process (ADR 0012 treats that
+unexpanded placeholder as unset). Grok's plugin adapter substitutes `${CLAUDE_PLUGIN_ROOT}` in
+`.mcp.json` `args` (observed on the Claude leaf). The Grok leaf uses that same token to address
+`dist/semctx-mcp.js` so no global CLI is required to start tools. `GROK_PLUGIN_ROOT` remains
+hook-only until Grok documents MCP expansion of that name.
+
+`semctx install --host grok` installs `hoklims/semctx@stable#plugins/grok` (qualified leaf). A
+`semctx` plugin whose checkout is the Claude leaf (`plugins/claude-code`) is `conflict`.
 
 Relative `./dist/semctx-mcp.js` with `cwd: "."` is the Codex contract. It is not assumed for Grok:
 plugin MCP cwd is the user workspace, not the plugin directory.
@@ -117,6 +120,6 @@ once Grok documents it; it does not change the pin-on-first-request or bundled-C
   `renderControlSkill("grok")`; shared body matches the other hosts after stripping the host
   ladder.
 - Installer unit tests: add/update/enable/`--trust`, conflict, missing binary, `--host grok`.
-- Negative: Grok `.mcp.json` has no `SEMCTX_ROOT`; Grok skill contains no `CLAUDE_PLUGIN_ROOT`
-  and no `bun ./dist/semctx.js`.
+- Negative: Grok `.mcp.json` `SEMCTX_ROOT` is only the unexpanded `${CLAUDE_PROJECT_DIR}`
+  sentinel; Grok skill contains no `CLAUDE_PLUGIN_ROOT` and no `bun ./dist/semctx.js`.
 - `bun run verify:pr` on both CI lanes.
