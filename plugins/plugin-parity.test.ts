@@ -245,6 +245,7 @@ describe("Codex and Claude Code plugin parity", () => {
       "docs/integrations/claude-code.md",
       "docs/integrations/claude-code-guarded-mode.md",
       "docs/integrations/codex-control-plane.md",
+      "docs/integrations/grok.md",
     ];
     expect(shipped.length).toBeGreaterThan(0);
     // Matches $CLAUDE_PLUGIN_ROOT only when it is NOT the ${…} form.

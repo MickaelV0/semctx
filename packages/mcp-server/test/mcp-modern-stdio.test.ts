@@ -5,20 +5,22 @@ import { resolve } from "node:path";
 
 const MODERN_STDIO_TIMEOUT_MS = 60_000;
 
-function stdioTransport(repositoryRoot: string): StdioClientTransport {
-  const entrypoint = resolve(import.meta.dir, "../src/index.ts");
+function stdioEnvironment(overrides: Record<string, string>): Record<string, string> {
   const environment = Object.fromEntries(
     Object.entries(process.env).filter(
       (entry): entry is [string, string] => entry[1] !== undefined,
     ),
   );
-  environment["SEMCTX_ROOT"] = repositoryRoot;
+  return Object.assign(environment, overrides);
+}
 
+function stdioTransport(repositoryRoot: string): StdioClientTransport {
+  const entrypoint = resolve(import.meta.dir, "../src/index.ts");
   return new StdioClientTransport({
     command: "bun",
     args: [entrypoint],
     cwd: repositoryRoot,
-    env: environment,
+    env: stdioEnvironment({ SEMCTX_ROOT: repositoryRoot }),
     stderr: "pipe",
   });
 }
@@ -206,6 +208,45 @@ describe("MCP dual-era stdio negotiation", () => {
           code: "INVALID_ARGUMENTS",
           error: "Tool arguments are invalid",
         });
+      } finally {
+        await client.close();
+      }
+    },
+    MODERN_STDIO_TIMEOUT_MS,
+  );
+
+  test(
+    "handshakes when SEMCTX_ROOT is an unexpanded host placeholder",
+    async () => {
+      const repositoryRoot = resolve(import.meta.dir, "../../..");
+      const entrypoint = resolve(import.meta.dir, "../src/index.ts");
+      const transport = new StdioClientTransport({
+        command: "bun",
+        args: [entrypoint],
+        cwd: repositoryRoot,
+        env: stdioEnvironment({ SEMCTX_ROOT: "${CLAUDE_PROJECT_DIR}" }),
+        stderr: "pipe",
+      });
+      const client = new Client(
+        { name: "semctx-unexpanded-root-stdio-test", version: "0.1.0" },
+        {
+          versionNegotiation: {
+            mode: { pin: "2026-07-28" },
+            probe: { timeoutMs: 10_000 },
+          },
+        },
+      );
+
+      try {
+        await client.connect(transport);
+        const result = await client.listTools();
+        const check = await client.callTool({
+          name: "semctx_semantic_check",
+          arguments: { repositoryRoot },
+        });
+
+        expect(result.tools).toHaveLength(37);
+        expect(check.isError).not.toBe(true);
       } finally {
         await client.close();
       }

@@ -148,8 +148,10 @@ If an older direct MCP registration is still present, remove it after the plugin
 - Every MCP call must pass the absolute project path as `repositoryRoot`; missing or relative roots
   are rejected.
 - Both host plugins ship byte-identical `dist/semctx-mcp.js` and `dist/semctx.js` entries plus the
-  fixed root `dist/semctx-shared.js` runtime chunk. Claude also binds `SEMCTX_ROOT`, while the
-  shared skill passes the explicit `repositoryRoot` required by the common Claude/Codex machine
+  fixed root `dist/semctx-shared.js` runtime chunk. Claude also binds `SEMCTX_ROOT`. Hosts that do
+  not expand `${CLAUDE_PROJECT_DIR}` (Grok) leave that env value as a literal placeholder; the
+  server treats it as unset and pins on the first absolute `repositoryRoot`. The shared skill
+  still passes the explicit `repositoryRoot` required by the common Claude/Codex/Grok machine
   contract.
 - Invoke the shared workflow explicitly as `semctx-control` for migrations, architecture work,
   generic demonstrations or cross-plane verification. The narrower skills remain available for
@@ -157,4 +159,5 @@ If an older direct MCP registration is still present, remove it after the plugin
 - To remove the guard entirely (zero footprint), delete `hooks/hooks.json` from your plugin
   install, or keep advisory mode (the default) where it never blocks.
 
-See `docs/integrations/claude-code.md` and `docs/integrations/claude-code-guarded-mode.md`.
+See `docs/integrations/claude-code.md`, `docs/integrations/claude-code-guarded-mode.md`, and
+`docs/integrations/grok.md`.
