@@ -166,10 +166,193 @@ describe("provisional Plane A graph assembly", () => {
         },
       ],
     },
+    {
+      // Isolates the target: the source resolves, so only provenance decides. A derived edge is
+      // computed from sources the analyzer registered itself, so an absent target is an analyzer
+      // contradiction and must never degrade into an unresolved-reference diagnostic.
+      name: "derived edges whose target alone is absent",
+      expectedCode: "MISSING_ENDPOINT",
+      facts: [
+        {
+          factType: "node",
+          ordinal: 0,
+          id: "mod:src/a.ts",
+          kind: "module",
+          name: "a.ts",
+          filePath: "src/a.ts",
+          evidence: [{ filePath: "src/a.ts", sourceKind: "code" }],
+          tags: [],
+          metadata: {},
+        },
+        {
+          factType: "edge",
+          ordinal: 1,
+          kind: "imports",
+          from: "mod:src/a.ts",
+          to: "mod:src/absent.ts",
+          evidence: [{ filePath: "src/a.ts", sourceKind: "code" }],
+          metadata: {},
+        },
+      ],
+    },
   ] satisfies readonly RejectionCase[])("rejects $name deterministically", ({ expectedCode, facts }) => {
     if (api === null) throw new Error("internal Plane A API is unavailable");
     expect(() => api.assembleFactBatches([batch(facts)])).toThrow(
       expect.objectContaining({ code: expectedCode }),
+    );
+  });
+
+  // A missing endpoint on an internally derived edge stays fatal (covered above): it means the
+  // assembler contradicted itself. An authored cross-reference is different — it is user input, and
+  // naming a target this repository does not contain is an unresolved link, not an assembly defect.
+  it("records an authored cross-reference to an absent endpoint instead of aborting the assembly", () => {
+    if (api === null) throw new Error("internal Plane A API is unavailable");
+    const evidence = [{ filePath: "src/a.ts", startLine: 1, sourceKind: "document" as const }];
+    const facts: readonly PlaneAFact[] = [
+      {
+        factType: "node",
+        ordinal: 0,
+        id: "doc:src/a.ts",
+        kind: "document",
+        name: "a",
+        filePath: "src/a.ts",
+        evidence,
+        tags: [],
+        metadata: {},
+      },
+      {
+        factType: "edge",
+        ordinal: 1,
+        kind: "contradicts",
+        from: "doc:src/a.ts",
+        to: "doc:docs/absent.md",
+        evidence,
+        metadata: {},
+        provenance: "authored",
+      },
+    ];
+
+    const assembled = api.assembleFactBatches([batch(facts)]);
+
+    expect(assembled.graph.nodes.map((node) => node.id)).toEqual(["doc:src/a.ts"]);
+    expect(assembled.graph.edges).toEqual([]);
+    expect(assembled.unresolvedReferences).toEqual([
+      expect.objectContaining({
+        kind: "contradicts",
+        from: "doc:src/a.ts",
+        to: "doc:docs/absent.md",
+        missing: "doc:docs/absent.md",
+      }),
+    ]);
+  });
+
+  // The source of an authored edge is the declaring document, which the analyzer registers itself.
+  // Its absence is an assembly defect whatever the edge's provenance, so it must stay fatal rather
+  // than be reported as a reference to a missing target.
+  it("keeps a missing source fatal even on an authored edge", () => {
+    if (api === null) throw new Error("internal Plane A API is unavailable");
+    const evidence = [{ filePath: "src/a.ts", startLine: 1, sourceKind: "document" as const }];
+    const facts: readonly PlaneAFact[] = [
+      {
+        factType: "node",
+        ordinal: 0,
+        id: "doc:src/a.ts",
+        kind: "document",
+        name: "a",
+        filePath: "src/a.ts",
+        evidence,
+        tags: [],
+        metadata: {},
+      },
+      {
+        factType: "edge",
+        ordinal: 1,
+        kind: "contradicts",
+        from: "doc:docs/absent.md",
+        to: "doc:src/a.ts",
+        evidence,
+        metadata: {},
+        provenance: "authored",
+      },
+    ];
+
+    expect(() => api.assembleFactBatches([batch(facts)])).toThrow(
+      expect.objectContaining({ code: "MISSING_ENDPOINT" }),
+    );
+  });
+
+  // Provenance is a typed field the assembler owns, not a key in the open metadata bag. A producer
+  // that writes the old switch into metadata gets no relaxation from it.
+  it("ignores a metadata key claiming authorship without the typed provenance", () => {
+    if (api === null) throw new Error("internal Plane A API is unavailable");
+    const evidence = [{ filePath: "src/a.ts", startLine: 1, sourceKind: "document" as const }];
+    const facts: readonly PlaneAFact[] = [
+      {
+        factType: "node",
+        ordinal: 0,
+        id: "doc:src/a.ts",
+        kind: "document",
+        name: "a",
+        filePath: "src/a.ts",
+        evidence,
+        tags: [],
+        metadata: {},
+      },
+      {
+        factType: "edge",
+        ordinal: 1,
+        kind: "contradicts",
+        from: "doc:src/a.ts",
+        to: "doc:docs/absent.md",
+        evidence,
+        metadata: { declared: true, authored: true, provenance: "authored" },
+      },
+    ];
+
+    expect(() => api.assembleFactBatches([batch(facts)])).toThrow(
+      expect.objectContaining({ code: "MISSING_ENDPOINT" }),
+    );
+  });
+
+  // Two producers disagreeing means at least one derived the edge, so the stricter reading wins.
+  it("keeps a contested edge derived when one producer did not claim authorship", () => {
+    if (api === null) throw new Error("internal Plane A API is unavailable");
+    const evidence = [{ filePath: "src/a.ts", startLine: 1, sourceKind: "document" as const }];
+    const facts: readonly PlaneAFact[] = [
+      {
+        factType: "node",
+        ordinal: 0,
+        id: "doc:src/a.ts",
+        kind: "document",
+        name: "a",
+        filePath: "src/a.ts",
+        evidence,
+        tags: [],
+        metadata: {},
+      },
+      {
+        factType: "edge",
+        ordinal: 1,
+        kind: "contradicts",
+        from: "doc:src/a.ts",
+        to: "doc:docs/absent.md",
+        evidence,
+        metadata: {},
+        provenance: "authored",
+      },
+      {
+        factType: "edge",
+        ordinal: 2,
+        kind: "contradicts",
+        from: "doc:src/a.ts",
+        to: "doc:docs/absent.md",
+        evidence,
+        metadata: {},
+      },
+    ];
+
+    expect(() => api.assembleFactBatches([batch(facts)])).toThrow(
+      expect.objectContaining({ code: "MISSING_ENDPOINT" }),
     );
   });
 
