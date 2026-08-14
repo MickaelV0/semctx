@@ -9,7 +9,7 @@ import {
   type RepositoryGraph,
   type RepositoryNode,
 } from "@semantic-context/core";
-import type { EdgeFact, FactBatchV1, NodeFact, PlaneAFact } from "./model";
+import type { EdgeFact, EdgeProvenance, FactBatchV1, NodeFact, PlaneAFact } from "./model";
 import { canonicalJson } from "./canonical";
 
 export type PlaneAAssemblyErrorCode =
@@ -28,9 +28,24 @@ export class PlaneAAssemblyError extends Error {
   }
 }
 
+/**
+ * An authored cross-reference naming a target this repository does not contain. The edge is kept
+ * out of the graph — a dangling endpoint would break every downstream traversal — and reported
+ * here so the gap stays visible instead of being silently dropped.
+ */
+export interface UnresolvedReference {
+  readonly edgeId: string;
+  readonly kind: RepositoryEdge["kind"];
+  readonly from: string;
+  readonly to: string;
+  /** The absent endpoint. Always the target: an absent source stays a fatal assembly error. */
+  readonly missing: string;
+}
+
 export interface AssembledPlaneA {
   graph: RepositoryGraph;
   evidence: EvidenceRecord[];
+  unresolvedReferences: UnresolvedReference[];
 }
 
 export interface ImportEdgeOccurrence {
@@ -114,6 +129,9 @@ export class DeterministicGraphAssembler {
   private readonly evidence = new Map<string, EvidenceRecord>();
   private readonly selectedPaths: ReadonlySet<string>;
   private readonly recordedFacts: PlaneAFact[] = [];
+  /** Provenance is assembler-owned, never read back from the assembled edge: nothing downstream can
+   *  promote a derived edge to authored by writing a metadata key. */
+  private readonly edgeProvenance = new Map<string, EdgeProvenance>();
   private nextOrdinal = 0;
 
   constructor(selectedPaths: readonly string[]) {
@@ -159,6 +177,7 @@ export class DeterministicGraphAssembler {
     to: string,
     evidence: readonly EvidenceRef[],
     metadata: Readonly<Record<string, MetadataValue>> = {},
+    provenance: EdgeProvenance = "derived",
   ): void {
     const fact: EdgeFact = {
       factType: "edge",
@@ -168,6 +187,7 @@ export class DeterministicGraphAssembler {
       to,
       evidence,
       metadata,
+      ...(provenance === "derived" ? {} : { provenance }),
     };
     this.recordedFacts.push(fact);
     this.addEdgeFact(fact);
@@ -178,20 +198,41 @@ export class DeterministicGraphAssembler {
   }
 
   build(): AssembledPlaneA {
+    const unresolvedReferences: UnresolvedReference[] = [];
+    const unresolvedEdgeIds = new Set<string>();
     for (const edge of this.edges.values()) {
-      if (!this.nodes.has(edge.from) || !this.nodes.has(edge.to)) {
+      const sourceMissing = !this.nodes.has(edge.from);
+      const targetMissing = !this.nodes.has(edge.to);
+      if (!sourceMissing && !targetMissing) continue;
+      // Authored input may name any target, so an absent target is an unresolved link. An absent
+      // source is not: it is the declaring artifact, which the analyzer registers itself, so its
+      // absence proves the assembler contradicted itself and stays fatal whatever the edge's
+      // provenance.
+      if (sourceMissing || this.edgeProvenance.get(edge.id) !== "authored") {
         throw new PlaneAAssemblyError("MISSING_ENDPOINT", {
           edgeId: edge.id,
-          missing: !this.nodes.has(edge.from) ? edge.from : edge.to,
+          missing: sourceMissing ? edge.from : edge.to,
         });
       }
+      unresolvedReferences.push({
+        edgeId: edge.id,
+        kind: edge.kind,
+        from: edge.from,
+        to: edge.to,
+        missing: edge.to,
+      });
+      unresolvedEdgeIds.add(edge.id);
     }
     return {
       graph: {
         nodes: [...this.nodes.values()].sort((left, right) => compareIds(left.id, right.id)),
-        edges: [...this.edges.values()].sort((left, right) => compareIds(left.id, right.id)),
+        edges: [...this.edges.values()]
+          .filter((edge) => !unresolvedEdgeIds.has(edge.id))
+          .sort((left, right) => compareIds(left.id, right.id)),
       },
       evidence: [...this.evidence.values()].sort((left, right) => compareIds(left.id, right.id)),
+      unresolvedReferences: unresolvedReferences.sort((left, right) =>
+        compareIds(left.edgeId, right.edgeId)),
     };
   }
 
@@ -242,6 +283,14 @@ export class DeterministicGraphAssembler {
   private addEdgeFact(fact: EdgeFact): void {
     for (const ref of fact.evidence) this.recordEvidence(ref);
     const id = edgeId(fact.kind, fact.from, fact.to);
+    const incoming: EdgeProvenance = fact.provenance ?? "derived";
+    const recorded = this.edgeProvenance.get(id);
+    // Two producers disagreeing on provenance means at least one of them derived the edge, so the
+    // stricter reading wins and a missing endpoint stays fatal.
+    this.edgeProvenance.set(
+      id,
+      recorded === undefined || recorded === incoming ? incoming : "derived",
+    );
     const existing = this.edges.get(id);
     if (existing !== undefined) {
       for (const [key, value] of Object.entries(fact.metadata)) {
