@@ -1,0 +1,25 @@
+{
+  "name": "semctx-stable",
+  "description": "Local semctx plugins for proof-honest repository changes",
+  "owner": {
+    "name": "hoklims",
+    "email": "hoklims@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "semctx",
+      "description": "Trace repository impact, authored intent and fail-closed migration plans in Grok. Ships a bundled MCP and CLI; no global semctx install is required.",
+      "version": "0.1.17",
+      "author": {
+        "name": "hoklims",
+        "email": "hoklims@gmail.com"
+      },
+      "category": "Development",
+      "tags": ["change-impact", "semantic-context", "migration", "verification"],
+      "source": {
+        "type": "local",
+        "path": "./plugins/grok"
+      }
+    }
+  ]
+}

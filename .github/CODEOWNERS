@@ -13,10 +13,13 @@
 # Plugin discovery, installation, launch, and marketplace contracts.
 /.claude-plugin/marketplace.json @hoklims
 /.agents/plugins/marketplace.json @hoklims
+/.grok-plugin/marketplace.json @hoklims
 /plugins/claude-code/.mcp.json @hoklims
 /plugins/claude-code/.claude-plugin/plugin.json @hoklims
 /plugins/semctx-control/.mcp.json @hoklims
 /plugins/semctx-control/.codex-plugin/plugin.json @hoklims
+/plugins/grok/.mcp.json @hoklims
+/plugins/grok/plugin.json @hoklims
 
 # Architecture decisions and canonical architecture documentation.
 /docs/adr/ @hoklims

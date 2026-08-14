@@ -24,14 +24,16 @@ function json<T>(path: string): T {
   return JSON.parse(read(path)) as T;
 }
 
-function typescriptLibs(plugin: "claude-code" | "semctx-control"): string[] {
+type PluginLeaf = "claude-code" | "semctx-control" | "grok";
+
+function typescriptLibs(plugin: PluginLeaf): string[] {
   return readdirSync(resolve(repoRoot, `plugins/${plugin}/dist/typescript-lib`))
     .filter((name) => name.startsWith("lib") && name.endsWith(".d.ts"))
     .sort();
 }
 
 function distFiles(
-  plugin: "claude-code" | "semctx-control",
+  plugin: PluginLeaf,
   relativeDir = "",
 ): string[] {
   const directory = resolve(repoRoot, `plugins/${plugin}/dist`, relativeDir);
@@ -48,9 +50,9 @@ function distFiles(
 }
 
 function skillPath(host: SkillHost): string {
-  return host === "claude-code"
-    ? "plugins/claude-code/skills/semctx-control/SKILL.md"
-    : "plugins/semctx-control/skills/semctx-control/SKILL.md";
+  if (host === "claude-code") return "plugins/claude-code/skills/semctx-control/SKILL.md";
+  if (host === "grok") return "plugins/grok/skills/semctx-control/SKILL.md";
+  return "plugins/semctx-control/skills/semctx-control/SKILL.md";
 }
 
 /** Shared workflow contract = generated skill with the host CLI ladder region removed. */
@@ -68,12 +70,12 @@ function sharedLifecycleBody(skill: string): string {
   return match![0];
 }
 
-describe("Codex and Claude Code plugin parity", () => {
+describe("Codex, Claude Code, and Grok plugin parity", () => {
   test("renders the machine workflow contract into both host adapters", () => {
     const template = read("plugins/shared/skills/semctx-control/SKILL.md");
     expect(template).toContain("{{SHARED_WORKFLOW_CONTRACT}}");
 
-    for (const host of ["claude-code", "semctx-control"] as const) {
+    for (const host of ["claude-code", "semctx-control", "grok"] as const) {
       const skill = read(skillPath(host));
       expect(skill).toContain("<!-- BEGIN shared-workflow-contract:v1 -->");
       expect(skill).toContain("<!-- END shared-workflow-contract -->");
@@ -125,6 +127,16 @@ describe("Codex and Claude Code plugin parity", () => {
     expect(codexFence).not.toMatch(/bun\s+["']?\.\/dist\/semctx\.js/);
     expect(codexFence).toContain("semctx --version");
     expect(codex).toContain("does **not** substitute a plugin-root path");
+
+    const grok = hostCliLadder("grok");
+    expect(grok).toContain("Plugin-bundled CLI");
+    expect(grok).toContain("grok plugin list --json");
+    expect(grok).toContain("<plugin-root>/dist/semctx.js");
+    expect(grok).not.toContain("CLAUDE_PLUGIN_ROOT");
+    expect(grok).not.toContain("${GROK_PLUGIN_ROOT}");
+    const grokFence = grok.match(/```text\n([\s\S]*?)```/)?.[1] ?? "";
+    expect(grokFence).not.toMatch(/bun\s+["']?\.\/dist\/semctx\.js/);
+    expect(grok.indexOf("Plugin-bundled CLI")).toBeLessThan(grok.indexOf("Global `semctx` on PATH"));
   });
 
   test("ships one shared semctx-control workflow contract with host-generated CLI ladders", () => {
@@ -134,14 +146,17 @@ describe("Codex and Claude Code plugin parity", () => {
 
     const codex = read(skillPath("semctx-control"));
     const claude = read(skillPath("claude-code"));
+    const grok = read(skillPath("grok"));
 
     // Generated artifacts match the build (deterministic).
     expect(claude).toBe(renderControlSkill("claude-code", template));
     expect(codex).toBe(renderControlSkill("semctx-control", template));
+    expect(grok).toBe(renderControlSkill("grok", template));
 
     // Host-neutral body is still byte-identical across hosts.
     const shared = sharedContractBody(claude);
     expect(shared).toBe(sharedContractBody(codex));
+    expect(shared).toBe(sharedContractBody(grok));
     // Host leakage must live only inside the strip region.
     expect(shared).not.toContain("CLAUDE_PLUGIN_ROOT");
     expect(shared).not.toContain("Plugin-bundled CLI");
@@ -190,6 +205,11 @@ describe("Codex and Claude Code plugin parity", () => {
     const codexFence = codex.match(/```text\n([\s\S]*?)```/)?.[1] ?? "";
     expect(codexFence).not.toMatch(/bun\s+["']?\.\/dist\/semctx\.js/);
     expect(codex).toContain("does **not** substitute a plugin-root path");
+
+    expect(grok).toContain("Plugin-bundled CLI");
+    expect(grok).toContain("grok plugin list --json");
+    expect(grok).not.toContain("CLAUDE_PLUGIN_ROOT");
+    expect(grok).toContain(hostCliLadder("grok").trim());
   });
 
   test("ships one generated advisory lifecycle contract byte-identically across hosts", () => {
@@ -198,9 +218,11 @@ describe("Codex and Claude Code plugin parity", () => {
 
     const claude = read(skillPath("claude-code"));
     const codex = read(skillPath("semctx-control"));
+    const grok = read(skillPath("grok"));
     const lifecycle = sharedLifecycleBody(claude);
 
     expect(lifecycle).toBe(sharedLifecycleBody(codex));
+    expect(lifecycle).toBe(sharedLifecycleBody(grok));
     expect(renderSharedLifecycleContract()).toBe(renderSharedLifecycleContract());
     expect(lifecycle).toBe(renderSharedLifecycleContract());
 
@@ -222,7 +244,7 @@ describe("Codex and Claude Code plugin parity", () => {
     expect(lifecycle).toContain("shadow");
     expect(lifecycle).toContain("blocking is disabled");
     expect(lifecycle).toContain("execution authority is `none`");
-    expect(lifecycle).toContain("hosts are instructed to invoke");
+    expect(lifecycle).toContain("Each host is instructed to invoke");
     expect(lifecycle).toContain("not automatic hooks");
   });
 
@@ -239,6 +261,9 @@ describe("Codex and Claude Code plugin parity", () => {
       "plugins/shared/skills/semctx-control/SKILL.md",
       "plugins/claude-code/hooks/hooks.json",
       "plugins/claude-code/.mcp.json",
+      "plugins/grok/.mcp.json",
+      "plugins/grok/README.md",
+      "plugins/grok/plugin.json",
       "plugins/claude-code/README.md",
       "plugins/claude-code/examples/guard.json",
       "README.md",
@@ -334,8 +359,24 @@ describe("Codex and Claude Code plugin parity", () => {
       }>;
     }>(".agents/plugins/marketplace.json");
 
+    const grokMcp = json<{
+      mcpServers: {
+        semctx: {
+          command: string;
+          args: string[];
+          env?: Record<string, string>;
+        };
+      };
+    }>("plugins/grok/.mcp.json");
+    const grokManifest = json<{ version: string }>("plugins/grok/plugin.json");
+    const grokMarketplace = json<{
+      name: string;
+      plugins: Array<{ name: string; version: string; source: { type: string; path: string } }>;
+    }>(".grok-plugin/marketplace.json");
+
     expect(Object.keys(codexMcp.mcpServers)).toEqual(["semctx"]);
     expect(Object.keys(claudeMcp.mcpServers)).toEqual(["semctx"]);
+    expect(Object.keys(grokMcp.mcpServers)).toEqual(["semctx"]);
     expect(codexMcp.mcpServers.semctx).toEqual({
       command: "bun",
       args: ["./dist/semctx-mcp.js"],
@@ -349,15 +390,25 @@ describe("Codex and Claude Code plugin parity", () => {
     expect(claudeMcp.mcpServers.semctx.env).toEqual({
       SEMCTX_ROOT: "${CLAUDE_PROJECT_DIR}",
     });
+    expect(grokMcp.mcpServers.semctx).toEqual({
+      command: "bun",
+      args: ["${CLAUDE_PLUGIN_ROOT}/dist/semctx-mcp.js"],
+    });
+    expect(grokMcp.mcpServers.semctx.env).toBeUndefined();
     expect(existsSync(resolve(repoRoot, "plugins/claude-code/bin/semctx-mcp-launcher.ts"))).toBe(false);
     const codexDistFiles = distFiles("semctx-control");
     const claudeDistFiles = distFiles("claude-code");
+    const grokDistFiles = distFiles("grok");
     expect(claudeDistFiles).toEqual(codexDistFiles);
+    expect(grokDistFiles).toEqual(codexDistFiles);
     for (const required of ["semctx-mcp.js", "semctx.js", "semctx-shared.js"]) {
       expect(codexDistFiles).toContain(required);
     }
     for (const path of codexDistFiles) {
       expect(readFileSync(resolve(repoRoot, `plugins/claude-code/dist/${path}`))).toEqual(
+        readFileSync(resolve(repoRoot, `plugins/semctx-control/dist/${path}`)),
+      );
+      expect(readFileSync(resolve(repoRoot, `plugins/grok/dist/${path}`))).toEqual(
         readFileSync(resolve(repoRoot, `plugins/semctx-control/dist/${path}`)),
       );
     }
@@ -366,7 +417,13 @@ describe("Codex and Claude Code plugin parity", () => {
     expect(codexLibs).toHaveLength(100);
     expect(codexLibs).toContain("lib.d.ts");
     expect(claudeLibs).toEqual(codexLibs);
+    expect(typescriptLibs("grok")).toEqual(codexLibs);
     expect(codexManifest.version.split("+")[0]).toBe(claudeManifest.version.split("+")[0]);
+    expect(grokManifest.version.split("+")[0]).toBe(claudeManifest.version.split("+")[0]);
+    expect(grokMarketplace.name).toBe("semctx-stable");
+    const grokEntry = grokMarketplace.plugins.find((plugin) => plugin.name === "semctx");
+    expect(grokEntry?.version).toBe(grokManifest.version);
+    expect(grokEntry?.source).toEqual({ type: "local", path: "./plugins/grok" });
     expect(claudeManifest.skills).toBeUndefined();
     expect(claudeManifest.hooks).toBeUndefined();
     expect(claudeManifest.mcpServers).toBeUndefined();

@@ -22,6 +22,7 @@ const root = resolve(import.meta.dir, "..");
 const pluginDists = [
   resolve(root, "plugins/claude-code/dist"),
   resolve(root, "plugins/semctx-control/dist"),
+  resolve(root, "plugins/grok/dist"),
 ];
 const check = process.argv.includes("--check");
 const typescriptEntrypoint = Bun.resolveSync("typescript", root);
@@ -58,7 +59,7 @@ export const CLI_BUNDLE_SPEC: BundleSpec = {
 };
 
 /** Host-specific shell ladder for the shared control skill (issue #40 option A). */
-export type SkillHost = "claude-code" | "semctx-control";
+export type SkillHost = "claude-code" | "semctx-control" | "grok";
 
 const HOST_CLI_MARKER = "{{HOST_CLI_LADDER}}";
 const SHARED_WORKFLOW_MARKER = "{{SHARED_WORKFLOW_CONTRACT}}";
@@ -67,19 +68,65 @@ const HOST_CLI_BEGIN = (host: SkillHost) => `<!-- BEGIN host-cli-ladder:${host} 
 const HOST_CLI_END = "<!-- END host-cli-ladder -->";
 // Strip markers + host body so parity can assert the shared contract is still one document.
 export const HOST_CLI_STRIP =
-  /<!-- BEGIN host-cli-ladder:(?:claude-code|semctx-control) -->\n[\s\S]*?<!-- END host-cli-ladder -->\n?/;
+  /<!-- BEGIN host-cli-ladder:(?:claude-code|semctx-control|grok) -->\n[\s\S]*?<!-- END host-cli-ladder -->\n?/;
 
 const skillTemplatePath = resolve(root, "plugins/shared/skills/semctx-control/SKILL.md");
 const skillOutputs: Record<SkillHost, string> = {
   "claude-code": resolve(root, "plugins/claude-code/skills/semctx-control/SKILL.md"),
   "semctx-control": resolve(root, "plugins/semctx-control/skills/semctx-control/SKILL.md"),
+  grok: resolve(root, "plugins/grok/skills/semctx-control/SKILL.md"),
 };
 
 /**
  * Claude: load-time `${CLAUDE_PLUGIN_ROOT}` placeholder + global fallback.
+ * Grok: discover the bundled CLI via `grok plugin list` — no skill substitution, no global install.
  * Codex: global `semctx` only — no plugin-root substitution on that host.
  */
 export function hostCliLadder(host: SkillHost): string {
+  if (host === "grok") {
+    return `Prefer MCP tools when they are connected. For shell fallbacks, resolve the plugin-bundled
+CLI (same release as the MCP bundle) without a global \`semctx\` install:
+
+1. **Plugin-bundled CLI** — run \`grok plugin list --json\`. Select the entry whose \`name\` is
+   \`semctx\` and whose \`status\` is \`installed\`. Read \`path\`. Then run
+   \`grok plugin details semctx\`. If details report a \`subdir\` (for example \`plugins/grok\`),
+   the plugin root is \`<path>/<subdir>\`; otherwise the plugin root is \`path\`. Invoke
+   \`bun "<plugin-root>/dist/semctx.js"\`. Never use \`bun ./dist/semctx.js\` from the user's
+   repository cwd. Do not expect \`GROK_PLUGIN_ROOT\` or a Claude plugin-root placeholder in the
+   agent shell — Grok injects those only into plugin hooks, not into skills or the terminal.
+2. **Global \`semctx\` on PATH** (\`bun install -g semctx@latest\` / \`bunx semctx@latest\`) — keep
+   it on the **same version** as the plugin (\`semctx --version\` should match the marketplace
+   plugin version). Use this only when step 1 cannot resolve a readable \`dist/semctx.js\`.
+3. If neither is available, say so and continue with MCP-only or ask the user to update the plugin
+   — do not invent results.
+
+\`\`\`text
+# After resolving <plugin-root> from grok plugin list / details:
+bun "<plugin-root>/dist/semctx.js" status --json
+bun "<plugin-root>/dist/semctx.js" semantic check --json
+bun "<plugin-root>/dist/semctx.js" semantic slice --change change.<slug> --format agent
+bun "<plugin-root>/dist/semctx.js" control trace repo:<graph-id> --direction lift --to 6 --json
+bun "<plugin-root>/dist/semctx.js" control plan change.<slug> --target target-architecture.json --json
+bun "<plugin-root>/dist/semctx.js" verify diff --base origin/main
+bun "<plugin-root>/dist/semctx.js" change verify change.<slug> --base origin/main
+
+# Control Handoff v2 — manual shadow surface
+bun "<plugin-root>/dist/semctx.js" control handoff <input.json> --json
+bun "<plugin-root>/dist/semctx.js" control resume-handoff <capsule-hash> --json
+
+# Legacy Plane-B Handoff v1 compatibility
+bun "<plugin-root>/dist/semctx.js" semantic handoff
+bun "<plugin-root>/dist/semctx.js" semantic resume
+
+# Optional global / CI fallback — same subcommands, no path
+semctx --version
+semctx status --json
+semctx control handoff <input.json> --json
+semctx control resume-handoff <capsule-hash> --json
+\`\`\`
+`;
+  }
+
   if (host === "claude-code") {
     return `Prefer MCP tools when they are connected. For shell fallbacks, resolve the CLI in this order
 (stop at the first that works):
@@ -196,8 +243,8 @@ export function renderSharedLifecycleContract(
   }).join("\n");
 
   return `<!-- BEGIN shared-lifecycle-contract:v1 -->
-Codex and Claude Code expose \`${parsed.mcpTool}\` through the same Semctx MCP runtime.
-Both hosts are instructed to invoke these checkpoints; these instructions are not automatic hooks
+Host plugins expose \`${parsed.mcpTool}\` through the same Semctx MCP runtime.
+Each host is instructed to invoke these checkpoints; these instructions are not automatic hooks
 and do not prove that a host event ran.
 
 This is a presence-only advisory contract. \`NO_OP\` means no stage-presence obligation applies,
@@ -521,6 +568,7 @@ async function main(): Promise<void> {
   const renderedSkills = {
     "claude-code": renderControlSkill("claude-code", skillTemplate),
     "semctx-control": renderControlSkill("semctx-control", skillTemplate),
+    grok: renderControlSkill("grok", skillTemplate),
   } as const;
 
   for (const dist of pluginDists) {

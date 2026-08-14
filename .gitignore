@@ -10,6 +10,12 @@ dist/
 !plugins/semctx-control/dist/semctx.js
 !plugins/semctx-control/dist/typescript-lib/
 !plugins/semctx-control/dist/typescript-lib/*.d.ts
+!plugins/grok/dist/
+!plugins/grok/dist/semctx-mcp.js
+!plugins/grok/dist/semctx.js
+!plugins/grok/dist/semctx-shared.js
+!plugins/grok/dist/typescript-lib/
+!plugins/grok/dist/typescript-lib/*.d.ts
 *.tsbuildinfo
 .ruff_cache/
 .venv/

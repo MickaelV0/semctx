@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "semctx": {
+      "command": "bun",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/dist/semctx-mcp.js"]
+    }
+  }
+}
