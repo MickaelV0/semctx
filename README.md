@@ -107,8 +107,8 @@ commit/CI gate.
 ## Get started
 
 Requires [Bun](https://bun.sh) ≥ 1.3. From a Git repository using the legacy TypeScript-family
-baseline, one command detects Codex and/or Claude Code, installs or updates the matching plugins,
-prepares the repository, and verifies the result:
+baseline, one command detects Codex, Claude Code, and/or Grok, installs or updates the matching
+plugins, prepares the repository, and verifies the result:
 
 ```bash
 bunx semctx@latest install
@@ -117,9 +117,10 @@ bunx semctx@latest install
 It is safe to run again. Existing installs are refreshed through the release-managed `stable`
 channel, legacy marketplace names are migrated, existing Semctx configuration and authored `.sem`
 files are preserved, and a non-Git directory is never initialised accidentally. Use `--dry-run`
-to preview, `--host codex|claude|all` to target a host, or `--skip-setup` for a machine-only plugin
-refresh. Open a new Codex task when required; in an active Claude Code session, run
-`/reload-plugins` after installation or update and restart only if the reload fails.
+to preview, `--host codex|claude|grok|all` to target a host, or `--skip-setup` for a machine-only
+plugin refresh. Open a new Codex task when required; in an active Claude Code session, run
+`/reload-plugins` after installation or update and restart only if the reload fails. For Grok,
+start a new session or press `r` in the Plugins tab.
 On Windows, if a running Codex task still holds the legacy plugin cache open, the replacement stays
 installed and verified while cleanup automatically retries in the background after the task exits.
 
@@ -273,10 +274,22 @@ absolute path. A global `semctx` remains optional for CI and non-plugin shells. 
 
 ### Grok
 
-Grok can load the same Claude Code plugin. It does not expand `${CLAUDE_PROJECT_DIR}` in
-`.mcp.json`, so `SEMCTX_ROOT` arrives as a literal placeholder. The MCP server treats that as
-unset and pins on the first absolute `repositoryRoot` argument — the same start path Codex
-uses. See [`docs/integrations/grok.md`](docs/integrations/grok.md).
+The [`plugins/grok`](plugins/grok) leaf is a third host adapter over the same generated runtime
+and shared `semctx-control` skill (ADR 0015). `.mcp.json` launches the bundled
+`dist/semctx-mcp.js` and does **not** set `SEMCTX_ROOT` — the server pins on the first absolute
+`repositoryRoot`. A global `semctx` CLI is optional: the skill resolves `dist/semctx.js` via
+`grok plugin list --json` / `grok plugin details semctx`. Install with
+`bunx semctx@latest install --host grok`, or Grok-native:
+
+```bash
+grok plugin marketplace add hoklims/semctx
+grok plugin install hoklims/semctx@stable#plugins/grok --trust
+grok plugin enable semctx
+```
+
+If Grok still loads the Claude leaf, an unexpanded `${CLAUDE_PROJECT_DIR}` in `SEMCTX_ROOT` is
+treated as unset (same pin-on-first-request path). See
+[`docs/integrations/grok.md`](docs/integrations/grok.md).
 
 ### Codex
 
@@ -434,7 +447,7 @@ Control Explorer resource is `ui://semctx/control-explorer-v1.html`; it has no n
 permission and always displays `executionAuthority: "none"`.
 
 CLI and MCP are thin transports over the same application services, schemas, reason precedence,
-and canonical serialization. The easiest path is the Codex or Claude Code plugin above; to
+and canonical serialization. The easiest path is the Codex, Claude Code, or Grok plugin above; to
 register the server directly over stdio:
 
 ```json
@@ -482,6 +495,7 @@ Monorepo (Bun workspaces, TypeScript strict):
 | `@semantic-context/github-action` | composite GitHub Action + Node annotation/summary adapter |
 | `apps/cli` | the `semctx` CLI (zero-framework arg router) |
 | `plugins/claude-code` | Claude Code plugin: shared control skill + focused skills + guarded hook + bundled CLI |
+| `plugins/grok` | Grok plugin: same generated runtime + control skill; bundled MCP/CLI, no global `semctx` |
 | `benchmarks/change-impact-eval` | the comparative retrieval benchmark behind ADR 0005 |
 
 `@semantic-context/cocoindex-adapter` and the `context prepare` command remain in the tree but

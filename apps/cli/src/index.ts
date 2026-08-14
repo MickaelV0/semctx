@@ -25,7 +25,7 @@ const HELP = `semctx — repository change-impact analyzer (v${packageJson.versi
 Usage: semctx <command> [options]
 
 Core:
-  install [--host auto|codex|claude|all]
+  install [--host auto|codex|claude|grok|all]
                                   install/update detected agent plugins + setup this Git repository
       --skip-setup --dry-run       machine-only install / preview without changing anything
   plugin-status [--json]           repository vs stable vs marketplace snapshot vs installed

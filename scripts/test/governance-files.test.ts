@@ -240,8 +240,11 @@ describe("contributor governance", () => {
     expect(codeowners).toContain("/scripts/build-plugin-runtime.ts @hoklims");
     expect(codeowners).toContain("/.claude-plugin/marketplace.json @hoklims");
     expect(codeowners).toContain("/.agents/plugins/marketplace.json @hoklims");
+    expect(codeowners).toContain("/.grok-plugin/marketplace.json @hoklims");
     expect(codeowners).toContain("/plugins/claude-code/.mcp.json @hoklims");
     expect(codeowners).toContain("/plugins/semctx-control/.mcp.json @hoklims");
+    expect(codeowners).toContain("/plugins/grok/.mcp.json @hoklims");
+    expect(codeowners).toContain("/plugins/grok/plugin.json @hoklims");
     expect(codeowners).not.toMatch(/^\*\s/m);
     expect(template).toContain("bun run verify:pr");
     expect(template).toContain(

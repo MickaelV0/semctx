@@ -7,7 +7,7 @@ description: Use semctx through its MCP tools for top-down root-cause diagnosis,
 
 # Semctx Control
 
-Use the `semctx` MCP server as a proof surface, not as a replacement for repository search or runtime tests. This workflow contract is shared by the Codex and Claude Code plugins.
+Use the `semctx` MCP server as a proof surface, not as a replacement for repository search or runtime tests. This workflow contract is shared by the Codex, Claude Code, and Grok plugins.
 
 For every MCP call, pass `repositoryRoot` as the absolute root of the repository being analyzed. The server rejects missing or relative roots, so hosts use the same explicit target contract even when Claude also binds `SEMCTX_ROOT`. An unexpanded `${CLAUDE_PROJECT_DIR}` process env is treated as unset (pin-on-first-request), not as a bound root.
 
@@ -129,8 +129,8 @@ public MCP report intentionally omits the local executable path.
 ## Shared lifecycle checkpoints
 
 <!-- BEGIN shared-lifecycle-contract:v1 -->
-Codex and Claude Code expose `semctx_control_agent_lifecycle` through the same Semctx MCP runtime.
-Both hosts are instructed to invoke these checkpoints; these instructions are not automatic hooks
+Host plugins expose `semctx_control_agent_lifecycle` through the same Semctx MCP runtime.
+Each host is instructed to invoke these checkpoints; these instructions are not automatic hooks
 and do not prove that a host event ran.
 
 This is a presence-only advisory contract. `NO_OP` means no stage-presence obligation applies,

@@ -2,7 +2,7 @@ import packageJson from "../../package.json";
 import { isSemctxError, SemctxError } from "@semantic-context/core";
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
-import { lstatSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve, sep } from "node:path";
 import type { ParsedArgs } from "../args";
@@ -18,6 +18,10 @@ const CODEX_PLUGIN = "semctx-control";
 const CLAUDE_MARKETPLACE = "semctx-stable";
 const LEGACY_CLAUDE_MARKETPLACE = "semctx";
 const CLAUDE_PLUGIN = "semctx";
+const GROK_PLUGIN = "semctx";
+const GROK_MARKETPLACE_SOURCE = SEMCTX_CODEX_SOURCE;
+const GROK_PLUGIN_SOURCE = `${SEMCTX_CODEX_SOURCE}@${MARKETPLACE_REF}#plugins/grok`;
+const GROK_RESERVED_MARKETPLACE_NAMES = ["semctx-stable", "semctx"] as const;
 /** Split runtime shipped by the plugin; all three must be present for a payload to count as whole. */
 const CODEX_PLUGIN_RUNTIME_BUNDLES = ["semctx-mcp.js", "semctx-shared.js", "semctx.js"] as const;
 /**
@@ -36,8 +40,9 @@ const CODEX_SNAPSHOT_SEGMENTS = [
   CODEX_PLUGIN,
 ] as const;
 
-type Host = "codex" | "claude";
+type Host = "codex" | "claude" | "grok";
 type HostSelection = "auto" | Host | "all";
+const HOSTS = ["codex", "claude", "grok"] as const;
 
 export type HostInstallStatus =
   | "not-requested"
@@ -199,6 +204,25 @@ interface ClaudePlugin {
   scope?: unknown;
   enabled?: unknown;
   version?: unknown;
+}
+
+interface GrokMarketplace {
+  name?: unknown;
+  kind?: unknown;
+  source?: {
+    url?: unknown;
+    branch?: unknown;
+  };
+}
+
+interface GrokPlugin {
+  status?: unknown;
+  name?: unknown;
+  version?: unknown;
+  path?: unknown;
+  source?: unknown;
+  marketplace?: unknown;
+  repo_key?: unknown;
 }
 
 function decode(bytes: Uint8Array | undefined): string {
@@ -638,17 +662,23 @@ function parseSelection(args: ParsedArgs): HostSelection {
   if (raw === true) {
     throw new SemctxError(
       "INVALID_TASK_INPUT",
-      "--host requires auto|codex|claude|all",
+      "--host requires auto|codex|claude|grok|all",
       { host: null },
     );
   }
   const value = flagString(args, "host") ?? "auto";
-  if (value === "auto" || value === "all" || value === "codex" || value === "claude") {
+  if (
+    value === "auto"
+    || value === "all"
+    || value === "codex"
+    || value === "claude"
+    || value === "grok"
+  ) {
     return value;
   }
   throw new SemctxError(
     "INVALID_TASK_INPUT",
-    `--host must be auto|codex|claude|all, got "${value}"`,
+    `--host must be auto|codex|claude|grok|all, got "${value}"`,
     { host: value },
   );
 }
@@ -986,10 +1016,48 @@ function normalizeGitSource(value: unknown): string {
     .replace(/\.git$/, "");
 }
 
+function sourceRef(value: unknown): unknown {
+  if (value !== null && typeof value === "object" && "url" in value) {
+    return (value as { url?: unknown }).url;
+  }
+  return value;
+}
+
 function isSemctxSource(value: unknown): boolean {
-  const normalized = normalizeGitSource(value);
+  const normalized = normalizeGitSource(sourceRef(value));
   return normalized === "hoklims/semctx"
     || normalized === "https://github.com/hoklims/semctx";
+}
+
+function looksLikeGitSource(value: unknown): boolean {
+  const raw = sourceRef(value);
+  if (typeof raw !== "string") return false;
+  const trimmed = raw.trim();
+  return trimmed.includes("github.com")
+    || /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(trimmed);
+}
+
+function grokMarketplaceUrl(item: GrokMarketplace): unknown {
+  return item.source?.url;
+}
+
+/** True when the installed checkout is the Grok leaf, not the Claude leftover. */
+function isGrokHostLeaf(plugin: GrokPlugin): boolean {
+  const repoKey = typeof plugin.repo_key === "string" ? plugin.repo_key : "";
+  if (repoKey.startsWith("grok-")) return true;
+  if (repoKey.startsWith("claude-code-")) return false;
+
+  const pluginPath = typeof plugin.path === "string" ? plugin.path : "";
+  if (pluginPath.includes(`${sep}plugins${sep}grok`) || pluginPath.endsWith(`${sep}grok`)) {
+    return true;
+  }
+  if (pluginPath.includes(`${sep}plugins${sep}claude-code`)) return false;
+  if (pluginPath.length === 0) return false;
+
+  const rootMcp = join(pluginPath, ".mcp.json");
+  const claudeMcp = join(pluginPath, "plugins", "claude-code", ".mcp.json");
+  if (existsSync(claudeMcp) && !existsSync(rootMcp)) return false;
+  return existsSync(rootMcp) && !existsSync(claudeMcp);
 }
 
 function installCodex(
@@ -1275,6 +1343,130 @@ function verifyClaudeInstall(
   return recordVerification(report, "verify Semctx Claude plugin", command, error);
 }
 
+function installGrok(
+  root: string,
+  dryRun: boolean,
+  runtime: InstallRuntime,
+  report: HostInstallReport,
+): void {
+  const marketplacesResult = runtime.run(
+    ["grok", "plugin", "marketplace", "list", "--json"],
+    root,
+  );
+  const pluginsResult = runtime.run(["grok", "plugin", "list", "--json"], root);
+  const marketplaces = parseJsonArray<GrokMarketplace>(marketplacesResult);
+  const plugins = parseJsonArray<GrokPlugin>(pluginsResult);
+  if (marketplaces === null || plugins === null) {
+    report.status = "failed";
+    report.error = marketplaces === null
+      ? `cannot inspect Grok marketplaces: ${compactError(marketplacesResult)}`
+      : `cannot inspect Grok plugins: ${compactError(pluginsResult)}`;
+    return;
+  }
+
+  const reserved = marketplaces.find((item) => {
+    const name = typeof item.name === "string" ? item.name : "";
+    return (GROK_RESERVED_MARKETPLACE_NAMES as readonly string[]).includes(name)
+      && !isSemctxSource(grokMarketplaceUrl(item));
+  });
+  if (reserved !== undefined) {
+    const name = typeof reserved.name === "string" ? reserved.name : "semctx-stable";
+    report.status = "conflict";
+    report.error = `Grok marketplace "${name}" already points to another source`;
+    return;
+  }
+
+  const installedPlugin = plugins.find((item) => item.name === GROK_PLUGIN);
+  if (installedPlugin !== undefined) {
+    if (
+      looksLikeGitSource(installedPlugin.source)
+      && !isSemctxSource(installedPlugin.source)
+    ) {
+      report.status = "conflict";
+      report.error = `Grok plugin "${GROK_PLUGIN}" already points to another source`;
+      return;
+    }
+    if (!isGrokHostLeaf(installedPlugin)) {
+      report.status = "conflict";
+      report.error =
+        `Grok plugin "${GROK_PLUGIN}" is not the Grok leaf (plugins/grok). Uninstall it, then rerun`;
+      return;
+    }
+  }
+
+  const named = marketplaces.find((item) => isSemctxSource(grokMarketplaceUrl(item)));
+  if (named === undefined) {
+    if (!runMutation(
+      runtime,
+      root,
+      report,
+      "add Semctx Grok marketplace",
+      ["grok", "plugin", "marketplace", "add", GROK_MARKETPLACE_SOURCE],
+      dryRun,
+    )) return;
+  } else if (typeof named.name === "string" && named.name.length > 0 && !runMutation(
+    runtime,
+    root,
+    report,
+    "refresh Semctx Grok marketplace",
+    ["grok", "plugin", "marketplace", "update", named.name],
+    dryRun,
+  )) return;
+
+  const installed = installedPlugin !== undefined;
+  const pluginCommand = installed
+    ? ["grok", "plugin", "update", GROK_PLUGIN]
+    : ["grok", "plugin", "install", GROK_PLUGIN_SOURCE, "--trust"];
+  if (!runMutation(
+    runtime,
+    root,
+    report,
+    installed ? "update Semctx Grok plugin" : "install Semctx Grok plugin",
+    pluginCommand,
+    dryRun,
+  )) return;
+  if (!runMutation(
+    runtime,
+    root,
+    report,
+    "enable Semctx Grok plugin",
+    ["grok", "plugin", "enable", GROK_PLUGIN],
+    dryRun,
+  )) return;
+
+  if (!dryRun && !verifyGrokInstall(root, runtime, report)) return;
+  report.status = dryRun ? "planned" : installed ? "updated" : "installed";
+  report.restartRequired = !dryRun;
+}
+
+function verifyGrokInstall(
+  root: string,
+  runtime: InstallRuntime,
+  report: HostInstallReport,
+): boolean {
+  const command = ["grok", "plugin", "list", "--json"];
+  const result = runtime.run(command, root);
+  const plugins = parseJsonArray<GrokPlugin>(result);
+  let error: string | undefined;
+  if (plugins === null) {
+    error = `cannot inspect final Grok plugin state: ${compactError(result)}`;
+  } else {
+    const installed = plugins.find((item) => item.name === GROK_PLUGIN);
+    if (installed === undefined) error = "plugin is not installed";
+    else if (installed.status !== "installed") {
+      const status = typeof installed.status === "string" ? installed.status : "unknown";
+      error = `plugin status is ${status}, expected installed`;
+    } else if (typeof installed.version !== "string") {
+      error = `expected plugin v${packageJson.version}, found vunknown`;
+    } else if (installed.version !== packageJson.version) {
+      error = `expected plugin v${packageJson.version}, found v${installed.version}`;
+    } else if (!isGrokHostLeaf(installed)) {
+      error = `plugin is not the Grok leaf (plugins/grok)`;
+    }
+  }
+  return recordVerification(report, "verify Semctx Grok plugin", command, error);
+}
+
 function detectHost(
   host: Host,
   root: string,
@@ -1365,9 +1557,12 @@ function nextSteps(
     next.push("open a new Codex task so the refreshed plugin is loaded");
   }
   if (hosts.claude.restartRequired) next.push("restart Claude Code so the refreshed plugin is loaded");
-  for (const host of ["codex", "claude"] as const) {
+  if (hosts.grok.restartRequired) {
+    next.push("start a new Grok session or press r in the Plugins tab so the refreshed plugin is loaded");
+  }
+  for (const host of HOSTS) {
     const report = hosts[host];
-    const label = host === "codex" ? "Codex" : "Claude Code";
+    const label = host === "codex" ? "Codex" : host === "claude" ? "Claude Code" : "Grok";
     if (report.status === "missing") {
       next.push(`install or update ${label}, then re-run with --host ${host}`);
     } else if (report.status === "conflict") {
@@ -1378,8 +1573,12 @@ function nextSteps(
       next.push(`resolve the ${label} command error above, then re-run`);
     }
   }
-  if (hosts.codex.status === "not-detected" && hosts.claude.status === "not-detected") {
-    next.push("install Codex or Claude Code, then re-run 'semctx install'");
+  if (
+    hosts.codex.status === "not-detected"
+    && hosts.claude.status === "not-detected"
+    && hosts.grok.status === "not-detected"
+  ) {
+    next.push("install Codex, Claude Code, or Grok, then re-run 'semctx install'");
   }
   if (workspace.next !== undefined) next.push(workspace.next);
   return next;
@@ -1395,14 +1594,16 @@ export function executeInstall(
   const hosts: Record<Host, HostInstallReport> = {
     codex: hostReport(selected(selection, "codex")),
     claude: hostReport(selected(selection, "claude")),
+    grok: hostReport(selected(selection, "grok")),
   };
 
-  for (const host of ["codex", "claude"] as const) {
+  for (const host of HOSTS) {
     const report = hosts[host];
     if (!report.requested) continue;
     if (!detectHost(host, root, selection, runtime, report)) continue;
     if (host === "codex") installCodex(root, dryRun, runtime, report);
-    else installClaude(root, dryRun, runtime, report);
+    else if (host === "claude") installClaude(root, dryRun, runtime, report);
+    else installGrok(root, dryRun, runtime, report);
   }
 
   const workspace = workspaceReport(root, args, runtime);
@@ -1429,7 +1630,7 @@ export function executeInstall(
 }
 
 function renderHost(host: Host, report: HostInstallReport): void {
-  const label = host === "codex" ? "Codex" : "Claude";
+  const label = host === "codex" ? "Codex" : host === "claude" ? "Claude" : "Grok";
   const positive = report.status === "installed"
     || report.status === "updated"
     || report.status === "migrated"
@@ -1476,6 +1677,7 @@ export function runInstall(
   heading(`semctx install  ${c.dim("·")}  v${report.version}`);
   renderHost("codex", report.hosts.codex);
   renderHost("claude", report.hosts.claude);
+  renderHost("grok", report.hosts.grok);
   const workspaceMark = report.workspace.status === "failed" ? c.red("!!") : c.green("ok");
   info(`  ${workspaceMark} Project  ${report.workspace.status} ${c.dim(report.workspace.root)}`);
   if (report.workspace.error !== undefined) info(`             ${c.red(report.workspace.error)}`);

@@ -11,6 +11,14 @@ GitHub Release advance together through the tag-driven lockstep workflow documen
 
 ### Added
 
+- **Grok host adapter** (ADR 0015): `plugins/grok` is a third generated leaf over the same
+  MCP/CLI runtime and shared `semctx-control` skill as Claude and Codex. `.mcp.json` launches
+  the bundled server without `SEMCTX_ROOT` (pin-on-first-request). A global `semctx` CLI is not
+  required: the skill resolves `dist/semctx.js` via `grok plugin list --json`.
+  `semctx install --host auto|codex|claude|grok|all` detects Grok, adds or refreshes the
+  `hoklims/semctx` marketplace, installs or updates `semctx` with `--trust`, and enables it.
+  `.grok-plugin/marketplace.json` lists `semctx` → `./plugins/grok`.
+
 - **Cross-host plugin delivery observability**
   ([#89](https://github.com/hoklims/semctx/issues/89)): `semctx plugin-status [--json]` reports the
   five states that were previously conflated — the repository checkout, the public `stable`
