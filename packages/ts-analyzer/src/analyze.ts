@@ -35,6 +35,7 @@ import {
   type ImportEdgeOccurrence,
   type PlaneASidecarV1,
   type ProducerIdentity,
+  type UnresolvedReference,
 } from "@semantic-context/plane-a-internal";
 import { discoverFiles, sourceLanguage, type DiscoveredFile } from "./discovery";
 import {
@@ -47,6 +48,8 @@ import { extractMigration } from "./migrations";
 export interface AnalysisResult {
   graph: RepositoryGraph;
   evidence: EvidenceRecord[];
+  /** Authored cross-references naming targets this repository does not contain. */
+  unresolvedReferences: UnresolvedReference[];
 }
 
 type GraphBuilder = DeterministicGraphAssembler;
@@ -472,7 +475,8 @@ function ingestDocument(builder: GraphBuilder, file: DiscoveredFile, repoNodeId:
   }
   for (const target of doc.contradicts) {
     const targetId = documentId(target);
-    builder.edge("contradicts", docId, targetId, ev, { declared: true });
+    // The document itself names the contradicted target; the repository need not contain it.
+    builder.edge("contradicts", docId, targetId, ev, {}, "authored");
   }
 }
 
