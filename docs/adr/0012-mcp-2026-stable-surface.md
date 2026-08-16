@@ -63,10 +63,14 @@ target, indexing, shell, patch, or any other mutating operation.
 
 ## Repository root policy
 
-When `SEMCTX_ROOT` is set, the local stdio server is bound to that canonical repository root at
-process construction. Without `SEMCTX_ROOT`, the first valid tool call pins one canonical
-repository root for that connection so the portable Codex plugin can still start outside the
-target checkout. Every later call on the connection must name the same root.
+When `SEMCTX_ROOT` is a concrete filesystem path, the local stdio server is bound to that
+canonical repository root at process construction. Missing, empty, whitespace-only, and
+unsubstituted host placeholders of the form `${NAME}` (for example `${CLAUDE_PROJECT_DIR}`
+passed literally by a host that does not expand Claude Code plugin env templates) are
+equivalent to unset. Without a usable process-bound root, the first valid tool call pins one
+canonical repository root for that connection so portable hosts (Codex, Grok, and any other
+stdio launcher that starts outside the target checkout) can still connect. Every later call
+on the connection must name the same root.
 
 A different absolute path, relative escape, or symlink escape is rejected before repository, Git,
 SQLite, or source access. The same policy applies to the new explorer. This connection-local
