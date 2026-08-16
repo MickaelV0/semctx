@@ -2,8 +2,12 @@ import { realpathSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import { ToolPublicError } from "./public-tool-error";
 
-/** Claude-style `${NAME}` left unexpanded by a host that does not substitute plugin env templates. */
-const UNEXPANDED_HOST_PLACEHOLDER = /\$\{[A-Za-z_][A-Za-z0-9_]*\}/;
+/**
+ * Claude-style `${NAME}` left unexpanded by a host that does not substitute plugin env templates.
+ * Start-anchored: a value only counts as a placeholder when it *begins* with one, so a real
+ * filesystem path that merely contains a `${…}`-shaped segment still binds at construction.
+ */
+const UNEXPANDED_HOST_PLACEHOLDER = /^\$\{[A-Za-z_][A-Za-z0-9_]*\}/;
 
 function canonicalKey(path: string): string {
   return process.platform === "win32" ? path.toLowerCase() : path;
