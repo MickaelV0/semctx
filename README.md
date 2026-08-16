@@ -271,6 +271,13 @@ on the same release as the tools; the skills and the guard hand the agent the CL
 absolute path. A global `semctx` remains optional for CI and non-plugin shells. See
 [`docs/integrations/claude-code.md`](docs/integrations/claude-code.md).
 
+### Grok
+
+Grok can load the same Claude Code plugin. It does not expand `${CLAUDE_PROJECT_DIR}` in
+`.mcp.json`, so `SEMCTX_ROOT` arrives as a literal placeholder. The MCP server treats that as
+unset and pins on the first absolute `repositoryRoot` argument — the same start path Codex
+uses. See [`docs/integrations/grok.md`](docs/integrations/grok.md).
+
 ### Codex
 
 The repo-local [`semctx-control`](plugins/semctx-control) plugin gives Codex the full semctx MCP

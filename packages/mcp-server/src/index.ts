@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
+import { optionalProcessBoundRoot } from "./repository-root";
 import { createSemctxServer } from "./server";
 
 export { createSemctxServer } from "./server";
@@ -19,7 +20,7 @@ export { controlTargetProposeTool } from "./target-tools";
 
 /** Entry point: serve semctx over stdio, optionally pre-bound by SEMCTX_ROOT. */
 export function main(): void {
-  const root = process.env["SEMCTX_ROOT"];
+  const root = optionalProcessBoundRoot(process.env["SEMCTX_ROOT"]);
   serveStdio(() => createSemctxServer(root), { legacy: "serve" });
   // stderr, so it never corrupts the stdio JSON-RPC channel.
   process.stderr.write(
