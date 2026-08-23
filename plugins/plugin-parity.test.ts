@@ -239,6 +239,7 @@ describe("Codex and Claude Code plugin parity", () => {
       "plugins/shared/skills/semctx-control/SKILL.md",
       "plugins/claude-code/hooks/hooks.json",
       "plugins/claude-code/.mcp.json",
+      "plugins/claude-code/mcp-omp.json",
       "plugins/claude-code/README.md",
       "plugins/claude-code/examples/guard.json",
       "README.md",
@@ -246,6 +247,7 @@ describe("Codex and Claude Code plugin parity", () => {
       "docs/integrations/claude-code-guarded-mode.md",
       "docs/integrations/codex-control-plane.md",
       "docs/integrations/grok.md",
+      "docs/integrations/omp.md",
     ];
     expect(shipped.length).toBeGreaterThan(0);
     // Matches $CLAUDE_PLUGIN_ROOT only when it is NOT the ${…} form.
@@ -275,9 +277,11 @@ describe("Codex and Claude Code plugin parity", () => {
       "docs/integrations/claude-code-guarded-mode.md",
       "docs/integrations/codex-control-plane.md",
       "docs/integrations/grok.md",
+      "docs/integrations/omp.md",
       "docs/examples/claude-code-integration.md",
       "plugins/claude-code/README.md",
       "plugins/claude-code/.mcp.json",
+      "plugins/claude-code/mcp-omp.json",
       "plugins/semctx-control/.mcp.json",
     ];
     expect(shipped.length).toBeGreaterThan(0);
