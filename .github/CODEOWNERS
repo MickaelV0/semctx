@@ -17,6 +17,9 @@
 /plugins/claude-code/.claude-plugin/plugin.json @hoklims
 /plugins/semctx-control/.mcp.json @hoklims
 /plugins/semctx-control/.codex-plugin/plugin.json @hoklims
+/.omp-plugin/marketplace.json @hoklims
+/plugins/claude-code/.omp-plugin/plugin.json @hoklims
+/plugins/claude-code/mcp-omp.json @hoklims
 
 # Architecture decisions and canonical architecture documentation.
 /docs/adr/ @hoklims
