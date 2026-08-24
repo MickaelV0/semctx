@@ -451,6 +451,17 @@ describe("Codex and Claude Code plugin parity", () => {
     expect(json<{ version: string }>("packages/app-services/package.json").version).toBe(claudeManifest.version);
     // Release SSOT: npm CLI package must ship the same release as the marketplace plugins/MCP.
     expect(json<{ version: string }>("apps/cli/package.json").version).toBe(claudeManifest.version);
+    // Release SSOT: the experimental, opt-in Oh My Pi surfaces move in lockstep too, even though
+    // they are excluded from the `deliver` stable-delivery-proof job (tracked in HOK-456).
+    const ompMarketplace = json<{ plugins: Array<{ name: string; version: string }> }>(
+      ".omp-plugin/marketplace.json",
+    );
+    expect(ompMarketplace.plugins.find((plugin) => plugin.name === "semctx")?.version).toBe(
+      claudeManifest.version,
+    );
+    expect(json<{ version: string }>("plugins/claude-code/.omp-plugin/plugin.json").version).toBe(
+      claudeManifest.version,
+    );
     const serverSource = read("packages/mcp-server/src/server.ts");
     expect(serverSource).toContain('import packageJson from "../package.json"');
     expect(serverSource).toContain("version: packageJson.version");

@@ -8,7 +8,12 @@
   "plugins": [
     {
       "name": "semctx",
-      "source": "./plugins/claude-code",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/hoklims/semctx.git",
+        "path": "plugins/claude-code",
+        "ref": "stable"
+      },
       "description": "Trace repository impact, authored intent and fail-closed migration plans in Oh My Pi.",
       "version": "0.1.17",
       "author": {

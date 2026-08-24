@@ -11,10 +11,14 @@ function json<T>(path: string): T {
 }
 
 describe("Oh My Pi plugin manifests", () => {
-  test("catalog points at the Claude plugin tree with matching version", () => {
+  test("catalog pins the Claude plugin tree to the stable git ref with matching version", () => {
     const catalog = json<{
       name: string;
-      plugins: Array<{ name: string; source: string; version: string }>;
+      plugins: Array<{
+        name: string;
+        source: { source: string; url: string; path: string; ref: string };
+        version: string;
+      }>;
     }>(".omp-plugin/marketplace.json");
     const claude = json<{ version: string }>(
       "plugins/claude-code/.claude-plugin/plugin.json",
@@ -23,9 +27,27 @@ describe("Oh My Pi plugin manifests", () => {
     expect(catalog.plugins).toHaveLength(1);
     expect(catalog.plugins[0]).toMatchObject({
       name: "semctx",
-      source: "./plugins/claude-code",
+      source: {
+        source: "git-subdir",
+        url: "https://github.com/hoklims/semctx.git",
+        path: "plugins/claude-code",
+        ref: "stable",
+      },
       version: claude.version,
     });
+  });
+
+  // The marketplace name ("semctx-stable") is a catalog label, not a Git pin: `omp plugin
+  // marketplace add hoklims/semctx` can fetch the catalog file itself from whatever ref the
+  // host resolves by default. Only the plugin `source.ref` field below binds the installed code
+  // to `stable`; an install that trusted the name alone would silently track `main`.
+  test("the marketplace name alone is not a git pin — only source.ref binds the install", () => {
+    const catalog = json<{
+      plugins: Array<{ source: { ref: string } }>;
+    }>(".omp-plugin/marketplace.json");
+    const ref = catalog.plugins[0]?.source.ref;
+    expect(ref).toBe("stable");
+    expect(ref).not.toBe("main");
   });
 
   test("OMP manifest replaces .mcp.json with a Codex-like launch and no Claude placeholders", () => {
