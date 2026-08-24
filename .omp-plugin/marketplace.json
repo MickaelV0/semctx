@@ -1,0 +1,27 @@
+{
+  "name": "semctx-stable",
+  "description": "Local semctx plugins for proof-honest repository changes (Claude Code, Codex, Oh My Pi)",
+  "owner": {
+    "name": "hoklims",
+    "email": "hoklims@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "semctx",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/hoklims/semctx.git",
+        "path": "plugins/claude-code",
+        "ref": "stable"
+      },
+      "description": "Trace repository impact, authored intent and fail-closed migration plans in Oh My Pi.",
+      "version": "0.1.17",
+      "author": {
+        "name": "hoklims",
+        "email": "hoklims@gmail.com"
+      },
+      "category": "Development",
+      "tags": ["change-impact", "semantic-context", "migration", "verification"]
+    }
+  ]
+}
