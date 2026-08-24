@@ -239,6 +239,7 @@ describe("Codex and Claude Code plugin parity", () => {
       "plugins/shared/skills/semctx-control/SKILL.md",
       "plugins/claude-code/hooks/hooks.json",
       "plugins/claude-code/.mcp.json",
+      "plugins/claude-code/mcp-omp.json",
       "plugins/claude-code/README.md",
       "plugins/claude-code/examples/guard.json",
       "README.md",
@@ -246,6 +247,7 @@ describe("Codex and Claude Code plugin parity", () => {
       "docs/integrations/claude-code-guarded-mode.md",
       "docs/integrations/codex-control-plane.md",
       "docs/integrations/grok.md",
+      "docs/integrations/omp.md",
     ];
     expect(shipped.length).toBeGreaterThan(0);
     // Matches $CLAUDE_PLUGIN_ROOT only when it is NOT the ${…} form.
@@ -275,9 +277,11 @@ describe("Codex and Claude Code plugin parity", () => {
       "docs/integrations/claude-code-guarded-mode.md",
       "docs/integrations/codex-control-plane.md",
       "docs/integrations/grok.md",
+      "docs/integrations/omp.md",
       "docs/examples/claude-code-integration.md",
       "plugins/claude-code/README.md",
       "plugins/claude-code/.mcp.json",
+      "plugins/claude-code/mcp-omp.json",
       "plugins/semctx-control/.mcp.json",
     ];
     expect(shipped.length).toBeGreaterThan(0);
@@ -447,6 +451,17 @@ describe("Codex and Claude Code plugin parity", () => {
     expect(json<{ version: string }>("packages/app-services/package.json").version).toBe(claudeManifest.version);
     // Release SSOT: npm CLI package must ship the same release as the marketplace plugins/MCP.
     expect(json<{ version: string }>("apps/cli/package.json").version).toBe(claudeManifest.version);
+    // Release SSOT: the experimental, opt-in Oh My Pi surfaces move in lockstep too, even though
+    // they are excluded from the `deliver` stable-delivery-proof job (tracked in HOK-456).
+    const ompMarketplace = json<{ plugins: Array<{ name: string; version: string }> }>(
+      ".omp-plugin/marketplace.json",
+    );
+    expect(ompMarketplace.plugins.find((plugin) => plugin.name === "semctx")?.version).toBe(
+      claudeManifest.version,
+    );
+    expect(json<{ version: string }>("plugins/claude-code/.omp-plugin/plugin.json").version).toBe(
+      claudeManifest.version,
+    );
     const serverSource = read("packages/mcp-server/src/server.ts");
     expect(serverSource).toContain('import packageJson from "../package.json"');
     expect(serverSource).toContain("version: packageJson.version");
