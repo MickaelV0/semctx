@@ -1,6 +1,6 @@
 {
   "name": "semctx-stable",
-  "description": "Local semctx plugins for proof-honest repository changes (Claude Code, Codex, Oh My Pi)",
+  "description": "Fork dogfood — Claude plugin tree from MickaelV0/semctx@main, not hoklims stable",
   "owner": {
     "name": "hoklims",
     "email": "hoklims@gmail.com"
@@ -10,9 +10,9 @@
       "name": "semctx",
       "source": {
         "source": "git-subdir",
-        "url": "https://github.com/hoklims/semctx.git",
+        "url": "https://github.com/MickaelV0/semctx.git",
         "path": "plugins/claude-code",
-        "ref": "stable"
+        "ref": "main"
       },
       "description": "Trace repository impact, authored intent and fail-closed migration plans in Oh My Pi.",
       "version": "0.1.17",
