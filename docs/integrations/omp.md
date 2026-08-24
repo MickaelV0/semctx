@@ -17,4 +17,15 @@ Then `/reload-plugins` or restart the session. Every MCP tool call must pass an 
 
 OMP substitutes `${CLAUDE_PLUGIN_ROOT}` and its own `${OMP_PLUGIN_ROOT}` inside MCP server config fields, but never inside skill/agent markdown body text — the Claude skill still contains a literal, unsubstituted `${CLAUDE_PLUGIN_ROOT}` when read on OMP, so agents must prefer connected MCP tools over that text.
 
-The Claude commit/push guard hook is not loaded on OMP.
+## Commit/push guard
+
+OMP loads `plugins/claude-code/hooks/pre/semctx-guard.ts` (default export factory registering
+`pi.on("tool_call")`). It calls the same ADR 0007 decision function as Claude's
+`hooks/semctx-guard.mjs` — `evaluateBashGuard` — with OMP's `bash` tool name (Claude uses
+`Bash`). Advisory is the default: the hook is present but never blocks until the project opts in via
+`.semctx/guard.json` `{ "enabled": true }` or `SEMCTX_GUARD=on`, which then blocks non-isolated
+`git commit` / `git push` until the working state matches a recorded verification baseline.
+
+Claude's `hooks/hooks.json` `PreToolUse` registration remains Claude-only; OMP does not read it.
+`pluginCliPath` inside the shared guard resolves the bundled CLI from `OMP_PLUGIN_ROOT` (after
+`CLAUDE_PLUGIN_ROOT`), then falls back to file-relative `dist/semctx.js`.

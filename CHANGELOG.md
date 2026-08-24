@@ -10,6 +10,10 @@ GitHub Release advance together through the tag-driven lockstep workflow documen
 ## [Unreleased]
 
 ### Added
+- **Oh My Pi commit/push guard**: `plugins/claude-code/hooks/pre/semctx-guard.ts` registers
+  `pi.on("tool_call")` and calls the same `evaluateBashGuard` as Claude's `PreToolUse` hook.
+  Advisory by default. `pluginCliPath` honors `OMP_PLUGIN_ROOT`.
+
 
 - **Cross-host plugin delivery observability**
   ([#89](https://github.com/hoklims/semctx/issues/89)): `semctx plugin-status [--json]` reports the

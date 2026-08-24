@@ -28,11 +28,13 @@ runtime behaviour. The analysis is local and deterministic; semctx itself needs 
   placeholder; Codex documents global `semctx` only). Source template:
   `plugins/shared/skills/semctx-control/SKILL.md`.
 - **Focused skills**: `skills/semctx-verify` for Plane A and `skills/semctx-semantic` for Plane B.
-- **Guard hook** (`hooks/`): a `PreToolUse` guard that is **inert by default** (advisory) and, when
-  the project opts into guarded mode, blocks non-isolated `git commit` / `git push` commands or an
-  unverified working state. Block messages point at the plugin-bundled CLI by absolute path when
-  the bundle is in reach, and at a global `semctx` otherwise. The semantic and control tools do not
-  change this host-specific behaviour.
+- **Guard hook**: Claude registers a `PreToolUse` guard via `hooks/hooks.json` (`hooks/semctx-guard.mjs`);
+  Oh My Pi loads a sibling adapter at `hooks/pre/semctx-guard.ts` (`pi.on("tool_call")` on the
+  `bash` tool). Both call the same `evaluateBashGuard` decision (ADR 0007). The guard is **inert by
+  default** (advisory) and, when the project opts into guarded mode, blocks non-isolated
+  `git commit` / `git push` commands or an unverified working state. Block messages point at the
+  plugin-bundled CLI by absolute path when the bundle is in reach, and at a global `semctx`
+  otherwise. The semantic and control tools do not change this host-specific behaviour.
 
 ## Shared Codex/Claude contract
 
@@ -156,8 +158,8 @@ If an older direct MCP registration is still present, remove it after the plugin
 - Invoke the shared workflow explicitly as `semctx-control` for migrations, architecture work,
   generic demonstrations or cross-plane verification. The narrower skills remain available for
   backward compatibility.
-- To remove the guard entirely (zero footprint), delete `hooks/hooks.json` from your plugin
-  install, or keep advisory mode (the default) where it never blocks.
+- To remove the guard entirely (zero footprint), delete `hooks/hooks.json` (Claude) and
+  `hooks/pre/semctx-guard.ts` (OMP), or keep advisory mode (the default) where it never blocks.
 
-See `docs/integrations/claude-code.md`, `docs/integrations/claude-code-guarded-mode.md`, and
-`docs/integrations/grok.md`.
+See `docs/integrations/claude-code.md`, `docs/integrations/claude-code-guarded-mode.md`,
+`docs/integrations/omp.md`, and `docs/integrations/grok.md`.

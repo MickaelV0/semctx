@@ -43,4 +43,5 @@ Oh My Pi is a **consumer of the existing Claude plugin directory** (`plugins/cla
 - `omp plugin marketplace add hoklims/semctx` then `omp plugin install semctx@semctx-stable` is the supported install; the plugin itself always resolves from `ref: "stable"` regardless of which ref the marketplace add step fetched.
 - `.omp-plugin/marketplace.json` and `plugins/claude-code/.omp-plugin/plugin.json` join the release-lockstep version SSOT (`plugins/plugin-parity.test.ts`, `docs/publishing.md`) alongside the Claude/Codex surfaces.
 - Cross-host `dist/` byte equality and Claude/Codex parity tests remain the SSOT; OMP adds a manifest test only, and is excluded from the `deliver` stable-delivery-proof job — no `plugin-status` support, no delivery attestation. Closing that gap is HOK-456, not this ADR.
-- Guard `hooks/hooks.json` stays Claude-only. OMP does not gain a commit/push guard in this change.
+- Guard `hooks/hooks.json` stays Claude-only. OMP has a sibling adapter at
+  `hooks/pre/semctx-guard.ts` that calls the same `evaluateBashGuard` decision function.
