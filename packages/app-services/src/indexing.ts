@@ -1,4 +1,4 @@
-import { SemctxError, type Claim, type SemctxConfig } from "@semantic-context/core";
+import { SemctxError, attachSuppressedError, type Claim, type SemctxConfig } from "@semantic-context/core";
 import { buildClaims, GraphIndex, parseObservedDiffHunks } from "@semantic-context/context-engine";
 import { loadConfig, openStore, SCHEMA_VERSION } from "@semantic-context/repository-store";
 import { SealedAttestationIndexV1Schema, type ControlFreshnessSeal } from "@semantic-context/control-model";
@@ -279,7 +279,7 @@ export function indexRepository(root: string, indexedAt: string): RepositoryInde
         [CONTROL_INDEX_SNAPSHOT_META_KEY]: JSON.stringify(snapshot),
       },
     });
-    return {
+    const result = {
       ...indexed,
       freshnessSeal: buildControlFreshnessSeal({
         repositoryRoot,
@@ -297,14 +297,22 @@ export function indexRepository(root: string, indexedAt: string): RepositoryInde
         planeAIndexSnapshotHash: planeAIndexSnapshotHash as `sha256:${string}`,
       }),
     };
-  } catch (error) {
-    if (error instanceof SyntaxError) {
-      throw new SemctxError("STORE_ERROR", "invalid persisted control attestation index", {
-        cause: error.message,
-      });
-    }
-    throw error;
-  } finally {
     store.close();
+    return result;
+  } catch (error) {
+    const operationError = error instanceof SyntaxError
+      ? new SemctxError("STORE_ERROR", "invalid persisted control attestation index", {
+        cause: error.message,
+      })
+      : error;
+    let cleanupFailure: unknown;
+    try {
+      store.close();
+    } catch (closeError) {
+      cleanupFailure = closeError;
+    }
+    throw cleanupFailure === undefined
+      ? operationError
+      : attachSuppressedError(operationError, cleanupFailure);
   }
 }

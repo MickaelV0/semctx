@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { SqliteRepositoryReader, SqliteRepositoryStore } from "@semantic-context/repository-store";
@@ -76,6 +77,168 @@ describe("SqliteRepositoryReader", () => {
     expect(treeSnapshot(directory)).toEqual(before);
 
     writer.close();
+  });
+
+  it("removes WAL sidecars when the writer closes", () => {
+    const directory = temporaryDirectory();
+    const dbFile = join(directory, "index.db");
+    const writer = SqliteRepositoryStore.open(dbFile);
+
+    expect(existsSync(`${dbFile}-wal`)).toBe(true);
+    expect(existsSync(`${dbFile}-shm`)).toBe(true);
+
+    writer.close();
+
+    expect(existsSync(`${dbFile}-wal`)).toBe(false);
+    expect(existsSync(`${dbFile}-shm`)).toBe(false);
+  });
+
+  it("can close an already closed writer", () => {
+    const directory = temporaryDirectory();
+    const writer = SqliteRepositoryStore.open(join(directory, "index.db"));
+
+    writer.close();
+
+    expect(() => writer.close()).not.toThrow();
+  });
+
+  it("closes a writer after a busy checkpoint and allows cleanup through a later writer", () => {
+    const directory = temporaryDirectory();
+    const dbFile = join(directory, "index.db");
+    const writer = SqliteRepositoryStore.open(dbFile);
+    writer.setMeta("checkpoint_probe", "before");
+    const blocker = new Database(dbFile, { readonly: true });
+    blocker.exec("BEGIN;");
+    blocker.query("SELECT value FROM meta WHERE key = ?").get("checkpoint_probe");
+    writer.setMeta("checkpoint_probe", "after");
+
+    expect(() => writer.close()).toThrow("repository store checkpoint is busy");
+    expect(() => writer.close()).not.toThrow();
+
+    blocker.exec("ROLLBACK;");
+    blocker.close();
+    SqliteRepositoryStore.open(dbFile).close();
+
+    const reader = SqliteRepositoryReader.openExisting(dbFile);
+    expect(reader.getMeta("checkpoint_probe")).toBe("after");
+    reader.close();
+  });
+
+  it("closes a writer after a concurrent write and allows cleanup through a later writer", () => {
+    const directory = temporaryDirectory();
+    const dbFile = join(directory, "index.db");
+    const writer = SqliteRepositoryStore.open(dbFile);
+    const blocker = new Database(dbFile);
+    blocker.exec("BEGIN IMMEDIATE;");
+    blocker.query("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)").run("checkpoint_probe", "concurrent");
+
+    expect(() => writer.close()).toThrow("repository store checkpoint is busy");
+    expect(() => writer.close()).not.toThrow();
+
+    blocker.exec("COMMIT;");
+    blocker.close();
+    SqliteRepositoryStore.open(dbFile).close();
+
+    const reader = SqliteRepositoryReader.openExisting(dbFile);
+    expect(reader.getMeta("checkpoint_probe")).toBe("concurrent");
+    reader.close();
+  });
+
+  it("closes a writer when an idle reader blocks WAL cleanup and permits later cleanup", () => {
+    const directory = temporaryDirectory();
+    const dbFile = join(directory, "index.db");
+    const writer = SqliteRepositoryStore.open(dbFile);
+    writer.setMeta("checkpoint_probe", "ready");
+    const blocker = new Database(dbFile, { readonly: true });
+    blocker.query("SELECT value FROM meta WHERE key = ?").get("checkpoint_probe");
+
+    expect(() => writer.close()).toThrow("repository store cannot leave WAL mode");
+    expect(() => writer.close()).not.toThrow();
+
+    blocker.close();
+    SqliteRepositoryStore.open(dbFile).close();
+
+    const reader = SqliteRepositoryReader.openExisting(dbFile);
+    expect(reader.getMeta("checkpoint_probe")).toBe("ready");
+    reader.close();
+  });
+
+  it("cleans up after multiple managed writers close in either order", () => {
+    for (const reverseCloseOrder of [false, true]) {
+      const directory = temporaryDirectory();
+      const dbFile = join(directory, "index.db");
+      const first = SqliteRepositoryStore.open(dbFile);
+      const second = SqliteRepositoryStore.open(dbFile);
+      first.setMeta("first_writer", "closed");
+      second.setMeta("second_writer", "closed");
+
+      if (reverseCloseOrder) {
+        second.close();
+        first.close();
+      } else {
+        first.close();
+        second.close();
+      }
+
+      expect(existsSync(`${dbFile}-wal`)).toBe(false);
+      expect(existsSync(`${dbFile}-shm`)).toBe(false);
+      const reader = SqliteRepositoryReader.openExisting(dbFile);
+      expect(reader.getMeta("first_writer")).toBe("closed");
+      expect(reader.getMeta("second_writer")).toBe("closed");
+      reader.close();
+    }
+  });
+
+  it("tracks managed writers by canonical path through a filesystem alias", () => {
+    for (const reverseCloseOrder of [false, true]) {
+      const directory = temporaryDirectory();
+      const realDirectory = join(directory, "real");
+      const aliasDirectory = join(directory, "alias");
+      mkdirSync(realDirectory);
+      symlinkSync(realDirectory, aliasDirectory, process.platform === "win32" ? "junction" : "dir");
+      const dbFile = join(realDirectory, "index.db");
+      const aliasedDbFile = join(aliasDirectory, "index.db");
+      const first = SqliteRepositoryStore.open(dbFile);
+      const second = SqliteRepositoryStore.open(aliasedDbFile);
+
+      if (reverseCloseOrder) {
+        second.close();
+        first.close();
+      } else {
+        first.close();
+        second.close();
+      }
+
+      expect(existsSync(`${dbFile}-wal`)).toBe(false);
+      expect(existsSync(`${dbFile}-shm`)).toBe(false);
+      expect(() => SqliteRepositoryReader.openExisting(dbFile).close()).not.toThrow();
+    }
+  });
+
+  it("does not poison later cleanup when opening a store fails", () => {
+    const directory = temporaryDirectory();
+    const dbFile = join(directory, "index.db");
+    SqliteRepositoryStore.open(dbFile).close();
+    const blocker = new Database(dbFile);
+    blocker.exec(`
+      CREATE TRIGGER reject_schema_version
+      BEFORE INSERT ON meta
+      WHEN NEW.key = 'schema_version'
+      BEGIN
+        SELECT RAISE(ABORT, 'schema version rejected');
+      END;
+    `);
+
+    expect(() => SqliteRepositoryStore.open(dbFile)).toThrow("schema version rejected");
+    blocker.exec("DROP TRIGGER reject_schema_version;");
+    blocker.close();
+
+    const recovered = SqliteRepositoryStore.open(dbFile);
+    recovered.close();
+
+    expect(existsSync(`${dbFile}-wal`)).toBe(false);
+    expect(existsSync(`${dbFile}-shm`)).toBe(false);
+    expect(() => SqliteRepositoryReader.openExisting(dbFile).close()).not.toThrow();
   });
 });
 

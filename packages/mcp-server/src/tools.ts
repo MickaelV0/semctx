@@ -1,8 +1,8 @@
-import { TaskModeSchema } from "@semantic-context/core";
+import { TaskModeSchema, attachSuppressedError } from "@semantic-context/core";
 import type { TaskFrame, ContextPack, TaskFrameInput, TaskMode } from "@semantic-context/core";
-import { loadConfig, openStore } from "@semantic-context/repository-store";
+import { loadConfig } from "@semantic-context/repository-store";
 import type { ReadonlyRepositoryStore, SqliteRepositoryStore } from "@semantic-context/repository-store";
-import { openReadyRepository, runVerify, trustedControlSealHash } from "@semantic-context/app-services";
+import { openReadyRepository, openReadyRepositoryWriter, runVerify, trustedControlSealHash } from "@semantic-context/app-services";
 import type { VerifyReport } from "@semantic-context/core";
 import {
   extractionContext,
@@ -25,9 +25,7 @@ export function ensureReady(root: string): ReadonlyRepositoryStore {
 }
 
 function openReadyWriter(root: string): SqliteRepositoryStore {
-  const reader = openReadyRepository(root);
-  reader.close();
-  return openStore(root);
+  return openReadyRepositoryWriter(root);
 }
 
 export interface PrepareTaskResult {
@@ -81,9 +79,18 @@ export async function prepareTaskTool(root: string, input: { task: string; mode?
       });
     }
     store.saveContextPack(contextPack);
-    return { taskFrame, contextPack };
-  } finally {
     store.close();
+    return { taskFrame, contextPack };
+  } catch (error) {
+    let cleanupFailure: unknown;
+    try {
+      store.close();
+    } catch (closeError) {
+      cleanupFailure = closeError;
+    }
+    throw cleanupFailure === undefined
+      ? error
+      : attachSuppressedError(error, cleanupFailure);
   }
 }
 

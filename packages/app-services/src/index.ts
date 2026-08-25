@@ -68,7 +68,7 @@ export type {
   RepositoryChannelV1,
   SessionVersionProbe,
 } from "./plugin-delivery";
-export { openReadyRepository } from "./readiness";
+export { openReadyRepository, openReadyRepositoryWriter } from "./readiness";
 export type { RepositoryAnalysis, RepositoryIndex } from "./indexing";
 export { indexHealth } from "./index-health";
 export type {
