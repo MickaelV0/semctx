@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { Database } from "bun:sqlite";
-import { cpSync, existsSync, rmSync, mkdtempSync } from "node:fs";
+import { cpSync, existsSync, realpathSync, rmSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { prepareTaskTool, inspectTool, verifyChangeTool } from "../src/index";
@@ -159,7 +159,7 @@ describe("semctx_prepare_task", () => {
   });
 
   it("recovers through a mutable writer after a busy WAL cleanup", async () => {
-    const recoveryRoot = mkdtempSync(join(tmpdir(), "semctx-mcp-wal-recovery-"));
+    const recoveryRoot = realpathSync.native(mkdtempSync(join(tmpdir(), "semctx-mcp-wal-recovery-")));
     try {
       cpSync(SAMPLE_REPO, recoveryRoot, {
         recursive: true,
@@ -178,10 +178,18 @@ describe("semctx_prepare_task", () => {
       const database = dbPath(recoveryRoot);
       const walSetup = new Database(database);
       walSetup.exec("PRAGMA journal_mode=WAL;");
-      walSetup.close();
+      walSetup.query("INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)").run(
+        "wal_recovery_probe",
+        "before",
+      );
       const blocker = new Database(database, { readonly: true });
       blocker.exec("BEGIN;");
-      blocker.query("SELECT value FROM meta WHERE key = 'schema_version'").get();
+      blocker.query("SELECT value FROM meta WHERE key = 'wal_recovery_probe'").get();
+      walSetup.query("INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)").run(
+        "wal_recovery_probe",
+        "pending",
+      );
+      walSetup.close();
       try {
         await expectFailure(
           () => prepareTaskTool(recoveryRoot, { task: "first WAL recovery attempt" }),
