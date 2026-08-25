@@ -1,5 +1,5 @@
 import { constants, Database } from "bun:sqlite";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { SemctxError } from "@semantic-context/core";
 import type {
@@ -61,6 +61,14 @@ interface ClaimRow {
 interface PayloadRow {
   payload: string;
 }
+
+interface WalCheckpointRow {
+  busy: number;
+  log: number;
+  checkpointed: number;
+}
+
+const openStoreCounts = new Map<string, number>();
 
 export interface RepositoryIndexSnapshot {
   graph: RepositoryGraph;
@@ -162,18 +170,28 @@ export class SqliteRepositoryReader implements ReadonlyRepositoryStore {
 
 export class SqliteRepositoryStore implements RepositoryStore {
   private readonly db: Database;
+  private readonly databasePath: string;
+  private isClosed = false;
 
-  private constructor(db: Database) {
+  private constructor(db: Database, databasePath: string) {
     this.db = db;
+    this.databasePath = databasePath;
   }
 
   static open(dbPath: string): SqliteRepositoryStore {
     const db = new Database(dbPath, { create: true });
-    db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = OFF;");
-    db.exec(SCHEMA_SQL);
-    const store = new SqliteRepositoryStore(db);
-    store.setMeta("schema_version", String(SCHEMA_VERSION));
-    return store;
+    try {
+      db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = OFF;");
+      db.exec(SCHEMA_SQL);
+      const databasePath = realpathSync(dbPath);
+      const store = new SqliteRepositoryStore(db, databasePath);
+      store.setMeta("schema_version", String(SCHEMA_VERSION));
+      openStoreCounts.set(databasePath, (openStoreCounts.get(databasePath) ?? 0) + 1);
+      return store;
+    } catch (cause) {
+      db.close();
+      throw cause;
+    }
   }
 
   saveGraph(graph: RepositoryGraph, evidence: EvidenceRecord[]): void {
@@ -254,8 +272,76 @@ export class SqliteRepositoryStore implements RepositoryStore {
   }
 
   close(): void {
-    this.db.close();
+    if (this.isClosed) return;
+    if (openStoreCount(this.databasePath) > 1) {
+      this.closeDatabase();
+      return;
+    }
+    let cleanupFailure: Error | undefined;
+    try {
+      this.db.fileControl(constants.SQLITE_FCNTL_PERSIST_WAL, 0);
+      const checkpoint = this.db.query("PRAGMA wal_checkpoint(TRUNCATE);").get() as unknown;
+      if (!isWalCheckpointRow(checkpoint)) {
+        throw new SemctxError("STORE_ERROR", "repository store checkpoint returned an invalid result", { checkpoint });
+      }
+      if (checkpoint.busy !== 0) {
+        throw new SemctxError("STORE_ERROR", "repository store checkpoint is busy", { checkpoint });
+      }
+      let journalMode: unknown;
+      try {
+        journalMode = this.db.query("PRAGMA journal_mode = DELETE;").get() as unknown;
+      } catch (cause) {
+        throw new SemctxError("STORE_ERROR", "repository store cannot leave WAL mode", { cause: String(cause) });
+      }
+      if (!isDeleteJournalModeRow(journalMode)) {
+        throw new SemctxError("STORE_ERROR", "repository store cannot leave WAL mode", { journalMode });
+      }
+    } catch (cause) {
+      cleanupFailure = cause instanceof Error
+        ? cause
+        : new SemctxError("STORE_ERROR", "repository store cleanup failed", { cause: String(cause) });
+    }
+    this.closeDatabase();
+    if (cleanupFailure !== undefined) throw cleanupFailure;
   }
+
+  private closeDatabase(): void {
+    this.db.close();
+    unregisterOpenStore(this.databasePath);
+    this.isClosed = true;
+  }
+}
+
+function openStoreCount(databasePath: string): number {
+  const count = openStoreCounts.get(databasePath);
+  if (count === undefined) {
+    throw new SemctxError("STORE_ERROR", "repository store registry is inconsistent", { databasePath });
+  }
+  return count;
+}
+
+function unregisterOpenStore(databasePath: string): void {
+  const count = openStoreCount(databasePath);
+  if (count === 1) {
+    openStoreCounts.delete(databasePath);
+    return;
+  }
+  openStoreCounts.set(databasePath, count - 1);
+}
+
+function isWalCheckpointRow(value: unknown): value is WalCheckpointRow {
+  if (typeof value !== "object" || value === null) return false;
+  const row = value as Record<string, unknown>;
+  return (row.busy === 0 || row.busy === 1)
+    && Number.isInteger(row.log)
+    && Number(row.log) >= 0
+    && Number.isInteger(row.checkpointed)
+    && Number(row.checkpointed) >= 0;
+}
+
+function isDeleteJournalModeRow(value: unknown): value is { journal_mode: "delete" } {
+  if (typeof value !== "object" || value === null) return false;
+  return (value as Record<string, unknown>).journal_mode === "delete";
 }
 
 function replaceGraphRows(db: Database, graph: RepositoryGraph, evidence: EvidenceRecord[]): void {

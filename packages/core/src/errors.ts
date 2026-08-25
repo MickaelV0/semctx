@@ -38,3 +38,45 @@ export class SemctxError extends Error {
 export function isSemctxError(value: unknown): value is SemctxError {
   return value instanceof SemctxError;
 }
+
+export interface ErrorWithSuppressed extends Error {
+  readonly suppressed: readonly Error[];
+}
+
+function normalizeError(value: unknown): Error {
+  return value instanceof Error ? value : new Error(String(value));
+}
+
+function previousSuppressed(error: Error): readonly Error[] {
+  try {
+    const value = (error as Partial<ErrorWithSuppressed>).suppressed;
+    return Array.isArray(value) ? value.filter((item): item is Error => item instanceof Error) : [];
+  } catch {
+    return [];
+  }
+}
+
+function errorEvidence(error: Error): unknown {
+  return error instanceof SemctxError
+    ? error.toJSON()
+    : { name: error.name, message: error.message };
+}
+
+/** Preserve a primary failure as the cause while retaining structured secondary cleanup failures. */
+export function attachSuppressedError(primary: unknown, suppressed: unknown): ErrorWithSuppressed {
+  const primaryError = normalizeError(primary);
+  const suppressedError = normalizeError(suppressed);
+  const failures = [...previousSuppressed(primaryError), suppressedError];
+  const combined = primaryError instanceof SemctxError
+    ? new SemctxError(primaryError.code, primaryError.message, {
+      ...primaryError.details,
+      suppressed: failures.map(errorEvidence),
+    })
+    : new Error(primaryError.message, { cause: primaryError });
+  combined.name = primaryError.name;
+  if (primaryError instanceof SemctxError) {
+    Object.defineProperty(combined, "cause", { value: primaryError });
+  }
+  Object.defineProperty(combined, "suppressed", { value: failures });
+  return combined as ErrorWithSuppressed;
+}
