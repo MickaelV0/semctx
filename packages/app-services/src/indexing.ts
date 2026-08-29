@@ -1,4 +1,4 @@
-import { SemctxError, type Claim, type SemctxConfig } from "@semantic-context/core";
+import { SemctxError, attachSuppressedError, type Claim, type SemctxConfig } from "@semantic-context/core";
 import { buildClaims, GraphIndex, parseObservedDiffHunks } from "@semantic-context/context-engine";
 import { loadConfig, openStore, SCHEMA_VERSION } from "@semantic-context/repository-store";
 import { SealedAttestationIndexV1Schema, type ControlFreshnessSeal } from "@semantic-context/control-model";
@@ -9,6 +9,8 @@ import {
   type AnalysisResult,
   type DiscoveredFile,
   type DiscoveryResult,
+  type IndexWorkerSelection,
+  type TypeScriptParallelism,
 } from "@semantic-context/ts-analyzer";
 import { digestCanonical, type PlaneASidecarV1 } from "@semantic-context/plane-a-internal";
 import {
@@ -36,7 +38,7 @@ import {
 } from "./control-evidence";
 import { CONTROL_ATTESTATION_INDEX_META_KEY } from "./control-queries";
 import { inspectSemanticLifecycle } from "./semantic-check";
-import { analyzePlaneARuntime } from "./plane-a-runtime";
+import { analyzePlaneARuntime, analyzePlaneARuntimeAsync } from "./plane-a-runtime";
 import {
   createPlaneAIndexSnapshot,
 } from "./index-health";
@@ -52,12 +54,26 @@ export interface RepositoryAnalysis {
 
 export interface RepositoryIndex extends RepositoryAnalysis {
   freshnessSeal: ControlFreshnessSeal;
+  /** Operational telemetry only; deliberately excluded from graph facts and freshness seals. */
+  parallelism?: TypeScriptParallelism;
 }
 
 interface InternalRepositoryAnalysis extends RepositoryAnalysis {
   sidecar: PlaneASidecarV1;
   workspaceProjection: WorkspaceProjection;
-  discovery: DiscoveryResult;
+}
+
+interface PreparedRepositoryIndex {
+  repositoryRoot: string;
+  configBefore: SemctxConfig;
+  gitBefore: ReturnType<typeof captureGitState>;
+  repositoryIdentity: string;
+  observedHunksBefore: ReturnType<typeof parseObservedDiffHunks>;
+  discoveryBefore?: DiscoveryResult;
+  analysisInputHash: string;
+  discoveryLedgerDigest: string;
+  lifecycleBefore: ReturnType<typeof inspectSemanticLifecycle>;
+  semanticModelHash: string;
 }
 
 type IndexRepositoryCaptureBarrier = () => void;
@@ -105,7 +121,6 @@ function analyzeAndBuildClaimsInternal(
     claims: buildClaims(new GraphIndex(runtime.analysis.graph)),
     sidecar: runtime.sidecar,
     workspaceProjection: runtime.workspaceProjection,
-    discovery,
   };
 }
 
@@ -136,6 +151,33 @@ function workspaceArtifacts(analysis: AnalysisResult): WorkspaceArtifact[] {
 
 /** Rebuild and persist Plane A. Store lifetime is owned by the application service. */
 export function indexRepository(root: string, indexedAt: string): RepositoryIndex {
+  const prepared = prepareRepositoryIndex(root, indexedAt);
+  const indexed = analyzeAndBuildClaimsInternal(prepared.configBefore, prepared.discoveryBefore!);
+  prepared.discoveryBefore = undefined;
+  return completeRepositoryIndex(root, indexedAt, prepared, indexed);
+}
+
+export async function indexRepositoryAsync(
+  root: string,
+  indexedAt: string,
+  workers: IndexWorkerSelection = "auto",
+): Promise<RepositoryIndex> {
+  const prepared = prepareRepositoryIndex(root, indexedAt);
+  const runtime = await analyzePlaneARuntimeAsync(prepared.configBefore, prepared.discoveryBefore!, workers);
+  const indexed: InternalRepositoryAnalysis = {
+    analysis: runtime.analysis,
+    claims: buildClaims(new GraphIndex(runtime.analysis.graph)),
+    sidecar: runtime.sidecar,
+    workspaceProjection: runtime.workspaceProjection,
+  };
+  prepared.discoveryBefore = undefined;
+  return {
+    ...completeRepositoryIndex(root, indexedAt, prepared, indexed),
+    parallelism: runtime.parallelism,
+  };
+}
+
+function prepareRepositoryIndex(root: string, indexedAt: string): PreparedRepositoryIndex {
   if (!Number.isFinite(Date.parse(indexedAt)) || new Date(indexedAt).toISOString() !== indexedAt) {
     throw new SemctxError("INVALID_TASK_INPUT", "indexedAt must be a canonical ISO-8601 timestamp", { indexedAt });
   }
@@ -148,7 +190,7 @@ export function indexRepository(root: string, indexedAt: string): RepositoryInde
     repositoryIdentity,
     diffBytes: trackedDiffBefore,
   });
-  const discoveryBefore = discoverRepository(configBefore);
+  const discoveryBefore: DiscoveryResult = discoverRepository(configBefore);
   const analysisInputHash = fingerprintAnalysisInputs(configBefore, discoveryBefore.files);
   const discoveryLedgerDigest = digestCanonical(discoveryBefore.candidates);
   const semanticBefore = loadSemanticModel(root);
@@ -163,7 +205,37 @@ export function indexRepository(root: string, indexedAt: string): RepositoryInde
       lifecycleFindings: lifecycleErrors,
     });
   }
-  const indexed = analyzeAndBuildClaimsInternal(configBefore, discoveryBefore);
+  return {
+    repositoryRoot,
+    configBefore,
+    gitBefore,
+    repositoryIdentity,
+    observedHunksBefore,
+    discoveryBefore,
+    analysisInputHash,
+    discoveryLedgerDigest,
+    lifecycleBefore,
+    semanticModelHash,
+  };
+}
+
+function completeRepositoryIndex(
+  root: string,
+  indexedAt: string,
+  prepared: PreparedRepositoryIndex,
+  indexed: InternalRepositoryAnalysis,
+): RepositoryIndex {
+  const {
+    repositoryRoot,
+    gitBefore,
+    repositoryIdentity,
+    observedHunksBefore,
+    analysisInputHash,
+    discoveryLedgerDigest,
+    lifecycleBefore,
+    semanticModelHash,
+  } = prepared;
+  // The caller drops the full-source discovery corpus before this second TOCTOU capture.
   crossIndexRepositoryCaptureBarrier();
   const configAfter = loadConfig(root);
   const discoveryAfter = discoverRepository(configAfter);
@@ -279,7 +351,7 @@ export function indexRepository(root: string, indexedAt: string): RepositoryInde
         [CONTROL_INDEX_SNAPSHOT_META_KEY]: JSON.stringify(snapshot),
       },
     });
-    return {
+    const result = {
       ...indexed,
       freshnessSeal: buildControlFreshnessSeal({
         repositoryRoot,
@@ -297,14 +369,22 @@ export function indexRepository(root: string, indexedAt: string): RepositoryInde
         planeAIndexSnapshotHash: planeAIndexSnapshotHash as `sha256:${string}`,
       }),
     };
-  } catch (error) {
-    if (error instanceof SyntaxError) {
-      throw new SemctxError("STORE_ERROR", "invalid persisted control attestation index", {
-        cause: error.message,
-      });
-    }
-    throw error;
-  } finally {
     store.close();
+    return result;
+  } catch (error) {
+    const operationError = error instanceof SyntaxError
+      ? new SemctxError("STORE_ERROR", "invalid persisted control attestation index", {
+        cause: error.message,
+      })
+      : error;
+    let cleanupFailure: unknown;
+    try {
+      store.close();
+    } catch (closeError) {
+      cleanupFailure = closeError;
+    }
+    throw cleanupFailure === undefined
+      ? operationError
+      : attachSuppressedError(operationError, cleanupFailure);
   }
 }

@@ -35,7 +35,7 @@ const SEMCTX_URL = "https://github.com/hoklims/semctx.git";
 const FORGED_VERSION = "9.9.9-forged";
 /** What a replacement object would substitute in, if replacement were honoured. */
 const REPLACED_VERSION = "7.7.7-replaced";
-const BUNDLES = ["semctx-mcp.js", "semctx-shared.js", "semctx.js"] as const;
+const BUNDLES = ["semctx-index-worker.js", "semctx-mcp.js", "semctx-shared.js", "semctx.js"] as const;
 const TIMEOUT_MS = 180_000;
 
 let work: string;
@@ -767,7 +767,7 @@ describe("semctx plugin-status — the attestation scratch store is placed, capp
     rmSync(inside, { recursive: true, force: true });
 
     const { code, report } = runStatus(["--attest", "--host", "codex"], {
-      env: { TEMP: inside, TMP: inside },
+      env: { TMPDIR: inside, TEMP: inside, TMP: inside },
     });
 
     expect(reasons(release(report))).toContain("PUBLIC_RELEASE_SCRATCH_LOCATION_REJECTED");
@@ -783,7 +783,7 @@ describe("semctx plugin-status — the attestation scratch store is placed, capp
     rmSync(inside, { recursive: true, force: true });
 
     const { report } = runStatus(["--attest", "--host", "codex"], {
-      env: { TEMP: inside, TMP: inside },
+      env: { TMPDIR: inside, TEMP: inside, TMP: inside },
     });
 
     expect(reasons(release(report))).toContain("PUBLIC_RELEASE_SCRATCH_LOCATION_REJECTED");
@@ -795,7 +795,11 @@ describe("semctx plugin-status — the attestation scratch store is placed, capp
     // has to happen on the string, not after a filesystem call.
     const started = Date.now();
     const { report } = runStatus(["--attest", "--host", "codex"], {
-      env: { TEMP: "\\\\10.255.255.1\\share\\tmp", TMP: "\\\\10.255.255.1\\share\\tmp" },
+      env: {
+        TMPDIR: "\\\\10.255.255.1\\share\\tmp",
+        TEMP: "\\\\10.255.255.1\\share\\tmp",
+        TMP: "\\\\10.255.255.1\\share\\tmp",
+      },
     });
 
     expect(reasons(release(report))).toContain("PUBLIC_RELEASE_SCRATCH_LOCATION_REJECTED");
@@ -805,7 +809,7 @@ describe("semctx plugin-status — the attestation scratch store is placed, capp
 
   test("a relative temporary base is refused", () => {
     const { report } = runStatus(["--attest", "--host", "codex"], {
-      env: { TEMP: "relative-temp", TMP: "relative-temp" },
+      env: { TMPDIR: "relative-temp", TEMP: "relative-temp", TMP: "relative-temp" },
     });
 
     expect(reasons(release(report))).toContain("PUBLIC_RELEASE_SCRATCH_LOCATION_REJECTED");
@@ -820,7 +824,7 @@ describe("semctx plugin-status — the attestation scratch store is placed, capp
     symlinkSync(target, link, process.platform === "win32" ? "junction" : "dir");
 
     const { report } = runStatus(["--attest", "--host", "codex"], {
-      env: { TEMP: link, TMP: link },
+      env: { TMPDIR: link, TEMP: link, TMP: link },
     });
 
     expect(reasons(release(report))).toContain("PUBLIC_RELEASE_SCRATCH_LOCATION_REJECTED");
@@ -851,7 +855,7 @@ describe("semctx plugin-status — the attestation scratch store is placed, capp
 
     const { code, report } = runStatus(["--attest", "--host", "codex"], {
       bin: directory,
-      env: { TEMP: base, TMP: base },
+      env: { TMPDIR: base, TEMP: base, TMP: base },
     });
 
     // A store left on disk is a leaked copy of the release; silence about it is the failure mode.
@@ -866,7 +870,9 @@ describe("semctx plugin-status — the attestation scratch store is placed, capp
   test("a successful attestation leaves no scratch store behind", () => {
     const base = mkdtempSync(join(work, "clean-base-"));
 
-    runStatus(["--attest", "--host", "codex"], { env: { TEMP: base, TMP: base } });
+    runStatus(["--attest", "--host", "codex"], {
+      env: { TMPDIR: base, TEMP: base, TMP: base },
+    });
 
     expect(readdirSync(base)).toEqual([]);
   }, TIMEOUT_MS);
