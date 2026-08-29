@@ -13,9 +13,9 @@ omp plugin marketplace add hoklims/semctx
 omp plugin install semctx@semctx-stable --scope project
 ```
 
-Then `/reload-plugins` or restart the session. Every MCP tool call must pass an absolute `repositoryRoot`. Prefer MCP tools. For shell fallbacks on a git/link user-scope install, run `bun "$HOME/.omp/plugins/node_modules/semctx/dist/semctx.js"` (same bundle as MCP). Do not run `bun ./dist/semctx.js` from the user repository cwd. A global `semctx` / `bunx semctx@latest` remains a last resort; keep it on the same version as the plugin.
+Then `/reload-plugins` or restart the session. Every MCP tool call must pass an absolute `repositoryRoot`. Prefer MCP tools. For shell fallbacks use a global CLI on the same version as the plugin (`semctx --version` / `bunx semctx@latest`). Do not run `bun ./dist/semctx.js` from the user repository cwd.
 
-OMP substitutes `${CLAUDE_PLUGIN_ROOT}` and its own `${OMP_PLUGIN_ROOT}` inside MCP server config fields, but never inside skill/agent markdown body text — the Claude skill still contains a literal, unsubstituted `${CLAUDE_PLUGIN_ROOT}` when read on OMP. Do not run that placeholder; use the `$HOME/.omp/plugins/…` copy above, or prefer connected MCP tools.
+OMP substitutes `${CLAUDE_PLUGIN_ROOT}` and its own `${OMP_PLUGIN_ROOT}` inside MCP server config fields, but never inside skill/agent markdown body text — the Claude skill still contains a literal, unsubstituted `${CLAUDE_PLUGIN_ROOT}` when read on OMP, so agents must prefer connected MCP tools over that text.
 
 ## Commit/push guard
 
