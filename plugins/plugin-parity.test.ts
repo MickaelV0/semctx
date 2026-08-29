@@ -112,13 +112,17 @@ describe("Codex and Claude Code plugin parity", () => {
     const claude = hostCliLadder("claude-code");
     expect(claude).toContain("Plugin-bundled CLI");
     expect(claude).toContain('bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js"');
+    expect(claude).toContain("Unsubstituted plugin-root");
+    expect(claude).toContain("$HOME/.omp/plugins/node_modules/semctx/dist/semctx.js");
     expect(claude).toContain("semctx --version");
     // Plugin rung before global fallback in the ordered list.
     expect(claude.indexOf("Plugin-bundled CLI")).toBeLessThan(claude.indexOf("Global `semctx` on PATH"));
+    expect(claude.indexOf("Unsubstituted plugin-root")).toBeLessThan(claude.indexOf("Global `semctx` on PATH"));
 
     const codex = hostCliLadder("semctx-control");
     expect(codex).not.toContain("CLAUDE_PLUGIN_ROOT");
     expect(codex).not.toContain("Plugin-bundled CLI");
+    expect(codex).not.toContain(".omp/plugins/node_modules/semctx");
     // Agent-runnable fence must not teach relative plugin paths (prose may name them as forbidden).
     const codexFence = codex.match(/```text\n([\s\S]*?)```/)?.[1] ?? "";
     expect(codexFence.length).toBeGreaterThan(0);
@@ -175,9 +179,10 @@ describe("Codex and Claude Code plugin parity", () => {
     expect(shared).not.toContain("L5 implementation");
     expect(shared).not.toContain("reindex before");
 
-    // Claude keeps the plugin-bundled placeholder rung.
+    // Claude keeps the plugin-bundled placeholder rung and an OMP unsubstituted fallback.
     expect(claude).toContain("Plugin-bundled CLI");
     expect(claude).toContain('bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js"');
+    expect(claude).toContain("$HOME/.omp/plugins/node_modules/semctx/dist/semctx.js");
     expect(claude).toContain("semctx --version");
     expect(claude).toContain(hostCliLadder("claude-code").trim());
 
@@ -187,6 +192,7 @@ describe("Codex and Claude Code plugin parity", () => {
     expect(codex).toContain("semctx status --json");
     expect(codex).not.toContain("CLAUDE_PLUGIN_ROOT");
     expect(codex).not.toContain("Plugin-bundled CLI");
+    expect(codex).not.toContain(".omp/plugins/node_modules/semctx");
     const codexFence = codex.match(/```text\n([\s\S]*?)```/)?.[1] ?? "";
     expect(codexFence).not.toMatch(/bun\s+["']?\.\/dist\/semctx\.js/);
     expect(codex).toContain("does **not** substitute a plugin-root path");

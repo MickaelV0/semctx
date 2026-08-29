@@ -75,6 +75,11 @@ GitHub Release advance together through the tag-driven lockstep workflow documen
 
 ### Fixed
 
+- **Oh My Pi unsubstituted Claude CLI ladder**: `hostCliLadder("claude-code")` tells agents not
+  to run a literal `${CLAUDE_PLUGIN_ROOT}` path (OMP/Grok do not substitute skill bodies) and
+  points at `bun "$HOME/.omp/plugins/node_modules/semctx/dist/semctx.js"` for git/link user-scope
+  installs. Codex ladder unchanged.
+
 - **Reconcile a converged Codex update behind an active-cache lock**
   ([#91](https://github.com/hoklims/semctx/issues/91)): on Windows, `codex plugin add` writes the new
   payload before archiving the one it replaces, so a live task holding the old cache entry makes it
