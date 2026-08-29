@@ -97,12 +97,7 @@ const skillOutputs: Record<SkillHost, string> = {
  * from the user repo — the relative path the Codex ladder forbids. Callers must
  * run the CLI only when `$root` is absolute (`/*`).
  */
-export function unsubstitutedPluginCli(skillName: string): string {
-  if (!/^[a-z][a-z0-9-]*$/.test(skillName)) {
-    throw new Error(`invalid skill name for unsubstituted CLI rung: ${skillName}`);
-  }
-  return `bun "$root/dist/semctx.js"`;
-}
+export const UNSUBSTITUTED_PLUGIN_CLI = `bun "$root/dist/semctx.js"`;
 
 export function unsubstitutedPluginRootAssignment(skillName: string): string {
   if (!/^[a-z][a-z0-9-]*$/.test(skillName)) {
@@ -113,7 +108,7 @@ export function unsubstitutedPluginRootAssignment(skillName: string): string {
 
 /** Fail-loud fence: run `commands` only when skill:// expanded to an absolute plugin root. */
 export function unsubstitutedPluginCliGuard(skillName: string, commands: readonly string[]): string {
-  const bun = unsubstitutedPluginCli(skillName);
+  const bun = UNSUBSTITUTED_PLUGIN_CLI;
   const body = commands.map((args) => `    ${bun} ${args}`).join("\n");
   return `${unsubstitutedPluginRootAssignment(skillName)}
 case "$root" in
@@ -656,8 +651,11 @@ async function main(): Promise<void> {
     }
     const current = readFileSync(focusedPath, "utf8");
     const assignment = unsubstitutedPluginRootAssignment(focused.name);
-    const bun = unsubstitutedPluginCli(focused.name);
-    if (!current.includes(assignment) || !current.includes('case "$root" in') || !current.includes(bun)) {
+    if (
+      !current.includes(assignment) ||
+      !current.includes('case "$root" in') ||
+      !current.includes(UNSUBSTITUTED_PLUGIN_CLI)
+    ) {
       throw new Error(
         `focused skill missing fail-loud unsubstituted CLI guard (${assignment}): ${focusedPath}`,
       );

@@ -12,7 +12,7 @@ import {
   hostCliLadder,
   renderControlSkill,
   renderSharedLifecycleContract,
-  unsubstitutedPluginCli,
+  UNSUBSTITUTED_PLUGIN_CLI,
   unsubstitutedPluginCliGuard,
   unsubstitutedPluginRootAssignment,
   type SkillHost,
@@ -149,10 +149,16 @@ describe("Codex and Claude Code plugin parity", () => {
     for (const focused of CLAUDE_FOCUSED_SKILL_FILES) {
       const body = read(focused.relativePath);
       expect(body).toContain(unsubstitutedPluginRootAssignment(focused.name));
-      expect(body).toContain(unsubstitutedPluginCli(focused.name));
       expect(body).toContain('case "$root" in');
+      expect(body).toContain(UNSUBSTITUTED_PLUGIN_CLI);
       expect(body).not.toContain("$HOME/.omp/plugins/node_modules/semctx");
     }
+    expect(read("plugins/claude-code/skills/semctx-verify/SKILL.md")).not.toContain(
+      unsubstitutedPluginRootAssignment("semctx-semantic"),
+    );
+    expect(read("plugins/claude-code/skills/semctx-semantic/SKILL.md")).not.toContain(
+      unsubstitutedPluginRootAssignment("semctx-verify"),
+    );
 
     const skillFiles = [
       "plugins/claude-code/skills/semctx-control/SKILL.md",
@@ -234,7 +240,7 @@ describe("Codex and Claude Code plugin parity", () => {
     // Claude keeps the plugin-bundled placeholder rung and an OMP fail-loud skill:// fallback.
     expect(claude).toContain("Plugin-bundled CLI");
     expect(claude).toContain('bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js"');
-    expect(claude).toContain(unsubstitutedPluginCli("semctx-control"));
+    expect(claude).toContain(unsubstitutedPluginRootAssignment("semctx-control"));
     expect(claude).toContain('case "$root" in');
     expect(claude).not.toContain("$HOME/.omp/plugins/node_modules/semctx");
     expect(claude).toContain("semctx --version");
