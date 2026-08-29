@@ -6,10 +6,12 @@ import {
   AGENT_WORKFLOW_CONTRACT_V1,
 } from "@semantic-context/control-model";
 import {
+  CLAUDE_FOCUSED_SKILL_FILES,
   HOST_CLI_STRIP,
   hostCliLadder,
   renderControlSkill,
   renderSharedLifecycleContract,
+  unsubstitutedPluginCli,
   type SkillHost,
 } from "../scripts/build-plugin-runtime.ts";
 import { HOST_CLI_SPECIFICATION } from "../scripts/prove-stable-delivery.ts";
@@ -110,10 +112,12 @@ describe("Codex and Claude Code plugin parity", () => {
 
   test("hostCliLadder option-A invariants (Claude plugin rung, Codex no relative dist)", () => {
     const claude = hostCliLadder("claude-code");
+    const ompCli = unsubstitutedPluginCli("semctx-control");
     expect(claude).toContain("Plugin-bundled CLI");
     expect(claude).toContain('bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js"');
     expect(claude).toContain("Unsubstituted plugin-root");
-    expect(claude).toContain("$HOME/.omp/plugins/node_modules/semctx/dist/semctx.js");
+    expect(claude).toContain(ompCli);
+    expect(claude).not.toContain("$HOME/.omp/plugins/node_modules/semctx");
     expect(claude).toContain("semctx --version");
     // Plugin rung before global fallback in the ordered list.
     expect(claude.indexOf("Plugin-bundled CLI")).toBeLessThan(claude.indexOf("Global `semctx` on PATH"));
@@ -122,6 +126,7 @@ describe("Codex and Claude Code plugin parity", () => {
     const codex = hostCliLadder("semctx-control");
     expect(codex).not.toContain("CLAUDE_PLUGIN_ROOT");
     expect(codex).not.toContain("Plugin-bundled CLI");
+    expect(codex).not.toContain("skill://");
     expect(codex).not.toContain(".omp/plugins/node_modules/semctx");
     // Agent-runnable fence must not teach relative plugin paths (prose may name them as forbidden).
     const codexFence = codex.match(/```text\n([\s\S]*?)```/)?.[1] ?? "";
@@ -129,6 +134,31 @@ describe("Codex and Claude Code plugin parity", () => {
     expect(codexFence).not.toMatch(/bun\s+["']?\.\/dist\/semctx\.js/);
     expect(codexFence).toContain("semctx --version");
     expect(codex).toContain("does **not** substitute a plugin-root path");
+  });
+
+  test("focused Claude skills share unsubstitutedPluginCli and bun dist invocations stay in-rung", () => {
+    for (const focused of CLAUDE_FOCUSED_SKILL_FILES) {
+      const body = read(focused.relativePath);
+      expect(body).toContain(unsubstitutedPluginCli(focused.name));
+      expect(body).not.toContain("$HOME/.omp/plugins/node_modules/semctx");
+    }
+
+    const skillFiles = [
+      "plugins/claude-code/skills/semctx-control/SKILL.md",
+      "plugins/claude-code/skills/semctx-semantic/SKILL.md",
+      "plugins/claude-code/skills/semctx-verify/SKILL.md",
+      "plugins/semctx-control/skills/semctx-control/SKILL.md",
+    ];
+    for (const relativePath of skillFiles) {
+      for (const line of read(relativePath).split("\n")) {
+        if (!/^\s*bun\s+/.test(line) || !line.includes("dist/semctx.js")) continue;
+        const allowed =
+          line.includes("${CLAUDE_PLUGIN_ROOT}/dist/semctx.js") ||
+          /skill:\/\/[a-z][a-z0-9-]*/.test(line);
+        expect({ relativePath, line, allowed }).toEqual({ relativePath, line, allowed: true });
+        expect(line).not.toContain("$HOME/.omp");
+      }
+    }
   });
 
   test("ships one shared semctx-control workflow contract with host-generated CLI ladders", () => {
@@ -179,10 +209,11 @@ describe("Codex and Claude Code plugin parity", () => {
     expect(shared).not.toContain("L5 implementation");
     expect(shared).not.toContain("reindex before");
 
-    // Claude keeps the plugin-bundled placeholder rung and an OMP unsubstituted fallback.
+    // Claude keeps the plugin-bundled placeholder rung and an OMP skill:// fallback.
     expect(claude).toContain("Plugin-bundled CLI");
     expect(claude).toContain('bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js"');
-    expect(claude).toContain("$HOME/.omp/plugins/node_modules/semctx/dist/semctx.js");
+    expect(claude).toContain(unsubstitutedPluginCli("semctx-control"));
+    expect(claude).not.toContain("$HOME/.omp/plugins/node_modules/semctx");
     expect(claude).toContain("semctx --version");
     expect(claude).toContain(hostCliLadder("claude-code").trim());
 
@@ -192,6 +223,7 @@ describe("Codex and Claude Code plugin parity", () => {
     expect(codex).toContain("semctx status --json");
     expect(codex).not.toContain("CLAUDE_PLUGIN_ROOT");
     expect(codex).not.toContain("Plugin-bundled CLI");
+    expect(codex).not.toContain("skill://");
     expect(codex).not.toContain(".omp/plugins/node_modules/semctx");
     const codexFence = codex.match(/```text\n([\s\S]*?)```/)?.[1] ?? "";
     expect(codexFence).not.toMatch(/bun\s+["']?\.\/dist\/semctx\.js/);

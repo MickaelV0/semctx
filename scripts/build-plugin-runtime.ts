@@ -88,12 +88,30 @@ const skillOutputs: Record<SkillHost, string> = {
 };
 
 /**
+ * Oh My Pi bash expands `skill://<name>` to that skill's directory before execution.
+ * Agent Skills layout is `<plugin-root>/skills/<name>/SKILL.md`, so two dirnames are the
+ * plugin root on any install layout (user, project, XDG, link). Do not hardcode `$HOME/.omp`.
+ */
+export function unsubstitutedPluginCli(skillName: string): string {
+  if (!/^[a-z][a-z0-9-]*$/.test(skillName)) {
+    throw new Error(`invalid skill name for unsubstituted CLI rung: ${skillName}`);
+  }
+  return `bun "$(dirname "$(dirname skill://${skillName})")/dist/semctx.js"`;
+}
+
+export const CLAUDE_FOCUSED_SKILL_FILES = [
+  { name: "semctx-verify", relativePath: "plugins/claude-code/skills/semctx-verify/SKILL.md" },
+  { name: "semctx-semantic", relativePath: "plugins/claude-code/skills/semctx-semantic/SKILL.md" },
+] as const;
+
+/**
  * Claude: load-time `${CLAUDE_PLUGIN_ROOT}` placeholder + global fallback.
- * Oh My Pi / Grok read this skill unsubstituted — do not run the placeholder.
+ * Oh My Pi reads this skill unsubstituted — do not run the placeholder; discover via skill://.
  * Codex: global `semctx` only — no plugin-root substitution on that host.
  */
 export function hostCliLadder(host: SkillHost): string {
   if (host === "claude-code") {
+    const ompCli = unsubstitutedPluginCli("semctx-control");
     return `Prefer MCP tools when they are connected. For shell fallbacks, resolve the CLI in this order
 (stop at the first that works):
 
@@ -103,12 +121,12 @@ export function hostCliLadder(host: SkillHost): string {
    in the shell — where it is set at all, it is exported to hooks and MCP servers, not to your
    terminal. Do not try to guess the plugin directory, and do not assume the shell's cwd is the
    plugin package root: it is the user's repository.
-2. **Unsubstituted plugin-root (Oh My Pi / Grok)** — if the path below still contains the literal
+2. **Unsubstituted plugin-root (Oh My Pi)** — if the path below still contains the literal
    \`\${CLAUDE_PLUGIN_ROOT}\` placeholder, do not run it (the shell would collapse it to
-   \`bun "/dist/semctx.js"\`). Use the Oh My Pi git/link user-scope copy instead:
-   \`bun "$HOME/.omp/plugins/node_modules/semctx/dist/semctx.js"\`. XDG
-   (\`$XDG_DATA_HOME/omp/…\`) and \`--scope project\` (\`.omp/plugins/…\` in the repo) differ —
-   prefer MCP on those layouts.
+   \`bun "/dist/semctx.js"\`). Oh My Pi bash expands \`skill://semctx-control\` (this skill's
+   registered name) to the skill directory; two dirnames are the plugin root on any layout:
+   \`${ompCli}\`. Requires OMP bash \`skill://\` expansion. Grok does not expand \`skill://\` —
+   prefer MCP there.
 3. **Global \`semctx\` on PATH** (\`bun install -g semctx@latest\` / \`bunx semctx@latest\`) — keep it on the **same
    version** as the plugin (\`semctx --version\` should match the marketplace plugin version).
 4. If none are available, say so and continue with MCP-only or ask the user to update the plugin /
@@ -132,10 +150,10 @@ bun "\${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" control resume-handoff <capsule-hash
 bun "\${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" semantic handoff
 bun "\${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" semantic resume
 
-# Unsubstituted plugin-root (OMP git/link user-scope)
-bun "$HOME/.omp/plugins/node_modules/semctx/dist/semctx.js" status --json
-bun "$HOME/.omp/plugins/node_modules/semctx/dist/semctx.js" semantic check --json
-bun "$HOME/.omp/plugins/node_modules/semctx/dist/semctx.js" verify diff --base origin/main
+# Unsubstituted plugin-root (Oh My Pi; skill:// is this skill's session name)
+${ompCli} status --json
+${ompCli} semantic check --json
+${ompCli} verify diff --base origin/main
 
 # Global / CI fallback — same subcommands, no path
 semctx --version
@@ -602,6 +620,20 @@ async function main(): Promise<void> {
     }
     mkdirSync(dirname(output), { recursive: true });
     await Bun.write(output, expected);
+  }
+
+  for (const focused of CLAUDE_FOCUSED_SKILL_FILES) {
+    const focusedPath = resolve(root, focused.relativePath);
+    if (!existsSync(focusedPath)) {
+      throw new Error(`missing focused skill: ${focusedPath}`);
+    }
+    const current = readFileSync(focusedPath, "utf8");
+    const needle = unsubstitutedPluginCli(focused.name);
+    if (!current.includes(needle)) {
+      throw new Error(
+        `focused skill missing unsubstituted CLI rung (${needle}): ${focusedPath}`,
+      );
+    }
   }
 
   const sizes = [...built].map(([path, bytes]) => `${path}=${bytes.length}`).join(", ");
