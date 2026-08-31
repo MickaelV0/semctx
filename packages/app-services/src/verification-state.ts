@@ -190,7 +190,8 @@ function captureContentState(
     frame(contentHash, "mode", mode);
     frame(contentHash, "kind", kind);
     frame(contentHash, "content", payload);
-    const objectId = indexEntry !== undefined
+    const objectId = stat === undefined
+        && indexEntry !== undefined
         && indexEntry.mode === mode
         && !changedOutsideIndex.has(path)
       ? indexEntry.objectId

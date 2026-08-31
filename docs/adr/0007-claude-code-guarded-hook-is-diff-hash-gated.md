@@ -37,6 +37,9 @@ hook on git push:
 State file `.semctx/verification-state.json` is **git-ignored** and written **atomically**
 (temp file + rename). The baseline binds normalized paths, raw bytes or symlink targets, executable
 modes, the canonical Git object representation, and the HEAD tree observed at verification time.
+Present tracked files are hashed from their materialized bytes even when `assume-unchanged` or
+`skip-worktree` suppresses them from Git's ordinary diff output; only absent sparse-checkout entries
+may reuse their indexed object.
 The CLI also compares the exact resolved HEAD and diff bytes consumed by analysis with captures made
 before and after analysis, so an A-B-A working-state race cannot attach B's verdict to A's baseline.
 A commit SHA may move without invalidating the proof when the resulting tree exactly materializes
@@ -58,8 +61,13 @@ authorize a terminal Git operation.
   equivalent config) are outside the isolated-command contract and fail closed when the target or
   session repo enables guarded mode.
 - Push refspecs are resolved before authorization. Deletions, multi-ref, mirror, tag-wide, wildcard,
-  configured, ambiguous, or non-HEAD sources fail closed; guarded mode never reuses one HEAD proof
-  to publish another ref.
+  configured, ambiguous, or non-HEAD sources fail closed. Push options use a closed allowlist and
+  shell words composed with embedded quotes or backslashes are rejected, so lexical reconstruction
+  cannot disguise a source-expanding option. Guarded mode never reuses one HEAD proof to publish
+  another ref.
+- If Git cannot resolve the top-level directory, the hook walks literal parent directories for the
+  nearest `.git` or guarded `.semctx` marker. A failed Git probe therefore cannot silently turn a
+  guarded nested invocation into advisory mode.
 - BLOCK is honoured: a recorded BLOCK verdict never satisfies the gate, even if the diff is
   unchanged.
 - Cross-platform: the state/hash logic is a plain script; the guard reads stdin JSON from Claude

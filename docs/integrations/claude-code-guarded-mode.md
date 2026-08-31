@@ -53,6 +53,8 @@ command.
 An exact commit is the expected HEAD movement and does not invalidate the baseline. Any byte, path,
 mode, symlink target, partial commit, or non-ignored untracked change blocks the terminal operation
 until you re-run `semctx verify diff --record` (or the plugin-CLI equivalent the guard prints).
+Tracked bytes remain authoritative even when Git index flags such as `assume-unchanged` or a present
+`skip-worktree` entry hide a path from `git diff`.
 Run `git commit` and `git push` as isolated commands in guarded mode. Compound commands,
 redirections, and shell substitutions are rejected because they could mutate repository bytes
 after the hook's pre-check. Cwd prefixes must use literal paths: unexpanded `$VAR`, `${VAR}`, `~`,
@@ -66,7 +68,9 @@ environment clearing (`-i`), repository-affecting `-u` / `--unset`, `env -C` / `
 `env -S` / `--split-string` are rejected.
 For push, use the current branch/HEAD only. Deletions, `--all`, `--mirror`, tag-wide pushes,
 wildcards, multiple refspecs, configured remote push refspecs, and any source that does not resolve
-to the verified HEAD are rejected.
+to the verified HEAD are rejected. Push options are allowlisted; embedded quote/backslash word
+construction and unknown or combined option forms fail closed. If Git's top-level probe fails, the
+hook still discovers the nearest literal repository/guard marker rather than disabling enforcement.
 
 ## Disable
 

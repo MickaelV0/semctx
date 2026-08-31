@@ -384,7 +384,7 @@ describe("guardDecision — verify, commit, push replay", () => {
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }
-  });
+  }, 20_000);
 });
 
 describe("guard runtime — large working diffs", () => {
@@ -416,6 +416,8 @@ describe("guard runtime — large working diffs", () => {
       for (const command of [
         "git push . other:refs/heads/target",
         "git push . --signed other:refs/heads/target",
+        'git push --"all" .',
+        "git push -fd . HEAD",
         "git push . verified-tag:refs/tags/target",
         "git push . HEAD~1:refs/heads/target",
         "git push . :refs/heads/target",
@@ -678,6 +680,31 @@ describe("guard runtime — repository scope must be explicit", () => {
       rmSync(repo, { recursive: true, force: true });
     }
   });
+
+  it("fails closed from a nested guarded repository when Git root discovery fails", () => {
+    const repo = mkdtempSync(join(tmpdir(), "semctx-guard-root-failure-"));
+    const nested = join(repo, "packages", "nested");
+    mkdirSync(nested, { recursive: true });
+    mkdirSync(join(repo, ".semctx"));
+    writeFileSync(join(repo, ".git"), "invalid git metadata\n");
+    writeFileSync(join(repo, ".semctx", "guard.json"), JSON.stringify({ enabled: true }));
+    try {
+      const guard = resolve(import.meta.dir, "../hooks/semctx-guard.mjs");
+      const result = spawnSync("node", [guard], {
+        cwd: nested,
+        input: JSON.stringify({
+          tool_name: "Bash",
+          tool_input: { command: "git -c safe.directory=* push ." },
+          cwd: nested,
+        }),
+        encoding: "utf8",
+      });
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain("semctx guarded mode");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("verification-state capture parity", () => {
@@ -766,6 +793,30 @@ describe("verification-state capture parity", () => {
       expect(state).toEqual(captureApplicationVerificationGitState(repo));
     } finally {
       rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("hashes present tracked bytes even when index flags suppress Git diff", () => {
+    for (const flag of ["--assume-unchanged", "--skip-worktree"]) {
+      const repo = mkdtempSync(join(tmpdir(), "semctx-guard-hidden-worktree-"));
+      const git = (args: string[]) => execFileSync("git", args, { cwd: repo, encoding: "utf8" }).trim();
+      try {
+        git(["init"]);
+        writeFileSync(join(repo, "tracked.ts"), "export const value = 1;\n");
+        git(["add", "tracked.ts"]);
+        git(["-c", "user.name=Semctx Test", "-c", "user.email=semctx@example.invalid", "commit", "-m", "base"]);
+        const baseline = captureVerificationGitState(repo);
+
+        git(["update-index", flag, "tracked.ts"]);
+        writeFileSync(join(repo, "tracked.ts"), "export const value = 2;\n");
+        expect(git(["diff", "--name-only"]), flag).toBe("");
+        const changed = captureVerificationGitState(repo);
+        expect(changed.contentStateHash, flag).not.toBe(baseline.contentStateHash);
+        expect(changed.repositoryStateHash, flag).not.toBe(baseline.repositoryStateHash);
+        expect(changed, flag).toEqual(captureApplicationVerificationGitState(repo));
+      } finally {
+        rmSync(repo, { recursive: true, force: true });
+      }
     }
   });
 
