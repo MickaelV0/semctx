@@ -23,6 +23,7 @@ interface VerificationStateV3 {
   workingStateHash: string;
   contentStateHash: string;
   repositoryStateHash: string;
+  indexStateHash: string;
   headTreeHash: string;
   verdict: "PASS" | "WARN" | "BLOCK";
   recordedAt: string;
@@ -166,6 +167,8 @@ function isVerificationState(value: unknown): value is VerificationStateV3 {
     && /^sha256:[0-9a-f]{64}$/.test(state.contentStateHash)
     && typeof state.repositoryStateHash === "string"
     && /^sha256:[0-9a-f]{64}$/.test(state.repositoryStateHash)
+    && typeof state.indexStateHash === "string"
+    && /^sha256:[0-9a-f]{64}$/.test(state.indexStateHash)
     && typeof state.headTreeHash === "string"
     && /^sha256:[0-9a-f]{64}$/.test(state.headTreeHash)
     && (state.verdict === "PASS" || state.verdict === "WARN" || state.verdict === "BLOCK")

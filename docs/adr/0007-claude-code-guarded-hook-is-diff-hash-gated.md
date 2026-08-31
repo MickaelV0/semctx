@@ -24,10 +24,12 @@ Two profiles, **advisory by default**:
 Guarded enforcement is **source-state gated**, not re-analysis:
 
 ```
-verify records:   HEAD + exact analyzed-diff hash + raw content hash + canonical repository-state hash + verdict
+verify records:   HEAD + exact analyzed-diff hash + raw content hash + canonical repository-state hash
+                  + exact index-state hash + verdict
                  →  .semctx/verification-state.json
 hook on git commit:
-    allow  if the analyzed content still matches the v3 baseline AND verdict != BLOCK
+    allow  if the analyzed content still matches the v3 baseline, the index exactly materializes
+           it, the command consumes that whole index, AND verdict != BLOCK
 hook on git push:
     allow  if the content still matches AND HEAD exactly materializes the recorded repository state
            AND the push source resolves to that verified HEAD only
@@ -38,8 +40,10 @@ State file `.semctx/verification-state.json` is **git-ignored** and written **at
 (temp file + rename). The baseline binds normalized paths, raw bytes or symlink targets, executable
 modes, the canonical Git object representation, and the HEAD tree observed at verification time.
 Present tracked files are hashed from their materialized bytes even when `assume-unchanged` or
-`skip-worktree` suppresses them from Git's ordinary diff output; only absent sparse-checkout entries
-may reuse their indexed object.
+`skip-worktree` suppresses them from Git's ordinary diff output. Such a hidden mismatch makes
+`--record` fail closed because those bytes were absent from the analyzed diff; only absent
+sparse-checkout entries may reuse their indexed object. Initialized gitlinks are compared directly
+to their materialized submodule HEAD, independently of Git's submodule-diff configuration.
 The CLI also compares the exact resolved HEAD and diff bytes consumed by analysis with captures made
 before and after analysis, so an A-B-A working-state race cannot attach B's verdict to A's baseline.
 A commit SHA may move without invalidating the proof when the resulting tree exactly materializes
@@ -60,8 +64,11 @@ authorize a terminal Git operation.
   `GIT_WORK_TREE`, `--git-dir`, `--work-tree`, namespaces, alternate index/object state, or
   equivalent config) are outside the isolated-command contract and fail closed when the target or
   session repo enables guarded mode.
+- Commit commands must consume the already-inspected whole index. Commit-time staging, interactive
+  selection, partial-index options, and pathspecs fail closed.
 - Push refspecs are resolved before authorization. Deletions, multi-ref, mirror, tag-wide, wildcard,
-  configured, ambiguous, or non-HEAD sources fail closed. Push options use a closed allowlist and
+  configured, ambiguous, or non-HEAD sources fail closed. An explicit source must be literal `HEAD`
+  or the exact full verified object ID. Push options use a closed allowlist and
   shell words composed with embedded quotes or backslashes are rejected, so lexical reconstruction
   cannot disguise a source-expanding option. Guarded mode never reuses one HEAD proof to publish
   another ref.

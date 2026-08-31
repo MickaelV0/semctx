@@ -302,6 +302,52 @@ export function isIsolatedTerminalGitCommand(command) {
   return true;
 }
 
+const COMMIT_OPTIONS_WITH_VALUE = new Set([
+  "-c", "-C", "-F", "-m", "-t", "--author", "--cleanup", "--date", "--file",
+  "--fixup", "--message", "--reedit-message", "--reuse-message", "--squash", "--template",
+  "--trailer",
+]);
+
+const COMMIT_TREE_SELECTION_OPTIONS = new Set([
+  "--all", "--include", "--interactive", "--only", "--patch", "--pathspec-file-nul",
+  "--pathspec-from-file", "-a", "-i", "-o", "-p",
+]);
+
+/** Authorize only commit forms that materialize the already-inspected index without restaging or path selection. */
+export function commitUsesWholeIndex(command) {
+  const terminal = String(command ?? "").split("&&").at(-1)?.trim() ?? "";
+  const tokens = terminal.split(/\s+/).filter(Boolean);
+  const gitIndex = gitTokenIndex(tokens);
+  if (gitIndex < 0) return false;
+  let i = gitIndex + 1;
+  while (i < tokens.length) {
+    const token = literalShellWord(tokens[i]);
+    if (token === null) return false;
+    if (gitOptionConsumesNext(token)) { i += 2; continue; }
+    if (token.startsWith("-")) { i += 1; continue; }
+    break;
+  }
+  if (literalShellWord(tokens[i]) !== "commit") return false;
+  i += 1;
+  while (i < tokens.length) {
+    const token = literalShellWord(tokens[i]);
+    if (token === null || token === "--") return false;
+    const option = gitOptionName(token);
+    if (
+      COMMIT_TREE_SELECTION_OPTIONS.has(option)
+      || (/^-[^-]+/.test(token) && !token.startsWith("-m") && !token.startsWith("-F") && /[aiop]/.test(token.slice(1)))
+    ) return false;
+    if (!token.startsWith("-")) return false;
+    if (COMMIT_OPTIONS_WITH_VALUE.has(option) && !token.includes("=") && token === option) {
+      if (tokens[i + 1] === undefined || literalShellWord(tokens[i + 1]) === null) return false;
+      i += 2;
+      continue;
+    }
+    i += 1;
+  }
+  return true;
+}
+
 const UNSAFE_PUSH_OPTIONS = new Set([
   "--all", "--branches", "--delete", "-d", "--follow-tags", "--mirror", "--prune",
   "--recurse-submodules", "--tags",
@@ -398,6 +444,7 @@ export function pushSourceMatchesHead(command, cwd, currentHead) {
     const rawSource = separator < 0 ? refspec : refspec.slice(0, separator);
     const source = rawSource.startsWith("+") ? rawSource.slice(1) : rawSource;
     if (source === "" || source.includes("*") || source.startsWith("^")) return false;
+    if (source !== "HEAD" && source !== currentHead) return false;
     const resolved = execFileSync("git", ["rev-parse", "--verify", source], {
       cwd,
       encoding: "utf8",
@@ -594,6 +641,7 @@ export function guardDecision(ctx) {
     || !ctx.state.workingStateHash
     || !ctx.state.contentStateHash
     || !ctx.state.repositoryStateHash
+    || !ctx.state.indexStateHash
     || !ctx.state.headTreeHash
     || !ctx.currentState
   ) {
@@ -605,7 +653,12 @@ export function guardDecision(ctx) {
   const sameAnalyzedContent = ctx.state.contentStateHash === ctx.currentState.contentStateHash
     && ctx.state.repositoryStateHash === ctx.currentState.repositoryStateHash;
   const exactCommittedContent = ctx.currentState.headTreeHash === ctx.state.repositoryStateHash;
-  if (!sameAnalyzedContent || (ctx.terminalVerb === "push" && !exactCommittedContent)) {
+  const exactStagedContent = ctx.currentState.indexStateHash === ctx.state.repositoryStateHash;
+  if (
+    !sameAnalyzedContent
+    || (ctx.terminalVerb === "commit" && (ctx.commitContentAuthorized === false || !exactStagedContent))
+    || (ctx.terminalVerb === "push" && !exactCommittedContent)
+  ) {
     return { block: true, reason: `semctx guarded mode: the analyzed content changed or the commit does not exactly materialize it. Re-run:\n  ${verifyCmd}\n${retry}` };
   }
   return { block: false };
@@ -692,6 +745,39 @@ function unstagedPaths(cwd) {
   return new Set(records.split("\0").filter(Boolean).map(normalizedPath));
 }
 
+function captureRepositoryStateHash(entries) {
+  const ordered = [...entries].sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
+  const hash = createHash("sha256");
+  frame(hash, "domain", "semctx:verification-repository-state:v1");
+  for (const entry of ordered) {
+    frame(hash, "path", entry.path);
+    frame(hash, "mode", entry.mode);
+    frame(hash, "object", entry.objectId);
+  }
+  return `sha256:${hash.digest("hex")}`;
+}
+
+function captureIndexStateHash(tracked) {
+  return captureRepositoryStateHash([...tracked].map(([path, entry]) => ({ path, ...entry })));
+}
+
+function initializedGitlinkHead(cwd, path) {
+  const absolute = resolve(cwd, path);
+  if (!lstatIfPresent(absolute)) return undefined;
+  const topLevel = spawnSync("git", ["-C", path, "rev-parse", "--show-toplevel"], {
+    cwd,
+    encoding: "utf8",
+  });
+  if (topLevel.status !== 0 || resolve(topLevel.stdout.trim()) !== absolute) return undefined;
+  const result = spawnSync("git", ["-C", path, "rev-parse", "--verify", "HEAD"], {
+    cwd,
+    encoding: "utf8",
+  });
+  if (result.status !== 0) return undefined;
+  const head = result.stdout.trim();
+  return /^[0-9a-f]{40,64}$/.test(head) ? head : undefined;
+}
+
 function captureHeadTreeHash(cwd) {
   const records = execFileSync("git", ["ls-tree", "-r", "-z", "--full-tree", "HEAD"], {
     cwd,
@@ -705,15 +791,7 @@ function captureHeadTreeHash(cwd) {
     if (!match) throw new Error("invalid HEAD tree entry");
     entries.push({ path: normalizedPath(match[3]), mode: match[1], objectId: match[2] });
   }
-  entries.sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
-  const hash = createHash("sha256");
-  frame(hash, "domain", "semctx:verification-repository-state:v1");
-  for (const entry of entries) {
-    frame(hash, "path", entry.path);
-    frame(hash, "mode", entry.mode);
-    frame(hash, "object", entry.objectId);
-  }
-  return `sha256:${hash.digest("hex")}`;
+  return captureRepositoryStateHash(entries);
 }
 
 function captureContentState(cwd, tracked, untracked, changedOutsideIndex) {
@@ -725,7 +803,10 @@ function captureContentState(cwd, tracked, untracked, changedOutsideIndex) {
   for (const path of paths) {
     const indexEntry = tracked.get(path);
     if (indexEntry?.mode === "160000") {
-      if (changedOutsideIndex.has(path)) throw new Error(`changed gitlink verification input is unsupported: ${path}`);
+      const materializedHead = initializedGitlinkHead(cwd, path);
+      if (changedOutsideIndex.has(path) || (materializedHead && materializedHead !== indexEntry.objectId)) {
+        throw new Error(`changed gitlink verification input is unsupported: ${path}`);
+      }
       frame(contentHash, "path", path);
       frame(contentHash, "mode", indexEntry.mode);
       frame(contentHash, "gitlink", indexEntry.objectId);
@@ -823,11 +904,13 @@ export function captureVerificationGitState(cwd) {
       throw new Error(`unsupported untracked verification input: ${path}`);
     }
   }
+  const tracked = trackedIndexEntries(cwd);
   return {
     headCommit,
     analyzedSourceHash: fingerprintVerificationSource(headCommit, new TextDecoder().decode(analyzedDiff)),
     workingStateHash: `sha256:${hash.digest("hex")}`,
-    ...captureContentState(cwd, trackedIndexEntries(cwd), untracked, unstagedPaths(cwd)),
+    ...captureContentState(cwd, tracked, untracked, unstagedPaths(cwd)),
+    indexStateHash: captureIndexStateHash(tracked),
     headTreeHash: captureHeadTreeHash(cwd),
   };
 }
@@ -871,11 +954,13 @@ function main() {
   }
   const pushSourceAuthorized = terminalVerb !== "push"
     || (currentState !== null && pushSourceMatchesHead(command, cwd, currentState.headCommit));
+  const commitContentAuthorized = terminalVerb !== "commit" || commitUsesWholeIndex(command);
   const decision = guardDecision({
     enabled,
     terminalVerb,
     commandIsolated,
     pushSourceAuthorized,
+    commitContentAuthorized,
     state,
     currentState,
     verifyCommand: verifyRecordCommand(process.env),

@@ -193,6 +193,7 @@ describe("verify diff --base (CLI, real git)", () => {
     expect(state.workingStateHash).toMatch(/^sha256:[0-9a-f]{64}$/);
     expect(state.contentStateHash).toMatch(/^sha256:[0-9a-f]{64}$/);
     expect(state.repositoryStateHash).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(state.indexStateHash).toMatch(/^sha256:[0-9a-f]{64}$/);
     expect(state.headTreeHash).toMatch(/^sha256:[0-9a-f]{64}$/);
     expect(["PASS", "WARN", "BLOCK"]).toContain(state.verdict);
   });
@@ -214,6 +215,27 @@ describe("verify diff --base (CLI, real git)", () => {
     expect(existsSync(output)).toBe(false);
   });
 
+  it("refuses to record tracked bytes hidden from the analyzed diff", () => {
+    const path = join(repo, "src", "a.ts");
+    const original = readFileSync(path, "utf8");
+    for (const [enable, disable] of [
+      ["--assume-unchanged", "--no-assume-unchanged"],
+      ["--skip-worktree", "--no-skip-worktree"],
+    ] as const) {
+      try {
+        expect(git(repo, ["update-index", enable, "src/a.ts"])).toBe(0);
+        writeFileSync(path, `${original}\n// hidden mutation\n`);
+        expect(gitOutput(repo, ["diff", "--name-only", "--", "src/a.ts"])).toBe("");
+        const result = semctx(["verify", "diff", "--record", "--fail-on", "none"], repo);
+        expect(result.code, enable).not.toBe(0);
+        expect(result.err + result.out, enable).toContain("hidden from the analyzed Git diff");
+      } finally {
+        writeFileSync(path, original);
+        git(repo, ["update-index", disable, "src/a.ts"]);
+      }
+    }
+  });
+
   it("rejects --record for ranges, staged diffs, and supplied files", () => {
     const supplied = join(repo, "supplied.diff");
     writeFileSync(supplied, "", "utf8");
@@ -229,6 +251,7 @@ describe("verify diff --base (CLI, real git)", () => {
       workingStateHash: `sha256:${"1".repeat(64)}`,
       contentStateHash: `sha256:${"2".repeat(64)}`,
       repositoryStateHash: `sha256:${"3".repeat(64)}`,
+      indexStateHash: `sha256:${"3".repeat(64)}`,
       headTreeHash: `sha256:${"4".repeat(64)}`,
     };
     const after = { ...before, workingStateHash: `sha256:${"2".repeat(64)}` };

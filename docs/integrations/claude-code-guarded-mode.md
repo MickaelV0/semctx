@@ -8,12 +8,13 @@ current analyzed content has been verified. It is **opt-in**; advisory is the de
 ```
 you run:   semctx verify diff --record
              → analyses the diff, records { HEAD, analyzed-diff hash, content hash,
-               repository-state hash, verdict } to
+               repository-state hash, index-state hash, verdict } to
                .semctx/verification-state.json  (git-ignored, written atomically)
 
 hook on `git commit` / `git push`:
-   recapture paths + modes + bytes + canonical Git objects + HEAD tree
-   ALLOW commit if the v3 content baseline matches AND recorded verdict != BLOCK
+   recapture paths + modes + bytes + canonical Git objects + index + HEAD tree
+   ALLOW commit if the v3 content baseline matches, the index exactly materializes it,
+              the command consumes that whole index, AND recorded verdict != BLOCK
    ALLOW push only if HEAD also materializes that exact recorded repository state and the push
               source resolves to that verified HEAD only
    BLOCK  otherwise, printing the exact command to re-verify
@@ -39,7 +40,8 @@ Create `.semctx/guard.json` in the project (see `plugins/claude-code/examples/gu
 ```bash
 # ... make changes ...
 semctx verify diff --record     # PASS/WARN → exact content may be committed; BLOCK → resolve first
-git commit -m "..."             # the SHA may move when the resulting tree is exactly the verified state
+git add <verified paths>         # stage the complete verified state before the terminal operation
+git commit -m "..."             # plain whole-index commit; partial/restaging forms are rejected
 git push                         # reuses that proof; a partial commit or later drift is blocked
 ```
 
@@ -54,7 +56,11 @@ An exact commit is the expected HEAD movement and does not invalidate the baseli
 mode, symlink target, partial commit, or non-ignored untracked change blocks the terminal operation
 until you re-run `semctx verify diff --record` (or the plugin-CLI equivalent the guard prints).
 Tracked bytes remain authoritative even when Git index flags such as `assume-unchanged` or a present
-`skip-worktree` entry hide a path from `git diff`.
+`skip-worktree` entry hide a path from `git diff`: `--record` refuses that unanalyzed mismatch until
+the flag is cleared or the indexed bytes are restored. Commit-time staging and path selection
+(`-a`, `--include`, `--only`, `--patch`, `--interactive`, or a pathspec) are rejected; stage the
+complete verified state first, then use a plain whole-index commit. Initialized submodule HEADs are
+checked directly even when Git configuration suppresses submodule diffs.
 Run `git commit` and `git push` as isolated commands in guarded mode. Compound commands,
 redirections, and shell substitutions are rejected because they could mutate repository bytes
 after the hook's pre-check. Cwd prefixes must use literal paths: unexpanded `$VAR`, `${VAR}`, `~`,
@@ -67,8 +73,8 @@ equivalent `push`. Direct `env` wrappers are parsed too: non-retargeting forms s
 environment clearing (`-i`), repository-affecting `-u` / `--unset`, `env -C` / `--chdir`, and
 `env -S` / `--split-string` are rejected.
 For push, use the current branch/HEAD only. Deletions, `--all`, `--mirror`, tag-wide pushes,
-wildcards, multiple refspecs, configured remote push refspecs, and any source that does not resolve
-to the verified HEAD are rejected. Push options are allowlisted; embedded quote/backslash word
+wildcards, multiple refspecs, configured remote push refspecs, and any explicit source other than
+literal `HEAD` or the exact full verified commit ID are rejected. Push options are allowlisted; embedded quote/backslash word
 construction and unknown or combined option forms fail closed. If Git's top-level probe fails, the
 hook still discovers the nearest literal repository/guard marker rather than disabling enforcement.
 

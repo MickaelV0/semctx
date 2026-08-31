@@ -7,6 +7,7 @@ import {
   isTerminalGitCommand,
   guardEnabled,
   guardDecision,
+  commitUsesWholeIndex,
   pushSourceMatchesHead,
   resolveGitCwd,
   verifyRecordCommand,
@@ -17,7 +18,10 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { captureVerificationGitState as captureApplicationVerificationGitState } from "@semantic-context/app-services";
+import {
+  captureRecordableVerificationGitState,
+  captureVerificationGitState as captureApplicationVerificationGitState,
+} from "@semantic-context/app-services";
 
 // A host-compatible POSIX shell is required only for shellQuote round-trip and command-replay e2e.
 // Default Git-for-Windows puts Git\cmd on PATH (git.exe) but not Git\bin (bash.exe). Windows may
@@ -146,6 +150,25 @@ describe("isIsolatedTerminalGitCommand — no mutation before authorization", ()
   });
 });
 
+describe("commitUsesWholeIndex — no commit-time tree selection", () => {
+  it("allows plain commits that consume the already inspected index", () => {
+    expect(commitUsesWholeIndex("git commit -m exact")).toBe(true);
+    expect(commitUsesWholeIndex("git commit --amend --no-edit")).toBe(true);
+    expect(commitUsesWholeIndex("git -C repo commit --message=exact")).toBe(true);
+  });
+
+  it("rejects restaging, interactive, partial-index, and pathspec forms", () => {
+    for (const command of [
+      "git commit -am partial", "git commit -a -m partial", "git commit --all -m partial",
+      "git commit -i a.ts -m partial", "git commit --include a.ts -m partial",
+      "git commit -o a.ts -m partial", "git commit --only a.ts -m partial",
+      "git commit -p", "git commit --patch", "git commit --interactive",
+      "git commit -m partial -- a.ts", "git commit a.ts -m partial",
+      "git commit --pathspec-from-file=paths.txt", "git commit --pathspec-file-nul",
+    ]) expect(commitUsesWholeIndex(command), command).toBe(false);
+  });
+});
+
 describe("guardEnabled — advisory by default, strict off wins", () => {
   it("defaults to advisory (false) with no env and no guard.json", () => {
     expect(guardEnabled({}, null)).toBe(false);
@@ -172,6 +195,7 @@ describe("guardDecision — diff-hash gate (ADR 0007)", () => {
     workingStateHash: HASH,
     contentStateHash: CONTENT,
     repositoryStateHash: REPOSITORY,
+    indexStateHash: REPOSITORY,
     headTreeHash: REPOSITORY,
   };
   const STATE = { version: 3, ...CURRENT, verdict: "WARN" };
@@ -351,6 +375,7 @@ describe("guardDecision — verify, commit, push replay", () => {
     const git = (args: string[]) => execFileSync("git", args, { cwd: repo, stdio: "ignore" });
     try {
       git(["init"]);
+      writeFileSync(join(repo, ".gitignore"), ".semctx/\n");
       writeFileSync(join(repo, "a.ts"), "export const a = 1;\n");
       writeFileSync(join(repo, "b.ts"), "export const b = 1;\n");
       git(["add", "-A"]);
@@ -361,6 +386,17 @@ describe("guardDecision — verify, commit, push replay", () => {
       git(["add", "-A"]);
       const verified = captureVerificationGitState(repo);
       const state = { version: 3, ...verified, verdict: "PASS" };
+      mkdirSync(join(repo, ".semctx"));
+      writeFileSync(join(repo, ".semctx", "guard.json"), JSON.stringify({ enabled: true }));
+      writeFileSync(join(repo, ".semctx", "verification-state.json"), JSON.stringify(state));
+      const guard = resolve(import.meta.dir, "../hooks/semctx-guard.mjs");
+      const guardStatus = (command: string) => spawnSync("node", [guard], {
+        cwd: repo,
+        input: JSON.stringify({ tool_name: "Bash", tool_input: { command }, cwd: repo }),
+        encoding: "utf8",
+      }).status;
+      expect(guardStatus("git commit -m exact")).toBe(0);
+      expect(guardStatus("git commit -am exact")).toBe(2);
       git(["-c", "user.name=Semctx Test", "-c", "user.email=semctx@example.invalid", "commit", "-m", "exact"]);
       const committed = captureVerificationGitState(repo);
       expect(committed.headCommit).not.toBe(verified.headCommit);
@@ -374,6 +410,23 @@ describe("guardDecision — verify, commit, push replay", () => {
       writeFileSync(join(repo, "b.ts"), "export const b = 3;\n");
       git(["add", "a.ts"]);
       const partialState = { version: 3, ...captureVerificationGitState(repo), verdict: "PASS" };
+      writeFileSync(join(repo, ".semctx", "verification-state.json"), JSON.stringify(partialState));
+      expect(partialState.indexStateHash).not.toBe(partialState.repositoryStateHash);
+      expect(guardStatus("git commit -m partial")).toBe(2);
+      expect(guardDecision({
+        enabled: true,
+        terminalVerb: "commit",
+        commitContentAuthorized: true,
+        state: partialState,
+        currentState: partialState,
+      }).block).toBe(true);
+      expect(guardDecision({
+        enabled: true,
+        terminalVerb: "commit",
+        commitContentAuthorized: false,
+        state: { ...partialState, indexStateHash: partialState.repositoryStateHash },
+        currentState: { ...partialState, indexStateHash: partialState.repositoryStateHash },
+      }).block).toBe(true);
       git(["-c", "user.name=Semctx Test", "-c", "user.email=semctx@example.invalid", "commit", "-m", "partial"]);
       const partial = captureVerificationGitState(repo);
       expect(partial.contentStateHash).toBe(partialState.contentStateHash);
@@ -411,7 +464,10 @@ describe("guard runtime — large working diffs", () => {
       );
 
       expect(pushSourceMatchesHead("git push . HEAD:refs/heads/target", repo, verified.headCommit)).toBe(true);
+      expect(pushSourceMatchesHead(`git push . ${verified.headCommit}:refs/heads/target`, repo, verified.headCommit)).toBe(true);
       expect(pushSourceMatchesHead("git push . verified-tag:refs/tags/target", repo, verified.headCommit)).toBe(false);
+      expect(pushSourceMatchesHead("git push . HEAD~0:refs/heads/target", repo, verified.headCommit)).toBe(false);
+      expect(pushSourceMatchesHead("git push . verified-tag^{}:refs/heads/target", repo, verified.headCommit)).toBe(false);
       const guard = resolve(import.meta.dir, "../hooks/semctx-guard.mjs");
       for (const command of [
         "git push . other:refs/heads/target",
@@ -420,6 +476,8 @@ describe("guard runtime — large working diffs", () => {
         "git push -fd . HEAD",
         "git push . verified-tag:refs/tags/target",
         "git push . HEAD~1:refs/heads/target",
+        "git push . HEAD~0:refs/heads/target",
+        "git push . verified-tag^{}:refs/heads/target",
         "git push . :refs/heads/target",
         "git push . --all",
         "git push . --mirror",
@@ -565,6 +623,7 @@ describe("guard runtime — large working diffs", () => {
       );
 
       writeFileSync(join(repo, "large.txt"), "b".repeat(2 * 1024 * 1024));
+      execFileSync("git", ["add", "large.txt"], { cwd: repo, stdio: "ignore" });
       mkdirSync(join(repo, ".semctx"));
       writeFileSync(join(repo, ".semctx", "guard.json"), JSON.stringify({ enabled: true }));
       writeFileSync(
@@ -814,6 +873,7 @@ describe("verification-state capture parity", () => {
         expect(changed.contentStateHash, flag).not.toBe(baseline.contentStateHash);
         expect(changed.repositoryStateHash, flag).not.toBe(baseline.repositoryStateHash);
         expect(changed, flag).toEqual(captureApplicationVerificationGitState(repo));
+        expect(() => captureRecordableVerificationGitState(repo), flag).toThrow("hidden from the analyzed Git diff");
       } finally {
         rmSync(repo, { recursive: true, force: true });
       }
@@ -844,6 +904,9 @@ describe("verification-state capture parity", () => {
       expect(state).toEqual(captureApplicationVerificationGitState(repo));
 
       execFileSync("git", ["checkout", firstCommit], { cwd: join(repo, "vendor"), stdio: "ignore" });
+      git(["config", "diff.ignoreSubmodules", "all"]);
+      git(["config", "submodule.vendor.ignore", "all"]);
+      expect(git(["diff", "--name-only"])).toBe("");
       expect(() => captureVerificationGitState(repo)).toThrow("changed gitlink verification input is unsupported");
       expect(() => captureApplicationVerificationGitState(repo)).toThrow("changed gitlink verification input is unsupported");
     } finally {
