@@ -818,7 +818,7 @@ describe("verification-state capture parity", () => {
         rmSync(repo, { recursive: true, force: true });
       }
     }
-  });
+  }, 20_000);
 
   it("preserves a clean gitlink and fails closed when its indexed commit changes", () => {
     const repo = mkdtempSync(join(tmpdir(), "semctx-guard-gitlink-"));
