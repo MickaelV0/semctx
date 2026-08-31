@@ -40,9 +40,93 @@ function shellCommandBody(command) {
   return wrappedShellCommand(command)?.body ?? null;
 }
 
+/** Split shell text without evaluating it, preserving quoted words and ignoring operators in quotes. */
+function shellWords(text) {
+  const source = String(text ?? "");
+  const words = [];
+  let word = "";
+  let quote = null;
+  for (let i = 0; i < source.length; i += 1) {
+    const char = source[i];
+    if (quote !== null) {
+      word += char;
+      if (quote === '"' && char === "\\" && source[i + 1] !== undefined) {
+        word += source[i + 1];
+        i += 1;
+        continue;
+      }
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (char === "\\" && source[i + 1] !== undefined) {
+      word += char + source[i + 1];
+      i += 1;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      word += char;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (word !== "") words.push(word);
+      word = "";
+      continue;
+    }
+    word += char;
+  }
+  if (word !== "") words.push(word);
+  return words;
+}
+
+function shellSegments(text) {
+  const source = String(text ?? "");
+  const segments = [];
+  let segment = "";
+  let quote = null;
+  for (let i = 0; i < source.length; i += 1) {
+    const char = source[i];
+    if (quote !== null) {
+      segment += char;
+      if (quote === '"' && char === "\\" && source[i + 1] !== undefined) {
+        segment += source[i + 1];
+        i += 1;
+        continue;
+      }
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (char === "\\" && source[i + 1] !== undefined) {
+      segment += char + source[i + 1];
+      i += 1;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      segment += char;
+      continue;
+    }
+    const pair = source.slice(i, i + 2);
+    if (pair === "&&" || pair === "||") {
+      segments.push(segment);
+      segment = "";
+      i += 1;
+      continue;
+    }
+    if (char === ";" || char === "|" || char === "\n") {
+      segments.push(segment);
+      segment = "";
+      continue;
+    }
+    segment += char;
+  }
+  segments.push(segment);
+  return segments;
+}
+
 function envSplitStringBody(command) {
   const text = String(command ?? "").trim();
-  const tokens = text.split(/\s+/).filter(Boolean);
+  const tokens = shellWords(text);
   let i = 0;
   while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) i += 1;
   if (executableName(tokens[i]) !== "env" && executableName(tokens[i]) !== "env.exe") return null;
@@ -223,8 +307,8 @@ function gitScopeRequiresSessionGuard(command) {
   const nested = shellCommandBody(text);
   if (nested !== null && gitScopeRequiresSessionGuard(nested)) return true;
 
-  for (const segment of text.split(/&&|\|\||;|\||\n/)) {
-    const tokens = segment.trim().split(/\s+/).filter(Boolean);
+  for (const segment of shellSegments(text)) {
+    const tokens = shellWords(segment.trim());
     let i = 0;
     while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) {
       if (isRetargetingEnvironmentAssignment(tokens[i])) return true;
@@ -277,9 +361,9 @@ export function isTerminalGitCommand(command) {
     const verb = isTerminalGitCommand(nested);
     if (verb !== null) return verb;
   }
-  const segments = String(command ?? "").split(/&&|\|\||;|\||\n/);
+  const segments = shellSegments(command);
   for (const seg of segments) {
-    const tokens = seg.trim().split(/\s+/).filter(Boolean);
+    const tokens = shellWords(seg.trim());
     const gitIndex = gitTokenIndex(tokens);
     if (gitIndex < 0) continue;
     let i = gitIndex + 1;
@@ -311,7 +395,7 @@ export function isIsolatedTerminalGitCommand(command) {
   if (terminal === undefined || isTerminalGitCommand(terminal) === null) return false;
 
   for (const prefix of segments) {
-    const tokens = prefix.split(/\s+/).filter(Boolean);
+    const tokens = shellWords(prefix);
     if (tokens.length !== 2 || stripQuotes(tokens[0]).toLowerCase() !== "cd") return false;
     const target = stripQuotes(tokens[1]);
     if (target === "" || pathRequiresShellExpansion(target)) return false;
@@ -343,7 +427,7 @@ function isAbbreviatedCommitOption(option) {
 /** Authorize only commit forms that materialize the already-inspected index without restaging or path selection. */
 export function commitUsesWholeIndex(command) {
   const terminal = String(command ?? "").split("&&").at(-1)?.trim() ?? "";
-  const tokens = terminal.split(/\s+/).filter(Boolean);
+  const tokens = shellWords(terminal);
   const gitIndex = gitTokenIndex(tokens);
   if (gitIndex < 0) return false;
   let i = gitIndex + 1;
@@ -429,7 +513,7 @@ function literalShellWord(token) {
 export function pushSourceMatchesHead(command, cwd, currentHead) {
   try {
     const terminal = String(command ?? "").split("&&").at(-1)?.trim() ?? "";
-    const tokens = terminal.split(/\s+/).filter(Boolean);
+    const tokens = shellWords(terminal);
     const gitIndex = gitTokenIndex(tokens);
     if (gitIndex < 0) return false;
     let i = gitIndex + 1;
@@ -532,10 +616,10 @@ export function resolveGitCwd(command, inputCwd) {
     const nestedBase = wrapped.start > 0 ? resolveGitCwd(text.slice(0, wrapped.start), inputCwd) : inputCwd;
     return resolveGitCwd(wrapped.body, nestedBase);
   }
-  const segments = text.split(/&&|\|\||;|\||\n/);
+  const segments = shellSegments(text);
   let cwd = inputCwd;
   for (const seg of segments) {
-    const tokens = seg.trim().split(/\s+/).filter(Boolean);
+    const tokens = shellWords(seg.trim());
     let i = 0;
     while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) i += 1; // skip env assignments
     if (tokens[i] === "cd" && tokens[i + 1] !== undefined) {
