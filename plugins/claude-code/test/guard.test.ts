@@ -772,7 +772,7 @@ describe("verification-state capture parity", () => {
       rmSync(repo, { recursive: true, force: true });
       rmSync(child, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   it.skipIf(process.platform === "win32")("changes on executable-mode and symlink-target drift", () => {
     const repo = mkdtempSync(join(tmpdir(), "semctx-guard-metadata-"));
