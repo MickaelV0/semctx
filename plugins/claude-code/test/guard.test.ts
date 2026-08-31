@@ -401,6 +401,7 @@ describe("guard runtime — large working diffs", () => {
       writeFileSync(join(repo, "tracked.ts"), "export const value = 2;\n");
       git(["add", "."]);
       git(["-c", "user.name=Semctx Test", "-c", "user.email=semctx@example.invalid", "commit", "-m", "verified"]);
+      git(["-c", "user.name=Semctx Test", "-c", "user.email=semctx@example.invalid", "tag", "-a", "verified-tag", "-m", "verified-tag", "HEAD"]);
       const verified = captureVerificationGitState(repo);
       mkdirSync(join(repo, ".semctx"));
       writeFileSync(join(repo, ".semctx", "guard.json"), JSON.stringify({ enabled: true }));
@@ -410,9 +411,12 @@ describe("guard runtime — large working diffs", () => {
       );
 
       expect(pushSourceMatchesHead("git push . HEAD:refs/heads/target", repo, verified.headCommit)).toBe(true);
+      expect(pushSourceMatchesHead("git push . verified-tag:refs/tags/target", repo, verified.headCommit)).toBe(false);
       const guard = resolve(import.meta.dir, "../hooks/semctx-guard.mjs");
       for (const command of [
         "git push . other:refs/heads/target",
+        "git push . --signed other:refs/heads/target",
+        "git push . verified-tag:refs/tags/target",
         "git push . HEAD~1:refs/heads/target",
         "git push . :refs/heads/target",
         "git push . --all",
