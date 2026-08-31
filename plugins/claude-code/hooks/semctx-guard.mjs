@@ -470,6 +470,10 @@ function gitScopeRequiresSessionGuard(command) {
       const cwdPath = gitCPath(token, tokens[i + 1]);
       if (cwdPath !== null) {
         if (pathRequiresShellExpansion(cwdPath)) return true;
+      } else if (token.startsWith("-c") && token !== "-c") {
+        // Git accepts attached config (`-ckey=value`). Keep it outside the authorizing contract:
+        // hooksPath and other execution-affecting keys must not bypass the pre-tool hook probe.
+        return true;
       } else if (option === "-c") {
         if (tokens[i + 1] !== undefined && isRetargetingConfig(tokens[i + 1])) return true;
       } else if (option === "--config-env") {

@@ -192,6 +192,7 @@ describe("isIsolatedTerminalGitCommand — no mutation before authorization", ()
       "git -c core.worktree=../other commit -m x",
       "git -c core.bare=true commit -m x",
       "git -c core.hooksPath=.semctx/no-hooks commit -m x",
+      "git -ccore.hooksPath=.semctx/no-hooks commit -m x",
     ]) {
       expect(isIsolatedTerminalGitCommand(command)).toBe(false);
     }
@@ -840,6 +841,7 @@ describe("guard runtime — repository scope must be explicit", () => {
         "env -i GIT_COMMON_DIR=../other/.git git push origin main",
         "env -S 'git commit -m x'",
         "git --git-dir ../other/.git --work-tree ../other commit -m x",
+        "git -ccore.hooksPath=.semctx/no-hooks commit -m x",
         "/tmp/proxy/git commit -m x",
         "C:\\proxy\\git.exe push origin main",
       ]) {
