@@ -55,6 +55,11 @@ function executableName(token) {
   return stripQuotes(token).replace(/\\/g, "/").split("/").pop()?.toLowerCase();
 }
 
+function isCanonicalGitExecutableToken(token) {
+  const executable = stripQuotes(token).toLowerCase();
+  return executable === "git" || executable === "git.exe";
+}
+
 const ENV_OPTIONS_WITH_VALUE = new Set([
   "-a",
   "-C",
@@ -108,6 +113,9 @@ const GIT_RETARGET_OPTIONS = new Set([
 ]);
 
 const GIT_RETARGET_ENV = new Set([
+  "GIT_CEILING_DIRECTORIES",
+  "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+  "GIT_EXEC_PATH",
   "GIT_ALTERNATE_OBJECT_DIRECTORIES",
   "GIT_COMMON_DIR",
   "GIT_DIR",
@@ -117,6 +125,13 @@ const GIT_RETARGET_ENV = new Set([
   "GIT_REPLACE_REF_BASE",
   "GIT_SHALLOW_FILE",
   "GIT_WORK_TREE",
+  "HOME",
+  "HOMEDRIVE",
+  "HOMEPATH",
+  "PATH",
+  "PATHEXT",
+  "USERPROFILE",
+  "XDG_CONFIG_HOME",
 ]);
 
 const GIT_RETARGET_CONFIG = new Set([
@@ -222,6 +237,7 @@ function gitScopeRequiresSessionGuard(command) {
 
     const gitIndex = gitTokenIndex(tokens);
     if (gitIndex < 0) continue;
+    if (!isCanonicalGitExecutableToken(tokens[gitIndex])) return true;
     if (envWrapperMakesScopeAmbiguous(tokens, gitIndex)) return true;
     for (let prefix = 0; prefix < gitIndex; prefix += 1) {
       if (isRetargetingEnvironmentAssignment(tokens[prefix])) return true;

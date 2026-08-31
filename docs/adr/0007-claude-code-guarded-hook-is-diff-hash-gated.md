@@ -63,7 +63,10 @@ authorize a terminal Git operation.
   expansion (`$VAR`, `${VAR}`, `~`, or globs) and repository-state retargeting (`GIT_DIR`,
   `GIT_WORK_TREE`, `--git-dir`, `--work-tree`, namespaces, alternate index/object state, or
   equivalent config) are outside the isolated-command contract and fail closed when the target or
-  session repo enables guarded mode.
+  session repo enables guarded mode. Command-scoped executable/config discovery changes (`PATH`,
+  home/profile or XDG config variables, and related Git discovery variables) and non-canonical Git
+  executable paths fail closed so the hook and the shell cannot resolve different Git programs or
+  configuration.
 - Commit commands must consume the already-inspected whole index. Commit-time staging, interactive
   selection, partial-index options, pathspecs, and `--fixup=reword:` (Git's implicit `--only`
   form) fail closed, including Git's accepted long-option abbreviations. Every persisted version 3

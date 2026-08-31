@@ -75,7 +75,10 @@ after the hook's pre-check. Cwd prefixes must use literal paths: unexpanded `$VA
 and globs in `cd` or `git -C` are rejected. Git repository retargeting is also outside the contract,
 including `GIT_DIR` / `GIT_WORK_TREE` and related index, object, common-dir, namespace, or config
 environment; `--git-dir`, `--work-tree`, `--namespace`, `--bare`; and `-c core.worktree` /
-`-c core.bare`. Command-local `core.hooksPath` overrides are rejected as well. Use a plain literal
+`-c core.bare`. Command-local `core.hooksPath` overrides are rejected as well. Environment changes
+that can select another Git executable or configuration (`PATH`, home/profile variables,
+`XDG_CONFIG_HOME`, and related Git discovery variables) also fail closed, as do explicit executable
+paths such as `/tmp/proxy/git`. Use a plain literal
 `cd <repo> && git commit`, `git -C <repo> commit`, or the
 equivalent `push`. Direct `env` wrappers are parsed too: non-retargeting forms such as
 `env GIT_AUTHOR_NAME=name git commit` remain in contract, while retargeting assignments,

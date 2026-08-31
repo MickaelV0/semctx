@@ -129,15 +129,30 @@ describe("isIsolatedTerminalGitCommand — no mutation before authorization", ()
 
   it("rejects environment, option, and config forms that retarget Git state", () => {
     for (const command of [
+      "PATH=../proxy-bin git commit -m x",
+      "PATHEXT=.PROXY git push origin main",
+      "HOME=../alternate-home git commit -m x",
+      "XDG_CONFIG_HOME=../alternate-config git push origin main",
+      "USERPROFILE=..\\alternate-profile git commit -m x",
+      "HOMEDRIVE=Z: git push origin main",
+      "HOMEPATH=\\alternate-home git commit -m x",
+      "GIT_EXEC_PATH=../proxy-libexec git commit -m x",
+      "GIT_CEILING_DIRECTORIES=.. git commit -m x",
+      "GIT_DISCOVERY_ACROSS_FILESYSTEM=true git push origin main",
       "GIT_DIR=../other/.git git commit -m x",
       "GIT_WORK_TREE=../other git commit -m x",
       "GIT_COMMON_DIR=../other/.git git push origin main",
       "GIT_INDEX_FILE=../other/index git commit -m x",
       "GIT_CONFIG_COUNT=1 git commit -m x",
       "env GIT_DIR=../other/.git GIT_WORK_TREE=../other git commit -m x",
+      "env PATH=../proxy-bin git commit -m x",
+      "env HOME=../alternate-home git push origin main",
+      "env XDG_CONFIG_HOME=../alternate-config git commit -m x",
       "env -i GIT_COMMON_DIR=../other/.git git push origin main",
       "env -i GIT_AUTHOR_NAME=x git commit -m x",
       "env -u GIT_DIR git commit -m x",
+      "env -u PATH git commit -m x",
+      "env --unset=HOME git push origin main",
       "env -C ../other git commit -m x",
       "env -S 'git commit -m x'",
       "git --git-dir ../other/.git --work-tree ../other commit -m x",
@@ -148,6 +163,17 @@ describe("isIsolatedTerminalGitCommand — no mutation before authorization", ()
       "git -c core.bare=true commit -m x",
       "git -c core.hooksPath=.semctx/no-hooks commit -m x",
     ]) {
+      expect(isIsolatedTerminalGitCommand(command)).toBe(false);
+    }
+  });
+
+  it("detects explicit Git paths but refuses to authorize a substituted executable", () => {
+    for (const command of [
+      "/tmp/proxy/git commit -m x",
+      "./proxy/git push origin main",
+      "C:\\proxy\\git.exe commit -m x",
+    ]) {
+      expect(isTerminalGitCommand(command)).not.toBeNull();
       expect(isIsolatedTerminalGitCommand(command)).toBe(false);
     }
   });
@@ -764,16 +790,23 @@ describe("guard runtime — repository scope must be explicit", () => {
     }
   });
 
-  it("blocks Git environment and CLI retargeting under a valid session baseline", () => {
+  it("blocks Git executable, environment, and CLI retargeting under a valid session baseline", () => {
     const repo = createGuardedRepo("semctx-guard-retarget-");
     try {
       const guard = resolve(import.meta.dir, "../hooks/semctx-guard.mjs");
       for (const command of [
         "GIT_DIR=../other/.git GIT_WORK_TREE=../other git commit -m x",
+        "PATH=../proxy-bin git commit -m x",
+        "HOME=../alternate-home git push origin main",
+        "XDG_CONFIG_HOME=../alternate-config git commit -m x",
         "env GIT_DIR=../other/.git GIT_WORK_TREE=../other git commit -m x",
+        "env PATH=../proxy-bin git commit -m x",
+        "env --unset=HOME git push origin main",
         "env -i GIT_COMMON_DIR=../other/.git git push origin main",
         "env -S 'git commit -m x'",
         "git --git-dir ../other/.git --work-tree ../other commit -m x",
+        "/tmp/proxy/git commit -m x",
+        "C:\\proxy\\git.exe push origin main",
       ]) {
         const result = spawnSync("node", [guard], {
           cwd: repo,
