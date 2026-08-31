@@ -7,6 +7,7 @@ import {
   isTerminalGitCommand,
   guardEnabled,
   guardDecision,
+  isGuardVerificationState,
   commitUsesWholeIndex,
   pushSourceMatchesHead,
   resolveGitCwd,
@@ -165,6 +166,7 @@ describe("commitUsesWholeIndex — no commit-time tree selection", () => {
       "git commit -p", "git commit --patch", "git commit --interactive",
       "git commit -m partial -- a.ts", "git commit a.ts -m partial",
       "git commit --pathspec-from-file=paths.txt", "git commit --pathspec-file-nul",
+      "git commit --fixup=reword:HEAD", "git commit --fixup reword:HEAD",
     ]) expect(commitUsesWholeIndex(command), command).toBe(false);
   });
 });
@@ -186,19 +188,20 @@ describe("guardEnabled — advisory by default, strict off wins", () => {
 });
 
 describe("guardDecision — diff-hash gate (ADR 0007)", () => {
-  const HASH = "sha256:abc";
-  const CONTENT = "sha256:content";
-  const REPOSITORY = "sha256:repository";
+  const HASH = `sha256:${"1".repeat(64)}`;
+  const CONTENT = `sha256:${"2".repeat(64)}`;
+  const REPOSITORY = `sha256:${"3".repeat(64)}`;
+  const RECORDED_AT = "2026-08-31T00:00:00.000Z";
   const CURRENT = {
     headCommit: "a".repeat(40),
-    analyzedSourceHash: "sha256:analyzed",
+    analyzedSourceHash: `sha256:${"4".repeat(64)}`,
     workingStateHash: HASH,
     contentStateHash: CONTENT,
     repositoryStateHash: REPOSITORY,
     indexStateHash: REPOSITORY,
     headTreeHash: REPOSITORY,
   };
-  const STATE = { version: 3, ...CURRENT, verdict: "WARN" };
+  const STATE = { version: 3, ...CURRENT, verdict: "WARN", recordedAt: RECORDED_AT };
   it("advisory profile never blocks", () => {
     expect(guardDecision({ enabled: false, terminalVerb: "commit", state: null, currentState: CURRENT }).block).toBe(false);
   });
@@ -357,6 +360,23 @@ describe("guardDecision — diff-hash gate (ADR 0007)", () => {
     expect(d.block).toBe(true);
     expect(d.reason).toContain("legacy");
   });
+  it("blocks malformed version 3 records before content comparison", () => {
+    for (const malformed of [
+      { ...STATE, verdict: "ALLOW" },
+      { ...STATE, headCommit: "not-an-object" },
+      { ...STATE, analyzedSourceHash: "truthy-junk" },
+      { ...STATE, indexStateHash: "truthy-junk" },
+      { ...STATE, recordedAt: "not-a-timestamp" },
+    ]) {
+      expect(isGuardVerificationState(malformed), JSON.stringify(malformed)).toBe(false);
+      expect(guardDecision({
+        enabled: true,
+        terminalVerb: "commit",
+        state: malformed,
+        currentState: CURRENT,
+      }).block).toBe(true);
+    }
+  });
   it("keeps the commit-bound version 2 baseline readable but non-authorizing", () => {
     const d = guardDecision({
       enabled: true,
@@ -385,7 +405,7 @@ describe("guardDecision — verify, commit, push replay", () => {
       writeFileSync(join(repo, "b.ts"), "export const b = 2;\n");
       git(["add", "-A"]);
       const verified = captureVerificationGitState(repo);
-      const state = { version: 3, ...verified, verdict: "PASS" };
+      const state = { version: 3, ...verified, verdict: "PASS", recordedAt: "2026-08-31T00:00:00.000Z" };
       mkdirSync(join(repo, ".semctx"));
       writeFileSync(join(repo, ".semctx", "guard.json"), JSON.stringify({ enabled: true }));
       writeFileSync(join(repo, ".semctx", "verification-state.json"), JSON.stringify(state));
@@ -409,7 +429,12 @@ describe("guardDecision — verify, commit, push replay", () => {
       writeFileSync(join(repo, "a.ts"), "export const a = 3;\n");
       writeFileSync(join(repo, "b.ts"), "export const b = 3;\n");
       git(["add", "a.ts"]);
-      const partialState = { version: 3, ...captureVerificationGitState(repo), verdict: "PASS" };
+      const partialState = {
+        version: 3,
+        ...captureVerificationGitState(repo),
+        verdict: "PASS",
+        recordedAt: "2026-08-31T00:00:00.000Z",
+      };
       writeFileSync(join(repo, ".semctx", "verification-state.json"), JSON.stringify(partialState));
       expect(partialState.indexStateHash).not.toBe(partialState.repositoryStateHash);
       expect(guardStatus("git commit -m partial")).toBe(2);
@@ -460,7 +485,7 @@ describe("guard runtime — large working diffs", () => {
       writeFileSync(join(repo, ".semctx", "guard.json"), JSON.stringify({ enabled: true }));
       writeFileSync(
         join(repo, ".semctx", "verification-state.json"),
-        JSON.stringify({ version: 3, ...verified, verdict: "PASS" }),
+        JSON.stringify({ version: 3, ...verified, verdict: "PASS", recordedAt: "2026-08-31T00:00:00.000Z" }),
       );
 
       expect(pushSourceMatchesHead("git push . HEAD:refs/heads/target", repo, verified.headCommit)).toBe(true);
@@ -524,7 +549,12 @@ describe("guard runtime — large working diffs", () => {
       writeFileSync(join(repo, ".semctx", "guard.json"), JSON.stringify({ enabled: true }));
       writeFileSync(
         join(repo, ".semctx", "verification-state.json"),
-        JSON.stringify({ version: 3, ...captureVerificationGitState(repo), verdict: "PASS" }),
+        JSON.stringify({
+          version: 3,
+          ...captureVerificationGitState(repo),
+          verdict: "PASS",
+          recordedAt: "2026-08-31T00:00:00.000Z",
+        }),
       );
 
       const guard = resolve(import.meta.dir, "../hooks/semctx-guard.mjs");
@@ -628,7 +658,12 @@ describe("guard runtime — large working diffs", () => {
       writeFileSync(join(repo, ".semctx", "guard.json"), JSON.stringify({ enabled: true }));
       writeFileSync(
         join(repo, ".semctx", "verification-state.json"),
-        JSON.stringify({ version: 3, ...captureVerificationGitState(repo), verdict: "PASS" }),
+        JSON.stringify({
+          version: 3,
+          ...captureVerificationGitState(repo),
+          verdict: "PASS",
+          recordedAt: "2026-08-31T00:00:00.000Z",
+        }),
       );
 
       const guard = resolve(import.meta.dir, "../hooks/semctx-guard.mjs");
@@ -665,7 +700,12 @@ describe("guard runtime — repository scope must be explicit", () => {
     writeFileSync(join(repo, ".semctx", "guard.json"), JSON.stringify({ enabled: true }));
     writeFileSync(
       join(repo, ".semctx", "verification-state.json"),
-      JSON.stringify({ version: 3, ...captureVerificationGitState(repo), verdict: "PASS" }),
+      JSON.stringify({
+        version: 3,
+        ...captureVerificationGitState(repo),
+        verdict: "PASS",
+        recordedAt: "2026-08-31T00:00:00.000Z",
+      }),
     );
     return repo;
   }
@@ -903,9 +943,16 @@ describe("verification-state capture parity", () => {
       expect(state.repositoryStateHash).toBe(state.headTreeHash);
       expect(state).toEqual(captureApplicationVerificationGitState(repo));
 
-      execFileSync("git", ["checkout", firstCommit], { cwd: join(repo, "vendor"), stdio: "ignore" });
       git(["config", "diff.ignoreSubmodules", "all"]);
       git(["config", "submodule.vendor.ignore", "all"]);
+      const moduleHead = join(repo, ".git", "modules", "vendor", "HEAD");
+      const hiddenModuleHead = `${moduleHead}.proof-mutant`;
+      renameSync(moduleHead, hiddenModuleHead);
+      expect(() => captureVerificationGitState(repo)).toThrow("cannot resolve initialized gitlink");
+      expect(() => captureApplicationVerificationGitState(repo)).toThrow("cannot resolve initialized gitlink");
+      renameSync(hiddenModuleHead, moduleHead);
+
+      execFileSync("git", ["checkout", firstCommit], { cwd: join(repo, "vendor"), stdio: "ignore" });
       expect(git(["diff", "--name-only"])).toBe("");
       expect(() => captureVerificationGitState(repo)).toThrow("changed gitlink verification input is unsupported");
       expect(() => captureApplicationVerificationGitState(repo)).toThrow("changed gitlink verification input is unsupported");

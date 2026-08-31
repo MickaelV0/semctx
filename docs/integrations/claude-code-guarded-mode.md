@@ -60,7 +60,9 @@ Tracked bytes remain authoritative even when Git index flags such as `assume-unc
 the flag is cleared or the indexed bytes are restored. Commit-time staging and path selection
 (`-a`, `--include`, `--only`, `--patch`, `--interactive`, or a pathspec) are rejected; stage the
 complete verified state first, then use a plain whole-index commit. Initialized submodule HEADs are
-checked directly even when Git configuration suppresses submodule diffs.
+checked directly even when Git configuration suppresses submodule diffs; a failed initialized
+submodule repository/HEAD probe blocks rather than reusing the indexed commit. Malformed version 3
+records and `--fixup=reword:` commits are non-authorizing.
 Run `git commit` and `git push` as isolated commands in guarded mode. Compound commands,
 redirections, and shell substitutions are rejected because they could mutate repository bytes
 after the hook's pre-check. Cwd prefixes must use literal paths: unexpanded `$VAR`, `${VAR}`, `~`,

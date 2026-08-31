@@ -333,13 +333,16 @@ export function commitUsesWholeIndex(command) {
     const token = literalShellWord(tokens[i]);
     if (token === null || token === "--") return false;
     const option = gitOptionName(token);
+    const optionValue = token.includes("=") ? token.slice(token.indexOf("=") + 1) : undefined;
     if (
       COMMIT_TREE_SELECTION_OPTIONS.has(option)
+      || (option === "--fixup" && optionValue?.startsWith("reword:") === true)
       || (/^-[^-]+/.test(token) && !token.startsWith("-m") && !token.startsWith("-F") && /[aiop]/.test(token.slice(1)))
     ) return false;
     if (!token.startsWith("-")) return false;
     if (COMMIT_OPTIONS_WITH_VALUE.has(option) && !token.includes("=") && token === option) {
-      if (tokens[i + 1] === undefined || literalShellWord(tokens[i + 1]) === null) return false;
+      const value = tokens[i + 1] === undefined ? null : literalShellWord(tokens[i + 1]);
+      if (value === null || (option === "--fixup" && value.startsWith("reword:"))) return false;
       i += 2;
       continue;
     }
@@ -634,17 +637,7 @@ export function guardDecision(ctx) {
   if (!ctx.state) {
     return { block: true, reason: `semctx guarded mode: no verification on record. Run:\n  ${verifyCmd}\n${retry}` };
   }
-  if (
-    ctx.state.version !== 3
-    || !ctx.state.headCommit
-    || !ctx.state.analyzedSourceHash
-    || !ctx.state.workingStateHash
-    || !ctx.state.contentStateHash
-    || !ctx.state.repositoryStateHash
-    || !ctx.state.indexStateHash
-    || !ctx.state.headTreeHash
-    || !ctx.currentState
-  ) {
+  if (!isGuardVerificationState(ctx.state) || !ctx.currentState) {
     return { block: true, reason: `semctx guarded mode: the verification baseline is legacy, invalid, or unavailable. Re-run:\n  ${verifyCmd}\n${retry}` };
   }
   if (ctx.state.verdict === "BLOCK") {
@@ -662,6 +655,31 @@ export function guardDecision(ctx) {
     return { block: true, reason: `semctx guarded mode: the analyzed content changed or the commit does not exactly materialize it. Re-run:\n  ${verifyCmd}\n${retry}` };
   }
   return { block: false };
+}
+
+/** Reject authored or corrupted baselines unless every persisted v3 field has its exact public shape. */
+export function isGuardVerificationState(state) {
+  const sha256 = /^sha256:[0-9a-f]{64}$/;
+  return typeof state === "object"
+    && state !== null
+    && state.version === 3
+    && typeof state.headCommit === "string"
+    && /^[0-9a-f]{40,64}$/.test(state.headCommit)
+    && typeof state.analyzedSourceHash === "string"
+    && sha256.test(state.analyzedSourceHash)
+    && typeof state.workingStateHash === "string"
+    && sha256.test(state.workingStateHash)
+    && typeof state.contentStateHash === "string"
+    && sha256.test(state.contentStateHash)
+    && typeof state.repositoryStateHash === "string"
+    && sha256.test(state.repositoryStateHash)
+    && typeof state.indexStateHash === "string"
+    && sha256.test(state.indexStateHash)
+    && typeof state.headTreeHash === "string"
+    && sha256.test(state.headTreeHash)
+    && (state.verdict === "PASS" || state.verdict === "WARN" || state.verdict === "BLOCK")
+    && typeof state.recordedAt === "string"
+    && Number.isFinite(Date.parse(state.recordedAt));
 }
 
 function readJson(path) {
@@ -764,18 +782,24 @@ function captureIndexStateHash(tracked) {
 function initializedGitlinkHead(cwd, path) {
   const absolute = resolve(cwd, path);
   if (!lstatIfPresent(absolute)) return undefined;
+  const gitMarkerPresent = Boolean(lstatIfPresent(resolve(absolute, ".git")));
   const topLevel = spawnSync("git", ["-C", path, "rev-parse", "--show-toplevel"], {
     cwd,
     encoding: "utf8",
   });
-  if (topLevel.status !== 0 || resolve(topLevel.stdout.trim()) !== absolute) return undefined;
+  if (topLevel.status !== 0) {
+    if (gitMarkerPresent) throw new Error(`cannot resolve initialized gitlink repository: ${path}`);
+    return undefined;
+  }
+  if (resolve(topLevel.stdout.trim()) !== absolute) return undefined;
   const result = spawnSync("git", ["-C", path, "rev-parse", "--verify", "HEAD"], {
     cwd,
     encoding: "utf8",
   });
-  if (result.status !== 0) return undefined;
+  if (result.status !== 0) throw new Error(`cannot resolve initialized gitlink HEAD: ${path}`);
   const head = result.stdout.trim();
-  return /^[0-9a-f]{40,64}$/.test(head) ? head : undefined;
+  if (!/^[0-9a-f]{40,64}$/.test(head)) throw new Error(`invalid initialized gitlink HEAD: ${path}`);
+  return head;
 }
 
 function captureHeadTreeHash(cwd) {

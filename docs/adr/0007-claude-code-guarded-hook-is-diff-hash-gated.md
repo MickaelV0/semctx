@@ -65,7 +65,8 @@ authorize a terminal Git operation.
   equivalent config) are outside the isolated-command contract and fail closed when the target or
   session repo enables guarded mode.
 - Commit commands must consume the already-inspected whole index. Commit-time staging, interactive
-  selection, partial-index options, and pathspecs fail closed.
+  selection, partial-index options, pathspecs, and `--fixup=reword:` (Git's implicit `--only`
+  form) fail closed. Every persisted version 3 field is shape-validated before authorization.
 - Push refspecs are resolved before authorization. Deletions, multi-ref, mirror, tag-wide, wildcard,
   configured, ambiguous, or non-HEAD sources fail closed. An explicit source must be literal `HEAD`
   or the exact full verified object ID. Push options use a closed allowlist and
@@ -74,7 +75,8 @@ authorize a terminal Git operation.
   another ref.
 - If Git cannot resolve the top-level directory, the hook walks literal parent directories for the
   nearest `.git` or guarded `.semctx` marker. A failed Git probe therefore cannot silently turn a
-  guarded nested invocation into advisory mode.
+  guarded nested invocation into advisory mode. An initialized gitlink whose repository or HEAD
+  probe fails is likewise rejected rather than treated as an uninitialized checkout.
 - BLOCK is honoured: a recorded BLOCK verdict never satisfies the gate, even if the diff is
   unchanged.
 - Cross-platform: the state/hash logic is a plain script; the guard reads stdin JSON from Claude

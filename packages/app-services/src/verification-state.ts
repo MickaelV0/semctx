@@ -130,22 +130,32 @@ function captureIndexStateHash(tracked: ReadonlyMap<string, IndexEntry>): string
 function initializedGitlinkHead(root: string, path: string): string | undefined {
   const absolute = resolve(root, path);
   if (lstatIfPresent(absolute) === undefined) return undefined;
+  const gitMarkerPresent = lstatIfPresent(resolve(absolute, ".git")) !== undefined;
   const topLevel = Bun.spawnSync(["git", "-C", path, "rev-parse", "--show-toplevel"], {
     cwd: root,
     stdout: "pipe",
     stderr: "pipe",
   });
-  if (topLevel.exitCode !== 0 || resolve(new TextDecoder().decode(topLevel.stdout).trim()) !== absolute) {
+  if (topLevel.exitCode !== 0) {
+    if (gitMarkerPresent) {
+      throw new SemctxError("GIT_ERROR", "cannot resolve initialized gitlink repository", { path });
+    }
     return undefined;
   }
+  if (resolve(new TextDecoder().decode(topLevel.stdout).trim()) !== absolute) return undefined;
   const process = Bun.spawnSync(["git", "-C", path, "rev-parse", "--verify", "HEAD"], {
     cwd: root,
     stdout: "pipe",
     stderr: "pipe",
   });
-  if (process.exitCode !== 0) return undefined;
+  if (process.exitCode !== 0) {
+    throw new SemctxError("GIT_ERROR", "cannot resolve initialized gitlink HEAD", { path });
+  }
   const head = new TextDecoder().decode(process.stdout).trim();
-  return /^[0-9a-f]{40,64}$/.test(head) ? head : undefined;
+  if (!/^[0-9a-f]{40,64}$/.test(head)) {
+    throw new SemctxError("GIT_ERROR", "invalid initialized gitlink HEAD", { path, head });
+  }
+  return head;
 }
 
 function captureHeadTreeHash(root: string): string {
