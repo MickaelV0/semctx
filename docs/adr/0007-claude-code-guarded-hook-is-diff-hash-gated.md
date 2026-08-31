@@ -65,8 +65,8 @@ authorize a terminal Git operation.
   equivalent config) are outside the isolated-command contract and fail closed when the target or
   session repo enables guarded mode. Command-scoped executable/config discovery changes (`PATH`,
   home/profile or XDG config variables, and related Git discovery variables) and non-canonical Git
-  executable paths fail closed so the hook and the shell cannot resolve different Git programs or
-  configuration. Literal quote/backslash composition is normalized for detection, so forms such as
+  executable paths and `--exec-path=<path>` fail closed so the hook and the shell cannot resolve
+  different Git programs or configuration. Literal quote/backslash composition is normalized for detection, so forms such as
   `g\it`, `gi't'`, `git co'mmit'`, `git pu\sh`, escaped newlines, or a composed `P'A'TH=...`
   assignment cannot hide the terminal Git operation. Direct `command` and `exec` builtin forms are
   parsed too; composed wrappers, `exec`, `builtin`, and executable-discovery options such as

@@ -208,11 +208,13 @@ function envSplitStringBody(command) {
   return unwrapShellBody(text.slice(splitOption.index + splitOption[0].length));
 }
 
+const RECOGNIZED_GIT_EXECUTABLES = new Set(["git", "git.exe", "git.cmd", "git.bat", "git.com"]);
+
 function executableName(token) {
   const literalName = shellWordLiteralValue(token)?.replace(/\\/g, "/").split("/").pop()?.toLowerCase();
   const windowsPathName = stripQuotes(token).replace(/\\/g, "/").split("/").pop()?.toLowerCase();
-  if (literalName === "git" || literalName === "git.exe") return literalName;
-  if (windowsPathName === "git" || windowsPathName === "git.exe") return windowsPathName;
+  if (literalName !== undefined && RECOGNIZED_GIT_EXECUTABLES.has(literalName)) return literalName;
+  if (windowsPathName !== undefined && RECOGNIZED_GIT_EXECUTABLES.has(windowsPathName)) return windowsPathName;
   return literalName;
 }
 
@@ -300,7 +302,7 @@ function gitTokenIndex(tokens) {
   i = shellWrapperCommandIndex(tokens, i);
   if (i < 0) return -1;
   const executable = executableName(tokens[i]);
-  return executable === "git" || executable === "git.exe" ? i : -1;
+  return executable !== undefined && RECOGNIZED_GIT_EXECUTABLES.has(executable) ? i : -1;
 }
 
 const GIT_GLOBAL_OPTIONS_WITH_VALUE = new Set([
@@ -313,6 +315,7 @@ const GIT_GLOBAL_OPTIONS_WITH_VALUE = new Set([
 ]);
 
 const GIT_RETARGET_OPTIONS = new Set([
+  "--exec-path",
   "--git-dir",
   "--namespace",
   "--work-tree",
