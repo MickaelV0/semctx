@@ -78,6 +78,8 @@ authorize a terminal Git operation.
   and textconv helpers so repository configuration cannot substitute the analyzed hunks. A commit
   is non-authorizing while `pre-commit`, `prepare-commit-msg`, or `commit-msg` exists, because those
   hooks run after the pre-tool check and can restage a different tree.
+  Attached command-scoped config (`-ckey=value`) is outside the authorizing contract so an
+  alternate `core.hooksPath` cannot evade that hook-surface probe.
 - Push refspecs are resolved before authorization. Deletions, multi-ref, mirror, tag-wide, wildcard,
   configured, ambiguous, or non-HEAD sources fail closed. An explicit source must be literal `HEAD`
   or the exact full verified object ID. Push options use a closed allowlist and
