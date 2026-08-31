@@ -83,6 +83,8 @@ describe("isTerminalGitCommand — structural detection (no shell eval)", () => 
     expect(isTerminalGitCommand("exec git commit -m x")).toBe("commit");
     expect(isTerminalGitCommand("exec -a semctx-git git push origin main")).toBe("push");
     expect(isTerminalGitCommand("builtin command git commit -m x")).toBe("commit");
+    expect(isTerminalGitCommand("$(true; printf git) commit -m x")).toBe("commit");
+    expect(isTerminalGitCommand("`true; printf git` push origin main")).toBe("push");
     expect(isTerminalGitCommand("$GIT commit -m x")).toBe("commit");
     expect(isTerminalGitCommand("${GIT} push origin main")).toBe("push");
     expect(isTerminalGitCommand("${GIT:-git} commit -m x")).toBe("commit");
@@ -871,6 +873,8 @@ describe("guard runtime — repository scope must be explicit", () => {
         "env --unset=HOME git push origin main",
         "env -i GIT_COMMON_DIR=../other/.git git push origin main",
         "env -S 'git commit -m x'",
+        "$(true; printf git) commit -m x",
+        "`true; printf git` push origin main",
         "$GIT commit -m x",
         "${GIT} push origin main",
         "${GIT:-git} commit -m x",
@@ -1091,6 +1095,15 @@ describe("verification-state capture parity", () => {
 
       git(["config", "diff.ignoreSubmodules", "all"]);
       git(["config", "submodule.vendor.ignore", "all"]);
+      const materializedVendor = join(repo, "vendor");
+      const hiddenVendor = join(aliasParent, "vendor.proof-materialized");
+      renameSync(materializedVendor, hiddenVendor);
+      symlinkSync(hiddenVendor, materializedVendor, process.platform === "win32" ? "junction" : "dir");
+      expect(() => captureVerificationGitState(repo)).toThrow("symlinked gitlink verification input is unsupported");
+      expect(() => captureApplicationVerificationGitState(repo)).toThrow("symlinked gitlink verification input is unsupported");
+      rmSync(materializedVendor, { force: true });
+      renameSync(hiddenVendor, materializedVendor);
+
       const moduleHead = join(repo, ".git", "modules", "vendor", "HEAD");
       const hiddenModuleHead = `${moduleHead}.proof-mutant`;
       renameSync(moduleHead, hiddenModuleHead);
