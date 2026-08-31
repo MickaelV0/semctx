@@ -1064,6 +1064,8 @@ describe("verification-state capture parity", () => {
   it("preserves a clean gitlink and fails closed when its indexed commit changes", () => {
     const repo = mkdtempSync(join(tmpdir(), "semctx-guard-gitlink-"));
     const child = mkdtempSync(join(tmpdir(), "semctx-guard-gitlink-child-"));
+    const aliasParent = mkdtempSync(join(tmpdir(), "semctx-guard-gitlink-alias-"));
+    const repoAlias = join(aliasParent, "repo");
     const git = (args: string[]) => execFileSync("git", args, { cwd: repo, encoding: "utf8" }).trim();
     const childGit = (args: string[]) => execFileSync("git", args, { cwd: child, encoding: "utf8" }).trim();
     try {
@@ -1079,10 +1081,13 @@ describe("verification-state capture parity", () => {
       git(["init"]);
       git(["-c", "protocol.file.allow=always", "submodule", "add", child, "vendor"]);
       git(["-c", "user.name=Semctx Test", "-c", "user.email=semctx@example.invalid", "commit", "-m", "gitlink"]);
+      symlinkSync(repo, repoAlias, process.platform === "win32" ? "junction" : "dir");
 
       const state = captureVerificationGitState(repo);
       expect(state.repositoryStateHash).toBe(state.headTreeHash);
       expect(state).toEqual(captureApplicationVerificationGitState(repo));
+      expect(captureVerificationGitState(repoAlias)).toEqual(state);
+      expect(captureApplicationVerificationGitState(repoAlias)).toEqual(state);
 
       git(["config", "diff.ignoreSubmodules", "all"]);
       git(["config", "submodule.vendor.ignore", "all"]);
@@ -1097,7 +1102,10 @@ describe("verification-state capture parity", () => {
       expect(git(["diff", "--name-only"])).toBe("");
       expect(() => captureVerificationGitState(repo)).toThrow("changed gitlink verification input is unsupported");
       expect(() => captureApplicationVerificationGitState(repo)).toThrow("changed gitlink verification input is unsupported");
+      expect(() => captureVerificationGitState(repoAlias)).toThrow("changed gitlink verification input is unsupported");
+      expect(() => captureApplicationVerificationGitState(repoAlias)).toThrow("changed gitlink verification input is unsupported");
     } finally {
+      rmSync(aliasParent, { recursive: true, force: true });
       rmSync(repo, { recursive: true, force: true });
       rmSync(child, { recursive: true, force: true });
     }
