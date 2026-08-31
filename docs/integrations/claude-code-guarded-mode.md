@@ -84,7 +84,8 @@ launchers such as `git.cmd`. Quote/backslash-composed executable names, terminal
 command wrappers, executable shell expansions, and assignments are normalized for terminal detection,
 then rejected as non-canonical; `g\it`, `gi't'`, `git co'mmit'`, `git pu\sh`, `$GIT commit`,
 `${GIT:-git} commit`, `$(printf git) commit`, `$(true; printf git) commit`, `command`, `exec`,
-`builtin`, escaped newlines, and `P'A'TH=...` therefore cannot bypass the guard. Shell expansion in
+`builtin`, `git${IFS}push`, `g${EMPTY}it${IFS}commit`, escaped newlines, and `P'A'TH=...` therefore
+cannot bypass the guard. Shell expansion in
 terminal-command arguments is rejected too: `git push .${IFS}--all` cannot materialize an
 uninspected `--all` option. Use a plain literal
 `cd <repo> && git commit`, `git -C <repo> commit`, or the

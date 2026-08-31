@@ -90,6 +90,9 @@ describe("isTerminalGitCommand — structural detection (no shell eval)", () => 
     expect(isTerminalGitCommand("${GIT:-git} commit -m x")).toBe("commit");
     expect(isTerminalGitCommand("$(printf git) commit -m x")).toBe("commit");
     expect(isTerminalGitCommand("`printf git` push origin main")).toBe("push");
+    expect(isTerminalGitCommand("git${IFS}push . --all")).toBe("push");
+    expect(isTerminalGitCommand("g${EMPTY}it${IFS}commit -m x")).toBe("commit");
+    expect(isTerminalGitCommand("command${IFS}git${IFS}push . --all")).toBe("push");
   });
 
   it("detects common wrapper, quoted, absolute-path, and shell -c shapes", () => {
@@ -112,6 +115,8 @@ describe("isTerminalGitCommand — structural detection (no shell eval)", () => 
     expect(isTerminalGitCommand("echo git commit")).toBeNull();
     expect(isTerminalGitCommand("gitfoo commit")).toBeNull();
     expect(isTerminalGitCommand("npm run commit")).toBeNull();
+    expect(isTerminalGitCommand("echo${IFS}git${IFS}push")).toBeNull();
+    expect(isTerminalGitCommand("git${EMPTY}pusher . --all")).toBeNull();
     expect(isTerminalGitCommand("")).toBeNull();
   });
 });
@@ -887,6 +892,9 @@ describe("guard runtime — repository scope must be explicit", () => {
         "${GIT:-git} commit -m x",
         "$(printf git) commit -m x",
         "`printf git` push origin main",
+        "git${IFS}push . --all",
+        "g${EMPTY}it${IFS}commit -m x",
+        "command${IFS}git${IFS}push . --all",
         "command git commit -m x",
         "git --git-dir ../other/.git --work-tree ../other commit -m x",
         "git --exec-path=../proxy-libexec commit -m x",

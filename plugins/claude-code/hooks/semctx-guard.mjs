@@ -458,6 +458,95 @@ function shellTokenRequiresExpansion(token) {
   return quote !== null;
 }
 
+/**
+ * Detect terminal Git words that shell expansion can split inside one lexical token.
+ * Expansion bodies are opaque: only the surrounding literal fragments are joined, and the
+ * result must be an exact supported invocation shape. This catches `git${IFS}push` without
+ * treating look-alikes such as `echo${IFS}git${IFS}push` as terminal Git commands.
+ */
+function terminalVerbFromExpandedWord(token) {
+  const source = String(token ?? "");
+  let compact = "";
+  let quote = null;
+  let expanded = false;
+
+  for (let i = 0; i < source.length; i += 1) {
+    const char = source[i];
+    if (quote === "'") {
+      if (char === "'") quote = null;
+      else compact += char;
+      continue;
+    }
+    if (quote === '"' && char === '"') {
+      quote = null;
+      continue;
+    }
+    if (quote === null && char === "'") {
+      quote = "'";
+      continue;
+    }
+    if (quote === null && char === '"') {
+      quote = '"';
+      continue;
+    }
+    if (char === "\\" && source[i + 1] !== undefined) {
+      if (quote === null || /[$`"\\\n]/.test(source[i + 1])) {
+        if (source[i + 1] !== "\n") compact += source[i + 1];
+        i += 1;
+      } else {
+        compact += char;
+      }
+      continue;
+    }
+    if (char === "`" && quote !== "'") {
+      expanded = true;
+      const closing = source.indexOf("`", i + 1);
+      i = closing < 0 ? source.length : closing;
+      continue;
+    }
+    if (char !== "$" || quote === "'") {
+      compact += char;
+      continue;
+    }
+
+    expanded = true;
+    const next = source[i + 1];
+    if (next === "{") {
+      let depth = 1;
+      i += 2;
+      while (i < source.length && depth > 0) {
+        if (source[i] === "{") depth += 1;
+        else if (source[i] === "}") depth -= 1;
+        i += 1;
+      }
+      i -= 1;
+      continue;
+    }
+    if (next === "(") {
+      let depth = 1;
+      i += 2;
+      while (i < source.length && depth > 0) {
+        if (source[i] === "(") depth += 1;
+        else if (source[i] === ")") depth -= 1;
+        i += 1;
+      }
+      i -= 1;
+      continue;
+    }
+    if (next !== undefined && /[A-Za-z0-9_]/.test(next)) {
+      i += 1;
+      while (i + 1 < source.length && /[A-Za-z0-9_]/.test(source[i + 1])) i += 1;
+    } else if (next !== undefined) {
+      i += 1;
+    }
+  }
+
+  if (!expanded || quote !== null) return null;
+  const normalized = compact.replace(/\\/g, "/").split("/").pop()?.toLowerCase() ?? "";
+  const shapes = /^(?:builtin)?(?:command|exec)?git(?:\.exe|\.cmd|\.bat|\.com)?(commit|push)$/;
+  return shapes.exec(normalized)?.[1] ?? null;
+}
+
 function isRetargetingEnvironmentName(name) {
   const normalized = String(name ?? "").toUpperCase();
   return GIT_RETARGET_ENV.has(normalized) || normalized.startsWith("GIT_CONFIG_");
@@ -581,6 +670,10 @@ export function isTerminalGitCommand(command) {
   const segments = shellSegments(command);
   for (const seg of segments) {
     const tokens = shellWords(seg.trim());
+    for (const token of tokens) {
+      const expandedVerb = terminalVerbFromExpandedWord(token);
+      if (expandedVerb !== null) return expandedVerb;
+    }
     const gitIndex = gitTokenIndex(tokens);
     if (gitIndex < 0) continue;
     let i = gitIndex + 1;
