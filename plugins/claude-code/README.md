@@ -116,7 +116,7 @@ non-terminal git commands. It compares canonical analyzed-content and repository
 (ADR 0007); it runs no analysis itself. In guarded mode, cwd prefixes must be literal and Git
 repository retargeting (`GIT_DIR`, `GIT_WORK_TREE`, `--git-dir`, `--work-tree`, and related forms)
 is rejected rather than compared against the session repository's hash. Command-local executable or
-configuration discovery overrides, explicit paths, variable-expanded executable tokens, and shell
+configuration discovery overrides, explicit paths, shell-expanded executable expressions, and shell
 command wrappers are rejected too. Quote/backslash-composed Git names and environment assignments
 are detected and rejected as non-canonical rather than being mistaken for unrelated commands;
 every `--fixup` commit form is also non-authorizing. An exact commit may change
