@@ -117,7 +117,8 @@ non-terminal git commands. It compares canonical analyzed-content and repository
 repository retargeting (`GIT_DIR`, `GIT_WORK_TREE`, `--git-dir`, `--work-tree`, and related forms)
 is rejected rather than compared against the session repository's hash. Command-local executable or
 configuration discovery overrides and explicit paths to a substituted Git executable are rejected
-too. An exact commit may change
+too. Quote/backslash-composed Git names and environment assignments are detected and rejected as
+non-canonical rather than being mistaken for unrelated commands. An exact commit may change
 HEAD without requiring another verification; push is allowed only when that HEAD tree exactly
 materializes the recorded state.
 

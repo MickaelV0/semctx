@@ -68,6 +68,12 @@ describe("isTerminalGitCommand — structural detection (no shell eval)", () => 
     expect(isTerminalGitCommand('PATH="../proxy bin" git commit -m x')).toBe("commit");
     expect(isTerminalGitCommand('HOME="../alternate; home" git push origin main')).toBe("push");
     expect(isTerminalGitCommand(String.raw`PATH=../proxy\ bin git commit -m x`)).toBe("commit");
+    expect(isTerminalGitCommand(String.raw`g\it commit -m x`)).toBe("commit");
+    expect(isTerminalGitCommand("gi't' push origin main")).toBe("push");
+    expect(isTerminalGitCommand("g\\\nit commit -m x")).toBe("commit");
+    expect(isTerminalGitCommand('P\'A\'TH="../proxy bin" git commit -m x')).toBe("commit");
+    expect(isTerminalGitCommand('PATH="../proxy bin" bash -c \'git push origin main\'')).toBe("push");
+    expect(isTerminalGitCommand('PATH="../proxy bin" command bash -c \'git commit -m x\'')).toBe("commit");
   });
 
   it("detects common wrapper, quoted, absolute-path, and shell -c shapes", () => {
@@ -153,6 +159,9 @@ describe("isIsolatedTerminalGitCommand — no mutation before authorization", ()
       'HOME="../alternate home" git push origin main',
       'XDG_CONFIG_HOME="../alternate; config" git commit -m x',
       String.raw`PATH=../proxy\ bin git commit -m x`,
+      'P\'A\'TH="../proxy bin" git commit -m x',
+      'PATH="../proxy bin" bash -c \'git push origin main\'',
+      'PATH="../proxy bin" command bash -c \'git commit -m x\'',
       "env HOME=../alternate-home git push origin main",
       "env XDG_CONFIG_HOME=../alternate-config git commit -m x",
       "env -i GIT_COMMON_DIR=../other/.git git push origin main",
@@ -181,6 +190,9 @@ describe("isIsolatedTerminalGitCommand — no mutation before authorization", ()
       "C:\\proxy\\git.exe commit -m x",
       '"/tmp/proxy bin/git" commit -m x',
       String.raw`/tmp/proxy\ bin/git push origin main`,
+      String.raw`g\it commit -m x`,
+      "gi't' push origin main",
+      "g\\\nit commit -m x",
     ]) {
       expect(isTerminalGitCommand(command)).not.toBeNull();
       expect(isIsolatedTerminalGitCommand(command)).toBe(false);
