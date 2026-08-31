@@ -5,7 +5,7 @@
 //
 // It parses the Bash command STRUCTURALLY (segments + tokens, never a shell eval) and never
 // executes PR/agent content. It gates on canonical content fingerprints — no analysis runs here.
-import { existsSync, lstatSync, readFileSync, readlinkSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readlinkSync, realpathSync } from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { dirname, join, resolve, isAbsolute } from "node:path";
@@ -1066,7 +1066,8 @@ function captureIndexStateHash(tracked) {
 
 function initializedGitlinkHead(cwd, path) {
   const absolute = resolve(cwd, path);
-  if (!lstatIfPresent(absolute)) return undefined;
+  const materialized = lstatIfPresent(absolute);
+  if (!materialized || materialized.isSymbolicLink()) return undefined;
   const gitMarkerPresent = Boolean(lstatIfPresent(resolve(absolute, ".git")));
   const topLevel = spawnSync("git", ["-C", path, "rev-parse", "--show-toplevel"], {
     cwd,
@@ -1076,7 +1077,7 @@ function initializedGitlinkHead(cwd, path) {
     if (gitMarkerPresent) throw new Error(`cannot resolve initialized gitlink repository: ${path}`);
     return undefined;
   }
-  if (resolve(topLevel.stdout.trim()) !== absolute) return undefined;
+  if (realpathSync.native(topLevel.stdout.trim()) !== realpathSync.native(absolute)) return undefined;
   const result = spawnSync("git", ["-C", path, "rev-parse", "--verify", "HEAD"], {
     cwd,
     encoding: "utf8",

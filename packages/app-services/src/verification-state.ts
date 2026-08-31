@@ -1,5 +1,5 @@
 import { createHash, type Hash } from "node:crypto";
-import { lstatSync, readFileSync, readlinkSync, type Stats } from "node:fs";
+import { lstatSync, readFileSync, readlinkSync, realpathSync, type Stats } from "node:fs";
 import { resolve } from "node:path";
 import { SemctxError } from "@semantic-context/core";
 
@@ -129,7 +129,8 @@ function captureIndexStateHash(tracked: ReadonlyMap<string, IndexEntry>): string
 
 function initializedGitlinkHead(root: string, path: string): string | undefined {
   const absolute = resolve(root, path);
-  if (lstatIfPresent(absolute) === undefined) return undefined;
+  const materialized = lstatIfPresent(absolute);
+  if (materialized === undefined || materialized.isSymbolicLink()) return undefined;
   const gitMarkerPresent = lstatIfPresent(resolve(absolute, ".git")) !== undefined;
   const topLevel = Bun.spawnSync(["git", "-C", path, "rev-parse", "--show-toplevel"], {
     cwd: root,
@@ -142,7 +143,9 @@ function initializedGitlinkHead(root: string, path: string): string | undefined 
     }
     return undefined;
   }
-  if (resolve(new TextDecoder().decode(topLevel.stdout).trim()) !== absolute) return undefined;
+  if (realpathSync.native(new TextDecoder().decode(topLevel.stdout).trim()) !== realpathSync.native(absolute)) {
+    return undefined;
+  }
   const process = Bun.spawnSync(["git", "-C", path, "rev-parse", "--verify", "HEAD"], {
     cwd: root,
     stdout: "pipe",
