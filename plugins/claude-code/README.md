@@ -115,7 +115,9 @@ The guard only ever gates the two terminal git verbs — never file edits, tests
 non-terminal git commands. It compares canonical analyzed-content and repository-state hashes
 (ADR 0007); it runs no analysis itself. In guarded mode, cwd prefixes must be literal and Git
 repository retargeting (`GIT_DIR`, `GIT_WORK_TREE`, `--git-dir`, `--work-tree`, and related forms)
-is rejected rather than compared against the session repository's hash. An exact commit may change
+is rejected rather than compared against the session repository's hash. Command-local executable or
+configuration discovery overrides and explicit paths to a substituted Git executable are rejected
+too. An exact commit may change
 HEAD without requiring another verification; push is allowed only when that HEAD tree exactly
 materializes the recorded state.
 
