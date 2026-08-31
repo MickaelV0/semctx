@@ -159,7 +159,7 @@ function writeReportAtomic(path: string, report: VerifyReport): void {
   renameSync(tmp, path);
 }
 
-/** Record the exact commit and complete working state for guarded-mode comparison. */
+/** Record the exact analyzed content and its canonical Git representation for guarded-mode replay. */
 function recordVerification(
   root: string,
   verdict: VerifyReport["verdict"],
@@ -168,7 +168,7 @@ function recordVerification(
   const dir = join(root, ".semctx");
   mkdirSync(dir, { recursive: true });
   const path = join(dir, "verification-state.json");
-  const state = { version: 2, ...verifiedState, verdict, recordedAt: nowIso() };
+  const state = { version: 3, ...verifiedState, verdict, recordedAt: nowIso() };
   const tmp = `${path}.tmp`;
   writeFileSync(tmp, `${JSON.stringify(state, null, 2)}\n`, "utf8");
   renameSync(tmp, path);
@@ -178,8 +178,17 @@ function recordVerification(
 export function requireStableVerificationGitState(
   before: VerificationGitState,
   after: VerificationGitState,
+  analyzedSourceHash: string = before.analyzedSourceHash,
 ): VerificationGitState {
-  if (before.headCommit !== after.headCommit || before.workingStateHash !== after.workingStateHash) {
+  if (
+    before.headCommit !== after.headCommit
+    || before.analyzedSourceHash !== after.analyzedSourceHash
+    || before.analyzedSourceHash !== analyzedSourceHash
+    || before.workingStateHash !== after.workingStateHash
+    || before.contentStateHash !== after.contentStateHash
+    || before.repositoryStateHash !== after.repositoryStateHash
+    || before.headTreeHash !== after.headTreeHash
+  ) {
     throw new SemctxError("GIT_ERROR", "repository state changed while verification was running", { before, after });
   }
   return before;
@@ -229,10 +238,14 @@ export function runVerifyDiff(root: string, args: ParsedArgs): number {
   }
 
   const stateBefore = shouldRecord ? captureRecordableVerificationGitState(root) : undefined;
-  const { result, report, git: g, coChanges } = runVerify(root, source);
+  const { result, report, git: g, coChanges, analyzedSourceHash } = runVerify(root, source);
   const verifiedState = stateBefore === undefined
     ? undefined
-    : requireStableVerificationGitState(stateBefore, captureRecordableVerificationGitState(root));
+    : requireStableVerificationGitState(
+        stateBefore,
+        captureRecordableVerificationGitState(root),
+        analyzedSourceHash ?? "",
+      );
 
   if (outputPath !== undefined) writeReportAtomic(resolve(process.cwd(), outputPath), report);
   const recordedPath = verifiedState === undefined ? undefined : recordVerification(root, report.verdict, verifiedState);

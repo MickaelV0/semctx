@@ -4,9 +4,9 @@
 // isolated or the current working state has not been verified.
 //
 // It parses the Bash command STRUCTURALLY (segments + tokens, never a shell eval) and never
-// executes PR/agent content. It gates on a diff hash — no analysis runs here.
+// executes PR/agent content. It gates on canonical content fingerprints — no analysis runs here.
 import { existsSync, lstatSync, readFileSync, readlinkSync } from "node:fs";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { dirname, join, resolve, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -302,6 +302,90 @@ export function isIsolatedTerminalGitCommand(command) {
   return true;
 }
 
+const UNSAFE_PUSH_OPTIONS = new Set([
+  "--all", "--branches", "--delete", "-d", "--follow-tags", "--mirror", "--prune",
+  "--recurse-submodules", "--tags",
+]);
+
+const PUSH_OPTIONS_WITH_VALUE = new Set([
+  "--exec", "--push-option", "--receive-pack", "--signed", "-o",
+]);
+
+/**
+ * Prove that an isolated push can publish only the checked-out HEAD. Implicit pushes are accepted
+ * only under Git's single-current-branch modes and with no configured remote push refspecs.
+ */
+export function pushSourceMatchesHead(command, cwd, currentHead) {
+  try {
+    const terminal = String(command ?? "").split("&&").at(-1)?.trim() ?? "";
+    const tokens = terminal.split(/\s+/).filter(Boolean);
+    const gitIndex = gitTokenIndex(tokens);
+    if (gitIndex < 0) return false;
+    let i = gitIndex + 1;
+    while (i < tokens.length) {
+      const token = stripQuotes(tokens[i]);
+      if (token === "-c" || token.startsWith("-c") || token === "--config-env" || token.startsWith("--config-env=")) {
+        return false;
+      }
+      if (gitOptionConsumesNext(token)) { i += 2; continue; }
+      if (token.startsWith("-")) { i += 1; continue; }
+      break;
+    }
+    if (stripQuotes(tokens[i]) !== "push") return false;
+    i += 1;
+
+    const positionals = [];
+    while (i < tokens.length) {
+      const token = stripQuotes(tokens[i]);
+      const option = gitOptionName(token);
+      if (UNSAFE_PUSH_OPTIONS.has(option) || option === "--repo") return false;
+      if (PUSH_OPTIONS_WITH_VALUE.has(option) && !token.includes("=")) {
+        if (tokens[i + 1] === undefined) return false;
+        i += 2;
+        continue;
+      }
+      if (token.startsWith("-")) {
+        i += 1;
+        continue;
+      }
+      positionals.push(token);
+      i += 1;
+    }
+    if (positionals.length > 2) return false;
+
+    const configured = spawnSync(
+      "git",
+      ["config", "--get-regexp", "^(push\\.(followtags|recursesubmodules)|remote\\..*\\.(mirror|push))$"],
+      { cwd, encoding: "utf8" },
+    );
+    if (configured.status !== 1) return false;
+
+    const refspec = positionals.length === 2 ? positionals[1] : undefined;
+    if (refspec === undefined) {
+      const pushDefaultResult = spawnSync("git", ["config", "--get", "push.default"], {
+        cwd,
+        encoding: "utf8",
+      });
+      if (pushDefaultResult.status !== 0 && pushDefaultResult.status !== 1) return false;
+      const pushDefault = pushDefaultResult.status === 0 ? pushDefaultResult.stdout.trim() : "simple";
+      if (!new Set(["simple", "current", "upstream"]).has(pushDefault)) return false;
+      return true;
+    }
+
+    const separator = refspec.indexOf(":");
+    const rawSource = separator < 0 ? refspec : refspec.slice(0, separator);
+    const source = rawSource.startsWith("+") ? rawSource.slice(1) : rawSource;
+    if (source === "" || source.includes("*") || source.startsWith("^")) return false;
+    const resolved = execFileSync("git", ["rev-parse", "--verify", `${source}^{commit}`], {
+      cwd,
+      encoding: "utf8",
+    }).trim();
+    return resolved === currentHead;
+  } catch {
+    return false;
+  }
+}
+
 /** Strip one layer of surrounding single or double quotes from a shell token. */
 function stripQuotes(token) {
   const t = String(token ?? "");
@@ -452,13 +536,23 @@ export function guardDecision(ctx) {
       reason: `semctx guarded mode: git ${ctx.terminalVerb} must be an isolated command; compound commands, shell substitutions, redirections, unexpanded cwd paths, and Git repository retargeting are not authorized.\n${retry}`,
     };
   }
+  if (ctx.terminalVerb === "push" && ctx.pushSourceAuthorized === false) {
+    return {
+      block: true,
+      reason: `semctx guarded mode: git push may publish only the verified HEAD; deletion, multi-ref, mirror, tag-wide, wildcard, configured, and ambiguous pushes are not authorized.\n${retry}`,
+    };
+  }
   if (!ctx.state) {
     return { block: true, reason: `semctx guarded mode: no verification on record. Run:\n  ${verifyCmd}\n${retry}` };
   }
   if (
-    ctx.state.version !== 2
+    ctx.state.version !== 3
     || !ctx.state.headCommit
+    || !ctx.state.analyzedSourceHash
     || !ctx.state.workingStateHash
+    || !ctx.state.contentStateHash
+    || !ctx.state.repositoryStateHash
+    || !ctx.state.headTreeHash
     || !ctx.currentState
   ) {
     return { block: true, reason: `semctx guarded mode: the verification baseline is legacy, invalid, or unavailable. Re-run:\n  ${verifyCmd}\n${retry}` };
@@ -466,11 +560,11 @@ export function guardDecision(ctx) {
   if (ctx.state.verdict === "BLOCK") {
     return { block: true, reason: `semctx guarded mode: the last verification was BLOCK. Resolve the findings, then re-run:\n  ${verifyCmd}` };
   }
-  if (
-    ctx.state.headCommit !== ctx.currentState.headCommit
-    || ctx.state.workingStateHash !== ctx.currentState.workingStateHash
-  ) {
-    return { block: true, reason: `semctx guarded mode: the commit or working state changed since the last verification. Re-run:\n  ${verifyCmd}\n${retry}` };
+  const sameAnalyzedContent = ctx.state.contentStateHash === ctx.currentState.contentStateHash
+    && ctx.state.repositoryStateHash === ctx.currentState.repositoryStateHash;
+  const exactCommittedContent = ctx.currentState.headTreeHash === ctx.state.repositoryStateHash;
+  if (!sameAnalyzedContent || (ctx.terminalVerb === "push" && !exactCommittedContent)) {
+    return { block: true, reason: `semctx guarded mode: the analyzed content changed or the commit does not exactly materialize it. Re-run:\n  ${verifyCmd}\n${retry}` };
   }
   return { block: false };
 }
@@ -488,9 +582,178 @@ function frame(hash, label, payload) {
   hash.update(`${label}\0${bytes.byteLength}\0`, "utf8").update(bytes);
 }
 
-/** Capture the same commit + tracked/untracked bytes recorded by `semctx verify diff --record`. */
+function normalizedPath(path) {
+  return path.replace(/\\/g, "/");
+}
+
+function sortedPaths(paths) {
+  return [...paths].sort((left, right) => left < right ? -1 : left > right ? 1 : 0);
+}
+
+function lstatIfPresent(path) {
+  try {
+    return lstatSync(path);
+  } catch (error) {
+    if (error?.code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
+function trackedIndexEntries(cwd) {
+  const skipWorktree = new Set(execFileSync("git", ["ls-files", "-v", "-z", "--", "."], {
+    cwd,
+    encoding: "utf8",
+    maxBuffer: 256 * 1024 * 1024,
+  }).split("\0").filter((record) => record.startsWith("S ")).map((record) => normalizedPath(record.slice(2))));
+  const records = execFileSync("git", ["ls-files", "--stage", "-z", "--", "."], {
+    cwd,
+    encoding: "utf8",
+    maxBuffer: 256 * 1024 * 1024,
+  });
+  const entries = new Map();
+  for (const record of records.split("\0")) {
+    if (!record) continue;
+    const match = /^([0-9]{6}) ([0-9a-f]{40,64}) ([0-3])\t([\s\S]+)$/.exec(record);
+    if (!match) throw new Error("invalid index entry");
+    if (match[3] !== "0") throw new Error(`unmerged index entry: ${match[4]}`);
+    const path = normalizedPath(match[4]);
+    entries.set(path, { mode: match[1], objectId: match[2], skipWorktree: skipWorktree.has(path) });
+  }
+  return entries;
+}
+
+function objectPayload(cwd, objectId) {
+  return execFileSync("git", ["cat-file", "blob", objectId], {
+    cwd,
+    encoding: "buffer",
+    maxBuffer: 256 * 1024 * 1024,
+  });
+}
+
+function hashObject(cwd, path, payload) {
+  const objectId = execFileSync("git", ["hash-object", `--path=${path}`, "--stdin"], {
+    cwd,
+    input: payload,
+    encoding: "utf8",
+    maxBuffer: 256 * 1024 * 1024,
+  }).trim();
+  if (!/^[0-9a-f]{40,64}$/.test(objectId)) throw new Error(`invalid object id: ${path}`);
+  return objectId;
+}
+
+function unstagedPaths(cwd) {
+  const records = execFileSync("git", ["diff", "--name-only", "-z", "--relative", "--", "."], {
+    cwd,
+    encoding: "utf8",
+    maxBuffer: 256 * 1024 * 1024,
+  });
+  return new Set(records.split("\0").filter(Boolean).map(normalizedPath));
+}
+
+function captureHeadTreeHash(cwd) {
+  const records = execFileSync("git", ["ls-tree", "-r", "-z", "--full-tree", "HEAD"], {
+    cwd,
+    encoding: "utf8",
+    maxBuffer: 256 * 1024 * 1024,
+  });
+  const entries = [];
+  for (const record of records.split("\0")) {
+    if (!record) continue;
+    const match = /^([0-9]{6}) (?:blob|commit) ([0-9a-f]{40,64})\t([\s\S]+)$/.exec(record);
+    if (!match) throw new Error("invalid HEAD tree entry");
+    entries.push({ path: normalizedPath(match[3]), mode: match[1], objectId: match[2] });
+  }
+  entries.sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
+  const hash = createHash("sha256");
+  frame(hash, "domain", "semctx:verification-repository-state:v1");
+  for (const entry of entries) {
+    frame(hash, "path", entry.path);
+    frame(hash, "mode", entry.mode);
+    frame(hash, "object", entry.objectId);
+  }
+  return `sha256:${hash.digest("hex")}`;
+}
+
+function captureContentState(cwd, tracked, untracked, changedOutsideIndex) {
+  const contentHash = createHash("sha256");
+  const repositoryHash = createHash("sha256");
+  frame(contentHash, "domain", "semctx:verification-content-state:v1");
+  frame(repositoryHash, "domain", "semctx:verification-repository-state:v1");
+  const paths = sortedPaths(new Set([...tracked.keys(), ...untracked.map(normalizedPath)]));
+  for (const path of paths) {
+    const indexEntry = tracked.get(path);
+    if (indexEntry?.mode === "160000") {
+      if (changedOutsideIndex.has(path)) throw new Error(`changed gitlink verification input is unsupported: ${path}`);
+      frame(contentHash, "path", path);
+      frame(contentHash, "mode", indexEntry.mode);
+      frame(contentHash, "gitlink", indexEntry.objectId);
+      frame(repositoryHash, "path", path);
+      frame(repositoryHash, "mode", indexEntry.mode);
+      frame(repositoryHash, "object", indexEntry.objectId);
+      continue;
+    }
+    const absolute = resolve(cwd, path);
+    const stat = lstatIfPresent(absolute);
+    if (!stat && !indexEntry?.skipWorktree) continue;
+    let mode;
+    let kind;
+    let payload;
+    if (!stat && indexEntry) {
+      mode = indexEntry.mode;
+      kind = mode === "120000" ? "symlink" : "file";
+      payload = objectPayload(cwd, indexEntry.objectId);
+    } else if (indexEntry?.mode === "120000") {
+      mode = "120000";
+      kind = "symlink";
+      payload = stat.isSymbolicLink()
+        ? Buffer.from(readlinkSync(absolute), "utf8")
+        : readFileSync(absolute);
+    } else if (stat.isSymbolicLink()) {
+      mode = "120000";
+      kind = "symlink";
+      payload = Buffer.from(readlinkSync(absolute), "utf8");
+    } else if (stat.isFile()) {
+      mode = process.platform === "win32"
+        ? indexEntry?.mode === "100755" ? "100755" : "100644"
+        : (stat.mode & 0o111) === 0 ? "100644" : "100755";
+      kind = "file";
+      payload = readFileSync(absolute);
+    } else {
+      throw new Error(`unsupported verification input: ${path}`);
+    }
+    frame(contentHash, "path", path);
+    frame(contentHash, "mode", mode);
+    frame(contentHash, "kind", kind);
+    frame(contentHash, "content", payload);
+    const objectId = indexEntry && indexEntry.mode === mode && !changedOutsideIndex.has(path)
+      ? indexEntry.objectId
+      : hashObject(cwd, path, payload);
+    frame(repositoryHash, "path", path);
+    frame(repositoryHash, "mode", mode);
+    frame(repositoryHash, "object", objectId);
+  }
+  return {
+    contentStateHash: `sha256:${contentHash.digest("hex")}`,
+    repositoryStateHash: `sha256:${repositoryHash.digest("hex")}`,
+  };
+}
+
+function fingerprintVerificationSource(headCommit, diff) {
+  const hash = createHash("sha256");
+  frame(hash, "domain", "semctx:verification-analyzed-source:v1");
+  frame(hash, "head", headCommit);
+  frame(hash, "diff", diff);
+  return `sha256:${hash.digest("hex")}`;
+}
+
+/** Capture the same commit, content bytes, paths and modes recorded by `semctx verify diff --record`. */
 export function captureVerificationGitState(cwd) {
   const headCommit = execFileSync("git", ["rev-parse", "--verify", "HEAD"], { cwd, encoding: "utf8" }).trim();
+  const analyzedDiff = execFileSync("git", ["diff", "--relative", "--unified=0", "--no-color", headCommit, "--"], {
+    cwd,
+    encoding: "buffer",
+    maxBuffer: 256 * 1024 * 1024,
+  });
   const diff = execFileSync("git", ["diff", "HEAD", "--relative", "--binary", "--no-color", "--", "."], {
     cwd,
     encoding: "buffer",
@@ -500,7 +763,7 @@ export function captureVerificationGitState(cwd) {
     cwd,
     encoding: "utf8",
     maxBuffer: 256 * 1024 * 1024,
-  }).split("\0").filter(Boolean).sort();
+  }).split("\0").filter(Boolean).map(normalizedPath).sort();
   const hash = createHash("sha256");
   frame(hash, "domain", "semctx:verification-working-state:v1");
   frame(hash, "tracked-diff", diff);
@@ -518,7 +781,13 @@ export function captureVerificationGitState(cwd) {
       throw new Error(`unsupported untracked verification input: ${path}`);
     }
   }
-  return { headCommit, workingStateHash: `sha256:${hash.digest("hex")}` };
+  return {
+    headCommit,
+    analyzedSourceHash: fingerprintVerificationSource(headCommit, new TextDecoder().decode(analyzedDiff)),
+    workingStateHash: `sha256:${hash.digest("hex")}`,
+    ...captureContentState(cwd, trackedIndexEntries(cwd), untracked, unstagedPaths(cwd)),
+    headTreeHash: captureHeadTreeHash(cwd),
+  };
 }
 
 function main() {
@@ -557,10 +826,13 @@ function main() {
       currentState = null;
     }
   }
+  const pushSourceAuthorized = terminalVerb !== "push"
+    || (currentState !== null && pushSourceMatchesHead(command, cwd, currentState.headCommit));
   const decision = guardDecision({
     enabled,
     terminalVerb,
     commandIsolated,
+    pushSourceAuthorized,
     state,
     currentState,
     verifyCommand: verifyRecordCommand(process.env),

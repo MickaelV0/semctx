@@ -1,18 +1,21 @@
 # Claude Code — guarded mode
 
 Guarded mode makes the plugin's `PreToolUse` hook **block** `git commit` / `git push` until the
-current commit-bound working state has been verified. It is **opt-in**; advisory is the default.
+current analyzed content has been verified. It is **opt-in**; advisory is the default.
 
 ## How it works (ADR 0007)
 
 ```
 you run:   semctx verify diff --record
-             → analyses the diff, records { HEAD, hash(tracked + untracked state), verdict } to
+             → analyses the diff, records { HEAD, analyzed-diff hash, content hash,
+               repository-state hash, verdict } to
                .semctx/verification-state.json  (git-ignored, written atomically)
 
 hook on `git commit` / `git push`:
-   recapture HEAD + tracked diff + non-ignored untracked paths/modes/bytes
-   ALLOW  if the v2 baseline matches AND recorded verdict != BLOCK
+   recapture paths + modes + bytes + canonical Git objects + HEAD tree
+   ALLOW commit if the v3 content baseline matches AND recorded verdict != BLOCK
+   ALLOW push only if HEAD also materializes that exact recorded repository state and the push
+              source resolves to that verified HEAD only
    BLOCK  otherwise, printing the exact command to re-verify
            (an absolute `bun /…/dist/semctx.js …` when the plugin bundle is in reach,
             resolved by the hook — never a shell variable the agent would have to expand)
@@ -35,8 +38,9 @@ Create `.semctx/guard.json` in the project (see `plugins/claude-code/examples/gu
 
 ```bash
 # ... make changes ...
-semctx verify diff --record     # PASS/WARN → commit allowed; BLOCK → resolve first
-git commit -m "..."             # allowed only if the diff is unchanged since --record
+semctx verify diff --record     # PASS/WARN → exact content may be committed; BLOCK → resolve first
+git commit -m "..."             # the SHA may move when the resulting tree is exactly the verified state
+git push                         # reuses that proof; a partial commit or later drift is blocked
 ```
 
 Inside a Claude Code session the agent should prefer the plugin-bundled CLI (same release as MCP)
@@ -46,9 +50,9 @@ the path the guard prints when it blocks. `CLAUDE_PLUGIN_ROOT` itself is exporte
 processes only — it is **not** set in the agent's shell, so it must never appear unexpanded in a
 command.
 
-If HEAD moves or any tracked/untracked source input changes, the baseline no longer matches and the
-commit is blocked until you re-run `semctx verify diff --record` (or the plugin-CLI equivalent the
-guard prints).
+An exact commit is the expected HEAD movement and does not invalidate the baseline. Any byte, path,
+mode, symlink target, partial commit, or non-ignored untracked change blocks the terminal operation
+until you re-run `semctx verify diff --record` (or the plugin-CLI equivalent the guard prints).
 Run `git commit` and `git push` as isolated commands in guarded mode. Compound commands,
 redirections, and shell substitutions are rejected because they could mutate repository bytes
 after the hook's pre-check. Cwd prefixes must use literal paths: unexpanded `$VAR`, `${VAR}`, `~`,
@@ -60,6 +64,9 @@ equivalent `push`. Direct `env` wrappers are parsed too: non-retargeting forms s
 `env GIT_AUTHOR_NAME=name git commit` remain in contract, while retargeting assignments,
 environment clearing (`-i`), repository-affecting `-u` / `--unset`, `env -C` / `--chdir`, and
 `env -S` / `--split-string` are rejected.
+For push, use the current branch/HEAD only. Deletions, `--all`, `--mirror`, tag-wide pushes,
+wildcards, multiple refspecs, configured remote push refspecs, and any source that does not resolve
+to the verified HEAD are rejected.
 
 ## Disable
 
@@ -74,7 +81,8 @@ environment clearing (`-i`), repository-affecting `-u` / `--unset`, `env -C` / `
 - No false positive can block editing or testing — only command lines containing `git commit` /
   `git push` are gated, and guarded mode requires those operations to be isolated.
 - The state file `.semctx/verification-state.json` is git-ignored and written atomically.
-- Legacy diff-only baselines are rejected and must be recreated with `--record`.
+- Legacy version 1 and commit-bound version 2 baselines are non-authorizing and must be recreated
+  with `--record`.
 
 This is a cooperative soft gate, not a sandbox or hostile-agent boundary. The same local principal
 can edit `verification-state.json`, set `SEMCTX_GUARD=off`, invoke Git outside Claude Code, or use a
