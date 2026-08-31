@@ -109,6 +109,8 @@ function shellSegments(text) {
   const segments = [];
   let segment = "";
   let quote = null;
+  let substitutionDepth = 0;
+  let backtickOpen = false;
   for (let i = 0; i < source.length; i += 1) {
     const char = source[i];
     if (quote !== null) {
@@ -128,6 +130,31 @@ function shellSegments(text) {
     }
     if (char === '"' || char === "'") {
       quote = char;
+      segment += char;
+      continue;
+    }
+    if (char === "`") {
+      backtickOpen = !backtickOpen;
+      segment += char;
+      continue;
+    }
+    if (!backtickOpen && char === "$" && source[i + 1] === "(") {
+      substitutionDepth += 1;
+      segment += "$(";
+      i += 1;
+      continue;
+    }
+    if (!backtickOpen && substitutionDepth > 0 && char === "(") {
+      substitutionDepth += 1;
+      segment += char;
+      continue;
+    }
+    if (!backtickOpen && substitutionDepth > 0 && char === ")") {
+      substitutionDepth -= 1;
+      segment += char;
+      continue;
+    }
+    if (backtickOpen || substitutionDepth > 0) {
       segment += char;
       continue;
     }
@@ -1067,7 +1094,10 @@ function captureIndexStateHash(tracked) {
 function initializedGitlinkHead(cwd, path) {
   const absolute = resolve(cwd, path);
   const materialized = lstatIfPresent(absolute);
-  if (!materialized || materialized.isSymbolicLink()) return undefined;
+  if (!materialized) return undefined;
+  if (materialized.isSymbolicLink()) {
+    throw new Error(`symlinked gitlink verification input is unsupported: ${path}`);
+  }
   const gitMarkerPresent = Boolean(lstatIfPresent(resolve(absolute, ".git")));
   const topLevel = spawnSync("git", ["-C", path, "rev-parse", "--show-toplevel"], {
     cwd,

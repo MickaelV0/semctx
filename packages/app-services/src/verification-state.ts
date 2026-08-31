@@ -130,7 +130,10 @@ function captureIndexStateHash(tracked: ReadonlyMap<string, IndexEntry>): string
 function initializedGitlinkHead(root: string, path: string): string | undefined {
   const absolute = resolve(root, path);
   const materialized = lstatIfPresent(absolute);
-  if (materialized === undefined || materialized.isSymbolicLink()) return undefined;
+  if (materialized === undefined) return undefined;
+  if (materialized.isSymbolicLink()) {
+    throw new SemctxError("GIT_ERROR", "symlinked gitlink verification input is unsupported", { path });
+  }
   const gitMarkerPresent = lstatIfPresent(resolve(absolute, ".git")) !== undefined;
   const topLevel = Bun.spawnSync(["git", "-C", path, "rev-parse", "--show-toplevel"], {
     cwd: root,
