@@ -104,7 +104,7 @@ function hashObject(root: string, path: string, payload: Uint8Array): string {
 
 function unstagedPaths(root: string): Set<string> {
   const records = new TextDecoder().decode(
-    git(root, ["diff", "--name-only", "-z", "--relative", "--", "."]),
+    git(root, ["diff", "--name-only", "-z", "--relative", "--no-ext-diff", "--no-textconv", "--", "."]),
   );
   return new Set(records.split("\0").filter((path) => path.length > 0).map(normalizedPath));
 }
@@ -284,8 +284,12 @@ function captureVerificationGitSnapshot(root: string): VerificationGitSnapshot {
     throw new SemctxError("GIT_ERROR", "cannot capture verification source state: invalid HEAD", { headCommit });
   }
 
-  const diff = git(root, ["diff", "HEAD", "--relative", "--binary", "--no-color", "--", "."]);
-  const analyzedDiff = git(root, ["diff", "--relative", "--unified=0", "--no-color", headCommit, "--"]);
+  const diff = git(root, [
+    "diff", "HEAD", "--relative", "--binary", "--no-color", "--no-ext-diff", "--no-textconv", "--", ".",
+  ]);
+  const analyzedDiff = git(root, [
+    "diff", "--relative", "--unified=0", "--no-color", "--no-ext-diff", "--no-textconv", headCommit, "--",
+  ]);
   const untracked = new TextDecoder().decode(
     git(root, ["ls-files", "--others", "--exclude-standard", "-z", "--", "."]),
   ).split("\0").filter((path) => path.length > 0).map(normalizedPath).sort();

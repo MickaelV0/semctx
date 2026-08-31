@@ -9,6 +9,7 @@ import {
   guardDecision,
   isGuardVerificationState,
   commitUsesWholeIndex,
+  commitHookSurfaceClear,
   pushSourceMatchesHead,
   resolveGitCwd,
   verifyRecordCommand,
@@ -145,6 +146,7 @@ describe("isIsolatedTerminalGitCommand — no mutation before authorization", ()
       "git --bare commit -m x",
       "git -c core.worktree=../other commit -m x",
       "git -c core.bare=true commit -m x",
+      "git -c core.hooksPath=.semctx/no-hooks commit -m x",
     ]) {
       expect(isIsolatedTerminalGitCommand(command)).toBe(false);
     }
@@ -167,6 +169,8 @@ describe("commitUsesWholeIndex — no commit-time tree selection", () => {
       "git commit -m partial -- a.ts", "git commit a.ts -m partial",
       "git commit --pathspec-from-file=paths.txt", "git commit --pathspec-file-nul",
       "git commit --fixup=reword:HEAD", "git commit --fixup reword:HEAD",
+      "git commit --inter", "git commit --incl a.ts -m partial", "git commit --on a.ts -m partial",
+      "git commit --fix=reword:HEAD",
     ]) expect(commitUsesWholeIndex(command), command).toBe(false);
   });
 });
@@ -355,6 +359,17 @@ describe("guardDecision — diff-hash gate (ADR 0007)", () => {
     expect(d.block).toBe(true);
     expect(d.reason).toContain("was BLOCK");
   });
+  it("blocks when a repository commit hook can restage after the pre-tool check", () => {
+    const decision = guardDecision({
+      enabled: true,
+      terminalVerb: "commit",
+      commitHooksAbsent: false,
+      state: STATE,
+      currentState: CURRENT,
+    });
+    expect(decision.block).toBe(true);
+    expect(decision.reason).toContain("commit hooks can change the index");
+  });
   it("blocks legacy diff-only baselines", () => {
     const d = guardDecision({ enabled: true, terminalVerb: "commit", state: { diffHash: HASH, verdict: "PASS" }, currentState: CURRENT });
     expect(d.block).toBe(true);
@@ -415,6 +430,22 @@ describe("guardDecision — verify, commit, push replay", () => {
         input: JSON.stringify({ tool_name: "Bash", tool_input: { command }, cwd: repo }),
         encoding: "utf8",
       }).status;
+      const preCommit = join(repo, ".git", "hooks", "pre-commit");
+      expect(commitHookSurfaceClear(repo)).toBe(true);
+      writeFileSync(preCommit, "#!/bin/sh\ngit add b.ts\n");
+      expect(commitHookSurfaceClear(repo)).toBe(false);
+      expect(guardStatus("git commit -m hook-restage")).toBe(2);
+      rmSync(preCommit);
+      const configuredHooks = join(repo, ".git", "configured-hooks");
+      mkdirSync(configuredHooks);
+      git(["config", "core.hooksPath", configuredHooks]);
+      const prepareCommitMessage = join(configuredHooks, "prepare-commit-msg");
+      writeFileSync(prepareCommitMessage, "#!/bin/sh\ngit add b.ts\n");
+      expect(commitHookSurfaceClear(repo)).toBe(false);
+      expect(guardStatus("git commit -m configured-hook-restage")).toBe(2);
+      rmSync(prepareCommitMessage);
+      expect(commitHookSurfaceClear(repo)).toBe(true);
+      git(["config", "--unset", "core.hooksPath"]);
       expect(guardStatus("git commit -m exact")).toBe(0);
       expect(guardStatus("git commit -am exact")).toBe(2);
       git(["-c", "user.name=Semctx Test", "-c", "user.email=semctx@example.invalid", "commit", "-m", "exact"]);
@@ -462,7 +493,7 @@ describe("guardDecision — verify, commit, push replay", () => {
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }
-  }, 20_000);
+  }, 30_000);
 });
 
 describe("guard runtime — large working diffs", () => {
@@ -531,7 +562,7 @@ describe("guard runtime — large working diffs", () => {
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }
-  }, 20_000);
+  }, 30_000);
 
   it("blocks a compound mutation command even with a matching baseline", () => {
     const repo = mkdtempSync(join(tmpdir(), "semctx-guard-compound-"));

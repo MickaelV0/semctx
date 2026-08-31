@@ -87,6 +87,28 @@ afterEach(() => {
 });
 
 describe("analysed source provenance", () => {
+  it("ignores repository textconv when binding the exact diff and raw content", () => {
+    const root = repository();
+    const script = join(root, ".git", "semctx-constant-textconv.cjs");
+    const executable = process.execPath.replaceAll("\\", "/");
+    const scriptPath = script.replaceAll("\\", "/");
+    writeFileSync(script, 'process.stdout.write("constant\\n");\n');
+    writeFileSync(join(root, ".gitattributes"), "*.ts diff=semctx-hide\n");
+    git(root, "add", ".gitattributes");
+    git(root, "commit", "-q", "-m", "textconv fixture");
+    git(root, "config", "diff.semctx-hide.textconv", `"${executable}" "${scriptPath}"`);
+    indexRepository(root, "2026-08-11T11:01:00.000Z");
+
+    writeFileSync(join(root, "src", "service.ts"), "export function service(): number {\n  return 2;\n}\n");
+    expect(git(root, "diff", "HEAD", "--", "src/service.ts")).toBe("");
+    expect(git(root, "diff", "--no-textconv", "HEAD", "--", "src/service.ts")).toContain("return 2");
+
+    const computation = runVerify(root, { kind: "working-tree" });
+    const state = captureRecordableVerificationGitState(root);
+    expect(computation.result.changedFiles).toContain("src/service.ts");
+    expect(computation.analyzedSourceHash).toBe(state.analyzedSourceHash);
+  }, 20_000);
+
   it("exposes the exact B snapshot consumed during an A-B-A working-tree race", () => {
     const root = repository();
     const path = join(root, "src", "service.ts");

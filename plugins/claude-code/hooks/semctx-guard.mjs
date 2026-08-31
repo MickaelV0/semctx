@@ -121,6 +121,7 @@ const GIT_RETARGET_ENV = new Set([
 
 const GIT_RETARGET_CONFIG = new Set([
   "core.bare",
+  "core.hookspath",
   "core.worktree",
   "extensions.worktreeconfig",
 ]);
@@ -313,6 +314,16 @@ const COMMIT_TREE_SELECTION_OPTIONS = new Set([
   "--pathspec-from-file", "-a", "-i", "-o", "-p",
 ]);
 
+const COMMIT_PREFIX_SENSITIVE_OPTIONS = new Set([
+  ...COMMIT_TREE_SELECTION_OPTIONS,
+  "--fixup",
+]);
+
+function isAbbreviatedCommitOption(option) {
+  return option.startsWith("--")
+    && [...COMMIT_PREFIX_SENSITIVE_OPTIONS].some((full) => full !== option && full.startsWith(option));
+}
+
 /** Authorize only commit forms that materialize the already-inspected index without restaging or path selection. */
 export function commitUsesWholeIndex(command) {
   const terminal = String(command ?? "").split("&&").at(-1)?.trim() ?? "";
@@ -336,6 +347,7 @@ export function commitUsesWholeIndex(command) {
     const optionValue = token.includes("=") ? token.slice(token.indexOf("=") + 1) : undefined;
     if (
       COMMIT_TREE_SELECTION_OPTIONS.has(option)
+      || isAbbreviatedCommitOption(option)
       || (option === "--fixup" && optionValue?.startsWith("reword:") === true)
       || (/^-[^-]+/.test(token) && !token.startsWith("-m") && !token.startsWith("-F") && /[aiop]/.test(token.slice(1)))
     ) return false;
@@ -349,6 +361,22 @@ export function commitUsesWholeIndex(command) {
     i += 1;
   }
   return true;
+}
+
+const COMMIT_HOOK_NAMES = ["pre-commit", "prepare-commit-msg", "commit-msg"];
+
+/** A pre-tool index proof is valid only when no repository commit hook can restage afterward. */
+export function commitHookSurfaceClear(cwd) {
+  try {
+    const result = spawnSync("git", ["rev-parse", "--git-path", "hooks"], { cwd, encoding: "utf8" });
+    if (result.status !== 0) return false;
+    const raw = result.stdout.trim();
+    if (raw === "") return false;
+    const hooks = isAbsolute(raw) ? resolve(raw) : resolve(cwd, raw);
+    return COMMIT_HOOK_NAMES.every((name) => !lstatIfPresent(join(hooks, name)));
+  } catch {
+    return false;
+  }
 }
 
 const UNSAFE_PUSH_OPTIONS = new Set([
@@ -637,6 +665,12 @@ export function guardDecision(ctx) {
   if (!ctx.state) {
     return { block: true, reason: `semctx guarded mode: no verification on record. Run:\n  ${verifyCmd}\n${retry}` };
   }
+  if (ctx.terminalVerb === "commit" && ctx.commitHooksAbsent === false) {
+    return {
+      block: true,
+      reason: "semctx guarded mode: repository commit hooks can change the index after verification; disable pre-commit, prepare-commit-msg, and commit-msg hooks, then retry the commit.",
+    };
+  }
   if (!isGuardVerificationState(ctx.state) || !ctx.currentState) {
     return { block: true, reason: `semctx guarded mode: the verification baseline is legacy, invalid, or unavailable. Re-run:\n  ${verifyCmd}\n${retry}` };
   }
@@ -755,7 +789,7 @@ function hashObject(cwd, path, payload) {
 }
 
 function unstagedPaths(cwd) {
-  const records = execFileSync("git", ["diff", "--name-only", "-z", "--relative", "--", "."], {
+  const records = execFileSync("git", ["diff", "--name-only", "-z", "--relative", "--no-ext-diff", "--no-textconv", "--", "."], {
     cwd,
     encoding: "utf8",
     maxBuffer: 256 * 1024 * 1024,
@@ -896,12 +930,12 @@ function fingerprintVerificationSource(headCommit, diff) {
 /** Capture the same commit, content bytes, paths and modes recorded by `semctx verify diff --record`. */
 export function captureVerificationGitState(cwd) {
   const headCommit = execFileSync("git", ["rev-parse", "--verify", "HEAD"], { cwd, encoding: "utf8" }).trim();
-  const analyzedDiff = execFileSync("git", ["diff", "--relative", "--unified=0", "--no-color", headCommit, "--"], {
+  const analyzedDiff = execFileSync("git", ["diff", "--relative", "--unified=0", "--no-color", "--no-ext-diff", "--no-textconv", headCommit, "--"], {
     cwd,
     encoding: "buffer",
     maxBuffer: 256 * 1024 * 1024,
   });
-  const diff = execFileSync("git", ["diff", "HEAD", "--relative", "--binary", "--no-color", "--", "."], {
+  const diff = execFileSync("git", ["diff", "HEAD", "--relative", "--binary", "--no-color", "--no-ext-diff", "--no-textconv", "--", "."], {
     cwd,
     encoding: "buffer",
     maxBuffer: 256 * 1024 * 1024,
@@ -979,12 +1013,14 @@ function main() {
   const pushSourceAuthorized = terminalVerb !== "push"
     || (currentState !== null && pushSourceMatchesHead(command, cwd, currentState.headCommit));
   const commitContentAuthorized = terminalVerb !== "commit" || commitUsesWholeIndex(command);
+  const commitHooksAbsent = terminalVerb !== "commit" || (commandIsolated && commitHookSurfaceClear(cwd));
   const decision = guardDecision({
     enabled,
     terminalVerb,
     commandIsolated,
     pushSourceAuthorized,
     commitContentAuthorized,
+    commitHooksAbsent,
     state,
     currentState,
     verifyCommand: verifyRecordCommand(process.env),
