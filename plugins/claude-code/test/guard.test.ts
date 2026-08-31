@@ -74,6 +74,15 @@ describe("isTerminalGitCommand — structural detection (no shell eval)", () => 
     expect(isTerminalGitCommand('P\'A\'TH="../proxy bin" git commit -m x')).toBe("commit");
     expect(isTerminalGitCommand('PATH="../proxy bin" bash -c \'git push origin main\'')).toBe("push");
     expect(isTerminalGitCommand('PATH="../proxy bin" command bash -c \'git commit -m x\'')).toBe("commit");
+    expect(isTerminalGitCommand("git co'mmit' -m x")).toBe("commit");
+    expect(isTerminalGitCommand(String.raw`git pu\sh origin main`)).toBe("push");
+    expect(isTerminalGitCommand("co'mmand' git commit -m x")).toBe("commit");
+    expect(isTerminalGitCommand(String.raw`e\xec git push origin main`)).toBe("push");
+    expect(isTerminalGitCommand("command -- git commit -m x")).toBe("commit");
+    expect(isTerminalGitCommand("command -p git push origin main")).toBe("push");
+    expect(isTerminalGitCommand("exec git commit -m x")).toBe("commit");
+    expect(isTerminalGitCommand("exec -a semctx-git git push origin main")).toBe("push");
+    expect(isTerminalGitCommand("builtin command git commit -m x")).toBe("commit");
   });
 
   it("detects common wrapper, quoted, absolute-path, and shell -c shapes", () => {
@@ -120,6 +129,11 @@ describe("isIsolatedTerminalGitCommand — no mutation before authorization", ()
     expect(isIsolatedTerminalGitCommand('env bash -c "git commit -am x"')).toBe(false);
     expect(isIsolatedTerminalGitCommand('env -i bash --noprofile -c "git commit -am x"')).toBe(false);
     expect(isIsolatedTerminalGitCommand('pwsh -NoProfile -ExecutionPolicy Bypass -Command "git push origin main"')).toBe(false);
+    expect(isIsolatedTerminalGitCommand("co'mmand' git commit -m x")).toBe(false);
+    expect(isIsolatedTerminalGitCommand(String.raw`e\xec git push origin main`)).toBe(false);
+    expect(isIsolatedTerminalGitCommand("command -p git push origin main")).toBe(false);
+    expect(isIsolatedTerminalGitCommand("exec git commit -m x")).toBe(false);
+    expect(isIsolatedTerminalGitCommand("builtin command git commit -m x")).toBe(false);
   });
 
   it("rejects cwd targets that require shell expansion", () => {
@@ -217,7 +231,7 @@ describe("commitUsesWholeIndex — no commit-time tree selection", () => {
       "git commit --pathspec-from-file=paths.txt", "git commit --pathspec-file-nul",
       "git commit --fixup=reword:HEAD", "git commit --fixup reword:HEAD",
       "git commit --inter", "git commit --incl a.ts -m partial", "git commit --on a.ts -m partial",
-      "git commit --fix=reword:HEAD",
+      "git commit --fix=reword:HEAD", "git co'mmit' -m x",
     ]) expect(commitUsesWholeIndex(command), command).toBe(false);
   });
 });

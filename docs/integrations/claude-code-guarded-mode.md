@@ -78,9 +78,11 @@ environment; `--git-dir`, `--work-tree`, `--namespace`, `--bare`; and `-c core.w
 `-c core.bare`. Command-local `core.hooksPath` overrides are rejected as well. Environment changes
 that can select another Git executable or configuration (`PATH`, home/profile variables,
 `XDG_CONFIG_HOME`, and related Git discovery variables) also fail closed, as do explicit executable
-paths such as `/tmp/proxy/git`. Quote/backslash-composed command names and assignments are normalized
-for terminal detection, then rejected as non-canonical; `g\it`, `gi't'`, escaped newlines, and
-`P'A'TH=...` therefore cannot bypass the guard. Use a plain literal
+paths such as `/tmp/proxy/git`. Quote/backslash-composed executable names, terminal subcommands,
+command wrappers, and assignments are normalized for terminal detection, then rejected as
+non-canonical; `g\it`, `gi't'`, `git co'mmit'`, `git pu\sh`, composed `command` / `exec`, escaped
+newlines, and `P'A'TH=...` therefore cannot bypass the guard. `command -p`, `exec`, and `builtin`
+forms are also detected but remain outside the authorizing isolated-command contract. Use a plain literal
 `cd <repo> && git commit`, `git -C <repo> commit`, or the
 equivalent `push`. Direct `env` wrappers are parsed too: non-retargeting forms such as
 `env GIT_AUTHOR_NAME=name git commit` remain in contract, while retargeting assignments,
@@ -111,7 +113,7 @@ hook still discovers the nearest literal repository/guard marker rather than dis
 This is a cooperative soft gate, not a sandbox or hostile-agent boundary. The same local principal
 can edit `verification-state.json`, set `SEMCTX_GUARD=off`, invoke Git outside Claude Code, or use a
 command shape/tool the hook does not recognize. Detection covers direct Bash invocations plus common
-quoted/path/`command` forms; compound commands and recognized `bash -c`, PowerShell, and `cmd /c`
+quoted/path/`command`/`exec` forms; compound commands and recognized `bash -c`, PowerShell, and `cmd /c`
 wrappers are detected but rejected in guarded mode. Aliases, shell functions, and arbitrary
 nesting remain outside the contract. Within recognized direct invocations, guarded isolation is
 fail-closed for ambiguous cwd expansion and Git repository retargeting. A syntactically valid state
