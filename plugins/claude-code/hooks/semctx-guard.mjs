@@ -39,7 +39,8 @@ function wrappedShellCommand(command) {
     while (isEnvironmentAssignmentToken(tokens[commandIndex])) commandIndex += 1;
     commandIndex = envCommandIndex(tokens, commandIndex);
     while (isEnvironmentAssignmentToken(tokens[commandIndex])) commandIndex += 1;
-    if (shellWordLiteralValue(tokens[commandIndex]) === "command") commandIndex += 1;
+    commandIndex = shellWrapperCommandIndex(tokens, commandIndex);
+    if (commandIndex < 0) continue;
     const executable = executableName(tokens[commandIndex]);
     const optionNames = executable === "cmd" || executable === "cmd.exe"
       ? new Set(["/c"])
@@ -247,12 +248,57 @@ function envCommandIndex(tokens, start) {
   return i;
 }
 
+/** Resolve shell builtins that can directly invoke the following command without evaluating data. */
+function shellWrapperCommandIndex(tokens, start) {
+  let i = start;
+  let wrapper = shellWordLiteralValue(tokens[i])?.toLowerCase();
+  if (wrapper === "builtin") {
+    i += 1;
+    wrapper = shellWordLiteralValue(tokens[i])?.toLowerCase();
+    if (wrapper !== "command" && wrapper !== "exec") return -1;
+  }
+  if (wrapper === "command") {
+    i += 1;
+    while (i < tokens.length) {
+      const option = shellWordLiteralValue(tokens[i]);
+      if (option === "--") return i + 1;
+      if (option === "-p") {
+        i += 1;
+        continue;
+      }
+      if (option?.startsWith("-")) return -1;
+      return i;
+    }
+    return i;
+  }
+  if (wrapper === "exec") {
+    i += 1;
+    while (i < tokens.length) {
+      const option = shellWordLiteralValue(tokens[i]);
+      if (option === "--") return i + 1;
+      if (option === "-a") {
+        i += 2;
+        continue;
+      }
+      if (option !== null && /^-[cl]+$/.test(option)) {
+        i += 1;
+        continue;
+      }
+      if (option?.startsWith("-")) return -1;
+      return i;
+    }
+    return i;
+  }
+  return start;
+}
+
 function gitTokenIndex(tokens) {
   let i = 0;
   while (i < tokens.length && isEnvironmentAssignmentToken(tokens[i])) i += 1;
   i = envCommandIndex(tokens, i);
   while (i < tokens.length && isEnvironmentAssignmentToken(tokens[i])) i += 1;
-  if (stripQuotes(tokens[i]) === "command") i += 1;
+  i = shellWrapperCommandIndex(tokens, i);
+  if (i < 0) return -1;
   const executable = executableName(tokens[i]);
   return executable === "git" || executable === "git.exe" ? i : -1;
 }
@@ -372,6 +418,19 @@ function envWrapperMakesScopeAmbiguous(tokens, gitIndex) {
   return false;
 }
 
+function shellWrapperMakesScopeAmbiguous(tokens, gitIndex) {
+  for (let i = 0; i < gitIndex; i += 1) {
+    const literal = shellWordLiteralValue(tokens[i])?.toLowerCase();
+    if (literal === "exec" || literal === "builtin") return true;
+    if (literal !== "command") continue;
+    if (stripQuotes(tokens[i]).toLowerCase() !== "command") return true;
+    for (let optionIndex = i + 1; optionIndex < gitIndex; optionIndex += 1) {
+      if (shellWordLiteralValue(tokens[optionIndex]) !== "--") return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Whether the command can make Git operate on state other than the structurally resolved cwd.
  * These forms are not evaluated or expanded by the hook, so guarded mode must use the session
@@ -399,6 +458,7 @@ function gitScopeRequiresSessionGuard(command) {
     if (gitIndex < 0) continue;
     if (!isCanonicalGitExecutableToken(tokens[gitIndex])) return true;
     if (envWrapperMakesScopeAmbiguous(tokens, gitIndex)) return true;
+    if (shellWrapperMakesScopeAmbiguous(tokens, gitIndex)) return true;
     for (let prefix = 0; prefix < gitIndex; prefix += 1) {
       if (isRetargetingEnvironmentAssignment(tokens[prefix])) return true;
     }
@@ -444,12 +504,13 @@ export function isTerminalGitCommand(command) {
     if (gitIndex < 0) continue;
     let i = gitIndex + 1;
     while (i < tokens.length) {
-      const t = stripQuotes(tokens[i]);
+      const t = shellWordLiteralValue(tokens[i]);
+      if (t === null) break;
       if (gitOptionConsumesNext(t)) { i += 2; continue; }
       if (t?.startsWith("-")) { i += 1; continue; } // other global flags
       break;
     }
-    const sub = stripQuotes(tokens[i]);
+    const sub = shellWordLiteralValue(tokens[i]);
     if (sub === "commit" || sub === "push") return sub;
   }
   return null;

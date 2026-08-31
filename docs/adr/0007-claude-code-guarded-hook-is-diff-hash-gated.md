@@ -67,8 +67,10 @@ authorize a terminal Git operation.
   home/profile or XDG config variables, and related Git discovery variables) and non-canonical Git
   executable paths fail closed so the hook and the shell cannot resolve different Git programs or
   configuration. Literal quote/backslash composition is normalized for detection, so forms such as
-  `g\it`, `gi't'`, escaped newlines, or a composed `P'A'TH=...` assignment cannot hide the terminal
-  Git operation; those non-canonical command shapes are then rejected.
+  `g\it`, `gi't'`, `git co'mmit'`, `git pu\sh`, escaped newlines, or a composed `P'A'TH=...`
+  assignment cannot hide the terminal Git operation. Direct `command` and `exec` builtin forms are
+  parsed too; composed wrappers, `exec`, `builtin`, and executable-discovery options such as
+  `command -p` are detected and then rejected as non-canonical command shapes.
 - Commit commands must consume the already-inspected whole index. Commit-time staging, interactive
   selection, partial-index options, pathspecs, and `--fixup=reword:` (Git's implicit `--only`
   form) fail closed, including Git's accepted long-option abbreviations. Every persisted version 3
