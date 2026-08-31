@@ -78,7 +78,9 @@ environment; `--git-dir`, `--work-tree`, `--namespace`, `--bare`; and `-c core.w
 `-c core.bare`. Command-local `core.hooksPath` overrides are rejected as well. Environment changes
 that can select another Git executable or configuration (`PATH`, home/profile variables,
 `XDG_CONFIG_HOME`, and related Git discovery variables) also fail closed, as do explicit executable
-paths such as `/tmp/proxy/git`. Use a plain literal
+paths such as `/tmp/proxy/git`. Quote/backslash-composed command names and assignments are normalized
+for terminal detection, then rejected as non-canonical; `g\it`, `gi't'`, escaped newlines, and
+`P'A'TH=...` therefore cannot bypass the guard. Use a plain literal
 `cd <repo> && git commit`, `git -C <repo> commit`, or the
 equivalent `push`. Direct `env` wrappers are parsed too: non-retargeting forms such as
 `env GIT_AUTHOR_NAME=name git commit` remain in contract, while retargeting assignments,

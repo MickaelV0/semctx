@@ -33,6 +33,30 @@ function wrappedShellCommand(command) {
       return { body: unwrapShellBody(text.slice(match.index + match[0].length)), start: match.index };
     }
   }
+  for (const segment of shellSegments(text)) {
+    const tokens = shellWords(segment);
+    let commandIndex = 0;
+    while (isEnvironmentAssignmentToken(tokens[commandIndex])) commandIndex += 1;
+    commandIndex = envCommandIndex(tokens, commandIndex);
+    while (isEnvironmentAssignmentToken(tokens[commandIndex])) commandIndex += 1;
+    if (shellWordLiteralValue(tokens[commandIndex]) === "command") commandIndex += 1;
+    const executable = executableName(tokens[commandIndex]);
+    const optionNames = executable === "cmd" || executable === "cmd.exe"
+      ? new Set(["/c"])
+      : executable === "powershell" || executable === "powershell.exe" || executable === "pwsh" || executable === "pwsh.exe"
+        ? new Set(["-command", "-c"])
+        : executable === "bash" || executable === "sh" || executable === "zsh"
+          ? new Set(["-c"])
+          : null;
+    if (optionNames === null) continue;
+    const optionIndex = tokens.findIndex(
+      (token, index) => index > commandIndex && optionNames.has(shellWordLiteralValue(token)?.toLowerCase()),
+    );
+    if (optionIndex < 0 || tokens[optionIndex + 1] === undefined) continue;
+    const body = tokens.slice(optionIndex + 1).map(shellWordLiteralValue);
+    if (body.some((word) => word === null)) return { body: "", start: text.indexOf(segment) };
+    return { body: body.join(" "), start: text.indexOf(segment) };
+  }
   return null;
 }
 
@@ -124,11 +148,59 @@ function shellSegments(text) {
   return segments;
 }
 
+/** Resolve only literal quote/backslash composition; never expand variables, substitutions, or globs. */
+function shellWordLiteralValue(token) {
+  const source = String(token ?? "");
+  let value = "";
+  let quote = null;
+  for (let i = 0; i < source.length; i += 1) {
+    const char = source[i];
+    if (quote === "'") {
+      if (char === "'") quote = null;
+      else value += char;
+      continue;
+    }
+    if (quote === '"') {
+      if (char === '"') {
+        quote = null;
+        continue;
+      }
+      if (char === "\\" && source[i + 1] !== undefined && /[$`"\\\n]/.test(source[i + 1])) {
+        if (source[i + 1] !== "\n") value += source[i + 1];
+        i += 1;
+        continue;
+      }
+      value += char;
+      continue;
+    }
+    if (char === "'") {
+      quote = "'";
+      continue;
+    }
+    if (char === '"') {
+      quote = '"';
+      continue;
+    }
+    if (char === "\\" && source[i + 1] !== undefined) {
+      if (source[i + 1] !== "\n") value += source[i + 1];
+      i += 1;
+      continue;
+    }
+    value += char;
+  }
+  return quote === null ? value : null;
+}
+
+function isEnvironmentAssignmentToken(token) {
+  const value = shellWordLiteralValue(token);
+  return value !== null && /^[A-Za-z_][A-Za-z0-9_]*=/.test(value);
+}
+
 function envSplitStringBody(command) {
   const text = String(command ?? "").trim();
   const tokens = shellWords(text);
   let i = 0;
-  while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) i += 1;
+  while (i < tokens.length && isEnvironmentAssignmentToken(tokens[i])) i += 1;
   if (executableName(tokens[i]) !== "env" && executableName(tokens[i]) !== "env.exe") return null;
   const splitOption = /(?:^|\s)(?:-S\s+|--split-string(?:=|\s+))/.exec(text);
   if (splitOption === null) return null;
@@ -136,7 +208,11 @@ function envSplitStringBody(command) {
 }
 
 function executableName(token) {
-  return stripQuotes(token).replace(/\\/g, "/").split("/").pop()?.toLowerCase();
+  const literalName = shellWordLiteralValue(token)?.replace(/\\/g, "/").split("/").pop()?.toLowerCase();
+  const windowsPathName = stripQuotes(token).replace(/\\/g, "/").split("/").pop()?.toLowerCase();
+  if (literalName === "git" || literalName === "git.exe") return literalName;
+  if (windowsPathName === "git" || windowsPathName === "git.exe") return windowsPathName;
+  return literalName;
 }
 
 function isCanonicalGitExecutableToken(token) {
@@ -161,7 +237,7 @@ function envCommandIndex(tokens, start) {
   while (i < tokens.length) {
     const token = stripQuotes(tokens[i]);
     if (token === "--") return i + 1;
-    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(token) || !token.startsWith("-")) return i;
+    if (isEnvironmentAssignmentToken(tokens[i]) || !token.startsWith("-")) return i;
     if (ENV_OPTIONS_WITH_VALUE.has(token)) {
       i += 2;
       continue;
@@ -173,9 +249,9 @@ function envCommandIndex(tokens, start) {
 
 function gitTokenIndex(tokens) {
   let i = 0;
-  while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) i += 1;
+  while (i < tokens.length && isEnvironmentAssignmentToken(tokens[i])) i += 1;
   i = envCommandIndex(tokens, i);
-  while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) i += 1;
+  while (i < tokens.length && isEnvironmentAssignmentToken(tokens[i])) i += 1;
   if (stripQuotes(tokens[i]) === "command") i += 1;
   const executable = executableName(tokens[i]);
   return executable === "git" || executable === "git.exe" ? i : -1;
@@ -252,7 +328,7 @@ function isRetargetingEnvironmentName(name) {
 }
 
 function isRetargetingEnvironmentAssignment(token) {
-  const match = /^([A-Za-z_][A-Za-z0-9_]*)=/.exec(String(token ?? ""));
+  const match = /^([A-Za-z_][A-Za-z0-9_]*)=/.exec(shellWordLiteralValue(token) ?? "");
   if (match === null) return false;
   return isRetargetingEnvironmentName(match[1]);
 }
@@ -264,7 +340,7 @@ function isRetargetingConfig(value) {
 
 function envWrapperMakesScopeAmbiguous(tokens, gitIndex) {
   let envIndex = 0;
-  while (envIndex < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[envIndex])) envIndex += 1;
+  while (envIndex < tokens.length && isEnvironmentAssignmentToken(tokens[envIndex])) envIndex += 1;
   if (executableName(tokens[envIndex]) !== "env" && executableName(tokens[envIndex]) !== "env.exe") return false;
   const envArgs = tokens.slice(envIndex + 1, gitIndex);
   for (let i = 0; i < envArgs.length; i += 1) {
@@ -310,7 +386,7 @@ function gitScopeRequiresSessionGuard(command) {
   for (const segment of shellSegments(text)) {
     const tokens = shellWords(segment.trim());
     let i = 0;
-    while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) {
+    while (i < tokens.length && isEnvironmentAssignmentToken(tokens[i])) {
       if (isRetargetingEnvironmentAssignment(tokens[i])) return true;
       i += 1;
     }
@@ -621,7 +697,7 @@ export function resolveGitCwd(command, inputCwd) {
   for (const seg of segments) {
     const tokens = shellWords(seg.trim());
     let i = 0;
-    while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) i += 1; // skip env assignments
+    while (i < tokens.length && isEnvironmentAssignmentToken(tokens[i])) i += 1; // skip env assignments
     if (tokens[i] === "cd" && tokens[i + 1] !== undefined) {
       cwd = resolveUnder(cwd, tokens[i + 1]);
       continue;
