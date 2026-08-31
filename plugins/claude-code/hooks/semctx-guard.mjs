@@ -311,6 +311,24 @@ const PUSH_OPTIONS_WITH_VALUE = new Set([
   "--exec", "--push-option", "--receive-pack", "-o",
 ]);
 
+const SAFE_PUSH_OPTIONS = new Set([
+  "--atomic", "--dry-run", "--force", "--force-if-includes", "--force-with-lease",
+  "--ipv4", "--ipv6", "--no-atomic", "--no-force-if-includes", "--no-force-with-lease",
+  "--no-signed", "--no-thin", "--no-verify", "--porcelain", "--quiet", "--set-upstream",
+  "--signed", "--thin", "--verbose", "-4", "-6", "-f", "-n", "-q", "-u", "-v",
+]);
+
+/** Resolve one shell word without evaluating it; reject quote/backslash composition inside a word. */
+function literalShellWord(token) {
+  const raw = String(token ?? "");
+  const value = stripQuotes(raw);
+  const wholeQuoted = raw.length >= 2
+    && (raw[0] === '"' || raw[0] === "'")
+    && raw.at(-1) === raw[0];
+  if ((wholeQuoted ? value : raw).includes("\\") || /["']/.test(value)) return null;
+  return value;
+}
+
 /**
  * Prove that an isolated push can publish only the checked-out HEAD. Implicit pushes are accepted
  * only under Git's single-current-branch modes and with no configured remote push refspecs.
@@ -323,7 +341,8 @@ export function pushSourceMatchesHead(command, cwd, currentHead) {
     if (gitIndex < 0) return false;
     let i = gitIndex + 1;
     while (i < tokens.length) {
-      const token = stripQuotes(tokens[i]);
+      const token = literalShellWord(tokens[i]);
+      if (token === null) return false;
       if (token === "-c" || token.startsWith("-c") || token === "--config-env" || token.startsWith("--config-env=")) {
         return false;
       }
@@ -331,20 +350,23 @@ export function pushSourceMatchesHead(command, cwd, currentHead) {
       if (token.startsWith("-")) { i += 1; continue; }
       break;
     }
-    if (stripQuotes(tokens[i]) !== "push") return false;
+    if (literalShellWord(tokens[i]) !== "push") return false;
     i += 1;
 
     const positionals = [];
     while (i < tokens.length) {
-      const token = stripQuotes(tokens[i]);
+      const token = literalShellWord(tokens[i]);
+      if (token === null) return false;
       const option = gitOptionName(token);
       if (UNSAFE_PUSH_OPTIONS.has(option) || option === "--repo") return false;
       if (PUSH_OPTIONS_WITH_VALUE.has(option) && !token.includes("=")) {
         if (tokens[i + 1] === undefined) return false;
+        if (literalShellWord(tokens[i + 1]) === null) return false;
         i += 2;
         continue;
       }
       if (token.startsWith("-")) {
+        if (!SAFE_PUSH_OPTIONS.has(option) && !PUSH_OPTIONS_WITH_VALUE.has(option)) return false;
         i += 1;
         continue;
       }
@@ -457,7 +479,15 @@ function resolveGitRoot(cwd) {
     }).trim();
     return root === "" ? cwd : resolve(root);
   } catch {
-    return cwd;
+    let current = resolve(cwd);
+    while (true) {
+      if (existsSync(join(current, ".git")) || existsSync(join(current, ".semctx", "guard.json"))) {
+        return current;
+      }
+      const parent = dirname(current);
+      if (parent === current) return resolve(cwd);
+      current = parent;
+    }
   }
 }
 
@@ -737,7 +767,7 @@ function captureContentState(cwd, tracked, untracked, changedOutsideIndex) {
     frame(contentHash, "mode", mode);
     frame(contentHash, "kind", kind);
     frame(contentHash, "content", payload);
-    const objectId = indexEntry && indexEntry.mode === mode && !changedOutsideIndex.has(path)
+    const objectId = !stat && indexEntry && indexEntry.mode === mode && !changedOutsideIndex.has(path)
       ? indexEntry.objectId
       : hashObject(cwd, path, payload);
     frame(repositoryHash, "path", path);
