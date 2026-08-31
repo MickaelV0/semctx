@@ -343,13 +343,6 @@ const GIT_RETARGET_ENV = new Set([
   "XDG_CONFIG_HOME",
 ]);
 
-const GIT_RETARGET_CONFIG = new Set([
-  "core.bare",
-  "core.hookspath",
-  "core.worktree",
-  "extensions.worktreeconfig",
-]);
-
 function gitOptionName(token) {
   const clean = stripQuotes(token);
   const equals = clean.indexOf("=");
@@ -380,11 +373,6 @@ function isRetargetingEnvironmentAssignment(token) {
   const match = /^([A-Za-z_][A-Za-z0-9_]*)=/.exec(shellWordLiteralValue(token) ?? "");
   if (match === null) return false;
   return isRetargetingEnvironmentName(match[1]);
-}
-
-function isRetargetingConfig(value) {
-  const key = stripQuotes(value).split("=", 1)[0].toLowerCase();
-  return GIT_RETARGET_CONFIG.has(key);
 }
 
 function envWrapperMakesScopeAmbiguous(tokens, gitIndex) {
@@ -473,15 +461,12 @@ function gitScopeRequiresSessionGuard(command) {
       const cwdPath = gitCPath(token, tokens[i + 1]);
       if (cwdPath !== null) {
         if (pathRequiresShellExpansion(cwdPath)) return true;
-      } else if (token.startsWith("-c") && token !== "-c") {
-        // Git accepts attached config (`-ckey=value`). Keep it outside the authorizing contract:
-        // hooksPath and other execution-affecting keys must not bypass the pre-tool hook probe.
+      } else if (token === "-c" || token.startsWith("-c")) {
+        // Any command-scoped config is outside the authorizing contract. Even an apparently
+        // unrelated key can include another config that changes hooksPath or repository discovery.
         return true;
-      } else if (option === "-c") {
-        if (tokens[i + 1] !== undefined && isRetargetingConfig(tokens[i + 1])) return true;
       } else if (option === "--config-env") {
-        const config = token.includes("=") ? token.slice(token.indexOf("=") + 1) : tokens[i + 1];
-        if (config !== undefined && isRetargetingConfig(config)) return true;
+        return true;
       } else if (GIT_RETARGET_OPTIONS.has(option) || option === "--bare") {
         return true;
       }

@@ -74,9 +74,9 @@ redirections, and shell substitutions are rejected because they could mutate rep
 after the hook's pre-check. Cwd prefixes must use literal paths: unexpanded `$VAR`, `${VAR}`, `~`,
 and globs in `cd` or `git -C` are rejected. Git repository retargeting is also outside the contract,
 including `GIT_DIR` / `GIT_WORK_TREE` and related index, object, common-dir, namespace, or config
-environment; `--git-dir`, `--work-tree`, `--namespace`, `--bare`; and `-c core.worktree` /
-`-c core.bare`. Command-local `core.hooksPath` overrides are rejected as well, and attached Git
-config such as `-ccore.hooksPath=...` is conservatively non-authorizing. Environment changes
+environment; `--git-dir`, `--work-tree`, `--namespace`, and `--bare`. Every command-local Git
+configuration form (`-c key=value`, attached `-ckey=value`, and `--config-env`) is conservatively
+non-authorizing, including indirect `include.path` configuration. Environment changes
 that can select another Git executable or configuration (`PATH`, home/profile variables,
 `XDG_CONFIG_HOME`, and related Git discovery variables) also fail closed, as do
 `--exec-path=<path>`, explicit executable paths such as `/tmp/proxy/git`, and non-canonical Windows
