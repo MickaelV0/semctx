@@ -190,7 +190,9 @@ function resolveSource(root: string, source: VerifySource, dryRun: boolean): Res
     }
     const mergeBase = merge.out.trim();
     if (dryRun) return { diffText: null, git: meta(mergeBase), includeCoChanges: true, identity, coChangeHead: headSha };
-    const diff = git(root, ["diff", "--relative", "--unified=0", "--no-color", mergeBase, headSha, "--"]);
+    const diff = git(root, [
+      "diff", "--relative", "--unified=0", "--no-color", "--no-ext-diff", "--no-textconv", mergeBase, headSha, "--",
+    ]);
     if (diff.code !== 0) throw new SemctxError("GIT_ERROR", "git diff failed", { stderr: diff.err.trim() });
     return { diffText: diff.out, git: meta(mergeBase), includeCoChanges: true, identity, coChangeHead: headSha };
   }
@@ -208,8 +210,8 @@ function resolveSource(root: string, source: VerifySource, dryRun: boolean): Res
   const checkedOutSha = requireRef(root, "HEAD", "head");
   crossVerifyCaptureBarrier();
   const args = source.kind === "staged"
-    ? ["diff", "--staged", "--relative", "--unified=0", "--no-color", headSha, "--"]
-    : ["diff", "--relative", "--unified=0", "--no-color", headSha, "--"];
+    ? ["diff", "--staged", "--relative", "--unified=0", "--no-color", "--no-ext-diff", "--no-textconv", headSha, "--"]
+    : ["diff", "--relative", "--unified=0", "--no-color", "--no-ext-diff", "--no-textconv", headSha, "--"];
   const diff = git(root, args);
   if (diff.code !== 0) throw new SemctxError("GIT_ERROR", "git diff failed (is this a git repository?)", { stderr: diff.err.trim() });
   // The checked-out commit is load-bearing too: the working tree it materialized is the post-image.

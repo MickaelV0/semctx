@@ -59,17 +59,24 @@ Tracked bytes remain authoritative even when Git index flags such as `assume-unc
 `skip-worktree` entry hide a path from `git diff`: `--record` refuses that unanalyzed mismatch until
 the flag is cleared or the indexed bytes are restored. Commit-time staging and path selection
 (`-a`, `--include`, `--only`, `--patch`, `--interactive`, or a pathspec) are rejected; stage the
-complete verified state first, then use a plain whole-index commit. Initialized submodule HEADs are
+complete verified state first, then use a plain whole-index commit. Git long-option abbreviations
+of those forms are rejected too. Repository `textconv` and external diff helpers are disabled for
+verification capture, so configured transformations cannot hide or rewrite the analyzed hunks.
+Initialized submodule HEADs are
 checked directly even when Git configuration suppresses submodule diffs; a failed initialized
 submodule repository/HEAD probe blocks rather than reusing the indexed commit. Malformed version 3
 records and `--fixup=reword:` commits are non-authorizing.
+Any present `pre-commit`, `prepare-commit-msg`, or `commit-msg` hook is also non-authorizing: it
+could restage after the pre-tool index proof, so guarded mode requires those repository hooks to be
+absent before committing.
 Run `git commit` and `git push` as isolated commands in guarded mode. Compound commands,
 redirections, and shell substitutions are rejected because they could mutate repository bytes
 after the hook's pre-check. Cwd prefixes must use literal paths: unexpanded `$VAR`, `${VAR}`, `~`,
 and globs in `cd` or `git -C` are rejected. Git repository retargeting is also outside the contract,
 including `GIT_DIR` / `GIT_WORK_TREE` and related index, object, common-dir, namespace, or config
 environment; `--git-dir`, `--work-tree`, `--namespace`, `--bare`; and `-c core.worktree` /
-`-c core.bare`. Use a plain literal `cd <repo> && git commit`, `git -C <repo> commit`, or the
+`-c core.bare`. Command-local `core.hooksPath` overrides are rejected as well. Use a plain literal
+`cd <repo> && git commit`, `git -C <repo> commit`, or the
 equivalent `push`. Direct `env` wrappers are parsed too: non-retargeting forms such as
 `env GIT_AUTHOR_NAME=name git commit` remain in contract, while retargeting assignments,
 environment clearing (`-i`), repository-affecting `-u` / `--unset`, `env -C` / `--chdir`, and

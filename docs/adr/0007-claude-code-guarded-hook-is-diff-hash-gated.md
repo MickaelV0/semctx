@@ -66,7 +66,11 @@ authorize a terminal Git operation.
   session repo enables guarded mode.
 - Commit commands must consume the already-inspected whole index. Commit-time staging, interactive
   selection, partial-index options, pathspecs, and `--fixup=reword:` (Git's implicit `--only`
-  form) fail closed. Every persisted version 3 field is shape-validated before authorization.
+  form) fail closed, including Git's accepted long-option abbreviations. Every persisted version 3
+  field is shape-validated before authorization. Verification diff capture disables external diff
+  and textconv helpers so repository configuration cannot substitute the analyzed hunks. A commit
+  is non-authorizing while `pre-commit`, `prepare-commit-msg`, or `commit-msg` exists, because those
+  hooks run after the pre-tool check and can restage a different tree.
 - Push refspecs are resolved before authorization. Deletions, multi-ref, mirror, tag-wide, wildcard,
   configured, ambiguous, or non-HEAD sources fail closed. An explicit source must be literal `HEAD`
   or the exact full verified object ID. Push options use a closed allowlist and
