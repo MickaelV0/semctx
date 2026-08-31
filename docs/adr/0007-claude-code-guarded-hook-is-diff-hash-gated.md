@@ -71,7 +71,8 @@ authorize a terminal Git operation.
   `g\it`, `gi't'`, `git co'mmit'`, `git pu\sh`, escaped newlines, or a composed `P'A'TH=...`
   assignment cannot hide the terminal Git operation. Direct `command`, `exec`, and `builtin` forms,
   plus shell-expanded executable expressions such as `$GIT`, `${GIT:-git}`, `$(printf git)`, and
-  `$(true; printf git)`, are detected and rejected as non-canonical command shapes. Shell expansion
+  `$(true; printf git)`, and expansion-split terminal words such as `git${IFS}push`, are detected and
+  rejected as non-canonical command shapes. Shell expansion
   in any otherwise authorizable terminal-command word is also rejected, so word splitting cannot
   turn an inspected argument such as `.${IFS}--all` into an uninspected push option.
 - Commit commands must consume the already-inspected whole index. Commit-time staging, interactive
