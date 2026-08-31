@@ -193,7 +193,9 @@ describe("isIsolatedTerminalGitCommand — no mutation before authorization", ()
       "git -c core.worktree=../other commit -m x",
       "git -c core.bare=true commit -m x",
       "git -c core.hooksPath=.semctx/no-hooks commit -m x",
+      "git -c include.path=.semctx/indirect.gitconfig commit -m x",
       "git -ccore.hooksPath=.semctx/no-hooks commit -m x",
+      "git --config-env=include.path=SEMCTX_GIT_CONFIG commit -m x",
     ]) {
       expect(isIsolatedTerminalGitCommand(command)).toBe(false);
     }
@@ -614,7 +616,11 @@ describe("guard runtime — large working diffs", () => {
           encoding: "utf8",
         });
         expect(result.status, command).toBe(2);
-        expect(result.stderr).toContain("may publish only the verified HEAD");
+        expect(result.stderr).toContain(
+          command.startsWith("git -c ")
+            ? "must be an isolated command"
+            : "may publish only the verified HEAD",
+        );
       }
 
       git(["config", "push.followTags", "true"]);
@@ -834,6 +840,14 @@ describe("guard runtime — repository scope must be explicit", () => {
     const repo = createGuardedRepo("semctx-guard-retarget-");
     try {
       const guard = resolve(import.meta.dir, "../hooks/semctx-guard.mjs");
+      const indirectHooks = join(repo, ".semctx", "indirect-hooks");
+      const indirectConfig = join(repo, ".semctx", "indirect.gitconfig");
+      mkdirSync(indirectHooks);
+      writeFileSync(join(indirectHooks, "pre-commit"), "#!/bin/sh\ngit add tracked.ts\n");
+      writeFileSync(
+        indirectConfig,
+        `[core]\n\thooksPath = ${indirectHooks.replaceAll("\\", "/")}\n`,
+      );
       for (const command of [
         "GIT_DIR=../other/.git GIT_WORK_TREE=../other git commit -m x",
         "PATH=../proxy-bin git commit -m x",
@@ -846,6 +860,8 @@ describe("guard runtime — repository scope must be explicit", () => {
         "env -S 'git commit -m x'",
         "git --git-dir ../other/.git --work-tree ../other commit -m x",
         "git --exec-path=../proxy-libexec commit -m x",
+        `git -c include.path=${indirectConfig.replaceAll("\\", "/")} commit -m x`,
+        "git --config-env=include.path=SEMCTX_GIT_CONFIG commit -m x",
         "git -ccore.hooksPath=.semctx/no-hooks commit -m x",
         "/tmp/proxy/git commit -m x",
         "C:\\proxy\\git.exe push origin main",
@@ -861,7 +877,7 @@ describe("guard runtime — repository scope must be explicit", () => {
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   it("anchors guarded state at the Git root when push starts in or targets a subdirectory", () => {
     const repo = createGuardedRepo("semctx-guard-subdirectory-");
