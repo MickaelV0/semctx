@@ -9,12 +9,14 @@ export interface VerificationGitState {
   workingStateHash: string;
   contentStateHash: string;
   repositoryStateHash: string;
+  indexStateHash: string;
   headTreeHash: string;
 }
 
 interface VerificationGitSnapshot {
   state: VerificationGitState;
   untrackedPaths: string[];
+  hiddenTrackedPaths: string[];
 }
 
 function git(root: string, args: string[], stdin?: Uint8Array): Uint8Array {
@@ -107,6 +109,45 @@ function unstagedPaths(root: string): Set<string> {
   return new Set(records.split("\0").filter((path) => path.length > 0).map(normalizedPath));
 }
 
+function captureRepositoryStateHash(
+  entries: Iterable<{ path: string; mode: string; objectId: string }>,
+): string {
+  const ordered = [...entries].sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
+  const hash = createHash("sha256");
+  frame(hash, "domain", "semctx:verification-repository-state:v1");
+  for (const entry of ordered) {
+    frame(hash, "path", entry.path);
+    frame(hash, "mode", entry.mode);
+    frame(hash, "object", entry.objectId);
+  }
+  return `sha256:${hash.digest("hex")}`;
+}
+
+function captureIndexStateHash(tracked: ReadonlyMap<string, IndexEntry>): string {
+  return captureRepositoryStateHash([...tracked].map(([path, entry]) => ({ path, ...entry })));
+}
+
+function initializedGitlinkHead(root: string, path: string): string | undefined {
+  const absolute = resolve(root, path);
+  if (lstatIfPresent(absolute) === undefined) return undefined;
+  const topLevel = Bun.spawnSync(["git", "-C", path, "rev-parse", "--show-toplevel"], {
+    cwd: root,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (topLevel.exitCode !== 0 || resolve(new TextDecoder().decode(topLevel.stdout).trim()) !== absolute) {
+    return undefined;
+  }
+  const process = Bun.spawnSync(["git", "-C", path, "rev-parse", "--verify", "HEAD"], {
+    cwd: root,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (process.exitCode !== 0) return undefined;
+  const head = new TextDecoder().decode(process.stdout).trim();
+  return /^[0-9a-f]{40,64}$/.test(head) ? head : undefined;
+}
+
 function captureHeadTreeHash(root: string): string {
   const records = new TextDecoder().decode(git(root, ["ls-tree", "-r", "-z", "--full-tree", "HEAD"]));
   const entries: Array<{ path: string; mode: string; objectId: string }> = [];
@@ -118,15 +159,7 @@ function captureHeadTreeHash(root: string): string {
     }
     entries.push({ path: normalizedPath(match[3]), mode: match[1], objectId: match[2] });
   }
-  entries.sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
-  const hash = createHash("sha256");
-  frame(hash, "domain", "semctx:verification-repository-state:v1");
-  for (const entry of entries) {
-    frame(hash, "path", entry.path);
-    frame(hash, "mode", entry.mode);
-    frame(hash, "object", entry.objectId);
-  }
-  return `sha256:${hash.digest("hex")}`;
+  return captureRepositoryStateHash(entries);
 }
 
 function captureContentState(
@@ -134,17 +167,19 @@ function captureContentState(
   tracked: ReadonlyMap<string, IndexEntry>,
   untracked: readonly string[],
   changedOutsideIndex: ReadonlySet<string>,
-): Pick<VerificationGitState, "contentStateHash" | "repositoryStateHash"> {
+): Pick<VerificationGitState, "contentStateHash" | "repositoryStateHash"> & { hiddenTrackedPaths: string[] } {
   const contentHash = createHash("sha256");
   const repositoryHash = createHash("sha256");
   frame(contentHash, "domain", "semctx:verification-content-state:v1");
   frame(repositoryHash, "domain", "semctx:verification-repository-state:v1");
+  const hiddenTrackedPaths: string[] = [];
 
   const paths = sortedPaths(new Set([...tracked.keys(), ...untracked.map(normalizedPath)]));
   for (const path of paths) {
     const indexEntry = tracked.get(path);
     if (indexEntry?.mode === "160000") {
-      if (changedOutsideIndex.has(path)) {
+      const materializedHead = initializedGitlinkHead(root, path);
+      if (changedOutsideIndex.has(path) || (materializedHead !== undefined && materializedHead !== indexEntry.objectId)) {
         throw new SemctxError("GIT_ERROR", "changed gitlink verification input is unsupported", { path });
       }
       frame(contentHash, "path", path);
@@ -158,7 +193,10 @@ function captureContentState(
 
     const absolute = resolve(root, path);
     const stat = lstatIfPresent(absolute);
-    if (stat === undefined && !indexEntry?.skipWorktree) continue;
+    if (stat === undefined && !indexEntry?.skipWorktree) {
+      if (indexEntry !== undefined && !changedOutsideIndex.has(path)) hiddenTrackedPaths.push(path);
+      continue;
+    }
     let mode: string;
     let kind: string;
     let payload: Uint8Array;
@@ -196,6 +234,14 @@ function captureContentState(
         && !changedOutsideIndex.has(path)
       ? indexEntry.objectId
       : hashObject(root, path, payload);
+    if (
+      stat !== undefined
+      && indexEntry !== undefined
+      && (mode !== indexEntry.mode || objectId !== indexEntry.objectId)
+      && !changedOutsideIndex.has(path)
+    ) {
+      hiddenTrackedPaths.push(path);
+    }
     frame(repositoryHash, "path", path);
     frame(repositoryHash, "mode", mode);
     frame(repositoryHash, "object", objectId);
@@ -204,6 +250,7 @@ function captureContentState(
   return {
     contentStateHash: `sha256:${contentHash.digest("hex")}`,
     repositoryStateHash: `sha256:${repositoryHash.digest("hex")}`,
+    hiddenTrackedPaths,
   };
 }
 
@@ -249,16 +296,19 @@ function captureVerificationGitSnapshot(root: string): VerificationGitSnapshot {
       throw new SemctxError("GIT_ERROR", "unsupported untracked verification input", { path });
     }
   }
-  const contentState = captureContentState(root, trackedIndexEntries(root), untracked, unstagedPaths(root));
+  const tracked = trackedIndexEntries(root);
+  const { hiddenTrackedPaths, ...contentState } = captureContentState(root, tracked, untracked, unstagedPaths(root));
   return {
     state: {
       headCommit,
       analyzedSourceHash: fingerprintVerificationSource(headCommit, new TextDecoder().decode(analyzedDiff)),
       workingStateHash: `sha256:${hash.digest("hex")}`,
       ...contentState,
+      indexStateHash: captureIndexStateHash(tracked),
       headTreeHash: captureHeadTreeHash(root),
     },
     untrackedPaths: untracked,
+    hiddenTrackedPaths,
   };
 }
 
@@ -275,6 +325,13 @@ export function captureRecordableVerificationGitState(root: string): Verificatio
       "INVALID_TASK_INPUT",
       "--record refuses non-ignored untracked files because working-tree verification cannot analyze them; add, remove, or ignore them first",
       { untrackedPaths: snapshot.untrackedPaths },
+    );
+  }
+  if (snapshot.hiddenTrackedPaths.length > 0) {
+    throw new SemctxError(
+      "INVALID_TASK_INPUT",
+      "--record refuses tracked bytes hidden from the analyzed Git diff; clear assume-unchanged/skip-worktree or restore the indexed content first",
+      { hiddenTrackedPaths: snapshot.hiddenTrackedPaths },
     );
   }
   return snapshot.state;
