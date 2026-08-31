@@ -742,6 +742,38 @@ describe("verification-state capture parity", () => {
     }
   });
 
+  it("preserves a clean gitlink and fails closed when its indexed commit changes", () => {
+    const repo = mkdtempSync(join(tmpdir(), "semctx-guard-gitlink-"));
+    const child = mkdtempSync(join(tmpdir(), "semctx-guard-gitlink-child-"));
+    const git = (args: string[]) => execFileSync("git", args, { cwd: repo, encoding: "utf8" }).trim();
+    const childGit = (args: string[]) => execFileSync("git", args, { cwd: child, encoding: "utf8" }).trim();
+    try {
+      childGit(["init"]);
+      writeFileSync(join(child, "dependency.ts"), "export const value = 1;\n");
+      childGit(["add", "dependency.ts"]);
+      childGit(["-c", "user.name=Semctx Test", "-c", "user.email=semctx@example.invalid", "commit", "-m", "first"]);
+      const firstCommit = childGit(["rev-parse", "HEAD"]);
+      writeFileSync(join(child, "dependency.ts"), "export const value = 2;\n");
+      childGit(["add", "dependency.ts"]);
+      childGit(["-c", "user.name=Semctx Test", "-c", "user.email=semctx@example.invalid", "commit", "-m", "second"]);
+
+      git(["init"]);
+      git(["-c", "protocol.file.allow=always", "submodule", "add", child, "vendor"]);
+      git(["-c", "user.name=Semctx Test", "-c", "user.email=semctx@example.invalid", "commit", "-m", "gitlink"]);
+
+      const state = captureVerificationGitState(repo);
+      expect(state.repositoryStateHash).toBe(state.headTreeHash);
+      expect(state).toEqual(captureApplicationVerificationGitState(repo));
+
+      execFileSync("git", ["checkout", firstCommit], { cwd: join(repo, "vendor"), stdio: "ignore" });
+      expect(() => captureVerificationGitState(repo)).toThrow("changed gitlink verification input is unsupported");
+      expect(() => captureApplicationVerificationGitState(repo)).toThrow("changed gitlink verification input is unsupported");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+      rmSync(child, { recursive: true, force: true });
+    }
+  });
+
   it.skipIf(process.platform === "win32")("changes on executable-mode and symlink-target drift", () => {
     const repo = mkdtempSync(join(tmpdir(), "semctx-guard-metadata-"));
     const git = (args: string[]) => execFileSync("git", args, { cwd: repo, stdio: "ignore" });
