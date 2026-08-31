@@ -223,8 +223,31 @@ function isCanonicalGitExecutableToken(token) {
   return executable === "git" || executable === "git.exe";
 }
 
-function isShellExpandedExecutableToken(token) {
-  return /^\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})$/.test(stripQuotes(token));
+function shellExpandedExecutableEndIndex(tokens, start) {
+  if (!/[$`]/.test(stripQuotes(tokens[start]))) return -1;
+  let substitutionDepth = 0;
+  let backtickOpen = false;
+  for (let i = start; i < tokens.length; i += 1) {
+    const token = stripQuotes(tokens[i]);
+    for (let offset = 0; offset < token.length; offset += 1) {
+      const char = token[offset];
+      if (char === "`") {
+        backtickOpen = !backtickOpen;
+        continue;
+      }
+      if (backtickOpen) continue;
+      if (char === "$" && token[offset + 1] === "(") {
+        substitutionDepth += 1;
+        offset += 1;
+      } else if (substitutionDepth > 0 && char === "(") {
+        substitutionDepth += 1;
+      } else if (substitutionDepth > 0 && char === ")") {
+        substitutionDepth -= 1;
+      }
+    }
+    if (substitutionDepth === 0 && !backtickOpen) return i;
+  }
+  return tokens.length - 1;
 }
 
 const ENV_OPTIONS_WITH_VALUE = new Set([
@@ -306,10 +329,8 @@ function gitTokenIndex(tokens) {
   i = shellWrapperCommandIndex(tokens, i);
   if (i < 0) return -1;
   const executable = executableName(tokens[i]);
-  return (executable !== undefined && RECOGNIZED_GIT_EXECUTABLES.has(executable))
-      || isShellExpandedExecutableToken(tokens[i])
-    ? i
-    : -1;
+  if (executable !== undefined && RECOGNIZED_GIT_EXECUTABLES.has(executable)) return i;
+  return shellExpandedExecutableEndIndex(tokens, i);
 }
 
 const GIT_GLOBAL_OPTIONS_WITH_VALUE = new Set([

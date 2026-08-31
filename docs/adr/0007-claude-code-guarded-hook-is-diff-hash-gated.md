@@ -69,8 +69,8 @@ authorize a terminal Git operation.
   different Git programs or configuration. Literal quote/backslash composition is normalized for detection, so forms such as
   `g\it`, `gi't'`, `git co'mmit'`, `git pu\sh`, escaped newlines, or a composed `P'A'TH=...`
   assignment cannot hide the terminal Git operation. Direct `command`, `exec`, and `builtin` forms,
-  plus variable-expanded executable tokens such as `$GIT` and `${GIT}`, are detected and rejected
-  as non-canonical command shapes.
+  plus shell-expanded executable expressions such as `$GIT`, `${GIT:-git}`, and `$(printf git)`,
+  are detected and rejected as non-canonical command shapes.
 - Commit commands must consume the already-inspected whole index. Commit-time staging, interactive
   selection, partial-index options, pathspecs, and every `--fixup` form fail closed, including Git's
   accepted long-option abbreviations. Every persisted version 3

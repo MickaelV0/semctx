@@ -85,6 +85,9 @@ describe("isTerminalGitCommand — structural detection (no shell eval)", () => 
     expect(isTerminalGitCommand("builtin command git commit -m x")).toBe("commit");
     expect(isTerminalGitCommand("$GIT commit -m x")).toBe("commit");
     expect(isTerminalGitCommand("${GIT} push origin main")).toBe("push");
+    expect(isTerminalGitCommand("${GIT:-git} commit -m x")).toBe("commit");
+    expect(isTerminalGitCommand("$(printf git) commit -m x")).toBe("commit");
+    expect(isTerminalGitCommand("`printf git` push origin main")).toBe("push");
   });
 
   it("detects common wrapper, quoted, absolute-path, and shell -c shapes", () => {
@@ -138,6 +141,9 @@ describe("isIsolatedTerminalGitCommand — no mutation before authorization", ()
     expect(isIsolatedTerminalGitCommand("builtin command git commit -m x")).toBe(false);
     expect(isIsolatedTerminalGitCommand("$GIT commit -m x")).toBe(false);
     expect(isIsolatedTerminalGitCommand("${GIT} push origin main")).toBe(false);
+    expect(isIsolatedTerminalGitCommand("${GIT:-git} commit -m x")).toBe(false);
+    expect(isIsolatedTerminalGitCommand("$(printf git) commit -m x")).toBe(false);
+    expect(isIsolatedTerminalGitCommand("`printf git` push origin main")).toBe(false);
   });
 
   it("rejects cwd targets that require shell expansion", () => {
@@ -867,6 +873,9 @@ describe("guard runtime — repository scope must be explicit", () => {
         "env -S 'git commit -m x'",
         "$GIT commit -m x",
         "${GIT} push origin main",
+        "${GIT:-git} commit -m x",
+        "$(printf git) commit -m x",
+        "`printf git` push origin main",
         "command git commit -m x",
         "git --git-dir ../other/.git --work-tree ../other commit -m x",
         "git --exec-path=../proxy-libexec commit -m x",

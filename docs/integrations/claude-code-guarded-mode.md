@@ -81,9 +81,9 @@ that can select another Git executable or configuration (`PATH`, home/profile va
 `XDG_CONFIG_HOME`, and related Git discovery variables) also fail closed, as do
 `--exec-path=<path>`, explicit executable paths such as `/tmp/proxy/git`, and non-canonical Windows
 launchers such as `git.cmd`. Quote/backslash-composed executable names, terminal subcommands,
-command wrappers, executable variables, and assignments are normalized for terminal detection,
+command wrappers, executable shell expansions, and assignments are normalized for terminal detection,
 then rejected as non-canonical; `g\it`, `gi't'`, `git co'mmit'`, `git pu\sh`, `$GIT commit`,
-`${GIT} push`, `command`, `exec`, `builtin`, escaped newlines, and `P'A'TH=...` therefore cannot
+`${GIT:-git} commit`, `$(printf git) commit`, `command`, `exec`, `builtin`, escaped newlines, and `P'A'TH=...` therefore cannot
 bypass the guard. Use a plain literal
 `cd <repo> && git commit`, `git -C <repo> commit`, or the
 equivalent `push`. Direct `env` wrappers are parsed too: non-retargeting forms such as
