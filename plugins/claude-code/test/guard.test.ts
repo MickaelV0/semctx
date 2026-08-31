@@ -119,6 +119,7 @@ describe("isTerminalGitCommand — structural detection (no shell eval)", () => 
 describe("isIsolatedTerminalGitCommand — no mutation before authorization", () => {
   it("allows one terminal Git operation with safe cwd, env, command, and Git prefixes", () => {
     expect(isIsolatedTerminalGitCommand("git commit -m x")).toBe(true);
+    expect(isIsolatedTerminalGitCommand("git commit -m '$MESSAGE'")).toBe(true);
     expect(isIsolatedTerminalGitCommand("cd repo && git push origin main")).toBe(true);
     expect(isIsolatedTerminalGitCommand("env GIT_AUTHOR_NAME=x git commit -m x")).toBe(true);
     expect(isIsolatedTerminalGitCommand("env -u SEMCTX_UNUSED git push origin main")).toBe(true);
@@ -146,6 +147,9 @@ describe("isIsolatedTerminalGitCommand — no mutation before authorization", ()
     expect(isIsolatedTerminalGitCommand("${GIT:-git} commit -m x")).toBe(false);
     expect(isIsolatedTerminalGitCommand("$(printf git) commit -m x")).toBe(false);
     expect(isIsolatedTerminalGitCommand("`printf git` push origin main")).toBe(false);
+    expect(isIsolatedTerminalGitCommand("git push .${IFS}--all")).toBe(false);
+    expect(isIsolatedTerminalGitCommand('git commit -m "$MESSAGE"')).toBe(false);
+    expect(isIsolatedTerminalGitCommand('git push ".\'${IFS}--all"')).toBe(false);
   });
 
   it("rejects cwd targets that require shell expansion", () => {
@@ -621,6 +625,7 @@ describe("guard runtime — large working diffs", () => {
         "git push . --all",
         "git push . --mirror",
         "git push . --recurse-submodules=on-demand",
+        "git push .${IFS}--all",
         "git -c push.default=matching push .",
         "git -c remote.origin.push=refs/heads/*:refs/heads/* push origin",
         "git -c push.followTags=true push .",
@@ -632,11 +637,13 @@ describe("guard runtime — large working diffs", () => {
         });
         expect(result.status, command).toBe(2);
         expect(result.stderr).toContain(
-          command.startsWith("git -c ")
-            ? "must be an isolated command"
-            : "may publish only the verified HEAD",
+          isIsolatedTerminalGitCommand(command)
+            ? "may publish only the verified HEAD"
+            : "must be an isolated command",
         );
       }
+
+      expect(pushSourceMatchesHead("git push .${IFS}--all", repo, verified.headCommit)).toBe(false);
 
       git(["config", "push.followTags", "true"]);
       expect(pushSourceMatchesHead("git push . HEAD:refs/heads/target", repo, verified.headCommit)).toBe(false);

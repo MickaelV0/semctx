@@ -419,6 +419,45 @@ function pathRequiresShellExpansion(token) {
   return /[$~*?{}[\]]/.test(stripQuotes(token));
 }
 
+function shellTokenRequiresExpansion(token) {
+  const source = String(token ?? "");
+  let quote = null;
+  for (let i = 0; i < source.length; i += 1) {
+    const char = source[i];
+    if (quote === "'") {
+      if (char === "'") quote = null;
+      continue;
+    }
+    if (quote === '"') {
+      if (char === "\\" && source[i + 1] !== undefined) {
+        i += 1;
+        continue;
+      }
+      if (char === '"') {
+        quote = null;
+        continue;
+      }
+      if (char === "$" || char === "`") return true;
+      continue;
+    }
+    if (char === "\\" && source[i + 1] !== undefined) {
+      i += 1;
+      continue;
+    }
+    if (char === '"') {
+      quote = '"';
+      continue;
+    }
+    if (char === "'") {
+      quote = "'";
+      continue;
+    }
+    if (char === "$" || char === "`") return true;
+    if (quote === null && /[~*?{}[\]]/.test(char)) return true;
+  }
+  return quote !== null;
+}
+
 function isRetargetingEnvironmentName(name) {
   const normalized = String(name ?? "").toUpperCase();
   return GIT_RETARGET_ENV.has(normalized) || normalized.startsWith("GIT_CONFIG_");
@@ -572,6 +611,7 @@ export function isIsolatedTerminalGitCommand(command) {
   if (segments.some((segment) => segment === "")) return false;
   const terminal = segments.pop();
   if (terminal === undefined || isTerminalGitCommand(terminal) === null) return false;
+  if (shellWords(terminal).some(shellTokenRequiresExpansion)) return false;
 
   for (const prefix of segments) {
     const tokens = shellWords(prefix);
@@ -692,6 +732,7 @@ export function pushSourceMatchesHead(command, cwd, currentHead) {
   try {
     const terminal = String(command ?? "").split("&&").at(-1)?.trim() ?? "";
     const tokens = shellWords(terminal);
+    if (tokens.some(shellTokenRequiresExpansion)) return false;
     const gitIndex = gitTokenIndex(tokens);
     if (gitIndex < 0) return false;
     let i = gitIndex + 1;
