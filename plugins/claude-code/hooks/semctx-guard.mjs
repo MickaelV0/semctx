@@ -449,6 +449,18 @@ export function resolveGitCwd(command, inputCwd) {
   return cwd;
 }
 
+/** Resolve a command directory to the repository root Git itself will discover from there. */
+function resolveGitRoot(cwd) {
+  try {
+    const root = execFileSync("git", ["-C", cwd, "rev-parse", "--show-toplevel"], {
+      encoding: "utf8",
+    }).trim();
+    return root === "" ? cwd : resolve(root);
+  } catch {
+    return cwd;
+  }
+}
+
 /** Enablement: SEMCTX_GUARD=off strictly disables (wins); =on forces; else .semctx/guard.json {enabled}. */
 export function guardEnabled(env, guardJson) {
   const e = String(env?.SEMCTX_GUARD ?? "").toLowerCase();
@@ -806,10 +818,11 @@ function main() {
   const inputCwd = input.cwd ?? process.cwd();
   const commandIsolated = isIsolatedTerminalGitCommand(command);
   const scopeRequiresSessionGuard = gitScopeRequiresSessionGuard(command);
-  const cwd = resolveGitCwd(command, inputCwd); // the repo the git command targets, not the session cwd
+  const sessionCwd = resolveGitRoot(inputCwd);
+  const cwd = resolveGitRoot(resolveGitCwd(command, inputCwd)); // the repo the git command targets, not the session cwd
   const targetGuard = readJson(join(cwd, ".semctx", "guard.json"));
   const sessionGuard = scopeRequiresSessionGuard
-    ? readJson(join(inputCwd, ".semctx", "guard.json"))
+    ? readJson(join(sessionCwd, ".semctx", "guard.json"))
     : null;
   const enabled = guardEnabled(process.env, targetGuard)
     || (scopeRequiresSessionGuard && guardEnabled(process.env, sessionGuard));

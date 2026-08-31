@@ -655,6 +655,29 @@ describe("guard runtime — repository scope must be explicit", () => {
       rmSync(repo, { recursive: true, force: true });
     }
   });
+
+  it("anchors guarded state at the Git root when push starts in or targets a subdirectory", () => {
+    const repo = createGuardedRepo("semctx-guard-subdirectory-");
+    const nested = join(repo, "packages", "nested");
+    mkdirSync(nested, { recursive: true });
+    try {
+      const guard = resolve(import.meta.dir, "../hooks/semctx-guard.mjs");
+      for (const scenario of [
+        { processCwd: repo, inputCwd: repo, command: "git -C packages push . other:refs/heads/target" },
+        { processCwd: nested, inputCwd: nested, command: "git push . other:refs/heads/target" },
+      ]) {
+        const result = spawnSync("node", [guard], {
+          cwd: scenario.processCwd,
+          input: JSON.stringify({ tool_name: "Bash", tool_input: { command: scenario.command }, cwd: scenario.inputCwd }),
+          encoding: "utf8",
+        });
+        expect(result.status, scenario.command).toBe(2);
+        expect(result.stderr).toContain("may publish only the verified HEAD");
+      }
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("verification-state capture parity", () => {
