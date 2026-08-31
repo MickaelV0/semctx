@@ -308,7 +308,7 @@ const UNSAFE_PUSH_OPTIONS = new Set([
 ]);
 
 const PUSH_OPTIONS_WITH_VALUE = new Set([
-  "--exec", "--push-option", "--receive-pack", "--signed", "-o",
+  "--exec", "--push-option", "--receive-pack", "-o",
 ]);
 
 /**
@@ -376,7 +376,7 @@ export function pushSourceMatchesHead(command, cwd, currentHead) {
     const rawSource = separator < 0 ? refspec : refspec.slice(0, separator);
     const source = rawSource.startsWith("+") ? rawSource.slice(1) : rawSource;
     if (source === "" || source.includes("*") || source.startsWith("^")) return false;
-    const resolved = execFileSync("git", ["rev-parse", "--verify", `${source}^{commit}`], {
+    const resolved = execFileSync("git", ["rev-parse", "--verify", source], {
       cwd,
       encoding: "utf8",
     }).trim();
