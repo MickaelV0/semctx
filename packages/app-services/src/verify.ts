@@ -22,6 +22,7 @@ import {
 } from "./unresolved-references";
 import { CONTROL_INDEX_SNAPSHOT_META_KEY, parseIndexedControlSnapshot } from "./freshness";
 import type { ControlFreshnessReason } from "@semantic-context/control-model";
+import { fingerprintVerificationSource } from "./verification-state";
 
 /**
  * `head` names the commit the analysed post-image belongs to. It is optional everywhere and means
@@ -43,6 +44,8 @@ export interface VerifyComputation {
   report: VerifyReport;
   git: VerifyReportGitMeta;
   coChanges: CoChange[];
+  /** Exact resolved HEAD plus diff bytes consumed by working-tree analysis; absent for other sources. */
+  analyzedSourceHash: string | null;
 }
 
 /**
@@ -76,6 +79,7 @@ interface ResolvedVerifySource {
   identity: SourceIdentity;
   /** Frozen object id the co-change history is walked from; refs are never re-read after capture. */
   coChangeHead: string | null;
+  analyzedSourceHash?: string;
 }
 
 type VerifyCaptureBarrier = () => void;
@@ -211,7 +215,16 @@ function resolveSource(root: string, source: VerifySource, dryRun: boolean): Res
   // The checked-out commit is load-bearing too: the working tree it materialized is the post-image.
   // A caller naming a different head has already broken the coordinate system it reports against.
   const identity: SourceIdentity = { kind: "commits", commits: [...new Set([headSha, checkedOutSha])] };
-  return { diffText: diff.out, git: meta, includeCoChanges: true, identity, coChangeHead: headSha };
+  return {
+    diffText: diff.out,
+    git: meta,
+    includeCoChanges: true,
+    identity,
+    coChangeHead: headSha,
+    ...(source.kind === "working-tree"
+      ? { analyzedSourceHash: fingerprintVerificationSource(headSha, diff.out) }
+      : {}),
+  };
 }
 
 function historicalCoChanges(root: string, files: readonly string[], head: string): CoChange[] {
@@ -534,7 +547,13 @@ export function runVerify(root: string, source: VerifySource): VerifyComputation
     const coChanges = resolved.includeCoChanges && resolved.coChangeHead !== null
       ? historicalCoChanges(root, result.changedFiles, resolved.coChangeHead)
       : [];
-    return { result, report: buildVerifyReport(result, resolved.git, config.blockingRules, coChanges), git: resolved.git, coChanges };
+    return {
+      result,
+      report: buildVerifyReport(result, resolved.git, config.blockingRules, coChanges),
+      git: resolved.git,
+      coChanges,
+      analyzedSourceHash: resolved.analyzedSourceHash ?? null,
+    };
   } finally {
     store.close();
   }

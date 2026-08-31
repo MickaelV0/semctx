@@ -109,6 +109,19 @@ describe("semantic lifecycle hygiene", () => {
       "utf8",
     );
     expect(checkSemanticState(legacyRoot).reasonCodes).toEqual(["EVIDENCE_BASELINE_INVALID"]);
+    writeFileSync(
+      join(legacyRoot, ".semctx", "verification-state.json"),
+      `${JSON.stringify({
+        version: 2,
+        headCommit: "a".repeat(40),
+        analyzedSourceHash: `sha256:${"0".repeat(64)}`,
+        workingStateHash: `sha256:${"0".repeat(64)}`,
+        verdict: "PASS",
+        recordedAt: "2026-07-23T00:00:00.000Z",
+      })}\n`,
+      "utf8",
+    );
+    expect(checkSemanticState(legacyRoot).reasonCodes).toEqual(["EVIDENCE_BASELINE_INVALID"]);
 
     const staleRoot = root();
     mkdirSync(join(staleRoot, ".semctx", "working"), { recursive: true });
@@ -116,9 +129,9 @@ describe("semantic lifecycle hygiene", () => {
     writeFileSync(
       join(staleRoot, ".semctx", "verification-state.json"),
       `${JSON.stringify({
-        version: 2,
+        version: 3,
         ...captureVerificationGitState(staleRoot),
-        workingStateHash: `sha256:${"0".repeat(64)}`,
+        contentStateHash: `sha256:${"0".repeat(64)}`,
         verdict: "PASS",
         recordedAt: "2026-07-23T00:00:00.000Z",
       })}\n`,
@@ -131,15 +144,36 @@ describe("semantic lifecycle hygiene", () => {
       "EVIDENCE_BASELINE_STALE",
     ]);
     expect(report.lifecycleFindings.find((finding) => finding.code === "EVIDENCE_BASELINE_STALE")?.message)
-      .toBe("The recorded verification baseline does not match the current commit-bound working state.");
+      .toBe("The recorded verification baseline does not match the current analyzed content state.");
   });
 
-  it("invalidates evidence baselines after HEAD movement or an untracked source change", () => {
+  it("survives an exact commit but invalidates changed committed or untracked content", () => {
+    const exactCommit = root();
+    writeFileSync(join(exactCommit, "README.md"), "verified change\n", "utf8");
+    Bun.spawnSync(["git", "add", "README.md"], { cwd: exactCommit });
+    const exactState = captureVerificationGitState(exactCommit);
+    writeFileSync(
+      join(exactCommit, ".semctx", "verification-state.json"),
+      `${JSON.stringify({
+        version: 3,
+        ...exactState,
+        verdict: "PASS",
+        recordedAt: "2026-07-23T00:00:00.000Z",
+      })}\n`,
+      "utf8",
+    );
+    Bun.spawnSync(
+      ["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "exact"],
+      { cwd: exactCommit },
+    );
+    expect(captureVerificationGitState(exactCommit).headCommit).not.toBe(exactState.headCommit);
+    expect(checkSemanticState(exactCommit).reasonCodes).toEqual([]);
+
     const movedHead = root();
     writeFileSync(
       join(movedHead, ".semctx", "verification-state.json"),
       `${JSON.stringify({
-        version: 2,
+        version: 3,
         ...captureVerificationGitState(movedHead),
         verdict: "PASS",
         recordedAt: "2026-07-23T00:00:00.000Z",
@@ -159,7 +193,7 @@ describe("semantic lifecycle hygiene", () => {
     writeFileSync(
       join(untracked, ".semctx", "verification-state.json"),
       `${JSON.stringify({
-        version: 2,
+        version: 3,
         ...captureVerificationGitState(untracked),
         verdict: "PASS",
         recordedAt: "2026-07-23T00:00:00.000Z",
@@ -168,7 +202,7 @@ describe("semantic lifecycle hygiene", () => {
     );
     writeFileSync(join(untracked, "untracked-source.ts"), "export const value = 1;\n", "utf8");
     expect(checkSemanticState(untracked).reasonCodes).toEqual(["EVIDENCE_BASELINE_STALE"]);
-  });
+  }, 15_000);
 
   it("refuses to seal an index while lifecycle inputs are invalid", () => {
     const dir = root();

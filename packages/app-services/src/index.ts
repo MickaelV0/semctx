@@ -86,7 +86,11 @@ export {
 } from "./unresolved-references";
 export type { PersistedUnresolvedReferenceIndexV1 } from "./unresolved-references";
 export { checkSemanticState, inspectSemanticLifecycle } from "./semantic-check";
-export { captureRecordableVerificationGitState, captureVerificationGitState } from "./verification-state";
+export {
+  captureRecordableVerificationGitState,
+  captureVerificationGitState,
+  fingerprintVerificationSource,
+} from "./verification-state";
 export type { VerificationGitState } from "./verification-state";
 export { closeChange, normalizeChangeId, openChange, updateChange, verifyAuthoredChange } from "./changes";
 export type { OpenChangeCommand, UpdateChangeCommand } from "./changes";

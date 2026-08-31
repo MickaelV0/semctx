@@ -7,13 +7,14 @@ import {
   isTerminalGitCommand,
   guardEnabled,
   guardDecision,
+  pushSourceMatchesHead,
   resolveGitCwd,
   verifyRecordCommand,
   shellQuote,
   GLOBAL_VERIFY_COMMAND,
 } from "../hooks/semctx-guard.mjs";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { captureVerificationGitState as captureApplicationVerificationGitState } from "@semantic-context/app-services";
@@ -163,8 +164,17 @@ describe("guardEnabled — advisory by default, strict off wins", () => {
 
 describe("guardDecision — diff-hash gate (ADR 0007)", () => {
   const HASH = "sha256:abc";
-  const CURRENT = { headCommit: "a".repeat(40), workingStateHash: HASH };
-  const STATE = { version: 2, ...CURRENT, verdict: "WARN" };
+  const CONTENT = "sha256:content";
+  const REPOSITORY = "sha256:repository";
+  const CURRENT = {
+    headCommit: "a".repeat(40),
+    analyzedSourceHash: "sha256:analyzed",
+    workingStateHash: HASH,
+    contentStateHash: CONTENT,
+    repositoryStateHash: REPOSITORY,
+    headTreeHash: REPOSITORY,
+  };
+  const STATE = { version: 3, ...CURRENT, verdict: "WARN" };
   it("advisory profile never blocks", () => {
     expect(guardDecision({ enabled: false, terminalVerb: "commit", state: null, currentState: CURRENT }).block).toBe(false);
   });
@@ -288,19 +298,30 @@ describe("guardDecision — diff-hash gate (ADR 0007)", () => {
     expect(d.block).toBe(true);
     expect(d.reason).toContain("must be an isolated command");
   });
-  it("allows when the verified diff is unchanged and not BLOCK", () => {
+  it("allows commit and push when the analyzed content is unchanged and HEAD materializes it", () => {
     const d = guardDecision({ enabled: true, terminalVerb: "commit", state: STATE, currentState: CURRENT });
     expect(d.block).toBe(false);
+    expect(guardDecision({ enabled: true, terminalVerb: "push", state: STATE, currentState: CURRENT }).block)
+      .toBe(false);
   });
-  it("blocks when the commit or working state changed since verification", () => {
+  it("allows a commit SHA change but blocks content drift or a partial committed tree", () => {
+    const committed = { ...CURRENT, headCommit: "b".repeat(40), workingStateHash: "sha256:new-commit" };
+    expect(guardDecision({ enabled: true, terminalVerb: "push", state: STATE, currentState: committed }).block)
+      .toBe(false);
     const d = guardDecision({
       enabled: true,
       terminalVerb: "push",
       state: { ...STATE, verdict: "PASS" },
-      currentState: { ...CURRENT, workingStateHash: "sha256:changed" },
+      currentState: { ...CURRENT, contentStateHash: "sha256:changed" },
     });
     expect(d.block).toBe(true);
-    expect(d.reason).toContain("changed since the last verification");
+    expect(d.reason).toContain("does not exactly materialize");
+    expect(guardDecision({
+      enabled: true,
+      terminalVerb: "push",
+      state: STATE,
+      currentState: { ...CURRENT, headTreeHash: "sha256:partial" },
+    }).block).toBe(true);
   });
   it("blocks when the recorded verdict was BLOCK, even if the diff is unchanged", () => {
     const d = guardDecision({ enabled: true, terminalVerb: "commit", state: { ...STATE, verdict: "BLOCK" }, currentState: CURRENT });
@@ -312,9 +333,117 @@ describe("guardDecision — diff-hash gate (ADR 0007)", () => {
     expect(d.block).toBe(true);
     expect(d.reason).toContain("legacy");
   });
+  it("keeps the commit-bound version 2 baseline readable but non-authorizing", () => {
+    const d = guardDecision({
+      enabled: true,
+      terminalVerb: "commit",
+      state: { version: 2, headCommit: CURRENT.headCommit, workingStateHash: HASH, verdict: "PASS" },
+      currentState: CURRENT,
+    });
+    expect(d.block).toBe(true);
+    expect(d.reason).toContain("legacy");
+  });
+});
+
+describe("guardDecision — verify, commit, push replay", () => {
+  it("reuses an exact pre-commit proof after commit and rejects a partial commit", () => {
+    const repo = mkdtempSync(join(tmpdir(), "semctx-guard-replay-"));
+    const git = (args: string[]) => execFileSync("git", args, { cwd: repo, stdio: "ignore" });
+    try {
+      git(["init"]);
+      writeFileSync(join(repo, "a.ts"), "export const a = 1;\n");
+      writeFileSync(join(repo, "b.ts"), "export const b = 1;\n");
+      git(["add", "-A"]);
+      git(["-c", "user.name=Semctx Test", "-c", "user.email=semctx@example.invalid", "commit", "-m", "base"]);
+
+      writeFileSync(join(repo, "a.ts"), "export const a = 2;\n");
+      writeFileSync(join(repo, "b.ts"), "export const b = 2;\n");
+      git(["add", "-A"]);
+      const verified = captureVerificationGitState(repo);
+      const state = { version: 3, ...verified, verdict: "PASS" };
+      git(["-c", "user.name=Semctx Test", "-c", "user.email=semctx@example.invalid", "commit", "-m", "exact"]);
+      const committed = captureVerificationGitState(repo);
+      expect(committed.headCommit).not.toBe(verified.headCommit);
+      expect(committed.contentStateHash).toBe(verified.contentStateHash);
+      expect(committed.repositoryStateHash).toBe(verified.repositoryStateHash);
+      expect(committed.headTreeHash).toBe(verified.repositoryStateHash);
+      expect(guardDecision({ enabled: true, terminalVerb: "push", state, currentState: committed }).block)
+        .toBe(false);
+
+      writeFileSync(join(repo, "a.ts"), "export const a = 3;\n");
+      writeFileSync(join(repo, "b.ts"), "export const b = 3;\n");
+      git(["add", "a.ts"]);
+      const partialState = { version: 3, ...captureVerificationGitState(repo), verdict: "PASS" };
+      git(["-c", "user.name=Semctx Test", "-c", "user.email=semctx@example.invalid", "commit", "-m", "partial"]);
+      const partial = captureVerificationGitState(repo);
+      expect(partial.contentStateHash).toBe(partialState.contentStateHash);
+      expect(partial.repositoryStateHash).toBe(partialState.repositoryStateHash);
+      expect(partial.headTreeHash).not.toBe(partialState.repositoryStateHash);
+      expect(guardDecision({ enabled: true, terminalVerb: "push", state: partialState, currentState: partial }).block)
+        .toBe(true);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("guard runtime — large working diffs", () => {
+  it("blocks every push source that is not exactly the verified HEAD", () => {
+    const repo = mkdtempSync(join(tmpdir(), "semctx-guard-push-source-"));
+    const git = (args: string[]) => execFileSync("git", args, { cwd: repo, encoding: "utf8" }).trim();
+    try {
+      git(["init"]);
+      writeFileSync(join(repo, ".gitignore"), ".semctx/\n");
+      writeFileSync(join(repo, "tracked.ts"), "export const value = 1;\n");
+      git(["add", "."]);
+      git(["-c", "user.name=Semctx Test", "-c", "user.email=semctx@example.invalid", "commit", "-m", "first"]);
+      git(["branch", "other"]);
+      writeFileSync(join(repo, "tracked.ts"), "export const value = 2;\n");
+      git(["add", "."]);
+      git(["-c", "user.name=Semctx Test", "-c", "user.email=semctx@example.invalid", "commit", "-m", "verified"]);
+      const verified = captureVerificationGitState(repo);
+      mkdirSync(join(repo, ".semctx"));
+      writeFileSync(join(repo, ".semctx", "guard.json"), JSON.stringify({ enabled: true }));
+      writeFileSync(
+        join(repo, ".semctx", "verification-state.json"),
+        JSON.stringify({ version: 3, ...verified, verdict: "PASS" }),
+      );
+
+      expect(pushSourceMatchesHead("git push . HEAD:refs/heads/target", repo, verified.headCommit)).toBe(true);
+      const guard = resolve(import.meta.dir, "../hooks/semctx-guard.mjs");
+      for (const command of [
+        "git push . other:refs/heads/target",
+        "git push . HEAD~1:refs/heads/target",
+        "git push . :refs/heads/target",
+        "git push . --all",
+        "git push . --mirror",
+        "git push . --recurse-submodules=on-demand",
+        "git -c push.default=matching push .",
+        "git -c remote.origin.push=refs/heads/*:refs/heads/* push origin",
+        "git -c push.followTags=true push .",
+      ]) {
+        const result = spawnSync("node", [guard], {
+          cwd: repo,
+          input: JSON.stringify({ tool_name: "Bash", tool_input: { command }, cwd: repo }),
+          encoding: "utf8",
+        });
+        expect(result.status, command).toBe(2);
+        expect(result.stderr).toContain("may publish only the verified HEAD");
+      }
+
+      git(["config", "push.followTags", "true"]);
+      expect(pushSourceMatchesHead("git push . HEAD:refs/heads/target", repo, verified.headCommit)).toBe(false);
+      git(["config", "--unset", "push.followTags"]);
+      git(["config", "remote.local.push", "refs/heads/*:refs/heads/*"]);
+      expect(pushSourceMatchesHead("git push . HEAD:refs/heads/target", repo, verified.headCommit)).toBe(false);
+      git(["config", "--unset", "remote.local.push"]);
+      git(["config", "push.recurseSubmodules", "on-demand"]);
+      expect(pushSourceMatchesHead("git push .", repo, verified.headCommit)).toBe(false);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  }, 20_000);
+
   it("blocks a compound mutation command even with a matching baseline", () => {
     const repo = mkdtempSync(join(tmpdir(), "semctx-guard-compound-"));
     try {
@@ -331,7 +460,7 @@ describe("guard runtime — large working diffs", () => {
       writeFileSync(join(repo, ".semctx", "guard.json"), JSON.stringify({ enabled: true }));
       writeFileSync(
         join(repo, ".semctx", "verification-state.json"),
-        JSON.stringify({ version: 2, ...captureVerificationGitState(repo), verdict: "PASS" }),
+        JSON.stringify({ version: 3, ...captureVerificationGitState(repo), verdict: "PASS" }),
       );
 
       const guard = resolve(import.meta.dir, "../hooks/semctx-guard.mjs");
@@ -434,7 +563,7 @@ describe("guard runtime — large working diffs", () => {
       writeFileSync(join(repo, ".semctx", "guard.json"), JSON.stringify({ enabled: true }));
       writeFileSync(
         join(repo, ".semctx", "verification-state.json"),
-        JSON.stringify({ version: 2, ...captureVerificationGitState(repo), verdict: "PASS" }),
+        JSON.stringify({ version: 3, ...captureVerificationGitState(repo), verdict: "PASS" }),
       );
 
       const guard = resolve(import.meta.dir, "../hooks/semctx-guard.mjs");
@@ -471,7 +600,7 @@ describe("guard runtime — repository scope must be explicit", () => {
     writeFileSync(join(repo, ".semctx", "guard.json"), JSON.stringify({ enabled: true }));
     writeFileSync(
       join(repo, ".semctx", "verification-state.json"),
-      JSON.stringify({ version: 2, ...captureVerificationGitState(repo), verdict: "PASS" }),
+      JSON.stringify({ version: 3, ...captureVerificationGitState(repo), verdict: "PASS" }),
     );
     return repo;
   }
@@ -540,6 +669,96 @@ describe("verification-state capture parity", () => {
       writeFileSync(join(repo, "untracked.ts"), "export const extra = true;\n");
 
       expect(captureVerificationGitState(repo)).toEqual(captureApplicationVerificationGitState(repo));
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("changes on byte, path, and untracked-state drift", () => {
+    const repo = mkdtempSync(join(tmpdir(), "semctx-guard-drift-"));
+    const git = (args: string[]) => execFileSync("git", args, { cwd: repo, stdio: "ignore" });
+    try {
+      git(["init"]);
+      writeFileSync(join(repo, "tracked.ts"), "export const value = 1;\n");
+      git(["add", "tracked.ts"]);
+      git(["-c", "user.name=Semctx Test", "-c", "user.email=semctx@example.invalid", "commit", "-m", "base"]);
+      const baseline = captureVerificationGitState(repo);
+
+      writeFileSync(join(repo, "tracked.ts"), "export const value = 2;\n");
+      expect(captureVerificationGitState(repo).contentStateHash).not.toBe(baseline.contentStateHash);
+      git(["checkout", "--", "tracked.ts"]);
+
+      renameSync(join(repo, "tracked.ts"), join(repo, "renamed.ts"));
+      expect(captureVerificationGitState(repo).repositoryStateHash).not.toBe(baseline.repositoryStateHash);
+      renameSync(join(repo, "renamed.ts"), join(repo, "tracked.ts"));
+
+      writeFileSync(join(repo, "untracked.ts"), "export const extra = true;\n");
+      const withUntracked = captureVerificationGitState(repo);
+      expect(withUntracked.contentStateHash).not.toBe(baseline.contentStateHash);
+      expect(withUntracked.repositoryStateHash).not.toBe(baseline.repositoryStateHash);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("treats a core.symlinks=false checkout as the logical Git symlink", () => {
+    const repo = mkdtempSync(join(tmpdir(), "semctx-guard-symlink-file-"));
+    const git = (args: string[]) => execFileSync("git", args, { cwd: repo, encoding: "utf8" }).trim();
+    try {
+      git(["init"]);
+      git(["config", "core.symlinks", "false"]);
+      writeFileSync(join(repo, "target.txt"), "target\n");
+      writeFileSync(join(repo, "link"), "target.txt");
+      git(["add", "target.txt"]);
+      const linkObject = git(["hash-object", "-w", "link"]);
+      git(["update-index", "--add", "--cacheinfo", `120000,${linkObject},link`]);
+      git(["-c", "user.name=Semctx Test", "-c", "user.email=semctx@example.invalid", "commit", "-m", "symlink"]);
+      expect(git(["status", "--porcelain"])).toBe("");
+      const state = captureVerificationGitState(repo);
+      expect(state.repositoryStateHash).toBe(state.headTreeHash);
+      expect(state).toEqual(captureApplicationVerificationGitState(repo));
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("includes absent skip-worktree entries in a clean sparse repository state", () => {
+    const repo = mkdtempSync(join(tmpdir(), "semctx-guard-sparse-"));
+    const git = (args: string[]) => execFileSync("git", args, { cwd: repo, encoding: "utf8" }).trim();
+    try {
+      git(["init"]);
+      writeFileSync(join(repo, "visible.ts"), "export const visible = true;\n");
+      writeFileSync(join(repo, "hidden.ts"), "export const hidden = true;\n");
+      git(["add", "."]);
+      git(["-c", "user.name=Semctx Test", "-c", "user.email=semctx@example.invalid", "commit", "-m", "tree"]);
+      git(["update-index", "--skip-worktree", "hidden.ts"]);
+      rmSync(join(repo, "hidden.ts"));
+      expect(git(["status", "--porcelain"])).toBe("");
+      const state = captureVerificationGitState(repo);
+      expect(state.repositoryStateHash).toBe(state.headTreeHash);
+      expect(state).toEqual(captureApplicationVerificationGitState(repo));
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("changes on executable-mode and symlink-target drift", () => {
+    const repo = mkdtempSync(join(tmpdir(), "semctx-guard-metadata-"));
+    const git = (args: string[]) => execFileSync("git", args, { cwd: repo, stdio: "ignore" });
+    try {
+      git(["init"]);
+      writeFileSync(join(repo, "tool.sh"), "#!/bin/sh\nexit 0\n");
+      symlinkSync("tool.sh", join(repo, "tool-link"));
+      git(["add", "tool.sh", "tool-link"]);
+      git(["-c", "user.name=Semctx Test", "-c", "user.email=semctx@example.invalid", "commit", "-m", "base"]);
+      const baseline = captureVerificationGitState(repo);
+
+      chmodSync(join(repo, "tool.sh"), 0o755);
+      expect(captureVerificationGitState(repo).repositoryStateHash).not.toBe(baseline.repositoryStateHash);
+      chmodSync(join(repo, "tool.sh"), 0o644);
+      rmSync(join(repo, "tool-link"));
+      symlinkSync("missing.sh", join(repo, "tool-link"));
+      expect(captureVerificationGitState(repo).contentStateHash).not.toBe(baseline.contentStateHash);
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }

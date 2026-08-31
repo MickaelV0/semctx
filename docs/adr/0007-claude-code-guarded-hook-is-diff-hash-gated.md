@@ -1,4 +1,4 @@
-# ADR 0007 — The Claude Code guarded hook gates on commit-bound working state, and is opt-in
+# ADR 0007 — The Claude Code guarded hook gates on analyzed content, and is opt-in
 
 - Status: accepted
 - Date: 2026-07-04
@@ -24,18 +24,25 @@ Two profiles, **advisory by default**:
 Guarded enforcement is **source-state gated**, not re-analysis:
 
 ```
-verify records:   HEAD + hash(tracked diff + non-ignored untracked bytes) + verdict
+verify records:   HEAD + exact analyzed-diff hash + raw content hash + canonical repository-state hash + verdict
                  →  .semctx/verification-state.json
-hook on git commit/push:
-    recapture HEAD + complete working state
-    allow  if both match the v2 baseline AND that verdict was not BLOCK
+hook on git commit:
+    allow  if the analyzed content still matches the v3 baseline AND verdict != BLOCK
+hook on git push:
+    allow  if the content still matches AND HEAD exactly materializes the recorded repository state
+           AND the push source resolves to that verified HEAD only
     block  otherwise, with the reason and the exact command to re-verify
 ```
 
 State file `.semctx/verification-state.json` is **git-ignored** and written **atomically**
-(temp file + rename). The baseline includes the commit, tracked binary diff, and every non-ignored
-untracked path, mode, and byte. Legacy diff-only state is rejected; HEAD movement or any source
-edit invalidates the baseline and requires re-verification.
+(temp file + rename). The baseline binds normalized paths, raw bytes or symlink targets, executable
+modes, the canonical Git object representation, and the HEAD tree observed at verification time.
+The CLI also compares the exact resolved HEAD and diff bytes consumed by analysis with captures made
+before and after analysis, so an A-B-A working-state race cannot attach B's verdict to A's baseline.
+A commit SHA may move without invalidating the proof when the resulting tree exactly materializes
+the recorded repository state. Byte, path, mode, symlink-target, partial-commit, or non-ignored
+untracked drift fails closed. Version 1 and version 2 records remain readable JSON but do not
+authorize a terminal Git operation.
 
 ## Consequences
 
@@ -50,6 +57,9 @@ edit invalidates the baseline and requires re-verification.
   `GIT_WORK_TREE`, `--git-dir`, `--work-tree`, namespaces, alternate index/object state, or
   equivalent config) are outside the isolated-command contract and fail closed when the target or
   session repo enables guarded mode.
+- Push refspecs are resolved before authorization. Deletions, multi-ref, mirror, tag-wide, wildcard,
+  configured, ambiguous, or non-HEAD sources fail closed; guarded mode never reuses one HEAD proof
+  to publish another ref.
 - BLOCK is honoured: a recorded BLOCK verdict never satisfies the gate, even if the diff is
   unchanged.
 - Cross-platform: the state/hash logic is a plain script; the guard reads stdin JSON from Claude
