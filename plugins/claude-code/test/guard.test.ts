@@ -83,6 +83,8 @@ describe("isTerminalGitCommand — structural detection (no shell eval)", () => 
     expect(isTerminalGitCommand("exec git commit -m x")).toBe("commit");
     expect(isTerminalGitCommand("exec -a semctx-git git push origin main")).toBe("push");
     expect(isTerminalGitCommand("builtin command git commit -m x")).toBe("commit");
+    expect(isTerminalGitCommand("$GIT commit -m x")).toBe("commit");
+    expect(isTerminalGitCommand("${GIT} push origin main")).toBe("push");
   });
 
   it("detects common wrapper, quoted, absolute-path, and shell -c shapes", () => {
@@ -113,7 +115,6 @@ describe("isIsolatedTerminalGitCommand — no mutation before authorization", ()
   it("allows one terminal Git operation with safe cwd, env, command, and Git prefixes", () => {
     expect(isIsolatedTerminalGitCommand("git commit -m x")).toBe(true);
     expect(isIsolatedTerminalGitCommand("cd repo && git push origin main")).toBe(true);
-    expect(isIsolatedTerminalGitCommand("GIT_AUTHOR_NAME=x command git -C sub commit -m x")).toBe(true);
     expect(isIsolatedTerminalGitCommand("env GIT_AUTHOR_NAME=x git commit -m x")).toBe(true);
     expect(isIsolatedTerminalGitCommand("env -u SEMCTX_UNUSED git push origin main")).toBe(true);
   });
@@ -132,8 +133,11 @@ describe("isIsolatedTerminalGitCommand — no mutation before authorization", ()
     expect(isIsolatedTerminalGitCommand("co'mmand' git commit -m x")).toBe(false);
     expect(isIsolatedTerminalGitCommand(String.raw`e\xec git push origin main`)).toBe(false);
     expect(isIsolatedTerminalGitCommand("command -p git push origin main")).toBe(false);
+    expect(isIsolatedTerminalGitCommand("command git commit -m x")).toBe(false);
     expect(isIsolatedTerminalGitCommand("exec git commit -m x")).toBe(false);
     expect(isIsolatedTerminalGitCommand("builtin command git commit -m x")).toBe(false);
+    expect(isIsolatedTerminalGitCommand("$GIT commit -m x")).toBe(false);
+    expect(isIsolatedTerminalGitCommand("${GIT} push origin main")).toBe(false);
   });
 
   it("rejects cwd targets that require shell expansion", () => {
@@ -236,6 +240,7 @@ describe("commitUsesWholeIndex — no commit-time tree selection", () => {
       "git commit -p", "git commit --patch", "git commit --interactive",
       "git commit -m partial -- a.ts", "git commit a.ts -m partial",
       "git commit --pathspec-from-file=paths.txt", "git commit --pathspec-file-nul",
+      "git commit --fixup=HEAD", "git commit --fixup amend:HEAD", "git commit --fixup=amend:HEAD",
       "git commit --fixup=reword:HEAD", "git commit --fixup reword:HEAD",
       "git commit --inter", "git commit --incl a.ts -m partial", "git commit --on a.ts -m partial",
       "git commit --fix=reword:HEAD", "git co'mmit' -m x",
@@ -516,6 +521,8 @@ describe("guardDecision — verify, commit, push replay", () => {
       git(["config", "--unset", "core.hooksPath"]);
       expect(guardStatus("git commit -m exact")).toBe(0);
       expect(guardStatus("git commit -am exact")).toBe(2);
+      expect(guardStatus("git commit --fixup=HEAD")).toBe(2);
+      expect(guardStatus("git commit --fixup=amend:HEAD")).toBe(2);
       git(["-c", "user.name=Semctx Test", "-c", "user.email=semctx@example.invalid", "commit", "-m", "exact"]);
       const committed = captureVerificationGitState(repo);
       expect(committed.headCommit).not.toBe(verified.headCommit);
@@ -858,6 +865,9 @@ describe("guard runtime — repository scope must be explicit", () => {
         "env --unset=HOME git push origin main",
         "env -i GIT_COMMON_DIR=../other/.git git push origin main",
         "env -S 'git commit -m x'",
+        "$GIT commit -m x",
+        "${GIT} push origin main",
+        "command git commit -m x",
         "git --git-dir ../other/.git --work-tree ../other commit -m x",
         "git --exec-path=../proxy-libexec commit -m x",
         `git -c include.path=${indirectConfig.replaceAll("\\", "/")} commit -m x`,

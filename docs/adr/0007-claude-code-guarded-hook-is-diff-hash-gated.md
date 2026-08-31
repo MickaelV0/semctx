@@ -68,12 +68,12 @@ authorize a terminal Git operation.
   executable paths and `--exec-path=<path>` fail closed so the hook and the shell cannot resolve
   different Git programs or configuration. Literal quote/backslash composition is normalized for detection, so forms such as
   `g\it`, `gi't'`, `git co'mmit'`, `git pu\sh`, escaped newlines, or a composed `P'A'TH=...`
-  assignment cannot hide the terminal Git operation. Direct `command` and `exec` builtin forms are
-  parsed too; composed wrappers, `exec`, `builtin`, and executable-discovery options such as
-  `command -p` are detected and then rejected as non-canonical command shapes.
+  assignment cannot hide the terminal Git operation. Direct `command`, `exec`, and `builtin` forms,
+  plus variable-expanded executable tokens such as `$GIT` and `${GIT}`, are detected and rejected
+  as non-canonical command shapes.
 - Commit commands must consume the already-inspected whole index. Commit-time staging, interactive
-  selection, partial-index options, pathspecs, and `--fixup=reword:` (Git's implicit `--only`
-  form) fail closed, including Git's accepted long-option abbreviations. Every persisted version 3
+  selection, partial-index options, pathspecs, and every `--fixup` form fail closed, including Git's
+  accepted long-option abbreviations. Every persisted version 3
   field is shape-validated before authorization. Verification diff capture disables external diff
   and textconv helpers so repository configuration cannot substitute the analyzed hunks. A commit
   is non-authorizing while `pre-commit`, `prepare-commit-msg`, or `commit-msg` exists, because those

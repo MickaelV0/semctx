@@ -223,6 +223,10 @@ function isCanonicalGitExecutableToken(token) {
   return executable === "git" || executable === "git.exe";
 }
 
+function isShellExpandedExecutableToken(token) {
+  return /^\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})$/.test(stripQuotes(token));
+}
+
 const ENV_OPTIONS_WITH_VALUE = new Set([
   "-a",
   "-C",
@@ -302,7 +306,10 @@ function gitTokenIndex(tokens) {
   i = shellWrapperCommandIndex(tokens, i);
   if (i < 0) return -1;
   const executable = executableName(tokens[i]);
-  return executable !== undefined && RECOGNIZED_GIT_EXECUTABLES.has(executable) ? i : -1;
+  return (executable !== undefined && RECOGNIZED_GIT_EXECUTABLES.has(executable))
+      || isShellExpandedExecutableToken(tokens[i])
+    ? i
+    : -1;
 }
 
 const GIT_GLOBAL_OPTIONS_WITH_VALUE = new Set([
@@ -412,12 +419,7 @@ function envWrapperMakesScopeAmbiguous(tokens, gitIndex) {
 function shellWrapperMakesScopeAmbiguous(tokens, gitIndex) {
   for (let i = 0; i < gitIndex; i += 1) {
     const literal = shellWordLiteralValue(tokens[i])?.toLowerCase();
-    if (literal === "exec" || literal === "builtin") return true;
-    if (literal !== "command") continue;
-    if (stripQuotes(tokens[i]).toLowerCase() !== "command") return true;
-    for (let optionIndex = i + 1; optionIndex < gitIndex; optionIndex += 1) {
-      if (shellWordLiteralValue(tokens[optionIndex]) !== "--") return true;
-    }
+    if (literal === "command" || literal === "exec" || literal === "builtin") return true;
   }
   return false;
 }
@@ -573,17 +575,16 @@ export function commitUsesWholeIndex(command) {
     const token = literalShellWord(tokens[i]);
     if (token === null || token === "--") return false;
     const option = gitOptionName(token);
-    const optionValue = token.includes("=") ? token.slice(token.indexOf("=") + 1) : undefined;
     if (
       COMMIT_TREE_SELECTION_OPTIONS.has(option)
       || isAbbreviatedCommitOption(option)
-      || (option === "--fixup" && optionValue?.startsWith("reword:") === true)
+      || option === "--fixup"
       || (/^-[^-]+/.test(token) && !token.startsWith("-m") && !token.startsWith("-F") && /[aiop]/.test(token.slice(1)))
     ) return false;
     if (!token.startsWith("-")) return false;
     if (COMMIT_OPTIONS_WITH_VALUE.has(option) && !token.includes("=") && token === option) {
       const value = tokens[i + 1] === undefined ? null : literalShellWord(tokens[i + 1]);
-      if (value === null || (option === "--fixup" && value.startsWith("reword:"))) return false;
+      if (value === null) return false;
       i += 2;
       continue;
     }
