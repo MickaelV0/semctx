@@ -43,7 +43,8 @@ Present tracked files are hashed from their materialized bytes even when `assume
 `skip-worktree` suppresses them from Git's ordinary diff output. Such a hidden mismatch makes
 `--record` fail closed because those bytes were absent from the analyzed diff; only absent
 sparse-checkout entries may reuse their indexed object. Initialized gitlinks are compared directly
-to their materialized submodule HEAD, independently of Git's submodule-diff configuration.
+to their materialized submodule HEAD, independently of Git's submodule-diff configuration; a
+directly symlinked gitlink is rejected rather than followed.
 The CLI also compares the exact resolved HEAD and diff bytes consumed by analysis with captures made
 before and after analysis, so an A-B-A working-state race cannot attach B's verdict to A's baseline.
 A commit SHA may move without invalidating the proof when the resulting tree exactly materializes
@@ -69,8 +70,10 @@ authorize a terminal Git operation.
   different Git programs or configuration. Literal quote/backslash composition is normalized for detection, so forms such as
   `g\it`, `gi't'`, `git co'mmit'`, `git pu\sh`, escaped newlines, or a composed `P'A'TH=...`
   assignment cannot hide the terminal Git operation. Direct `command`, `exec`, and `builtin` forms,
-  plus shell-expanded executable expressions such as `$GIT`, `${GIT:-git}`, and `$(printf git)`,
-  are detected and rejected as non-canonical command shapes.
+  plus shell-expanded executable expressions such as `$GIT`, `${GIT:-git}`, `$(printf git)`, and
+  `$(true; printf git)`, are detected and rejected as non-canonical command shapes. Shell expansion
+  in any otherwise authorizable terminal-command word is also rejected, so word splitting cannot
+  turn an inspected argument such as `.${IFS}--all` into an uninspected push option.
 - Commit commands must consume the already-inspected whole index. Commit-time staging, interactive
   selection, partial-index options, pathspecs, and every `--fixup` form fail closed, including Git's
   accepted long-option abbreviations. Every persisted version 3
