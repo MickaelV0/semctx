@@ -84,7 +84,9 @@ authorize a terminal Git operation.
   and textconv helpers so repository configuration cannot substitute the analyzed hunks. A commit
   is non-authorizing while `pre-commit`, `prepare-commit-msg`, `commit-msg`, `post-commit`, or
   `post-rewrite` exists. Earlier hooks can restage a different tree; later hooks can initiate
-  unguarded follow-up effects after the pre-tool check.
+  unguarded follow-up effects after the pre-tool check. A push is likewise non-authorizing while
+  `pre-push` exists because that hook can execute arbitrary side effects or initiate another push
+  after the inspected command has been authorized.
   All command-scoped config (`-c key=value`, attached `-ckey=value`, and `--config-env`) is outside
   the authorizing contract so direct or included config cannot evade that hook-surface probe.
 - Push refspecs are resolved before authorization. Deletions, multi-ref, mirror, tag-wide, wildcard,

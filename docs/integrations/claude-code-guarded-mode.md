@@ -70,6 +70,8 @@ Any present `pre-commit`, `prepare-commit-msg`, `commit-msg`, `post-commit`, or 
 is also non-authorizing. Earlier hooks could restage after the pre-tool index proof; later hooks
 could trigger unguarded follow-up effects. Guarded mode therefore requires all five repository hooks
 to be absent before committing.
+Any present `pre-push` hook is non-authorizing too: it could execute arbitrary side effects or
+initiate another push after the inspected push command passes the pre-tool check.
 Run `git commit` and `git push` as isolated commands in guarded mode. Compound commands,
 redirections, and shell substitutions are rejected because they could mutate repository bytes
 after the hook's pre-check. Cwd prefixes must use literal paths: unexpanded `$VAR`, `${VAR}`, `~`,

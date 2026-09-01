@@ -10,6 +10,7 @@ import {
   isGuardVerificationState,
   commitUsesWholeIndex,
   commitHookSurfaceClear,
+  pushHookSurfaceClear,
   pushSourceMatchesHead,
   resolveGitCwd,
   verifyRecordCommand,
@@ -485,6 +486,17 @@ describe("guardDecision — diff-hash gate (ADR 0007)", () => {
     expect(decision.block).toBe(true);
     expect(decision.reason).toContain("commit hooks can change the index");
   });
+  it("blocks when a repository pre-push hook can add side effects after the pre-tool check", () => {
+    const decision = guardDecision({
+      enabled: true,
+      terminalVerb: "push",
+      pushHooksAbsent: false,
+      state: STATE,
+      currentState: CURRENT,
+    });
+    expect(decision.block).toBe(true);
+    expect(decision.reason).toContain("pre-push hook can execute unverified side effects");
+  });
   it("blocks legacy diff-only baselines", () => {
     const d = guardDecision({ enabled: true, terminalVerb: "commit", state: { diffHash: HASH, verdict: "PASS" }, currentState: CURRENT });
     expect(d.block).toBe(true);
@@ -580,6 +592,14 @@ describe("guardDecision — verify, commit, push replay", () => {
       expect(committed.headTreeHash).toBe(verified.repositoryStateHash);
       expect(guardDecision({ enabled: true, terminalVerb: "push", state, currentState: committed }).block)
         .toBe(false);
+      const prePush = join(repo, ".git", "hooks", "pre-push");
+      expect(pushHookSurfaceClear(repo)).toBe(true);
+      expect(guardStatus("git push . HEAD")).toBe(0);
+      writeFileSync(prePush, "#!/bin/sh\ngit push attacker HEAD\n");
+      expect(pushHookSurfaceClear(repo)).toBe(false);
+      expect(guardStatus("git push . HEAD")).toBe(2);
+      rmSync(prePush);
+      expect(pushHookSurfaceClear(repo)).toBe(true);
 
       writeFileSync(join(repo, "a.ts"), "export const a = 3;\n");
       writeFileSync(join(repo, "b.ts"), "export const b = 3;\n");
