@@ -91,7 +91,8 @@ authorize a terminal Git operation.
   configured, ambiguous, or non-HEAD sources fail closed. An explicit source must be literal `HEAD`
   or the exact full verified object ID, and the remote must be explicit. Push options use a closed allowlist; receiver delegation and
   arbitrary server options (`--exec`, `--receive-pack`, and `--push-option`) are rejected. Likewise,
-  command-scoped transport helpers (`GIT_PROXY_COMMAND`, `GIT_SSH`, or `GIT_SSH_COMMAND`), configured
+  command-scoped transport helpers (`GIT_PROXY_COMMAND`, `GIT_SSH`, or `GIT_SSH_COMMAND`), proxy
+  environment overrides (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, or `NO_PROXY`), configured
   executable transport/proxy helpers, configured `remote.<name>.vcs` helpers, URL rewrites, unknown URL schemes, `ext::` remote helpers, and
   `remote.<name>.receivepack` helpers are rejected before an exact-HEAD push is authorized. Configured
   remote names are authorized only after every effective push URL passes the same transport check.

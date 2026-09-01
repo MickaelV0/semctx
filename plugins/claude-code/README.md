@@ -117,7 +117,7 @@ non-terminal git commands. It compares canonical analyzed-content and repository
 (ADR 0007); it runs no analysis itself. In guarded mode, cwd prefixes must be literal and Git
 repository retargeting (`GIT_DIR`, `GIT_WORK_TREE`, `--git-dir`, `--work-tree`, and related forms)
 is rejected rather than compared against the session repository's hash. Command-local executable or
-configuration discovery overrides, explicit paths, shell-expanded executable expressions, and shell
+configuration discovery overrides, explicit paths, proxy environment overrides, shell-expanded executable expressions, and shell
 command wrappers are rejected too. Expansion-split terminal words such as `git${IFS}push` and
 `${GIT:-git}${IFS}push`,
 quote/backslash-composed Git names, and environment assignments

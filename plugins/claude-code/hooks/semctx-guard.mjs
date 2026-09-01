@@ -377,6 +377,7 @@ const GIT_RETARGET_OPTIONS = new Set([
 ]);
 
 const GIT_RETARGET_ENV = new Set([
+  "ALL_PROXY",
   "GIT_CEILING_DIRECTORIES",
   "GIT_DISCOVERY_ACROSS_FILESYSTEM",
   "GIT_EXEC_PATH",
@@ -395,6 +396,9 @@ const GIT_RETARGET_ENV = new Set([
   "HOME",
   "HOMEDRIVE",
   "HOMEPATH",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "NO_PROXY",
   "PATH",
   "PATHEXT",
   "USERPROFILE",
@@ -893,6 +897,7 @@ function literalShellWord(token) {
 export function pushSourceMatchesHead(command, cwd, currentHead) {
   try {
     const terminal = String(command ?? "").split("&&").at(-1)?.trim() ?? "";
+    if (gitScopeRequiresSessionGuard(terminal)) return false;
     const tokens = shellWords(terminal);
     if (tokens.some(shellTokenRequiresExpansion)) return false;
     const gitIndex = gitTokenIndex(tokens);
