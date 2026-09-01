@@ -82,6 +82,8 @@ authorize a terminal Git operation.
   The same applies after shell control keywords and the recognized execution-transparent wrappers
   `chroot`, `chrt`, `doas`, `ionice`, `nice`, `nohup`, `setsid`, `stdbuf`, `sudo`, `taskset`,
   `time`, `timeout`, and `unshare`; arbitrary other external wrappers remain outside the cooperative contract.
+  Recognized `bash`/`sh`/`zsh` command wrappers include both a separate `-c` and grouped short
+  options containing `c`, such as `-lc`, `-ec`, or `-euc`.
 - Commit commands must consume the already-inspected whole index. Commit-time staging, interactive
   selection, partial-index options, pathspecs, and every `--fixup` form fail closed, including Git's
   accepted long-option abbreviations. Every persisted version 3

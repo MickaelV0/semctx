@@ -96,6 +96,8 @@ asynchronous `&` segments, subshell groups, and brace groups are detected and re
 Shell control keywords and recognized execution-transparent wrappers (`chroot`, `chrt`, `doas`,
 `ionice`, `nice`, `nohup`, `setsid`, `stdbuf`, `sudo`, `taskset`, `time`, `timeout`, and `unshare`)
 are covered too. Arbitrary other external wrappers remain outside this cooperative contract.
+For `bash`, `sh`, and `zsh`, a separate `-c` and grouped short options such as `-lc`, `-ec`, or
+`-euc` are all recognized as command wrappers.
 Shell expansion in terminal-command arguments is rejected too: `git push .${IFS}--all` cannot materialize an
 uninspected `--all` option. Use a plain literal
 `cd <repo> && git commit`, `git -C <repo> commit`, or the

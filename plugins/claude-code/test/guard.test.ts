@@ -138,6 +138,11 @@ describe("isTerminalGitCommand — structural detection (no shell eval)", () => 
     expect(isTerminalGitCommand('cmd /c "git commit -am x"')).toBe("commit");
     expect(isTerminalGitCommand('env bash -c "git push origin main"')).toBe("push");
     expect(isTerminalGitCommand('env -i bash --noprofile -c "git commit -am x"')).toBe("commit");
+    expect(isTerminalGitCommand("bash -lc 'git push origin HEAD'")).toBe("push");
+    expect(isTerminalGitCommand("sh -ec 'git commit -m x'")).toBe("commit");
+    expect(isTerminalGitCommand("sh -xc 'git push origin HEAD'")).toBe("push");
+    expect(isTerminalGitCommand("bash -euc 'git commit -m x'")).toBe("commit");
+    expect(isTerminalGitCommand("zsh -lc 'git push origin HEAD'")).toBe("push");
     expect(isTerminalGitCommand('pwsh -NoProfile -ExecutionPolicy Bypass -Command "git push origin main"')).toBe("push");
     expect(isTerminalGitCommand("eval 'git push origin HEAD'")).toBe("push");
     expect(isTerminalGitCommand("eval 'git commit -m x'")).toBe("commit");
@@ -184,6 +189,8 @@ describe("isIsolatedTerminalGitCommand — no mutation before authorization", ()
     expect(isIsolatedTerminalGitCommand('cmd /c "git commit -am x"')).toBe(false);
     expect(isIsolatedTerminalGitCommand('env bash -c "git commit -am x"')).toBe(false);
     expect(isIsolatedTerminalGitCommand('env -i bash --noprofile -c "git commit -am x"')).toBe(false);
+    expect(isIsolatedTerminalGitCommand("bash -lc 'git push origin HEAD'")).toBe(false);
+    expect(isIsolatedTerminalGitCommand("sh -euc 'git commit -m x'")).toBe(false);
     expect(isIsolatedTerminalGitCommand('pwsh -NoProfile -ExecutionPolicy Bypass -Command "git push origin main"')).toBe(false);
     expect(isIsolatedTerminalGitCommand("co'mmand' git commit -m x")).toBe(false);
     expect(isIsolatedTerminalGitCommand(String.raw`e\xec git push origin main`)).toBe(false);
