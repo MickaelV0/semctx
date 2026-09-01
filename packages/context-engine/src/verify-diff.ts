@@ -375,15 +375,19 @@ function nodeLineRange(node: RepositoryNode): { start: number; end: number } | u
   return { start, end: end ?? start };
 }
 
-function hunkTouchesRange(hunk: DiffHunk, range: { start: number; end: number }): boolean {
-  // Node line ranges come from HEAD (old-side) evidence, so the old-side window is the
-  // primary test — this catches pure deletions (new-side count 0). The new-side window is
-  // unioned in to catch modifications and near-insertions.
-  const oldEnd = hunk.oldStart + Math.max(hunk.oldLines, 1) - 1;
-  const newEnd = hunk.newStart + Math.max(hunk.newLines, 1) - 1;
-  const oldOverlap = hunk.oldStart <= range.end && oldEnd >= range.start;
-  const newOverlap = hunk.newStart <= range.end && newEnd >= range.start;
-  return oldOverlap || newOverlap;
+function hunkTouchesRange(
+  hunk: DiffHunk,
+  range: { start: number; end: number },
+  side: "old" | "new",
+): boolean {
+  const start = side === "old" ? hunk.oldStart : hunk.newStart;
+  const lines = side === "old" ? hunk.oldLines : hunk.newLines;
+  // A zero-length hunk is an insertion point on the selected coordinate side. It touches a
+  // declaration only when that point is inside it, not when the edit merely shifts the
+  // declaration on the opposite side.
+  if (lines === 0) return start >= range.start && start < range.end;
+  const end = start + lines - 1;
+  return start <= range.end && end >= range.start;
 }
 
 function isTested(index: GraphIndex, nodeId: string): boolean {
@@ -424,6 +428,7 @@ export function analyzeDiff(args: {
   claims: Claim[];
   config: SemctxConfig;
   diffText: string;
+  nodeRangeSide?: "old" | "new";
 }): VerifyResult {
   const { index, claims, config } = args;
   const diffFiles = parseUnifiedDiff(args.diffText);
@@ -443,7 +448,9 @@ export function analyzeDiff(args: {
       impactedNodeIds.add(node.id);
       continue;
     }
-    if (file.hunks.some((h) => hunkTouchesRange(h, range))) impactedNodeIds.add(node.id);
+    if (file.hunks.some((h) => hunkTouchesRange(h, range, args.nodeRangeSide ?? "old"))) {
+      impactedNodeIds.add(node.id);
+    }
   }
 
   const impactedNodes = [...impactedNodeIds]
