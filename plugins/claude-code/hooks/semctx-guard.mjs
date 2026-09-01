@@ -705,6 +705,23 @@ function gitScopeRequiresSessionGuard(command) {
   return false;
 }
 
+function visibleDynamicWrapperBody(command) {
+  const tokens = shellWords(String(command ?? "").trim());
+  const wrapper = shellWordLiteralValue(tokens[0])?.toLowerCase();
+  if (wrapper === "eval") {
+    const body = tokens.slice(1).map(shellWordLiteralValue);
+    return body.length > 0 && body.every((word) => word !== null) ? body.join(" ") : null;
+  }
+  if (wrapper !== "xargs") return null;
+  for (let i = 1; i + 2 < tokens.length; i += 1) {
+    const shell = executableName(tokens[i]);
+    if (shell !== "sh" && shell !== "bash") continue;
+    if (shellWordLiteralValue(tokens[i + 1]) !== "-c") continue;
+    return shellWordLiteralValue(tokens[i + 2]);
+  }
+  return null;
+}
+
 /** Detect a terminal git verb (commit|push) in a shell command, structurally. Returns the verb or null. */
 export function isTerminalGitCommand(command) {
   const envSplit = envSplitStringBody(command);
@@ -715,6 +732,11 @@ export function isTerminalGitCommand(command) {
   const nested = shellCommandBody(command);
   if (nested !== null) {
     const verb = isTerminalGitCommand(nested);
+    if (verb !== null) return verb;
+  }
+  const dynamicWrapper = visibleDynamicWrapperBody(command);
+  if (dynamicWrapper !== null) {
+    const verb = isTerminalGitCommand(dynamicWrapper);
     if (verb !== null) return verb;
   }
   const segments = shellSegments(command);
@@ -748,7 +770,12 @@ export function isTerminalGitCommand(command) {
  */
 export function isIsolatedTerminalGitCommand(command) {
   const text = String(command ?? "").trim();
-  if (text === "" || shellCommandBody(text) !== null || envSplitStringBody(text) !== null) return false;
+  if (
+    text === ""
+    || shellCommandBody(text) !== null
+    || envSplitStringBody(text) !== null
+    || visibleDynamicWrapperBody(text) !== null
+  ) return false;
   if (/\$\(|`|\r|\n|\|\||(?<!\|)\|(?!\|)|;|(?<!&)&(?!&)|[<>]/.test(text)) return false;
   if (gitScopeRequiresSessionGuard(text)) return false;
 
@@ -937,7 +964,7 @@ export function pushSourceMatchesHead(command, cwd, currentHead) {
       [
         "config",
         "--get-regexp",
-        "^(push\\.(followtags|recursesubmodules)|remote\\..*\\.(mirror|push|receivepack|proxy|vcs)|core\\.(sshcommand|gitproxy)|http(\\..+)?\\.(proxy|proxyauthmethod|proxysslcainfo|proxysslcert|proxysslcertpasswordprotected|proxysslkey|curloptresolve|followredirects|extraheader)|url\\..*\\.(insteadof|pushinsteadof))$",
+        "^(push\\.(followtags|recursesubmodules)|remote\\..*\\.(mirror|push|receivepack|proxy|proxyauthmethod|vcs)|core\\.(sshcommand|gitproxy)|http(\\..+)?\\.(proxy|proxyauthmethod|proxysslcainfo|proxysslcert|proxysslcertpasswordprotected|proxysslkey|curloptresolve|followredirects|extraheader)|url\\..*\\.(insteadof|pushinsteadof))$",
       ],
       { cwd, encoding: "utf8" },
     );

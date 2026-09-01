@@ -82,7 +82,8 @@ that can select another Git executable or configuration (`PATH`, home/profile va
 `XDG_CONFIG_HOME`, and related Git discovery variables) also fail closed, as do
 `--exec-path=<path>`, explicit executable paths such as `/tmp/proxy/git`, and non-canonical Windows
 launchers such as `git.cmd`. Quote/backslash-composed executable names, terminal subcommands,
-command wrappers, executable shell expansions, and assignments are normalized for terminal detection,
+command wrappers (including visible `eval` and `xargs ... sh -c` forms), executable shell expansions,
+and assignments are normalized for terminal detection,
 then rejected as non-canonical; `g\it`, `gi't'`, `git co'mmit'`, `git pu\sh`, `$GIT commit`,
 `${GIT:-git} commit`, `${X:=git} commit`, `${X:-g}it commit`, `$(printf g)it commit`, `$(printf git) commit`,
 `$(true; printf git) commit`, `command`, `exec`,
@@ -103,7 +104,7 @@ construction, receiver delegation (`--exec` / `--receive-pack`), command-scoped 
 (`GIT_PROXY_COMMAND`, `GIT_SSH`, or `GIT_SSH_COMMAND`), proxy environment overrides
 (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, or `NO_PROXY`), configured HTTP proxy/resolution,
 executable transport/proxy or
-`remote.<name>.vcs` helpers,
+`remote.<name>.vcs` helpers and remote proxy authentication overrides,
 URL rewrites, unknown URL schemes, `ext::` remote helpers, `remote.<name>.receivepack`, push options,
 and unknown or combined option forms fail closed. A configured remote name is accepted only when
 every effective push URL uses a recognized non-delegating transport. If Git's top-level probe fails, the
