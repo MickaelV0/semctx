@@ -263,6 +263,10 @@ describe("verify diff --base (CLI, real git)", () => {
       before,
       `sha256:${"9".repeat(64)}`,
     )).toThrow("repository state changed while verification was running");
+    expect(() => requireStableVerificationGitState(
+      before,
+      { ...before, indexStateHash: `sha256:${"8".repeat(64)}` },
+    )).toThrow("repository state changed while verification was running");
   });
 });
 

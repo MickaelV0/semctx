@@ -262,6 +262,8 @@ describe("isIsolatedTerminalGitCommand — no mutation before authorization", ()
 describe("commitUsesWholeIndex — no commit-time tree selection", () => {
   it("allows plain commits that consume the already inspected index", () => {
     expect(commitUsesWholeIndex("git commit -m exact")).toBe(true);
+    expect(commitUsesWholeIndex('git commit -m "it\'s exact"')).toBe(true);
+    expect(commitUsesWholeIndex(`git commit -m 'the "exact" state'`)).toBe(true);
     expect(commitUsesWholeIndex("git commit --amend --no-edit")).toBe(true);
     expect(commitUsesWholeIndex("git -C repo commit --message=exact")).toBe(true);
   });
