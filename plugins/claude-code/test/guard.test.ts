@@ -639,6 +639,10 @@ describe("guard runtime — large working diffs", () => {
 
       expect(pushSourceMatchesHead("git push . HEAD:refs/heads/target", repo, verified.headCommit)).toBe(true);
       expect(pushSourceMatchesHead(`git push . ${verified.headCommit}:refs/heads/target`, repo, verified.headCommit)).toBe(true);
+      expect(pushSourceMatchesHead("git push ext::helper HEAD", repo, verified.headCommit)).toBe(false);
+      expect(pushSourceMatchesHead("git push helper://target HEAD", repo, verified.headCommit)).toBe(false);
+      expect(pushSourceMatchesHead("git push https://example.invalid/repo HEAD", repo, verified.headCommit)).toBe(true);
+      expect(pushSourceMatchesHead("git push HEAD", repo, verified.headCommit)).toBe(false);
       expect(pushSourceMatchesHead("git push --exec git-receive-pack . HEAD", repo, verified.headCommit)).toBe(false);
       expect(pushSourceMatchesHead("git push --receive-pack git-receive-pack . HEAD", repo, verified.headCommit)).toBe(false);
       expect(pushSourceMatchesHead("git push --push-option mutate . HEAD", repo, verified.headCommit)).toBe(false);
@@ -665,6 +669,9 @@ describe("guard runtime — large working diffs", () => {
         "git push --push-option mutate . HEAD",
         "GIT_SSH=helper git push origin HEAD",
         "GIT_SSH_COMMAND=helper git push origin HEAD",
+        "GIT_PROXY_COMMAND=helper git push origin HEAD",
+        "git push ext::helper HEAD",
+        "git push helper://target HEAD",
         "git -c push.default=matching push .",
         "git -c remote.origin.push=refs/heads/*:refs/heads/* push origin",
         "git -c push.followTags=true push .",
@@ -693,6 +700,15 @@ describe("guard runtime — large working diffs", () => {
       git(["config", "remote.origin.receivepack", "helper"]);
       expect(pushSourceMatchesHead("git push origin HEAD", repo, verified.headCommit)).toBe(false);
       git(["config", "--unset", "remote.origin.receivepack"]);
+      git(["remote", "add", "delegated", "ext::helper"]);
+      expect(pushSourceMatchesHead("git push delegated HEAD", repo, verified.headCommit)).toBe(false);
+      git(["remote", "remove", "delegated"]);
+      git(["config", "core.sshCommand", "helper"]);
+      expect(pushSourceMatchesHead("git push . HEAD", repo, verified.headCommit)).toBe(false);
+      git(["config", "--unset", "core.sshCommand"]);
+      git(["config", "url.ext::helper.pushInsteadOf", "https://example.invalid/"]);
+      expect(pushSourceMatchesHead("git push https://example.invalid/repo HEAD", repo, verified.headCommit)).toBe(false);
+      git(["config", "--unset", "url.ext::helper.pushInsteadOf"]);
       git(["config", "push.recurseSubmodules", "on-demand"]);
       expect(pushSourceMatchesHead("git push .", repo, verified.headCommit)).toBe(false);
     } finally {

@@ -74,7 +74,8 @@ lives only in `packages/github-action`, never in `core`/`context-engine`.
 - **Guarded Claude hook = analyzed-content verification-state** (ADR 0007). Advisory by default;
   guarded opt-in blocks only terminal `git commit`/`git push` when the complete tracked and
   non-ignored untracked working state differs from the v3 analyzed-content baseline; push also
-  requires the commit tree and source ref to equal the verified content. State is git-ignored and atomic.
+  requires the commit tree and source ref to equal the verified content through an explicit,
+  non-delegating remote transport. State is git-ignored and atomic.
 - **Stable machine output = versioned `schemaVersion`** (ADR 0008). `--format json` is additive-
   only within a major schema; `--format github` is a derived view.
 

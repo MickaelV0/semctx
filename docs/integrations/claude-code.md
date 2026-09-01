@@ -272,7 +272,8 @@ When the user asks for a repository-independent demonstration, the shared skill 
 The `PreToolUse` hook is advisory by default. When `.semctx/guard.json` enables guarded mode, it
 blocks only `git commit` and `git push` until the current analyzed-content state has a recorded
 non-`BLOCK` verification. An exact commit can reuse that proof for push; content drift or a partial
-commit cannot. It never blocks edits, tests, exploration, trace or plan tools. See
+commit cannot. Push additionally requires an explicit non-delegating remote and exact `HEAD` source.
+It never blocks edits, tests, exploration, trace or plan tools. See
 [`claude-code-guarded-mode.md`](./claude-code-guarded-mode.md).
 
 ## MCP without the plugin

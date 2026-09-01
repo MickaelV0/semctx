@@ -388,6 +388,7 @@ const GIT_RETARGET_ENV = new Set([
   "GIT_OBJECT_DIRECTORY",
   "GIT_REPLACE_REF_BASE",
   "GIT_SHALLOW_FILE",
+  "GIT_PROXY_COMMAND",
   "GIT_SSH",
   "GIT_SSH_COMMAND",
   "GIT_WORK_TREE",
@@ -849,6 +850,30 @@ const SAFE_PUSH_OPTIONS = new Set([
   "--signed", "--thin", "--verbose", "-4", "-6", "-f", "-n", "-q", "-u", "-v",
 ]);
 
+const SAFE_PUSH_SCHEMES = new Set(["file", "git", "http", "https", "ssh"]);
+
+function pushEndpointIsSafe(endpoint) {
+  const value = String(endpoint ?? "");
+  if (value === "" || /[\r\n\0]/.test(value) || value.includes("::")) return false;
+  const scheme = /^([A-Za-z][A-Za-z0-9+.-]*):\/\//.exec(value)?.[1]?.toLowerCase();
+  return scheme === undefined || SAFE_PUSH_SCHEMES.has(scheme);
+}
+
+function pushRemoteTransportIsSafe(cwd, remote) {
+  if (!pushEndpointIsSafe(remote)) return false;
+  const remotes = spawnSync("git", ["remote"], { cwd, encoding: "utf8" });
+  if (remotes.status !== 0) return false;
+  const configuredNames = remotes.stdout.split(/\r?\n/).filter((name) => name !== "");
+  if (!configuredNames.includes(remote)) return true;
+  const urls = spawnSync("git", ["remote", "get-url", "--push", "--all", remote], {
+    cwd,
+    encoding: "utf8",
+  });
+  if (urls.status !== 0) return false;
+  const endpoints = urls.stdout.split(/\r?\n/).filter((endpoint) => endpoint !== "");
+  return endpoints.length > 0 && endpoints.every(pushEndpointIsSafe);
+}
+
 /** Resolve one shell word without evaluating it; reject quote/backslash composition inside a word. */
 function literalShellWord(token) {
   const raw = String(token ?? "");
@@ -862,8 +887,8 @@ function literalShellWord(token) {
 }
 
 /**
- * Prove that an isolated push can publish only the checked-out HEAD. Implicit pushes are accepted
- * only under Git's single-current-branch modes and with no configured remote push refspecs.
+ * Prove that an isolated push can publish only the checked-out HEAD through an explicit,
+ * non-delegating remote transport.
  */
 export function pushSourceMatchesHead(command, cwd, currentHead) {
   try {
@@ -900,27 +925,22 @@ export function pushSourceMatchesHead(command, cwd, currentHead) {
       positionals.push(token);
       i += 1;
     }
-    if (positionals.length > 2) return false;
+    if (positionals.length !== 2) return false;
 
     const configured = spawnSync(
       "git",
-      ["config", "--get-regexp", "^(push\\.(followtags|recursesubmodules)|remote\\..*\\.(mirror|push|receivepack))$"],
+      [
+        "config",
+        "--get-regexp",
+        "^(push\\.(followtags|recursesubmodules)|remote\\..*\\.(mirror|push|receivepack|proxy)|core\\.(sshcommand|gitproxy)|url\\..*\\.(insteadof|pushinsteadof))$",
+      ],
       { cwd, encoding: "utf8" },
     );
     if (configured.status !== 1) return false;
 
-    const refspec = positionals.length === 2 ? positionals[1] : undefined;
-    if (refspec === undefined) {
-      const pushDefaultResult = spawnSync("git", ["config", "--get", "push.default"], {
-        cwd,
-        encoding: "utf8",
-      });
-      if (pushDefaultResult.status !== 0 && pushDefaultResult.status !== 1) return false;
-      const pushDefault = pushDefaultResult.status === 0 ? pushDefaultResult.stdout.trim() : "simple";
-      if (!new Set(["simple", "current", "upstream"]).has(pushDefault)) return false;
-      return true;
-    }
-
+    const remote = positionals[0];
+    if (!pushRemoteTransportIsSafe(cwd, remote)) return false;
+    const refspec = positionals[1];
     const separator = refspec.indexOf(":");
     const rawSource = separator < 0 ? refspec : refspec.slice(0, separator);
     const source = rawSource.startsWith("+") ? rawSource.slice(1) : rawSource;
