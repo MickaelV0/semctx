@@ -66,12 +66,11 @@ Initialized submodule HEADs are
 checked directly even when Git configuration suppresses submodule diffs; a failed initialized
 submodule repository/HEAD probe blocks rather than reusing the indexed commit. Malformed version 3
 records and `--fixup=reword:` commits are non-authorizing.
-Any present `pre-commit`, `prepare-commit-msg`, `commit-msg`, `post-commit`, or `post-rewrite` hook
-is also non-authorizing. Earlier hooks could restage after the pre-tool index proof; later hooks
-could trigger unguarded follow-up effects. Guarded mode therefore requires all five repository hooks
-to be absent before committing.
-Any present `pre-push` hook is non-authorizing too: it could execute arbitrary side effects or
-initiate another push after the inspected push command passes the pre-tool check.
+Guarded commit and push require the effective hooks directory to contain no entry except ordinary
+`*.sample` files. This future-proof rule covers every current hook name, including
+`reference-transaction`, `post-index-change`, `pre-auto-gc`, and `pre-push`; any active, custom, or
+unknown hook entry is non-authorizing because it could restage or execute follow-up effects after
+the pre-tool proof.
 Run `git commit` and `git push` as isolated commands in guarded mode. Compound commands,
 redirections, and shell substitutions are rejected because they could mutate repository bytes
 after the hook's pre-check. Cwd prefixes must use literal paths: unexpanded `$VAR`, `${VAR}`, `~`,
