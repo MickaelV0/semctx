@@ -618,6 +618,9 @@ describe("guard runtime — large working diffs", () => {
 
       expect(pushSourceMatchesHead("git push . HEAD:refs/heads/target", repo, verified.headCommit)).toBe(true);
       expect(pushSourceMatchesHead(`git push . ${verified.headCommit}:refs/heads/target`, repo, verified.headCommit)).toBe(true);
+      expect(pushSourceMatchesHead("git push --exec git-receive-pack . HEAD", repo, verified.headCommit)).toBe(false);
+      expect(pushSourceMatchesHead("git push --receive-pack git-receive-pack . HEAD", repo, verified.headCommit)).toBe(false);
+      expect(pushSourceMatchesHead("git push --push-option mutate . HEAD", repo, verified.headCommit)).toBe(false);
       expect(pushSourceMatchesHead("git push . verified-tag:refs/tags/target", repo, verified.headCommit)).toBe(false);
       expect(pushSourceMatchesHead("git push . HEAD~0:refs/heads/target", repo, verified.headCommit)).toBe(false);
       expect(pushSourceMatchesHead("git push . verified-tag^{}:refs/heads/target", repo, verified.headCommit)).toBe(false);
@@ -636,6 +639,9 @@ describe("guard runtime — large working diffs", () => {
         "git push . --mirror",
         "git push . --recurse-submodules=on-demand",
         "git push .${IFS}--all",
+        "git push --exec git-receive-pack . HEAD",
+        "git push --receive-pack git-receive-pack . HEAD",
+        "git push --push-option mutate . HEAD",
         "git -c push.default=matching push .",
         "git -c remote.origin.push=refs/heads/*:refs/heads/* push origin",
         "git -c push.followTags=true push .",

@@ -813,11 +813,7 @@ export function commitHookSurfaceClear(cwd) {
 
 const UNSAFE_PUSH_OPTIONS = new Set([
   "--all", "--branches", "--delete", "-d", "--follow-tags", "--mirror", "--prune",
-  "--recurse-submodules", "--tags",
-]);
-
-const PUSH_OPTIONS_WITH_VALUE = new Set([
-  "--exec", "--push-option", "--receive-pack", "-o",
+  "--recurse-submodules", "--tags", "--exec", "--push-option", "--receive-pack", "-o",
 ]);
 
 const SAFE_PUSH_OPTIONS = new Set([
@@ -869,14 +865,8 @@ export function pushSourceMatchesHead(command, cwd, currentHead) {
       if (token === null) return false;
       const option = gitOptionName(token);
       if (UNSAFE_PUSH_OPTIONS.has(option) || option === "--repo") return false;
-      if (PUSH_OPTIONS_WITH_VALUE.has(option) && !token.includes("=")) {
-        if (tokens[i + 1] === undefined) return false;
-        if (literalShellWord(tokens[i + 1]) === null) return false;
-        i += 2;
-        continue;
-      }
       if (token.startsWith("-")) {
-        if (!SAFE_PUSH_OPTIONS.has(option) && !PUSH_OPTIONS_WITH_VALUE.has(option)) return false;
+        if (!SAFE_PUSH_OPTIONS.has(option)) return false;
         i += 1;
         continue;
       }

@@ -86,7 +86,8 @@ authorize a terminal Git operation.
   the authorizing contract so direct or included config cannot evade that hook-surface probe.
 - Push refspecs are resolved before authorization. Deletions, multi-ref, mirror, tag-wide, wildcard,
   configured, ambiguous, or non-HEAD sources fail closed. An explicit source must be literal `HEAD`
-  or the exact full verified object ID. Push options use a closed allowlist and
+  or the exact full verified object ID. Push options use a closed allowlist; receiver delegation and
+  arbitrary server options (`--exec`, `--receive-pack`, and `--push-option`) are rejected. Likewise,
   shell words composed with embedded quotes or backslashes are rejected, so lexical reconstruction
   cannot disguise a source-expanding option. Guarded mode never reuses one HEAD proof to publish
   another ref.
