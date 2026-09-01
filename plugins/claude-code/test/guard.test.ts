@@ -97,6 +97,10 @@ describe("isTerminalGitCommand — structural detection (no shell eval)", () => 
     expect(isTerminalGitCommand("$GIT${IFS}commit -m x")).toBe("commit");
     expect(isTerminalGitCommand("$(printf git)${IFS}commit -m x")).toBe("commit");
     expect(isTerminalGitCommand("`printf git`${IFS}push origin HEAD")).toBe("push");
+    expect(isTerminalGitCommand("${X:=git}${IFS}push origin HEAD")).toBe("push");
+    expect(isTerminalGitCommand("${X=git}${IFS}commit -m x")).toBe("commit");
+    expect(isTerminalGitCommand("${X-git}${IFS}push origin HEAD")).toBe("push");
+    expect(isTerminalGitCommand("${X:+git}${IFS}commit -m x")).toBe("commit");
   });
 
   it("detects common wrapper, quoted, absolute-path, and shell -c shapes", () => {
@@ -122,6 +126,8 @@ describe("isTerminalGitCommand — structural detection (no shell eval)", () => 
     expect(isTerminalGitCommand("echo${IFS}git${IFS}push")).toBeNull();
     expect(isTerminalGitCommand("git${EMPTY}pusher . --all")).toBeNull();
     expect(isTerminalGitCommand("${ECHO}${IFS}push")).toBeNull();
+    expect(isTerminalGitCommand("${X:=echo}${IFS}push")).toBeNull();
+    expect(isTerminalGitCommand("${X:=gitlab}${IFS}push")).toBeNull();
     expect(isTerminalGitCommand("")).toBeNull();
   });
 });
@@ -915,6 +921,10 @@ describe("guard runtime — repository scope must be explicit", () => {
         "$GIT${IFS}commit -m x",
         "$(printf git)${IFS}commit -m x",
         "`printf git`${IFS}push origin HEAD",
+        "${X:=git}${IFS}push origin HEAD",
+        "${X=git}${IFS}commit -m x",
+        "${X-git}${IFS}push origin HEAD",
+        "${X:+git}${IFS}commit -m x",
         "command git commit -m x",
         "git --git-dir ../other/.git --work-tree ../other commit -m x",
         "git --exec-path=../proxy-libexec commit -m x",
