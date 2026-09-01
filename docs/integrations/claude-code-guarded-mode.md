@@ -101,7 +101,8 @@ wildcards, multiple refspecs, configured remote push refspecs, and any explicit 
 literal `HEAD` or the exact full verified commit ID are rejected. Push options are allowlisted; embedded quote/backslash word
 construction, receiver delegation (`--exec` / `--receive-pack`), command-scoped transport helpers
 (`GIT_PROXY_COMMAND`, `GIT_SSH`, or `GIT_SSH_COMMAND`), proxy environment overrides
-(`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, or `NO_PROXY`), configured executable transport/proxy or
+(`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, or `NO_PROXY`), configured HTTP proxy/resolution,
+executable transport/proxy or
 `remote.<name>.vcs` helpers,
 URL rewrites, unknown URL schemes, `ext::` remote helpers, `remote.<name>.receivepack`, push options,
 and unknown or combined option forms fail closed. A configured remote name is accepted only when
