@@ -116,6 +116,16 @@ describe("isTerminalGitCommand — structural detection (no shell eval)", () => 
     expect(isTerminalGitCommand("echo $(git commit -m x)")).toBe("commit");
     expect(isTerminalGitCommand("true & git commit -m x")).toBe("commit");
     expect(isTerminalGitCommand("(git commit -m x)")).toBe("commit");
+    expect(isTerminalGitCommand("if true; then git push origin HEAD; fi")).toBe("push");
+    expect(isTerminalGitCommand("for f in a; do git push origin HEAD; done")).toBe("push");
+    expect(isTerminalGitCommand("while true; do git commit -m x; done")).toBe("commit");
+    expect(isTerminalGitCommand("nohup git push origin HEAD")).toBe("push");
+    expect(isTerminalGitCommand("time git push origin HEAD")).toBe("push");
+    expect(isTerminalGitCommand("timeout 60 git push origin HEAD")).toBe("push");
+    expect(isTerminalGitCommand("sudo -u root git push origin HEAD")).toBe("push");
+    expect(isTerminalGitCommand("nice -n 5 git commit -m x")).toBe("commit");
+    expect(isTerminalGitCommand("setsid git push origin HEAD")).toBe("push");
+    expect(isTerminalGitCommand("stdbuf -o0 git push origin HEAD")).toBe("push");
   });
 
   it("detects common wrapper, quoted, absolute-path, and shell -c shapes", () => {
@@ -738,6 +748,9 @@ describe("guard runtime — large working diffs", () => {
       git(["config", "push.followTags", "true"]);
       expect(pushSourceMatchesHead("git push . HEAD:refs/heads/target", repo, verified.headCommit)).toBe(false);
       git(["config", "--unset", "push.followTags"]);
+      git(["config", "submodule.recurse", "true"]);
+      expect(pushSourceMatchesHead("git push . HEAD:refs/heads/target", repo, verified.headCommit)).toBe(false);
+      git(["config", "--unset", "submodule.recurse"]);
       git(["config", "push.pushOption", "mutate"]);
       expect(pushSourceMatchesHead("git push . HEAD:refs/heads/target", repo, verified.headCommit)).toBe(false);
       git(["config", "--unset-all", "push.pushOption"]);

@@ -441,6 +441,37 @@ function gitTokenIndex(tokens) {
   return shellExpandedExecutableEndIndex(tokens, i);
 }
 
+const SHELL_CONTROL_PREFIXES = new Set([
+  "!", "case", "do", "elif", "else", "if", "select", "then", "until", "while",
+]);
+const EXEC_TRANSPARENT_PREFIXES = new Set([
+  "chroot", "chrt", "doas", "ionice", "nice", "nohup", "setsid", "stdbuf", "sudo",
+  "taskset", "time", "timeout", "unshare",
+]);
+
+function visiblePrefixedGitTokenIndex(tokens) {
+  const prefix = shellWordLiteralValue(tokens[0])?.toLowerCase();
+  if (!SHELL_CONTROL_PREFIXES.has(prefix) && !EXEC_TRANSPARENT_PREFIXES.has(prefix)) return -1;
+  for (let i = 1; i < tokens.length; i += 1) {
+    const executable = executableName(tokens[i]);
+    if (executable !== undefined && RECOGNIZED_GIT_EXECUTABLES.has(executable)) return i;
+  }
+  return -1;
+}
+
+function terminalGitVerbFromTokens(tokens, gitIndex) {
+  let i = gitIndex + 1;
+  while (i < tokens.length) {
+    const token = shellWordLiteralValue(tokens[i]);
+    if (token === null) break;
+    if (gitOptionConsumesNext(token)) { i += 2; continue; }
+    if (token?.startsWith("-")) { i += 1; continue; }
+    break;
+  }
+  const subcommand = shellWordLiteralValue(tokens[i]);
+  return subcommand === "commit" || subcommand === "push" ? subcommand : null;
+}
+
 const GIT_GLOBAL_OPTIONS_WITH_VALUE = new Set([
   "-C",
   "-c",
@@ -834,18 +865,11 @@ export function isTerminalGitCommand(command) {
       const expandedVerb = terminalVerbFromExpandedWord(token);
       if (expandedVerb !== null) return expandedVerb;
     }
-    const gitIndex = gitTokenIndex(tokens);
+    let gitIndex = gitTokenIndex(tokens);
+    if (gitIndex < 0) gitIndex = visiblePrefixedGitTokenIndex(tokens);
     if (gitIndex < 0) continue;
-    let i = gitIndex + 1;
-    while (i < tokens.length) {
-      const t = shellWordLiteralValue(tokens[i]);
-      if (t === null) break;
-      if (gitOptionConsumesNext(t)) { i += 2; continue; }
-      if (t?.startsWith("-")) { i += 1; continue; } // other global flags
-      break;
-    }
-    const sub = shellWordLiteralValue(tokens[i]);
-    if (sub === "commit" || sub === "push") return sub;
+    const verb = terminalGitVerbFromTokens(tokens, gitIndex);
+    if (verb !== null) return verb;
   }
   return null;
 }
@@ -1060,7 +1084,7 @@ export function pushSourceMatchesHead(command, cwd, currentHead) {
       [
         "config",
         "--get-regexp",
-        "^(push\\.(followtags|recursesubmodules|pushoption)|remote\\..*\\.(mirror|push|receivepack|proxy|proxyauthmethod|serveroption|vcs)|core\\.(sshcommand|gitproxy)|http(\\..+)?\\.(proxy|proxyauthmethod|proxysslcainfo|proxysslcert|proxysslcertpasswordprotected|proxysslkey|curloptresolve|followredirects|extraheader)|url\\..*\\.(insteadof|pushinsteadof))$",
+        "^(push\\.(followtags|recursesubmodules|pushoption)|submodule\\.recurse|remote\\..*\\.(mirror|push|receivepack|proxy|proxyauthmethod|serveroption|vcs)|core\\.(sshcommand|gitproxy)|http(\\..+)?\\.(proxy|proxyauthmethod|proxysslcainfo|proxysslcert|proxysslcertpasswordprotected|proxysslkey|curloptresolve|followredirects|extraheader)|url\\..*\\.(insteadof|pushinsteadof))$",
       ],
       { cwd, encoding: "utf8" },
     );
