@@ -128,11 +128,37 @@ export function inspectSemanticLifecycle(root: string, changes: readonly ChangeC
       message: "The recorded verification baseline does not match the current analyzed content state.",
       subjectIds: [],
     });
+  } else if (baseline === "superseded") {
+    findings.push({
+      code: "EVIDENCE_BASELINE_SUPERSEDED",
+      severity: "warning",
+      message: "The recorded verification baseline uses a schema this build no longer reads; re-record it with semctx verify diff --record.",
+      subjectIds: [],
+    });
   }
   return findings;
 }
 
-function inspectVerificationBaseline(root: string): "missing" | "valid" | "invalid" | "stale" {
+/**
+ * Schema versions a previous build wrote and this one recognises without reading.
+ *
+ * A superseded baseline is not evidence and never becomes one: it is replaced, never
+ * reinterpreted. It is a warning rather than an error because it reports an absence, not a
+ * contradiction — the same reason `DURABLE_ANCHOR_IS_TRANSIENT` is a warning. Treating it as an
+ * error closed the only exit: `index` refuses to seal on any lifecycle error, so the operation
+ * that produces a current baseline was gated on already having one.
+ */
+const SUPERSEDED_VERIFICATION_VERSIONS: ReadonlySet<number> = new Set([1, 2]);
+
+function isSupersededVerificationState(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const { version } = value as { version?: unknown };
+  return typeof version === "number" && SUPERSEDED_VERIFICATION_VERSIONS.has(version);
+}
+
+function inspectVerificationBaseline(
+  root: string,
+): "missing" | "valid" | "invalid" | "stale" | "superseded" {
   const path = join(root, ".semctx", "verification-state.json");
   if (!existsSync(path)) return "missing";
   let parsed: unknown;
@@ -141,7 +167,9 @@ function inspectVerificationBaseline(root: string): "missing" | "valid" | "inval
   } catch {
     return "invalid";
   }
-  if (!isVerificationState(parsed)) return "invalid";
+  if (!isVerificationState(parsed)) {
+    return isSupersededVerificationState(parsed) ? "superseded" : "invalid";
+  }
   try {
     const current = captureVerificationGitState(root);
     return current.contentStateHash === parsed.contentStateHash
