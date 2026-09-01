@@ -937,7 +937,7 @@ export function pushSourceMatchesHead(command, cwd, currentHead) {
       [
         "config",
         "--get-regexp",
-        "^(push\\.(followtags|recursesubmodules)|remote\\..*\\.(mirror|push|receivepack|proxy|vcs)|core\\.(sshcommand|gitproxy)|url\\..*\\.(insteadof|pushinsteadof))$",
+        "^(push\\.(followtags|recursesubmodules)|remote\\..*\\.(mirror|push|receivepack|proxy|vcs)|core\\.(sshcommand|gitproxy)|http(\\..+)?\\.(proxy|proxyauthmethod|proxysslcainfo|proxysslcert|proxysslcertpasswordprotected|proxysslkey|curloptresolve|followredirects|extraheader)|url\\..*\\.(insteadof|pushinsteadof))$",
       ],
       { cwd, encoding: "utf8" },
     );
