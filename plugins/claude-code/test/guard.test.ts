@@ -706,6 +706,9 @@ describe("guard runtime — large working diffs", () => {
       git(["config", "push.followTags", "true"]);
       expect(pushSourceMatchesHead("git push . HEAD:refs/heads/target", repo, verified.headCommit)).toBe(false);
       git(["config", "--unset", "push.followTags"]);
+      git(["config", "push.pushOption", "mutate"]);
+      expect(pushSourceMatchesHead("git push . HEAD:refs/heads/target", repo, verified.headCommit)).toBe(false);
+      git(["config", "--unset-all", "push.pushOption"]);
       git(["config", "remote.local.push", "refs/heads/*:refs/heads/*"]);
       expect(pushSourceMatchesHead("git push . HEAD:refs/heads/target", repo, verified.headCommit)).toBe(false);
       git(["config", "--unset", "remote.local.push"]);
@@ -715,6 +718,9 @@ describe("guard runtime — large working diffs", () => {
       git(["config", "remote.origin.proxyAuthMethod", "basic"]);
       expect(pushSourceMatchesHead("git push origin HEAD", repo, verified.headCommit)).toBe(false);
       git(["config", "--unset", "remote.origin.proxyAuthMethod"]);
+      git(["config", "remote.origin.serverOption", "mutate"]);
+      expect(pushSourceMatchesHead("git push origin HEAD", repo, verified.headCommit)).toBe(false);
+      git(["config", "--unset-all", "remote.origin.serverOption"]);
       git(["remote", "add", "configured", "https://example.invalid/repo"]);
       git(["config", "remote.configured.vcs", "helper"]);
       expect(pushSourceMatchesHead("git push configured HEAD", repo, verified.headCommit)).toBe(false);

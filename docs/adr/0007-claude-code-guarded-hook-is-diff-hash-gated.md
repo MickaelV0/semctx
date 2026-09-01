@@ -90,7 +90,8 @@ authorize a terminal Git operation.
 - Push refspecs are resolved before authorization. Deletions, multi-ref, mirror, tag-wide, wildcard,
   configured, ambiguous, or non-HEAD sources fail closed. An explicit source must be literal `HEAD`
   or the exact full verified object ID, and the remote must be explicit. Push options use a closed allowlist; receiver delegation and
-  arbitrary server options (`--exec`, `--receive-pack`, and `--push-option`) are rejected. Likewise,
+  arbitrary server options (`--exec`, `--receive-pack`, and `--push-option`), including configured
+  `push.pushOption` and remote server options, are rejected. Likewise,
   command-scoped transport helpers (`GIT_PROXY_COMMAND`, `GIT_SSH`, or `GIT_SSH_COMMAND`), proxy
   environment overrides (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, or `NO_PROXY`), configured HTTP
   proxy/resolution, configured
