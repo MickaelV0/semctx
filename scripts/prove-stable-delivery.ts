@@ -1527,8 +1527,11 @@ export async function exerciseHost(
 
   runtime.makeDirectory(hostRoot);
   runtime.makeDirectory(runtime.joinPath(hostRoot, "tmp"));
+  const codexHome = env["CODEX_HOME"];
+  if (isNonEmpty(codexHome)) runtime.makeDirectory(codexHome);
   // The `--version` probe is read-only and is what *establishes* identity, so it is allowed
-  // before the gates below. Nothing that mutates a host runs until they pass.
+  // before the gates below. No mutating host CLI command runs until they pass; creating the
+  // confined sandbox roots above is proof scaffolding, not host state inherited from a user.
   const probe = runtime.run([host, "--version"], options.foreignRepository, env);
   cli.rawVersion = text(probe.out) ?? text(probe.err);
   cli.reportedVersion = normaliseCliVersion(cli.rawVersion);
