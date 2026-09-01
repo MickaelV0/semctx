@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDefaultConfig } from "@semantic-context/core";
 import { initWorkspace, openStore } from "@semantic-context/repository-store";
-import { indexRepository, runVerify } from "../src";
+import { captureRecordableVerificationGitState, indexRepository, runVerify } from "../src";
 import { __setVerifyCaptureBarrierForTesting } from "../src/verify";
 import { CONTROL_INDEX_SNAPSHOT_META_KEY } from "../src/freshness";
 
@@ -87,6 +87,44 @@ afterEach(() => {
 });
 
 describe("analysed source provenance", () => {
+  it("ignores repository textconv when binding the exact diff and raw content", () => {
+    const root = repository();
+    const script = join(root, ".git", "semctx-constant-textconv.cjs");
+    const executable = process.execPath.replaceAll("\\", "/");
+    const scriptPath = script.replaceAll("\\", "/");
+    writeFileSync(script, 'process.stdout.write("constant\\n");\n');
+    writeFileSync(join(root, ".gitattributes"), "*.ts diff=semctx-hide\n");
+    git(root, "add", ".gitattributes");
+    git(root, "commit", "-q", "-m", "textconv fixture");
+    git(root, "config", "diff.semctx-hide.textconv", `"${executable}" "${scriptPath}"`);
+    indexRepository(root, "2026-08-11T11:01:00.000Z");
+
+    writeFileSync(join(root, "src", "service.ts"), "export function service(): number {\n  return 2;\n}\n");
+    expect(git(root, "diff", "HEAD", "--", "src/service.ts")).toBe("");
+    expect(git(root, "diff", "--no-textconv", "HEAD", "--", "src/service.ts")).toContain("return 2");
+
+    const computation = runVerify(root, { kind: "working-tree" });
+    const state = captureRecordableVerificationGitState(root);
+    expect(computation.result.changedFiles).toContain("src/service.ts");
+    expect(computation.analyzedSourceHash).toBe(state.analyzedSourceHash);
+  }, 20_000);
+
+  it("exposes the exact B snapshot consumed during an A-B-A working-tree race", () => {
+    const root = repository();
+    const path = join(root, "src", "service.ts");
+    const stateA = captureRecordableVerificationGitState(root);
+    __setVerifyCaptureBarrierForTesting(() => {
+      writeFileSync(path, "export function service(): number {\n  return 2;\n}\n");
+    });
+
+    const computation = runVerify(root, { kind: "working-tree" });
+    writeFileSync(path, "export function service(): number {\n  return 1;\n}\n");
+    const restoredA = captureRecordableVerificationGitState(root);
+
+    expect(restoredA.analyzedSourceHash).toBe(stateA.analyzedSourceHash);
+    expect(computation.analyzedSourceHash).not.toBe(stateA.analyzedSourceHash);
+  });
+
   // A diff semctx did not compute and nobody attributed is a set of hunks belonging to no known
   // source state. PASS would certify a join whose two halves were never shown to share coordinates.
   it("refuses a provided diff that carries no post-image identity", () => {
