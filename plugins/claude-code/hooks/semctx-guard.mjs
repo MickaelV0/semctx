@@ -466,6 +466,10 @@ function shellTokenRequiresExpansion(token) {
  * result must be an exact supported invocation shape. This catches `git${IFS}push` without
  * treating look-alikes such as `echo${IFS}git${IFS}push` as terminal Git commands.
  */
+function literalPrintfOutput(body) {
+  return /(?:^|[;&|]\s*)printf\s+(?:--\s+)?([A-Za-z0-9_.-]+)\s*$/.exec(body)?.[1];
+}
+
 function terminalVerbFromExpandedWord(token) {
   const source = String(token ?? "");
   let compact = "";
@@ -505,6 +509,8 @@ function terminalVerbFromExpandedWord(token) {
       expanded = true;
       const closing = source.indexOf("`", i + 1);
       const body = source.slice(i + 1, closing < 0 ? source.length : closing);
+      const literal = literalPrintfOutput(body);
+      if (literal !== undefined) compact += literal;
       if (/(?:^|\s|[\\/])git(?:\.exe|\.cmd|\.bat|\.com)?(?:\s|$)/i.test(body)) expandedGitExecutable = true;
       i = closing < 0 ? source.length : closing;
       continue;
@@ -526,6 +532,13 @@ function terminalVerbFromExpandedWord(token) {
         i += 1;
       }
       const body = source.slice(bodyStart, depth === 0 ? i - 1 : source.length);
+      const parameter = /^([A-Za-z_][A-Za-z0-9_]*)(:?[-+=?])([A-Za-z0-9_.-]+)$/.exec(body);
+      const bareName = /^[A-Za-z_][A-Za-z0-9_]*$/.test(body) ? body.toUpperCase() : null;
+      if (bareName === "IFS") compact += " ";
+      else if (bareName === "GIT") compact += "git";
+      else if (parameter !== null && parameter[2] !== "?" && parameter[2] !== ":?") {
+        compact += parameter[3];
+      }
       if (
         /^GIT(?:[^A-Za-z0-9_]|$)/i.test(body)
         || /:?[-+=?]git(?:\.exe|\.cmd|\.bat|\.com)?$/i.test(body)
@@ -545,6 +558,8 @@ function terminalVerbFromExpandedWord(token) {
         i += 1;
       }
       const body = source.slice(bodyStart, depth === 0 ? i - 1 : source.length);
+      const literal = literalPrintfOutput(body);
+      if (literal !== undefined) compact += literal;
       if (/(?:^|\s|[\\/])git(?:\.exe|\.cmd|\.bat|\.com)?(?:\s|$)/i.test(body)) expandedGitExecutable = true;
       i -= 1;
       continue;
@@ -560,7 +575,13 @@ function terminalVerbFromExpandedWord(token) {
   }
 
   if (!expanded || quote !== null) return null;
-  const normalized = compact.replace(/\\/g, "/").split("/").pop()?.toLowerCase() ?? "";
+  const literalWords = compact.trim().split(/\s+/);
+  const literalExecutable = literalWords[0]?.replace(/\\/g, "/").split("/").pop()?.toLowerCase() ?? "";
+  if (/^git(?:\.exe|\.cmd|\.bat|\.com)?$/.test(literalExecutable)) {
+    const verb = literalWords[1]?.toLowerCase();
+    if (verb === "commit" || verb === "push") return verb;
+  }
+  const normalized = compact.replace(/\s+/g, "").replace(/\\/g, "/").split("/").pop()?.toLowerCase() ?? "";
   const shapes = /^(?:builtin)?(?:command|exec)?git(?:\.exe|\.cmd|\.bat|\.com)?(commit|push)$/;
   const exact = shapes.exec(normalized)?.[1];
   if (exact !== undefined) return exact;
@@ -800,9 +821,9 @@ export function commitUsesWholeIndex(command) {
   return true;
 }
 
-const COMMIT_HOOK_NAMES = ["pre-commit", "prepare-commit-msg", "commit-msg"];
+const COMMIT_HOOK_NAMES = ["pre-commit", "prepare-commit-msg", "commit-msg", "post-commit", "post-rewrite"];
 
-/** A pre-tool index proof is valid only when no repository commit hook can restage afterward. */
+/** A pre-tool proof is valid only when no commit hook can restage or trigger follow-up effects. */
 export function commitHookSurfaceClear(cwd) {
   try {
     const result = spawnSync("git", ["rev-parse", "--git-path", "hooks"], { cwd, encoding: "utf8" });

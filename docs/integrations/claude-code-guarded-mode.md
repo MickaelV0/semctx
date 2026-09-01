@@ -83,7 +83,8 @@ that can select another Git executable or configuration (`PATH`, home/profile va
 launchers such as `git.cmd`. Quote/backslash-composed executable names, terminal subcommands,
 command wrappers, executable shell expansions, and assignments are normalized for terminal detection,
 then rejected as non-canonical; `g\it`, `gi't'`, `git co'mmit'`, `git pu\sh`, `$GIT commit`,
-`${GIT:-git} commit`, `${X:=git} commit`, `$(printf git) commit`, `$(true; printf git) commit`, `command`, `exec`,
+`${GIT:-git} commit`, `${X:=git} commit`, `${X:-g}it commit`, `$(printf g)it commit`, `$(printf git) commit`,
+`$(true; printf git) commit`, `command`, `exec`,
 `builtin`, `git${IFS}push`, `${GIT:-git}${IFS}push`, `$(printf git)${IFS}commit`,
 `g${EMPTY}it${IFS}commit`, escaped newlines, and `P'A'TH=...` therefore
 cannot bypass the guard. Shell expansion in

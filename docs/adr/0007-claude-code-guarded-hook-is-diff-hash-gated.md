@@ -71,7 +71,8 @@ authorize a terminal Git operation.
   `g\it`, `gi't'`, `git co'mmit'`, `git pu\sh`, escaped newlines, or a composed `P'A'TH=...`
   assignment cannot hide the terminal Git operation. Direct `command`, `exec`, and `builtin` forms,
   plus shell-expanded executable expressions such as `$GIT`, `${GIT:-git}`, `$(printf git)`, and
-  `$(true; printf git)` (including literal parameter fallbacks such as `${X:=git}`), and
+  `$(true; printf git)` (including literal parameter fallbacks and fragments such as `${X:=git}`,
+  `${X:-g}it`, and `$(printf g)it`), and
   expansion-split terminal words such as `git${IFS}push` and
   `${GIT:-git}${IFS}push`, are detected and rejected as non-canonical command shapes. Shell expansion
   in any otherwise authorizable terminal-command word is also rejected, so word splitting cannot
@@ -81,8 +82,9 @@ authorize a terminal Git operation.
   accepted long-option abbreviations. Every persisted version 3
   field is shape-validated before authorization. Verification diff capture disables external diff
   and textconv helpers so repository configuration cannot substitute the analyzed hunks. A commit
-  is non-authorizing while `pre-commit`, `prepare-commit-msg`, or `commit-msg` exists, because those
-  hooks run after the pre-tool check and can restage a different tree.
+  is non-authorizing while `pre-commit`, `prepare-commit-msg`, `commit-msg`, `post-commit`, or
+  `post-rewrite` exists. Earlier hooks can restage a different tree; later hooks can initiate
+  unguarded follow-up effects after the pre-tool check.
   All command-scoped config (`-c key=value`, attached `-ckey=value`, and `--config-env`) is outside
   the authorizing contract so direct or included config cannot evade that hook-surface probe.
 - Push refspecs are resolved before authorization. Deletions, multi-ref, mirror, tag-wide, wildcard,
