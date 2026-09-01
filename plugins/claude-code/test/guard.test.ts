@@ -106,6 +106,16 @@ describe("isTerminalGitCommand — structural detection (no shell eval)", () => 
     expect(isTerminalGitCommand("git${IFS}${V:-pu}sh origin HEAD")).toBe("push");
     expect(isTerminalGitCommand("$(printf g)it${IFS}push origin HEAD")).toBe("push");
     expect(isTerminalGitCommand("`printf gi`t${IFS}commit -m x")).toBe("commit");
+    expect(isTerminalGitCommand("echo $(git push origin HEAD)")).toBe("push");
+    expect(isTerminalGitCommand("`git push origin HEAD`")).toBe("push");
+    expect(isTerminalGitCommand("x=$(git push origin HEAD)")).toBe("push");
+    expect(isTerminalGitCommand("true & git push origin HEAD")).toBe("push");
+    expect(isTerminalGitCommand("git status & git push . HEAD")).toBe("push");
+    expect(isTerminalGitCommand("(git push origin HEAD)")).toBe("push");
+    expect(isTerminalGitCommand("{ git push origin HEAD; }")).toBe("push");
+    expect(isTerminalGitCommand("echo $(git commit -m x)")).toBe("commit");
+    expect(isTerminalGitCommand("true & git commit -m x")).toBe("commit");
+    expect(isTerminalGitCommand("(git commit -m x)")).toBe("commit");
   });
 
   it("detects common wrapper, quoted, absolute-path, and shell -c shapes", () => {
@@ -128,6 +138,8 @@ describe("isTerminalGitCommand — structural detection (no shell eval)", () => 
   it("does not fire on non-terminal or look-alike commands", () => {
     expect(isTerminalGitCommand("git status")).toBeNull();
     expect(isTerminalGitCommand("git log --grep=commit")).toBeNull();
+    expect(isTerminalGitCommand("echo '$(git push origin HEAD)'")).toBeNull();
+    expect(isTerminalGitCommand("printf '%s' '(git push origin HEAD)'")).toBeNull();
     expect(isTerminalGitCommand("git add -A")).toBeNull();
     expect(isTerminalGitCommand("echo git commit")).toBeNull();
     expect(isTerminalGitCommand("gitfoo commit")).toBeNull();

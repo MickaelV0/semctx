@@ -91,8 +91,10 @@ then rejected as non-canonical; `g\it`, `gi't'`, `git co'mmit'`, `git pu\sh`, `$
 `$(true; printf git) commit`, `command`, `exec`,
 `builtin`, `git${IFS}push`, `${GIT:-git}${IFS}push`, `$(printf git)${IFS}commit`,
 `g${EMPTY}it${IFS}commit`, escaped newlines, and `P'A'TH=...` therefore
-cannot bypass the guard. Shell expansion in
-terminal-command arguments is rejected too: `git push .${IFS}--all` cannot materialize an
+cannot bypass the guard.
+Visible `git commit` or `git push` operations inside command substitutions, backticks,
+asynchronous `&` segments, subshell groups, and brace groups are detected and rejected too.
+Shell expansion in terminal-command arguments is rejected too: `git push .${IFS}--all` cannot materialize an
 uninspected `--all` option. Use a plain literal
 `cd <repo> && git commit`, `git -C <repo> commit`, or the
 equivalent `push`. Direct `env` wrappers are parsed too: non-retargeting forms such as

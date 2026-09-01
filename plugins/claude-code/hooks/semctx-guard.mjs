@@ -165,7 +165,7 @@ function shellSegments(text) {
       i += 1;
       continue;
     }
-    if (char === ";" || char === "|" || char === "\n") {
+    if (char === ";" || char === "|" || char === "&" || char === "\n") {
       segments.push(segment);
       segment = "";
       continue;
@@ -174,6 +174,87 @@ function shellSegments(text) {
   }
   segments.push(segment);
   return segments;
+}
+
+function visibleCommandSubstitutionBodies(text) {
+  const source = String(text ?? "");
+  const bodies = [];
+  let quote = null;
+  for (let i = 0; i < source.length; i += 1) {
+    const char = source[i];
+    if (quote === "'") {
+      if (char === "'") quote = null;
+      continue;
+    }
+    if (char === "\\" && source[i + 1] !== undefined) {
+      i += 1;
+      continue;
+    }
+    if (char === "'") {
+      quote = "'";
+      continue;
+    }
+    if (char === '"') {
+      quote = quote === '"' ? null : '"';
+      continue;
+    }
+    if (char === "`") {
+      let body = "";
+      for (i += 1; i < source.length; i += 1) {
+        if (source[i] === "\\" && source[i + 1] !== undefined) {
+          body += source[i] + source[i + 1];
+          i += 1;
+          continue;
+        }
+        if (source[i] === "`") break;
+        body += source[i];
+      }
+      bodies.push(body);
+      continue;
+    }
+    if (char !== "$" || source[i + 1] !== "(") continue;
+    let body = "";
+    let depth = 1;
+    let innerQuote = null;
+    for (i += 2; i < source.length; i += 1) {
+      const inner = source[i];
+      if (innerQuote !== null) {
+        body += inner;
+        if (innerQuote === '"' && inner === "\\" && source[i + 1] !== undefined) {
+          body += source[i + 1];
+          i += 1;
+        } else if (inner === innerQuote) {
+          innerQuote = null;
+        }
+        continue;
+      }
+      if (inner === "\\" && source[i + 1] !== undefined) {
+        body += inner + source[i + 1];
+        i += 1;
+        continue;
+      }
+      if (inner === "'" || inner === '"') {
+        innerQuote = inner;
+        body += inner;
+        continue;
+      }
+      if (inner === "(") depth += 1;
+      if (inner === ")") {
+        depth -= 1;
+        if (depth === 0) break;
+      }
+      body += inner;
+    }
+    bodies.push(body);
+  }
+  return bodies;
+}
+
+function stripVisibleShellGroupEdges(segment) {
+  let value = String(segment ?? "").trim();
+  while (value.startsWith("(") || value.startsWith("{")) value = value.slice(1).trimStart();
+  while (value.endsWith(")") || value.endsWith("}")) value = value.slice(0, -1).trimEnd();
+  return value;
 }
 
 /** Resolve only literal quote/backslash composition; never expand variables, substitutions, or globs. */
@@ -724,6 +805,10 @@ function visibleDynamicWrapperBody(command) {
 
 /** Detect a terminal git verb (commit|push) in a shell command, structurally. Returns the verb or null. */
 export function isTerminalGitCommand(command) {
+  for (const body of visibleCommandSubstitutionBodies(command)) {
+    const verb = isTerminalGitCommand(body);
+    if (verb !== null) return verb;
+  }
   const envSplit = envSplitStringBody(command);
   if (envSplit !== null) {
     const verb = isTerminalGitCommand(envSplit);
@@ -741,9 +826,10 @@ export function isTerminalGitCommand(command) {
   }
   const segments = shellSegments(command);
   for (const seg of segments) {
-    const composedVerb = terminalVerbFromExpandedWord(seg.trim());
+    const visibleSegment = stripVisibleShellGroupEdges(seg);
+    const composedVerb = terminalVerbFromExpandedWord(visibleSegment);
     if (composedVerb !== null) return composedVerb;
-    const tokens = shellWords(seg.trim());
+    const tokens = shellWords(visibleSegment);
     for (const token of tokens) {
       const expandedVerb = terminalVerbFromExpandedWord(token);
       if (expandedVerb !== null) return expandedVerb;
