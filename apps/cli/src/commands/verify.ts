@@ -187,6 +187,7 @@ export function requireStableVerificationGitState(
     || before.workingStateHash !== after.workingStateHash
     || before.contentStateHash !== after.contentStateHash
     || before.repositoryStateHash !== after.repositoryStateHash
+    || before.indexStateHash !== after.indexStateHash
     || before.headTreeHash !== after.headTreeHash
   ) {
     throw new SemctxError("GIT_ERROR", "repository state changed while verification was running", { before, after });

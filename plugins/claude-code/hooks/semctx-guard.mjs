@@ -856,7 +856,8 @@ function literalShellWord(token) {
   const wholeQuoted = raw.length >= 2
     && (raw[0] === '"' || raw[0] === "'")
     && raw.at(-1) === raw[0];
-  if ((wholeQuoted ? value : raw).includes("\\") || /["']/.test(value)) return null;
+  if ((wholeQuoted ? value : raw).includes("\\")) return null;
+  if (wholeQuoted ? value.includes(raw[0]) : /["']/.test(value)) return null;
   return value;
 }
 
