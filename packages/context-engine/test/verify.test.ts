@@ -196,6 +196,114 @@ describe("severity tiers — critical contract (strict/BLOCK) vs plain contract 
   });
 });
 
+describe("analyzeDiff insertion boundaries", () => {
+  const graph: RepositoryGraph = {
+    nodes: [
+      { id: "mod:api.ts", kind: "module", name: "api.ts", filePath: "api.ts", evidence: [{ filePath: "api.ts", sourceKind: "code" }], tags: [], metadata: {} },
+      { id: "sym:type:api.ts:PublicResult:5", kind: "type", name: "PublicResult", filePath: "api.ts", exported: true, evidence: [{ filePath: "api.ts", startLine: 5, endLine: 8, sourceKind: "code" }], tags: [], metadata: {} },
+    ],
+    edges: [],
+  };
+  const index = new GraphIndex(graph);
+  const config = createDefaultConfig("/repo");
+
+  it("does not impact an unchanged declaration when text is inserted immediately above it", () => {
+    const diff = "--- a/api.ts\n+++ b/api.ts\n@@ -4,0 +5,1 @@\n+const helper = true;\n";
+    const result = analyzeDiff({ index, claims: [], config, diffText: diff });
+    expect(result.impactedNodes.map((node) => node.id)).not.toContain("sym:type:api.ts:PublicResult:5");
+  });
+
+  it("still impacts a declaration when text is inserted inside it", () => {
+    const diff = "--- a/api.ts\n+++ b/api.ts\n@@ -5,0 +6,1 @@\n+  error?: string;\n";
+    const result = analyzeDiff({ index, claims: [], config, diffText: diff });
+    expect(result.impactedNodes.map((node) => node.id)).toContain("sym:type:api.ts:PublicResult:5");
+  });
+
+  it("does not impact an old-side declaration when text is inserted immediately after it", () => {
+    const diff = "--- a/api.ts\n+++ b/api.ts\n@@ -8,0 +9,1 @@\n+const footer = true;\n";
+    const result = analyzeDiff({ index, claims: [], config, diffText: diff });
+    expect(result.impactedNodes.map((node) => node.id)).not.toContain("sym:type:api.ts:PublicResult:5");
+  });
+
+  it("uses new-side coordinates when the indexed declaration belongs to the range head", () => {
+    const shiftedGraph: RepositoryGraph = {
+      ...graph,
+      nodes: graph.nodes.map((node) => node.id === "sym:type:api.ts:PublicResult:5"
+        ? { ...node, evidence: [{ filePath: "api.ts", startLine: 15, endLine: 18, sourceKind: "code" }] }
+        : node),
+    };
+    const diff = [
+      "--- a/api.ts",
+      "+++ b/api.ts",
+      "@@ -1,0 +1,10 @@",
+      "+// ten lines inserted above the declaration",
+      "+// 2",
+      "+// 3",
+      "+// 4",
+      "+// 5",
+      "+// 6",
+      "+// 7",
+      "+// 8",
+      "+// 9",
+      "+// 10",
+      "@@ -5 +15 @@",
+      "-export type PublicResult = {",
+      "+export type PublicResult = Readonly<{",
+      "",
+    ].join("\n");
+    const result = analyzeDiff({
+      index: new GraphIndex(shiftedGraph),
+      claims: [],
+      config,
+      diffText: diff,
+      nodeRangeSide: "new",
+    });
+    expect(result.impactedNodes.map((node) => node.id)).toContain("sym:type:api.ts:PublicResult:5");
+  });
+
+  it("does not impact a new-side declaration when text was inserted immediately above it", () => {
+    const shiftedGraph: RepositoryGraph = {
+      ...graph,
+      nodes: graph.nodes.map((node) => node.id === "sym:type:api.ts:PublicResult:5"
+        ? { ...node, evidence: [{ filePath: "api.ts", startLine: 6, endLine: 9, sourceKind: "code" }] }
+        : node),
+    };
+    const diff = "--- a/api.ts\n+++ b/api.ts\n@@ -4,0 +5,1 @@\n+const helper = true;\n";
+    const result = analyzeDiff({
+      index: new GraphIndex(shiftedGraph),
+      claims: [],
+      config,
+      diffText: diff,
+      nodeRangeSide: "new",
+    });
+    expect(result.impactedNodes.map((node) => node.id)).not.toContain("sym:type:api.ts:PublicResult:5");
+  });
+
+  it("impacts a new-side declaration when text was inserted inside it", () => {
+    const expandedGraph: RepositoryGraph = {
+      ...graph,
+      nodes: graph.nodes.map((node) => node.id === "sym:type:api.ts:PublicResult:5"
+        ? { ...node, evidence: [{ filePath: "api.ts", startLine: 5, endLine: 9, sourceKind: "code" }] }
+        : node),
+    };
+    const diff = "--- a/api.ts\n+++ b/api.ts\n@@ -5,0 +6,1 @@\n+  error?: string;\n";
+    const result = analyzeDiff({
+      index: new GraphIndex(expandedGraph),
+      claims: [],
+      config,
+      diffText: diff,
+      nodeRangeSide: "new",
+    });
+    expect(result.impactedNodes.map((node) => node.id)).toContain("sym:type:api.ts:PublicResult:5");
+  });
+
+  it("does not impact a new-side declaration when text was inserted immediately after it", () => {
+    const diff = "--- a/api.ts\n+++ b/api.ts\n@@ -8,0 +9,1 @@\n+const footer = true;\n";
+    const result = analyzeDiff({ index, claims: [], config, diffText: diff, nodeRangeSide: "new" });
+    expect(result.impactedNodes.map((node) => node.id)).not.toContain("sym:type:api.ts:PublicResult:5");
+  });
+});
+
 describe("Plane A marker integration", () => {
   it("arms the critical contract gate from analyzer output without injected tags", () => {
     const config = sampleConfig();
