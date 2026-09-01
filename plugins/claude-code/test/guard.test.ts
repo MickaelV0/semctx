@@ -101,6 +101,10 @@ describe("isTerminalGitCommand — structural detection (no shell eval)", () => 
     expect(isTerminalGitCommand("${X=git}${IFS}commit -m x")).toBe("commit");
     expect(isTerminalGitCommand("${X-git}${IFS}push origin HEAD")).toBe("push");
     expect(isTerminalGitCommand("${X:+git}${IFS}commit -m x")).toBe("commit");
+    expect(isTerminalGitCommand("${X:-g}it${IFS}push origin HEAD")).toBe("push");
+    expect(isTerminalGitCommand("git${IFS}${V:-pu}sh origin HEAD")).toBe("push");
+    expect(isTerminalGitCommand("$(printf g)it${IFS}push origin HEAD")).toBe("push");
+    expect(isTerminalGitCommand("`printf gi`t${IFS}commit -m x")).toBe("commit");
   });
 
   it("detects common wrapper, quoted, absolute-path, and shell -c shapes", () => {
@@ -128,6 +132,8 @@ describe("isTerminalGitCommand — structural detection (no shell eval)", () => 
     expect(isTerminalGitCommand("${ECHO}${IFS}push")).toBeNull();
     expect(isTerminalGitCommand("${X:=echo}${IFS}push")).toBeNull();
     expect(isTerminalGitCommand("${X:=gitlab}${IFS}push")).toBeNull();
+    expect(isTerminalGitCommand("${X:-e}cho${IFS}git${IFS}push")).toBeNull();
+    expect(isTerminalGitCommand("$(printf e)cho${IFS}git${IFS}push")).toBeNull();
     expect(isTerminalGitCommand("")).toBeNull();
   });
 });
@@ -546,6 +552,13 @@ describe("guardDecision — verify, commit, push replay", () => {
       expect(guardStatus("git commit -m configured-hook-restage")).toBe(2);
       rmSync(prepareCommitMessage);
       expect(commitHookSurfaceClear(repo)).toBe(true);
+      for (const hookName of ["post-commit", "post-rewrite"]) {
+        const hook = join(configuredHooks, hookName);
+        writeFileSync(hook, "#!/bin/sh\ngit push origin HEAD\n");
+        expect(commitHookSurfaceClear(repo)).toBe(false);
+        expect(guardStatus("git commit -m post-hook")).toBe(2);
+        rmSync(hook);
+      }
       git(["config", "--unset", "core.hooksPath"]);
       expect(guardStatus("git commit -m exact")).toBe(0);
       expect(guardStatus("git commit -am exact")).toBe(2);
@@ -925,6 +938,10 @@ describe("guard runtime — repository scope must be explicit", () => {
         "${X=git}${IFS}commit -m x",
         "${X-git}${IFS}push origin HEAD",
         "${X:+git}${IFS}commit -m x",
+        "${X:-g}it${IFS}push origin HEAD",
+        "git${IFS}${V:-pu}sh origin HEAD",
+        "$(printf g)it${IFS}push origin HEAD",
+        "`printf gi`t${IFS}commit -m x",
         "command git commit -m x",
         "git --git-dir ../other/.git --work-tree ../other commit -m x",
         "git --exec-path=../proxy-libexec commit -m x",
