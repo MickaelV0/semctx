@@ -30,8 +30,8 @@ const CODEX_SNAPSHOT_PATH = join(
 );
 /** The versioned cache Codex actually executes. */
 const CODEX_CACHE_ROOT = join(CODEX_HOME, "plugins", "cache", "semctx-stable", "semctx-control");
-const CODEX_CACHE_PATH = join(CODEX_CACHE_ROOT, "0.1.17");
-const CODEX_OBSOLETE_CACHE_PATH = join(CODEX_CACHE_ROOT, "0.1.16");
+const CODEX_CACHE_PATH = join(CODEX_CACHE_ROOT, "0.1.18");
+const CODEX_OBSOLETE_CACHE_PATH = join(CODEX_CACHE_ROOT, "0.1.17");
 const CODEX_ACTIVE_CACHE_LOCK =
   "failed to back up plugin cache entry: Accès refusé. (os error 5)";
 
@@ -48,7 +48,7 @@ function bundleDigests(
 }
 
 function probe(
-  version: string | undefined = "0.1.17",
+  version: string | undefined = "0.1.18",
   overrides: Record<string, CodexBundleProbe> = {},
 ): CodexPayloadProbe {
   return {
@@ -136,7 +136,7 @@ function fakeRuntime(
               pluginId: "semctx-control@semctx-stable",
               installed: true,
               enabled: true,
-              version: "0.1.17",
+              version: "0.1.18",
             }],
             available: [],
           };
@@ -153,7 +153,7 @@ function fakeRuntime(
             id: "semctx@semctx-stable",
             scope: "user",
             enabled: true,
-            version: "0.1.17",
+            version: "0.1.18",
           }];
         return ok(JSON.stringify(state));
       }
@@ -234,7 +234,7 @@ function codexPluginsAfter(
         pluginId: "semctx-control@semctx-stable",
         installed: true,
         enabled: true,
-        version: "0.1.17",
+        version: "0.1.18",
         source: { source: "local", path: CODEX_SNAPSHOT_PATH },
         ...overrides,
       },
@@ -245,7 +245,7 @@ function codexPluginsAfter(
 
 function installWithLockedAdd(options: FakeOptions): ReturnType<typeof fakeRuntime> {
   return fakeRuntime({
-    ...stableCodexOptions("0.1.16"),
+    ...stableCodexOptions("0.1.17"),
     failCommand: "codex plugin add semctx-control@semctx-stable --json",
     failError: CODEX_ACTIVE_CACHE_LOCK,
     ...options,
@@ -670,8 +670,8 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
     expect(runtime.deferredCacheCleanups).toEqual([{
       cacheRoot: CODEX_CACHE_ROOT,
       path: CODEX_OBSOLETE_CACHE_PATH,
-      version: "0.1.16",
-      keepVersion: "0.1.17",
+      version: "0.1.17",
+      keepVersion: "0.1.18",
     }]);
     expect(runtime.deferredCodexCleanups).toEqual([]);
     expect(report.next.join(" ")).toContain("previous cache entry");
@@ -707,9 +707,9 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
   });
 
   test("never targets the expected version, even when the host reports it as the old one", () => {
-    // A host that claims the pre-update version is already 0.1.17 must not get its live cache wiped.
+    // A host that claims the pre-update version is already 0.1.18 must not get its live cache wiped.
     const runtime = installWithLockedAdd({
-      ...stableCodexOptions("0.1.17"),
+      ...stableCodexOptions("0.1.18"),
       codexPluginsAfter: codexPluginsAfter({}),
       failCommand: "codex plugin add semctx-control@semctx-stable --json",
       failError: CODEX_ACTIVE_CACHE_LOCK,
@@ -763,7 +763,7 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
             pluginId: "semctx-control@semctx-stable",
             installed: true,
             enabled: true,
-            version: "0.1.16",
+            version: "0.1.17",
           },
           { pluginId: "semctx-control@personal", installed: true, enabled: true, version: "0.1.10" },
         ],
@@ -804,14 +804,14 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
     expect(runtime.deferredCacheCleanups).toEqual([{
       cacheRoot: CODEX_CACHE_ROOT,
       path: CODEX_OBSOLETE_CACHE_PATH,
-      version: "0.1.16",
-      keepVersion: "0.1.17",
+      version: "0.1.17",
+      keepVersion: "0.1.18",
     }]);
   });
 
   test("survives a malformed plugin list with a structured failure", () => {
     const runtime = installWithLockedAdd({
-      codexPlugins: { installed: [null, { pluginId: "semctx-control@semctx-stable", installed: true, enabled: true, version: "0.1.16" }] },
+      codexPlugins: { installed: [null, { pluginId: "semctx-control@semctx-stable", installed: true, enabled: true, version: "0.1.17" }] },
       codexPluginsAfter: codexPluginsAfter({}, [null, "not-an-object"]),
     });
 
@@ -850,8 +850,8 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
     },
     {
       name: "the installed version is still the old one",
-      options: { codexPluginsAfter: codexPluginsAfter({ version: "0.1.16" }) },
-      reason: "expected plugin v0.1.17, found v0.1.16",
+      options: { codexPluginsAfter: codexPluginsAfter({ version: "0.1.17" }) },
+      reason: "expected plugin v0.1.18, found v0.1.17",
     },
     {
       name: "the plugin is installed but disabled",
@@ -885,7 +885,7 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
         codexPluginsAfter: codexPluginsAfter({}),
         codexPayloads: {
           [CODEX_SNAPSHOT_PATH]: probe(),
-          [CODEX_CACHE_PATH]: probe("0.1.17", { "semctx-shared.js": { status: "missing" } }),
+          [CODEX_CACHE_PATH]: probe("0.1.18", { "semctx-shared.js": { status: "missing" } }),
         },
       },
       reason: "semctx-shared.js is missing",
@@ -896,7 +896,7 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
         codexPluginsAfter: codexPluginsAfter({}),
         codexPayloads: {
           [CODEX_SNAPSHOT_PATH]: probe(),
-          [CODEX_CACHE_PATH]: probe("0.1.17", { "semctx.js": { status: "empty" } }),
+          [CODEX_CACHE_PATH]: probe("0.1.18", { "semctx.js": { status: "empty" } }),
         },
       },
       reason: "semctx.js is empty",
@@ -907,7 +907,7 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
         codexPluginsAfter: codexPluginsAfter({}),
         codexPayloads: {
           [CODEX_SNAPSHOT_PATH]: probe(),
-          [CODEX_CACHE_PATH]: probe("0.1.17", { "semctx-mcp.js": { status: "not-a-file" } }),
+          [CODEX_CACHE_PATH]: probe("0.1.18", { "semctx-mcp.js": { status: "not-a-file" } }),
         },
       },
       reason: "semctx-mcp.js is not-a-file",
@@ -916,15 +916,15 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
       name: "the cache manifest declares another version",
       options: {
         codexPluginsAfter: codexPluginsAfter({}),
-        codexPayloads: { [CODEX_SNAPSHOT_PATH]: probe(), [CODEX_CACHE_PATH]: probe("0.1.16") },
+        codexPayloads: { [CODEX_SNAPSHOT_PATH]: probe(), [CODEX_CACHE_PATH]: probe("0.1.17") },
       },
-      reason: "declares v0.1.16, expected v0.1.17",
+      reason: "declares v0.1.17, expected v0.1.18",
     },
     {
       name: "the marketplace snapshot manifest declares another version",
       options: {
         codexPluginsAfter: codexPluginsAfter({}),
-        codexPayloads: { [CODEX_SNAPSHOT_PATH]: probe("0.1.16"), [CODEX_CACHE_PATH]: probe() },
+        codexPayloads: { [CODEX_SNAPSHOT_PATH]: probe("0.1.17"), [CODEX_CACHE_PATH]: probe() },
       },
       reason: "snapshot at",
     },
@@ -934,7 +934,7 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
         codexPluginsAfter: codexPluginsAfter({}),
         codexPayloads: {
           [CODEX_SNAPSHOT_PATH]: probe(),
-          [CODEX_CACHE_PATH]: probe("0.1.17", {
+          [CODEX_CACHE_PATH]: probe("0.1.18", {
             "semctx-shared.js": { status: "ok", sha256: "tampered" },
           }),
         },
@@ -1252,7 +1252,7 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
 
     expect(report.ok).toBe(false);
     expect(report.hosts.codex.status).toBe("failed");
-    expect(report.hosts.codex.error).toContain("expected plugin v0.1.17");
+    expect(report.hosts.codex.error).toContain("expected plugin v0.1.18");
   });
 
   test("fails closed when Claude remains disabled after the enable command succeeds", () => {
@@ -1270,7 +1270,7 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
         id: "semctx@semctx-stable",
         scope: "user",
         enabled: false,
-        version: "0.1.17",
+        version: "0.1.18",
       }],
     });
     const report = executeInstall(
@@ -1380,7 +1380,7 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
     expect(new TextDecoder().decode(process.stderr)).toBe("");
     expect(JSON.parse(out)).toMatchObject({
       ok: false,
-      version: "0.1.17",
+      version: "0.1.18",
       error: { code: "INVALID_TASK_INPUT" },
     });
   });
@@ -1397,7 +1397,7 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
     expect(new TextDecoder().decode(process.stderr)).toBe("");
     expect(JSON.parse(out)).toMatchObject({
       ok: false,
-      version: "0.1.17",
+      version: "0.1.18",
       error: {
         code: "INVALID_TASK_INPUT",
         message: "--host requires auto|codex|claude|all",
@@ -1419,8 +1419,8 @@ describe("Codex cache entry confinement", () => {
   });
 
   test("resolves the versioned entry under the Codex cache root", () => {
-    expect(resolveCodexCacheEntry(CODEX_HOME, "0.1.17")).toBe(CODEX_CACHE_PATH);
-    expect(resolveCodexCacheEntry(CODEX_HOME, "0.1.16")).toBe(CODEX_OBSOLETE_CACHE_PATH);
+    expect(resolveCodexCacheEntry(CODEX_HOME, "0.1.18")).toBe(CODEX_CACHE_PATH);
+    expect(resolveCodexCacheEntry(CODEX_HOME, "0.1.17")).toBe(CODEX_OBSOLETE_CACHE_PATH);
     // Shapes a real Codex version can legitimately take.
     expect(resolveCodexCacheEntry(CODEX_HOME, "0.2.8-13ceeea1f599")).not.toBeNull();
     expect(resolveCodexCacheEntry(CODEX_HOME, "26.805.11740")).not.toBeNull();

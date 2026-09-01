@@ -9,7 +9,41 @@ GitHub Release advance together through the tag-driven lockstep workflow documen
 
 ## [Unreleased]
 
+## [0.1.18] - 2026-09-01
+
 ### Added
+
+- **Explain and replay change decisions**
+  ([#125](https://github.com/hoklims/semctx/pull/125),
+  [#126](https://github.com/hoklims/semctx/pull/126)): Semctx can seal the intent, source state,
+  diff, evidence, unknowns, policy, and `ALLOW`, `DENY`, or `REQUIRE_EVIDENCE` verdict in a closed,
+  content-addressed `ChangeAuthorizationCapsuleV1`. `semctx control verify-authorization` and the
+  read-only `semctx_control_verify_authorization` MCP tool replay that decision outside the host and
+  process that produced it. The caller pins the expected authority; a capsule never grants write,
+  commit, push, merge, or deployment authority.
+
+- **Prove fresh delivery on Codex and Claude Code**
+  ([#98](https://github.com/hoklims/semctx/pull/98)): after npm publication and `stable` promotion,
+  the release workflow installs both plugins through fresh, isolated host homes. It binds the
+  marketplace commit, manifests, and executed CLI/MCP bundle digests to the tagged release, runs
+  real `doctor` and MCP smokes, and archives one JSON proof for 90 days. The proof establishes
+  delivery to the next session; it does not claim that an already running session reloaded.
+
+- **Oh My Pi marketplace catalog**
+  ([#112](https://github.com/hoklims/semctx/pull/112)): OMP users can install the same Claude plugin
+  tree from the repository's `stable` channel, with manifest and runtime parity checked alongside
+  Codex and Claude Code.
+
+- **Stable symbol identities and anchor diagnostics**
+  ([#118](https://github.com/hoklims/semctx/pull/118)): Semctx separates semantic identity from a
+  declaration's current line and reports when an anchor migrated, degraded, or became ambiguous.
+  Reindexing no longer silently turns a moved symbol into a different symbol.
+
+- **Bounded multicore TypeScript indexing**
+  ([#115](https://github.com/hoklims/semctx/pull/115),
+  [#117](https://github.com/hoklims/semctx/pull/117)): large repositories can release discovery
+  memory before rescans and analyze isolated file shards with Bun workers, while deterministic
+  ordering and the single-process fallback preserve the same graph.
 
 - **Shadow lifecycle hook for `before_completion`**
   ([#28](https://github.com/hoklims/semctx/issues/28)): both plugins now ship
@@ -107,6 +141,33 @@ GitHub Release advance together through the tag-driven lockstep workflow documen
   [ADR 0014](docs/adr/0014-plugin-delivery-is-observed-across-five-states.md).
 
 ### Fixed
+
+- **Reuse verification across content-preserving commits and pushes**
+  ([#127](https://github.com/hoklims/semctx/pull/127)): the guard binds proof to the complete source,
+  index, configuration, and Git content state instead of invalidating it merely because a commit
+  changed the repository object ID. A developer can verify, commit the same bytes, and push without
+  a ritual reindex; hidden state, submodule drift, unsafe ref expansion, hooks, helpers, and
+  transport retargeting still fail closed.
+
+- **Ignore declarations that only moved to another line**
+  ([#128](https://github.com/hoklims/semctx/pull/128)): diff impact now uses the coordinate side that
+  owns the indexed declaration. Inserting lines above an unchanged export no longer reports
+  `contract_changed_without_test`; insertions and edits inside the declaration remain visible for
+  working-tree, staged, and commit-range verification.
+
+- **Bind semantic authority to the sources actually analyzed**
+  ([#102](https://github.com/hoklims/semctx/pull/102)): readiness and freshness refuse stale or
+  incomplete source coverage instead of treating repository-level metadata as proof that every
+  selected file was analyzed.
+
+- **Start the MCP runtime from portable plugin paths**
+  ([#100](https://github.com/hoklims/semctx/pull/100),
+  [#106](https://github.com/hoklims/semctx/pull/106)): supported hosts no longer depend on an
+  unexpanded or relative `SEMCTX_ROOT` when they launch the bundled server from another directory.
+
+- **Clean persistent SQLite WAL sidecars**
+  ([#114](https://github.com/hoklims/semctx/pull/114)): repository stores checkpoint and remove
+  obsolete `-wal` and `-shm` files without deleting live database state.
 
 - **Reconcile a converged Codex update behind an active-cache lock**
   ([#91](https://github.com/hoklims/semctx/issues/91)): on Windows, `codex plugin add` writes the new
@@ -408,5 +469,6 @@ declared stable).
 - GitHub Action passes all user-controlled inputs through the step `env:` (no `${{ }}` template
   interpolation into run scripts) to prevent Actions injection.
 
-[Unreleased]: https://github.com/hoklims/semctx/compare/v0.1.17...HEAD
+[Unreleased]: https://github.com/hoklims/semctx/compare/v0.1.18...HEAD
+[0.1.18]: https://github.com/hoklims/semctx/compare/v0.1.17...v0.1.18
 [0.1.17]: https://github.com/hoklims/semctx/compare/v0.1.16...v0.1.17
