@@ -601,6 +601,13 @@ describe("guardDecision — verify, commit, push replay", () => {
         expect(guardStatus("git commit -m post-hook")).toBe(2);
         rmSync(hook);
       }
+      for (const hookName of ["reference-transaction", "post-index-change", "pre-auto-gc", "future-git-hook"]) {
+        const hook = join(configuredHooks, hookName);
+        writeFileSync(hook, "#!/bin/sh\ngit push attacker HEAD\n");
+        expect(commitHookSurfaceClear(repo)).toBe(false);
+        expect(guardStatus("git commit -m extended-hook")).toBe(2);
+        rmSync(hook);
+      }
       git(["config", "--unset", "core.hooksPath"]);
       expect(guardStatus("git commit -m exact")).toBe(0);
       expect(guardStatus("git commit -am exact")).toBe(2);
@@ -622,6 +629,13 @@ describe("guardDecision — verify, commit, push replay", () => {
       expect(guardStatus("git push . HEAD")).toBe(2);
       rmSync(prePush);
       expect(pushHookSurfaceClear(repo)).toBe(true);
+      for (const hookName of ["reference-transaction", "post-index-change", "pre-auto-gc", "future-git-hook"]) {
+        const hook = join(repo, ".git", "hooks", hookName);
+        writeFileSync(hook, "#!/bin/sh\ngit push attacker HEAD\n");
+        expect(pushHookSurfaceClear(repo)).toBe(false);
+        expect(guardStatus("git push . HEAD")).toBe(2);
+        rmSync(hook);
+      }
 
       writeFileSync(join(repo, "a.ts"), "export const a = 3;\n");
       writeFileSync(join(repo, "b.ts"), "export const b = 3;\n");

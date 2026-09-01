@@ -87,11 +87,10 @@ authorize a terminal Git operation.
   accepted long-option abbreviations. Every persisted version 3
   field is shape-validated before authorization. Verification diff capture disables external diff
   and textconv helpers so repository configuration cannot substitute the analyzed hunks. A commit
-  is non-authorizing while `pre-commit`, `prepare-commit-msg`, `commit-msg`, `post-commit`, or
-  `post-rewrite` exists. Earlier hooks can restage a different tree; later hooks can initiate
-  unguarded follow-up effects after the pre-tool check. A push is likewise non-authorizing while
-  `pre-push` exists because that hook can execute arbitrary side effects or initiate another push
-  after the inspected command has been authorized.
+  is non-authorizing while the effective hooks directory contains any entry except ordinary
+  `*.sample` files. This covers current and future hook names, including `reference-transaction`,
+  `post-index-change`, `pre-auto-gc`, and `pre-push`: earlier hooks can restage a different tree,
+  while later hooks can initiate unguarded follow-up effects after the pre-tool check.
   All command-scoped config (`-c key=value`, attached `-ckey=value`, and `--config-env`) is outside
   the authorizing contract so direct or included config cannot evade that hook-surface probe.
 - Push refspecs are resolved before authorization. Deletions, multi-ref, mirror, tag-wide, wildcard,

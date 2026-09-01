@@ -5,7 +5,7 @@
 //
 // It parses the Bash command STRUCTURALLY (segments + tokens, never a shell eval) and never
 // executes PR/agent content. It gates on canonical content fingerprints — no analysis runs here.
-import { existsSync, lstatSync, readFileSync, readlinkSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readlinkSync, realpathSync, readdirSync } from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { dirname, join, resolve, isAbsolute } from "node:path";
@@ -963,17 +963,15 @@ export function commitUsesWholeIndex(command) {
   return true;
 }
 
-const COMMIT_HOOK_NAMES = ["pre-commit", "prepare-commit-msg", "commit-msg", "post-commit", "post-rewrite"];
-const PUSH_HOOK_NAMES = ["pre-push"];
-
-function gitHookSurfaceClear(cwd, hookNames) {
+function gitHookSurfaceClear(cwd) {
   try {
     const result = spawnSync("git", ["rev-parse", "--git-path", "hooks"], { cwd, encoding: "utf8" });
     if (result.status !== 0) return false;
     const raw = result.stdout.trim();
     if (raw === "") return false;
     const hooks = isAbsolute(raw) ? resolve(raw) : resolve(cwd, raw);
-    return hookNames.every((name) => !lstatIfPresent(join(hooks, name)));
+    return readdirSync(hooks, { withFileTypes: true })
+      .every((entry) => entry.isFile() && entry.name.endsWith(".sample"));
   } catch {
     return false;
   }
@@ -981,12 +979,12 @@ function gitHookSurfaceClear(cwd, hookNames) {
 
 /** A pre-tool proof is valid only when no commit hook can restage or trigger follow-up effects. */
 export function commitHookSurfaceClear(cwd) {
-  return gitHookSurfaceClear(cwd, COMMIT_HOOK_NAMES);
+  return gitHookSurfaceClear(cwd);
 }
 
 /** A pre-tool proof is valid only when no pre-push hook can add uninspected side effects. */
 export function pushHookSurfaceClear(cwd) {
-  return gitHookSurfaceClear(cwd, PUSH_HOOK_NAMES);
+  return gitHookSurfaceClear(cwd);
 }
 
 const UNSAFE_PUSH_OPTIONS = new Set([
