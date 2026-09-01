@@ -642,6 +642,8 @@ describe("guard runtime — large working diffs", () => {
         "git push --exec git-receive-pack . HEAD",
         "git push --receive-pack git-receive-pack . HEAD",
         "git push --push-option mutate . HEAD",
+        "GIT_SSH=helper git push origin HEAD",
+        "GIT_SSH_COMMAND=helper git push origin HEAD",
         "git -c push.default=matching push .",
         "git -c remote.origin.push=refs/heads/*:refs/heads/* push origin",
         "git -c push.followTags=true push .",
@@ -667,6 +669,9 @@ describe("guard runtime — large working diffs", () => {
       git(["config", "remote.local.push", "refs/heads/*:refs/heads/*"]);
       expect(pushSourceMatchesHead("git push . HEAD:refs/heads/target", repo, verified.headCommit)).toBe(false);
       git(["config", "--unset", "remote.local.push"]);
+      git(["config", "remote.origin.receivepack", "helper"]);
+      expect(pushSourceMatchesHead("git push origin HEAD", repo, verified.headCommit)).toBe(false);
+      git(["config", "--unset", "remote.origin.receivepack"]);
       git(["config", "push.recurseSubmodules", "on-demand"]);
       expect(pushSourceMatchesHead("git push .", repo, verified.headCommit)).toBe(false);
     } finally {
