@@ -42,7 +42,7 @@ Create `.semctx/guard.json` in the project (see `plugins/claude-code/examples/gu
 semctx verify diff --record     # PASS/WARN → exact content may be committed; BLOCK → resolve first
 git add <verified paths>         # stage the complete verified state before the terminal operation
 git commit -m "..."             # plain whole-index commit; partial/restaging forms are rejected
-git push                         # reuses that proof; a partial commit or later drift is blocked
+git push origin HEAD             # explicit remote + exact HEAD; a partial commit or later drift is blocked
 ```
 
 Inside a Claude Code session the agent should prefer the plugin-bundled CLI (same release as MCP)
@@ -96,12 +96,14 @@ equivalent `push`. Direct `env` wrappers are parsed too: non-retargeting forms s
 `env GIT_AUTHOR_NAME=name git commit` remain in contract, while retargeting assignments,
 environment clearing (`-i`), repository-affecting `-u` / `--unset`, `env -C` / `--chdir`, and
 `env -S` / `--split-string` are rejected.
-For push, use the current branch/HEAD only. Deletions, `--all`, `--mirror`, tag-wide pushes,
+For push, name an explicit remote and use `HEAD` or the exact verified commit only. Deletions, `--all`, `--mirror`, tag-wide pushes,
 wildcards, multiple refspecs, configured remote push refspecs, and any explicit source other than
 literal `HEAD` or the exact full verified commit ID are rejected. Push options are allowlisted; embedded quote/backslash word
-construction, receiver delegation (`--exec` / `--receive-pack`, `GIT_SSH` / `GIT_SSH_COMMAND`, or
-`remote.<name>.receivepack`), push options, and unknown or combined
-option forms fail closed. If Git's top-level probe fails, the
+construction, receiver delegation (`--exec` / `--receive-pack`), command-scoped transport helpers
+(`GIT_PROXY_COMMAND`, `GIT_SSH`, or `GIT_SSH_COMMAND`), configured executable transport/proxy helpers,
+URL rewrites, unknown URL schemes, `ext::` remote helpers, `remote.<name>.receivepack`, push options,
+and unknown or combined option forms fail closed. A configured remote name is accepted only when
+every effective push URL uses a recognized non-delegating transport. If Git's top-level probe fails, the
 hook still discovers the nearest literal repository/guard marker rather than disabling enforcement.
 
 ## Disable

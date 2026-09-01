@@ -32,7 +32,7 @@ hook on git commit:
            it, the command consumes that whole index, AND verdict != BLOCK
 hook on git push:
     allow  if the content still matches AND HEAD exactly materializes the recorded repository state
-           AND the push source resolves to that verified HEAD only
+           AND an explicit non-delegating remote carries that verified HEAD only
     block  otherwise, with the reason and the exact command to re-verify
 ```
 
@@ -89,10 +89,12 @@ authorize a terminal Git operation.
   the authorizing contract so direct or included config cannot evade that hook-surface probe.
 - Push refspecs are resolved before authorization. Deletions, multi-ref, mirror, tag-wide, wildcard,
   configured, ambiguous, or non-HEAD sources fail closed. An explicit source must be literal `HEAD`
-  or the exact full verified object ID. Push options use a closed allowlist; receiver delegation and
+  or the exact full verified object ID, and the remote must be explicit. Push options use a closed allowlist; receiver delegation and
   arbitrary server options (`--exec`, `--receive-pack`, and `--push-option`) are rejected. Likewise,
-  command-scoped SSH helpers (`GIT_SSH` / `GIT_SSH_COMMAND`) and configured
-  `remote.<name>.receivepack` helpers are rejected before an exact-HEAD push is authorized.
+  command-scoped transport helpers (`GIT_PROXY_COMMAND`, `GIT_SSH`, or `GIT_SSH_COMMAND`), configured
+  executable transport/proxy helpers, URL rewrites, unknown URL schemes, `ext::` remote helpers, and
+  `remote.<name>.receivepack` helpers are rejected before an exact-HEAD push is authorized. Configured
+  remote names are authorized only after every effective push URL passes the same transport check.
   shell words composed with embedded quotes or backslashes are rejected, so lexical reconstruction
   cannot disguise a source-expanding option. Guarded mode never reuses one HEAD proof to publish
   another ref.
