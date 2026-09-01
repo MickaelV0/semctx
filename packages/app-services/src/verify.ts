@@ -529,6 +529,9 @@ export function runVerify(root: string, source: VerifySource): VerifyComputation
       claims: store.loadClaims(),
       config,
       diffText: resolved.diffText ?? "",
+      // Working-tree and staged indexes describe the old HEAD snapshot. A commit range is
+      // analysed against its indexed head, so its graph ranges use the diff's new coordinates.
+      nodeRangeSide: source.kind === "range" ? "new" : "old",
     });
     const changedScopePaths = parseUnifiedDiffScopePaths(resolved.diffText ?? "");
     // Unconditional: the analysis-health preflight below only runs for `config.version === 2`, so a

@@ -216,6 +216,64 @@ describe("analysed source provenance", () => {
   });
 });
 
+describe("diff coordinate binding", () => {
+  it("does not impact a working-tree declaration that only shifts down", () => {
+    const root = repository();
+    writeFileSync(
+      join(root, "src", "service.ts"),
+      "const helper = true;\nexport function service(): number {\n  return 1;\n}\n",
+    );
+
+    const computation = runVerify(root, { kind: "working-tree" });
+
+    expect(computation.result.impactedNodes.map((node) => node.name)).not.toContain("service");
+  });
+
+  it("does not impact a staged declaration that only shifts down", () => {
+    const root = repository();
+    writeFileSync(
+      join(root, "src", "service.ts"),
+      "const helper = true;\nexport function service(): number {\n  return 1;\n}\n",
+    );
+    git(root, "add", ".");
+
+    const computation = runVerify(root, { kind: "staged" });
+
+    expect(computation.result.impactedNodes.map((node) => node.name)).not.toContain("service");
+  });
+
+  it("impacts a range declaration using the indexed head coordinates", () => {
+    const root = repository();
+    const base = git(root, "rev-parse", "HEAD");
+    writeFileSync(
+      join(root, "src", "service.ts"),
+      [
+        "const helper1 = 1;",
+        "const helper2 = 2;",
+        "const helper3 = 3;",
+        "const helper4 = 4;",
+        "const helper5 = 5;",
+        "const helper6 = 6;",
+        "const helper7 = 7;",
+        "const helper8 = 8;",
+        "const helper9 = 9;",
+        "const helper10 = 10;",
+        "export function service(): number {",
+        "  return 2;",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    git(root, "add", ".");
+    git(root, "commit", "-q", "-m", "shift and change service");
+    indexRepository(root, "2026-08-11T11:02:00.000Z");
+
+    const computation = runVerify(root, { kind: "range", base });
+
+    expect(computation.result.impactedNodes.map((node) => node.name)).toContain("service");
+  });
+});
+
 describe("frozen Git identity", () => {
   // The hunks must come from the commit that was resolved, not from whatever the ref names by the
   // time the diff runs. `feature` is redirected to a sibling commit between the two steps.
