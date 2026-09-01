@@ -77,6 +77,8 @@ authorize a terminal Git operation.
   `${GIT:-git}${IFS}push`, are detected and rejected as non-canonical command shapes. Shell expansion
   in any otherwise authorizable terminal-command word is also rejected, so word splitting cannot
   turn an inspected argument such as `.${IFS}--all` into an uninspected push option.
+  Visible terminal operations nested in command substitutions, backticks, asynchronous `&`
+  segments, subshell groups, or brace groups are detected too and then rejected as non-isolated.
 - Commit commands must consume the already-inspected whole index. Commit-time staging, interactive
   selection, partial-index options, pathspecs, and every `--fixup` form fail closed, including Git's
   accepted long-option abbreviations. Every persisted version 3
