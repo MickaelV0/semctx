@@ -526,7 +526,10 @@ function terminalVerbFromExpandedWord(token) {
         i += 1;
       }
       const body = source.slice(bodyStart, depth === 0 ? i - 1 : source.length);
-      if (/^GIT(?:[^A-Za-z0-9_]|$)/i.test(body) || /:-git(?:\}|$)/i.test(body)) {
+      if (
+        /^GIT(?:[^A-Za-z0-9_]|$)/i.test(body)
+        || /:?[-+=?]git(?:\.exe|\.cmd|\.bat|\.com)?$/i.test(body)
+      ) {
         expandedGitExecutable = true;
       }
       i -= 1;
