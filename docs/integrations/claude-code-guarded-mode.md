@@ -100,7 +100,8 @@ environment clearing (`-i`), repository-affecting `-u` / `--unset`, `env -C` / `
 For push, name an explicit remote and use `HEAD` or the exact verified commit only. Deletions, `--all`, `--mirror`, tag-wide pushes,
 wildcards, multiple refspecs, configured remote push refspecs, and any explicit source other than
 literal `HEAD` or the exact full verified commit ID are rejected. Push options are allowlisted; embedded quote/backslash word
-construction, receiver delegation (`--exec` / `--receive-pack`), command-scoped transport helpers
+construction, receiver delegation (`--exec` / `--receive-pack`), configured or explicit push/server options,
+command-scoped transport helpers
 (`GIT_PROXY_COMMAND`, `GIT_SSH`, or `GIT_SSH_COMMAND`), proxy environment overrides
 (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, or `NO_PROXY`), configured HTTP proxy/resolution,
 executable transport/proxy or
