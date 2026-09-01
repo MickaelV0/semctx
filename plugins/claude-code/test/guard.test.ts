@@ -642,6 +642,8 @@ describe("guard runtime — large working diffs", () => {
       expect(pushSourceMatchesHead("git push ext::helper HEAD", repo, verified.headCommit)).toBe(false);
       expect(pushSourceMatchesHead("git push helper://target HEAD", repo, verified.headCommit)).toBe(false);
       expect(pushSourceMatchesHead("git push https://example.invalid/repo HEAD", repo, verified.headCommit)).toBe(true);
+      expect(pushSourceMatchesHead("HTTPS_PROXY=http://127.0.0.1:9 git push https://example.invalid/repo HEAD", repo, verified.headCommit)).toBe(false);
+      expect(pushSourceMatchesHead("ALL_PROXY=socks5://127.0.0.1:9 git push ssh://example.invalid/repo HEAD", repo, verified.headCommit)).toBe(false);
       expect(pushSourceMatchesHead("git push HEAD", repo, verified.headCommit)).toBe(false);
       expect(pushSourceMatchesHead("git push --exec git-receive-pack . HEAD", repo, verified.headCommit)).toBe(false);
       expect(pushSourceMatchesHead("git push --receive-pack git-receive-pack . HEAD", repo, verified.headCommit)).toBe(false);
@@ -670,6 +672,10 @@ describe("guard runtime — large working diffs", () => {
         "GIT_SSH=helper git push origin HEAD",
         "GIT_SSH_COMMAND=helper git push origin HEAD",
         "GIT_PROXY_COMMAND=helper git push origin HEAD",
+        "HTTP_PROXY=http://127.0.0.1:9 git push https://example.invalid/repo HEAD",
+        "HTTPS_PROXY=http://127.0.0.1:9 git push https://example.invalid/repo HEAD",
+        "ALL_PROXY=socks5://127.0.0.1:9 git push ssh://example.invalid/repo HEAD",
+        "NO_PROXY=example.invalid git push https://example.invalid/repo HEAD",
         "git push ext::helper HEAD",
         "git push helper://target HEAD",
         "git -c push.default=matching push .",
