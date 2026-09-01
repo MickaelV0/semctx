@@ -31,7 +31,10 @@ runtime behaviour. The analysis is local and deterministic; semctx itself needs 
 - **Focused skills**: `skills/semctx-verify` for Plane A and `skills/semctx-semantic` for Plane B.
 - **Guard hook** (`hooks/`): a `PreToolUse` guard that is **inert by default** (advisory) and, when
   the project opts into guarded mode, blocks non-isolated `git commit` / `git push` commands or an
-  unverified working state. Block messages point at the plugin-bundled CLI by absolute path when
+  unverified working state. Verification disables external diff/textconv helpers; commit-time
+  selection abbreviations and repository commit hooks that could restage after the pre-check are
+  rejected. Push requires an explicit non-delegating remote and exact `HEAD`; configured push/server options, remote helpers,
+  executable transport configuration, and URL rewrites fail closed. Block messages point at the plugin-bundled CLI by absolute path when
   the bundle is in reach, and at a global `semctx` otherwise. The semantic and control tools do not
   change this host-specific behaviour.
 
@@ -110,10 +113,20 @@ SEMCTX_GUARD=off
 ```
 
 The guard only ever gates the two terminal git verbs — never file edits, tests, exploration, or
-non-terminal git commands. It compares a hash of the working diff to the last verified hash
+non-terminal git commands. It compares canonical analyzed-content and repository-state hashes
 (ADR 0007); it runs no analysis itself. In guarded mode, cwd prefixes must be literal and Git
 repository retargeting (`GIT_DIR`, `GIT_WORK_TREE`, `--git-dir`, `--work-tree`, and related forms)
-is rejected rather than compared against the session repository's hash.
+is rejected rather than compared against the session repository's hash. Command-local executable or
+configuration discovery overrides, explicit paths, proxy environment or Git HTTP configuration overrides,
+shell-expanded executable expressions, and shell
+command wrappers, including visible `eval` and `xargs ... sh -c` forms, are rejected too.
+Expansion-split terminal words such as `git${IFS}push` and
+`${GIT:-git}${IFS}push`,
+quote/backslash-composed Git names, and environment assignments
+are detected and rejected as non-canonical rather than being mistaken for unrelated commands;
+every `--fixup` commit form is also non-authorizing. An exact commit may change
+HEAD without requiring another verification; push is allowed only when that HEAD tree exactly
+materializes the recorded state.
 
 ## Requirements
 
