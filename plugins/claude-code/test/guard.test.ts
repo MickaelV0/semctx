@@ -700,9 +700,12 @@ describe("guard runtime — large working diffs", () => {
       git(["config", "remote.origin.receivepack", "helper"]);
       expect(pushSourceMatchesHead("git push origin HEAD", repo, verified.headCommit)).toBe(false);
       git(["config", "--unset", "remote.origin.receivepack"]);
-      git(["config", "remote.origin.vcs", "helper"]);
-      expect(pushSourceMatchesHead("git push origin HEAD", repo, verified.headCommit)).toBe(false);
-      git(["config", "--unset", "remote.origin.vcs"]);
+      git(["remote", "add", "configured", "https://example.invalid/repo"]);
+      git(["config", "remote.configured.vcs", "helper"]);
+      expect(pushSourceMatchesHead("git push configured HEAD", repo, verified.headCommit)).toBe(false);
+      git(["config", "--unset", "remote.configured.vcs"]);
+      expect(pushSourceMatchesHead("git push configured HEAD", repo, verified.headCommit)).toBe(true);
+      git(["remote", "remove", "configured"]);
       git(["remote", "add", "delegated", "ext::helper"]);
       expect(pushSourceMatchesHead("git push delegated HEAD", repo, verified.headCommit)).toBe(false);
       git(["remote", "remove", "delegated"]);
