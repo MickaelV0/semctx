@@ -907,6 +907,10 @@ interface FakeOptions {
   /** Bundles the published commit does not carry, so the witness is incomplete. */
   missingBlobs?: string[];
   throwOnCommand?: string;
+  /** Current Codex releases may leave snapshot identity solely to Git. */
+  missingCodexMetadata?: boolean;
+  /** Files that remain present and admitted but cannot be read as text. */
+  unreadableTextPaths?: string[];
 }
 
 function fakeRuntime(options: FakeOptions = {}) {
@@ -1053,8 +1057,9 @@ function fakeRuntime(options: FakeOptions = {}) {
     makeDirectory(target) { note("make", target); madeDirectories.add(target); },
     readTextFile(target) {
       note("read", target);
+      if ((options.unreadableTextPaths ?? []).includes(target)) return null;
       if (files.has(target)) return files.get(target) ?? null;
-      if (target.endsWith(".codex-marketplace-install.json")) {
+      if (target.endsWith(".codex-marketplace-install.json") && options.missingCodexMetadata !== true) {
         return JSON.stringify({
           revision,
           ...(options.codexRef === "" ? {} : { ref_name: options.codexRef ?? "stable" }),
@@ -1099,6 +1104,9 @@ function fakeRuntime(options: FakeOptions = {}) {
     },
     pathKind(target) {
       note("stat", target);
+      if (target.endsWith(".codex-marketplace-install.json") && options.missingCodexMetadata === true) {
+        return "absent";
+      }
       if ((options.linkPaths ?? []).includes(target)) return "link";
       if ((options.swappedPaths ?? []).includes(target)) {
         // A directory when it is checked, a junction when it is used: the exact race a single
@@ -2303,6 +2311,44 @@ describe("hostile 13 — an invalid authority authorises no effect", () => {
     const proof = await runStableDeliveryProof(LIVE_OPTIONS, runtime);
     expect(proof.hosts.codex.marketplaceRef).toBe("stable");
     expect(proof.hosts.codex.ok).toBe(true);
+  });
+
+  test("Codex falls back to the admitted Git snapshot when legacy metadata is absent", async () => {
+    const { runtime } = fakeRuntime({ missingCodexMetadata: true });
+    const proof = await runStableDeliveryProof(LIVE_OPTIONS, runtime);
+    expect(proof.hosts.codex.marketplaceCommit).toBe(RELEASE.sha);
+    expect(proof.hosts.codex.marketplaceRef).toBe("stable");
+    expect(proof.hosts.codex.pathAdmissions).toContainEqual(
+      expect.objectContaining({ label: "marketplace.metadata#absent", reason: null }),
+    );
+    expect(proof.hosts.codex.ok).toBe(true);
+  });
+
+  test("a swapped Codex snapshot is refused before optional metadata is consulted", async () => {
+    const metadata = join(CODEX_MARKETPLACE_ROOT, ".codex-marketplace-install.json");
+    const { runtime, ledger, calls } = fakeRuntime({
+      missingCodexMetadata: true,
+      swappedPaths: [CODEX_MARKETPLACE_ROOT],
+    });
+    const proof = await runStableDeliveryProof(LIVE_OPTIONS, runtime);
+    expect(proof.hosts.codex.reasons).toContain("HOST_PATH_IS_LINK");
+    expect(ledger).not.toContainEqual({ operation: "stat", path: metadata });
+    expect(ledger).not.toContainEqual({ operation: "read", path: metadata });
+    expect(launchedPayloads(calls).some((entry) => entry.includes("codex"))).toBe(false);
+  });
+
+  test("present but unreadable Codex metadata fails closed before payload execution", async () => {
+    const metadata = join(CODEX_MARKETPLACE_ROOT, ".codex-marketplace-install.json");
+    const { runtime, calls } = fakeRuntime({ unreadableTextPaths: [metadata] });
+    const proof = await runStableDeliveryProof(LIVE_OPTIONS, runtime);
+    expect(proof.hosts.codex.pathAdmissions).toContainEqual(expect.objectContaining({
+      label: "marketplace.metadata#read",
+      candidate: metadata,
+      admitted: null,
+      reason: "HOST_PATH_UNREADABLE",
+    }));
+    expect(proof.hosts.codex.reasons).toContain("HOST_PATH_UNREADABLE");
+    expect(launchedPayloads(calls).some((entry) => entry.includes("codex"))).toBe(false);
   });
 
   test("an incidental Codex list ref cannot override snapshot ref_name", async () => {
