@@ -388,6 +388,8 @@ const GIT_RETARGET_ENV = new Set([
   "GIT_OBJECT_DIRECTORY",
   "GIT_REPLACE_REF_BASE",
   "GIT_SHALLOW_FILE",
+  "GIT_SSH",
+  "GIT_SSH_COMMAND",
   "GIT_WORK_TREE",
   "HOME",
   "HOMEDRIVE",
@@ -877,7 +879,7 @@ export function pushSourceMatchesHead(command, cwd, currentHead) {
 
     const configured = spawnSync(
       "git",
-      ["config", "--get-regexp", "^(push\\.(followtags|recursesubmodules)|remote\\..*\\.(mirror|push))$"],
+      ["config", "--get-regexp", "^(push\\.(followtags|recursesubmodules)|remote\\..*\\.(mirror|push|receivepack))$"],
       { cwd, encoding: "utf8" },
     );
     if (configured.status !== 1) return false;

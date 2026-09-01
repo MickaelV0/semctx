@@ -88,6 +88,8 @@ authorize a terminal Git operation.
   configured, ambiguous, or non-HEAD sources fail closed. An explicit source must be literal `HEAD`
   or the exact full verified object ID. Push options use a closed allowlist; receiver delegation and
   arbitrary server options (`--exec`, `--receive-pack`, and `--push-option`) are rejected. Likewise,
+  command-scoped SSH helpers (`GIT_SSH` / `GIT_SSH_COMMAND`) and configured
+  `remote.<name>.receivepack` helpers are rejected before an exact-HEAD push is authorized.
   shell words composed with embedded quotes or backslashes are rejected, so lexical reconstruction
   cannot disguise a source-expanding option. Guarded mode never reuses one HEAD proof to publish
   another ref.

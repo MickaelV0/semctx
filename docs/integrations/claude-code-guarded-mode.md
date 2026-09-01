@@ -97,7 +97,8 @@ environment clearing (`-i`), repository-affecting `-u` / `--unset`, `env -C` / `
 For push, use the current branch/HEAD only. Deletions, `--all`, `--mirror`, tag-wide pushes,
 wildcards, multiple refspecs, configured remote push refspecs, and any explicit source other than
 literal `HEAD` or the exact full verified commit ID are rejected. Push options are allowlisted; embedded quote/backslash word
-construction, receiver delegation (`--exec` / `--receive-pack`), push options, and unknown or combined
+construction, receiver delegation (`--exec` / `--receive-pack`, `GIT_SSH` / `GIT_SSH_COMMAND`, or
+`remote.<name>.receivepack`), push options, and unknown or combined
 option forms fail closed. If Git's top-level probe fails, the
 hook still discovers the nearest literal repository/guard marker rather than disabling enforcement.
 
