@@ -94,7 +94,8 @@ authorize a terminal Git operation.
   command-scoped transport helpers (`GIT_PROXY_COMMAND`, `GIT_SSH`, or `GIT_SSH_COMMAND`), proxy
   environment overrides (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, or `NO_PROXY`), configured HTTP
   proxy/resolution, configured
-  executable transport/proxy helpers, configured `remote.<name>.vcs` helpers, URL rewrites, unknown URL schemes, `ext::` remote helpers, and
+  executable transport/proxy helpers, configured `remote.<name>.vcs` helpers, remote proxy authentication,
+  URL rewrites, unknown URL schemes, `ext::` remote helpers, and
   `remote.<name>.receivepack` helpers are rejected before an exact-HEAD push is authorized. Configured
   remote names are authorized only after every effective push URL passes the same transport check.
   shell words composed with embedded quotes or backslashes are rejected, so lexical reconstruction

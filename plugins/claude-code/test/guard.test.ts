@@ -118,6 +118,10 @@ describe("isTerminalGitCommand — structural detection (no shell eval)", () => 
     expect(isTerminalGitCommand('env bash -c "git push origin main"')).toBe("push");
     expect(isTerminalGitCommand('env -i bash --noprofile -c "git commit -am x"')).toBe("commit");
     expect(isTerminalGitCommand('pwsh -NoProfile -ExecutionPolicy Bypass -Command "git push origin main"')).toBe("push");
+    expect(isTerminalGitCommand("eval 'git push origin HEAD'")).toBe("push");
+    expect(isTerminalGitCommand("eval 'git commit -m x'")).toBe("commit");
+    expect(isTerminalGitCommand("xargs sh -c 'git push origin HEAD'")).toBe("push");
+    expect(isTerminalGitCommand("xargs -0 bash -c 'git commit -m x'")).toBe("commit");
   });
 
   it("does not fire on non-terminal or look-alike commands", () => {
@@ -172,6 +176,8 @@ describe("isIsolatedTerminalGitCommand — no mutation before authorization", ()
     expect(isIsolatedTerminalGitCommand("git push .${IFS}--all")).toBe(false);
     expect(isIsolatedTerminalGitCommand('git commit -m "$MESSAGE"')).toBe(false);
     expect(isIsolatedTerminalGitCommand('git push ".\'${IFS}--all"')).toBe(false);
+    expect(isIsolatedTerminalGitCommand("eval 'git push origin HEAD'")).toBe(false);
+    expect(isIsolatedTerminalGitCommand("xargs sh -c 'git commit -m x'")).toBe(false);
   });
 
   it("rejects cwd targets that require shell expansion", () => {
@@ -706,6 +712,9 @@ describe("guard runtime — large working diffs", () => {
       git(["config", "remote.origin.receivepack", "helper"]);
       expect(pushSourceMatchesHead("git push origin HEAD", repo, verified.headCommit)).toBe(false);
       git(["config", "--unset", "remote.origin.receivepack"]);
+      git(["config", "remote.origin.proxyAuthMethod", "basic"]);
+      expect(pushSourceMatchesHead("git push origin HEAD", repo, verified.headCommit)).toBe(false);
+      git(["config", "--unset", "remote.origin.proxyAuthMethod"]);
       git(["remote", "add", "configured", "https://example.invalid/repo"]);
       git(["config", "remote.configured.vcs", "helper"]);
       expect(pushSourceMatchesHead("git push configured HEAD", repo, verified.headCommit)).toBe(false);

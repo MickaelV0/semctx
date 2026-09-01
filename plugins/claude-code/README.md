@@ -119,7 +119,8 @@ repository retargeting (`GIT_DIR`, `GIT_WORK_TREE`, `--git-dir`, `--work-tree`, 
 is rejected rather than compared against the session repository's hash. Command-local executable or
 configuration discovery overrides, explicit paths, proxy environment or Git HTTP configuration overrides,
 shell-expanded executable expressions, and shell
-command wrappers are rejected too. Expansion-split terminal words such as `git${IFS}push` and
+command wrappers, including visible `eval` and `xargs ... sh -c` forms, are rejected too.
+Expansion-split terminal words such as `git${IFS}push` and
 `${GIT:-git}${IFS}push`,
 quote/backslash-composed Git names, and environment assignments
 are detected and rejected as non-canonical rather than being mistaken for unrelated commands;
