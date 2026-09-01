@@ -23,7 +23,7 @@ function wrappedShellCommand(command) {
   const text = String(command ?? "");
   const assignments = String.raw`(?:env(?:\s+-\S+)*\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=[^\s]+\s+)*`;
   const patterns = [
-    new RegExp(String.raw`(?:^|[;&|\n]\s*)${assignments}(?:bash|sh|zsh)(?:\s+(?!-c\b)\S+)*\s+-c\s+`, "i"),
+    new RegExp(String.raw`(?:^|[;&|\n]\s*)${assignments}(?:bash|sh|zsh)(?:\s+(?!-[^-\s]*c[^\s]*\b)\S+)*\s+-[^-\s]*c[^\s]*\s+`, "i"),
     new RegExp(String.raw`(?:^|[;&|\n]\s*)${assignments}(?:powershell|pwsh)(?:\.exe)?(?:\s+(?!-(?:command|c)\b)\S+)*\s+-(?:command|c)\s+`, "i"),
     new RegExp(String.raw`(?:^|[;&|\n]\s*)${assignments}cmd(?:\.exe)?(?:\s+(?!\/c\b)\S+)*\s+\/c\s+`, "i"),
   ];
@@ -42,16 +42,16 @@ function wrappedShellCommand(command) {
     commandIndex = shellWrapperCommandIndex(tokens, commandIndex);
     if (commandIndex < 0) continue;
     const executable = executableName(tokens[commandIndex]);
-    const optionNames = executable === "cmd" || executable === "cmd.exe"
-      ? new Set(["/c"])
+    const optionInvokesCommand = executable === "cmd" || executable === "cmd.exe"
+      ? (option) => option === "/c"
       : executable === "powershell" || executable === "powershell.exe" || executable === "pwsh" || executable === "pwsh.exe"
-        ? new Set(["-command", "-c"])
+        ? (option) => option === "-command" || option === "-c"
         : executable === "bash" || executable === "sh" || executable === "zsh"
-          ? new Set(["-c"])
+          ? (option) => /^-[^-]*c[^-]*$/.test(option)
           : null;
-    if (optionNames === null) continue;
+    if (optionInvokesCommand === null) continue;
     const optionIndex = tokens.findIndex(
-      (token, index) => index > commandIndex && optionNames.has(shellWordLiteralValue(token)?.toLowerCase()),
+      (token, index) => index > commandIndex && optionInvokesCommand(shellWordLiteralValue(token)?.toLowerCase() ?? ""),
     );
     if (optionIndex < 0 || tokens[optionIndex + 1] === undefined) continue;
     const body = tokens.slice(optionIndex + 1).map(shellWordLiteralValue);
