@@ -854,19 +854,29 @@ export function commitUsesWholeIndex(command) {
 }
 
 const COMMIT_HOOK_NAMES = ["pre-commit", "prepare-commit-msg", "commit-msg", "post-commit", "post-rewrite"];
+const PUSH_HOOK_NAMES = ["pre-push"];
 
-/** A pre-tool proof is valid only when no commit hook can restage or trigger follow-up effects. */
-export function commitHookSurfaceClear(cwd) {
+function gitHookSurfaceClear(cwd, hookNames) {
   try {
     const result = spawnSync("git", ["rev-parse", "--git-path", "hooks"], { cwd, encoding: "utf8" });
     if (result.status !== 0) return false;
     const raw = result.stdout.trim();
     if (raw === "") return false;
     const hooks = isAbsolute(raw) ? resolve(raw) : resolve(cwd, raw);
-    return COMMIT_HOOK_NAMES.every((name) => !lstatIfPresent(join(hooks, name)));
+    return hookNames.every((name) => !lstatIfPresent(join(hooks, name)));
   } catch {
     return false;
   }
+}
+
+/** A pre-tool proof is valid only when no commit hook can restage or trigger follow-up effects. */
+export function commitHookSurfaceClear(cwd) {
+  return gitHookSurfaceClear(cwd, COMMIT_HOOK_NAMES);
+}
+
+/** A pre-tool proof is valid only when no pre-push hook can add uninspected side effects. */
+export function pushHookSurfaceClear(cwd) {
+  return gitHookSurfaceClear(cwd, PUSH_HOOK_NAMES);
 }
 
 const UNSAFE_PUSH_OPTIONS = new Set([
@@ -1171,6 +1181,12 @@ export function guardDecision(ctx) {
     return {
       block: true,
       reason: "semctx guarded mode: repository commit hooks can change the index after verification; disable pre-commit, prepare-commit-msg, and commit-msg hooks, then retry the commit.",
+    };
+  }
+  if (ctx.terminalVerb === "push" && ctx.pushHooksAbsent === false) {
+    return {
+      block: true,
+      reason: "semctx guarded mode: a repository pre-push hook can execute unverified side effects; disable the pre-push hook, then retry the push.",
     };
   }
   if (!isGuardVerificationState(ctx.state) || !ctx.currentState) {
@@ -1520,6 +1536,7 @@ function main() {
     || (currentState !== null && pushSourceMatchesHead(command, cwd, currentState.headCommit));
   const commitContentAuthorized = terminalVerb !== "commit" || commitUsesWholeIndex(command);
   const commitHooksAbsent = terminalVerb !== "commit" || (commandIsolated && commitHookSurfaceClear(cwd));
+  const pushHooksAbsent = terminalVerb !== "push" || (commandIsolated && pushHookSurfaceClear(cwd));
   const decision = guardDecision({
     enabled,
     terminalVerb,
@@ -1527,6 +1544,7 @@ function main() {
     pushSourceAuthorized,
     commitContentAuthorized,
     commitHooksAbsent,
+    pushHooksAbsent,
     state,
     currentState,
     verifyCommand: verifyRecordCommand(process.env),
