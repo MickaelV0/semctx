@@ -94,6 +94,9 @@ then rejected as non-canonical; `g\it`, `gi't'`, `git co'mmit'`, `git pu\sh`, `$
 cannot bypass the guard.
 Visible `git commit` or `git push` operations inside command substitutions, backticks,
 asynchronous `&` segments, subshell groups, and brace groups are detected and rejected too.
+Shell control keywords and recognized execution-transparent wrappers (`chroot`, `chrt`, `doas`,
+`ionice`, `nice`, `nohup`, `setsid`, `stdbuf`, `sudo`, `taskset`, `time`, `timeout`, and `unshare`)
+are covered too. Arbitrary other external wrappers remain outside this cooperative contract.
 Shell expansion in terminal-command arguments is rejected too: `git push .${IFS}--all` cannot materialize an
 uninspected `--all` option. Use a plain literal
 `cd <repo> && git commit`, `git -C <repo> commit`, or the
@@ -111,6 +114,7 @@ command-scoped transport helpers
 executable transport/proxy or
 `remote.<name>.vcs` helpers and remote proxy authentication overrides,
 URL rewrites, unknown URL schemes, `ext::` remote helpers, `remote.<name>.receivepack`, push options,
+configured `submodule.recurse`,
 and unknown or combined option forms fail closed. A configured remote name is accepted only when
 every effective push URL uses a recognized non-delegating transport. If Git's top-level probe fails, the
 hook still discovers the nearest literal repository/guard marker rather than disabling enforcement.

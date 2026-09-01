@@ -79,6 +79,9 @@ authorize a terminal Git operation.
   turn an inspected argument such as `.${IFS}--all` into an uninspected push option.
   Visible terminal operations nested in command substitutions, backticks, asynchronous `&`
   segments, subshell groups, or brace groups are detected too and then rejected as non-isolated.
+  The same applies after shell control keywords and the recognized execution-transparent wrappers
+  `chroot`, `chrt`, `doas`, `ionice`, `nice`, `nohup`, `setsid`, `stdbuf`, `sudo`, `taskset`,
+  `time`, `timeout`, and `unshare`; arbitrary other external wrappers remain outside the cooperative contract.
 - Commit commands must consume the already-inspected whole index. Commit-time staging, interactive
   selection, partial-index options, pathspecs, and every `--fixup` form fail closed, including Git's
   accepted long-option abbreviations. Every persisted version 3
@@ -95,7 +98,8 @@ authorize a terminal Git operation.
   configured, ambiguous, or non-HEAD sources fail closed. An explicit source must be literal `HEAD`
   or the exact full verified object ID, and the remote must be explicit. Push options use a closed allowlist; receiver delegation and
   arbitrary server options (`--exec`, `--receive-pack`, and `--push-option`), including configured
-  `push.pushOption` and remote server options, are rejected. Likewise,
+  `push.pushOption` and remote server options, are rejected. Configured `submodule.recurse` is also
+  rejected so an inspected single-repository push cannot implicitly publish submodule commits. Likewise,
   command-scoped transport helpers (`GIT_PROXY_COMMAND`, `GIT_SSH`, or `GIT_SSH_COMMAND`), proxy
   environment overrides (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, or `NO_PROXY`), configured HTTP
   proxy/resolution, configured
