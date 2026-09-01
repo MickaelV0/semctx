@@ -117,7 +117,8 @@ non-terminal git commands. It compares canonical analyzed-content and repository
 repository retargeting (`GIT_DIR`, `GIT_WORK_TREE`, `--git-dir`, `--work-tree`, and related forms)
 is rejected rather than compared against the session repository's hash. Command-local executable or
 configuration discovery overrides, explicit paths, shell-expanded executable expressions, and shell
-command wrappers are rejected too. Expansion-split terminal words such as `git${IFS}push`,
+command wrappers are rejected too. Expansion-split terminal words such as `git${IFS}push` and
+`${GIT:-git}${IFS}push`,
 quote/backslash-composed Git names, and environment assignments
 are detected and rejected as non-canonical rather than being mistaken for unrelated commands;
 every `--fixup` commit form is also non-authorizing. An exact commit may change

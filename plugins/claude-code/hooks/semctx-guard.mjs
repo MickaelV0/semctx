@@ -469,6 +469,7 @@ function terminalVerbFromExpandedWord(token) {
   let compact = "";
   let quote = null;
   let expanded = false;
+  let expandedGitExecutable = false;
 
   for (let i = 0; i < source.length; i += 1) {
     const char = source[i];
@@ -501,6 +502,8 @@ function terminalVerbFromExpandedWord(token) {
     if (char === "`" && quote !== "'") {
       expanded = true;
       const closing = source.indexOf("`", i + 1);
+      const body = source.slice(i + 1, closing < 0 ? source.length : closing);
+      if (/(?:^|\s|[\\/])git(?:\.exe|\.cmd|\.bat|\.com)?(?:\s|$)/i.test(body)) expandedGitExecutable = true;
       i = closing < 0 ? source.length : closing;
       continue;
     }
@@ -513,29 +516,39 @@ function terminalVerbFromExpandedWord(token) {
     const next = source[i + 1];
     if (next === "{") {
       let depth = 1;
+      const bodyStart = i + 2;
       i += 2;
       while (i < source.length && depth > 0) {
         if (source[i] === "{") depth += 1;
         else if (source[i] === "}") depth -= 1;
         i += 1;
       }
+      const body = source.slice(bodyStart, depth === 0 ? i - 1 : source.length);
+      if (/^GIT(?:[^A-Za-z0-9_]|$)/i.test(body) || /:-git(?:\}|$)/i.test(body)) {
+        expandedGitExecutable = true;
+      }
       i -= 1;
       continue;
     }
     if (next === "(") {
       let depth = 1;
+      const bodyStart = i + 2;
       i += 2;
       while (i < source.length && depth > 0) {
         if (source[i] === "(") depth += 1;
         else if (source[i] === ")") depth -= 1;
         i += 1;
       }
+      const body = source.slice(bodyStart, depth === 0 ? i - 1 : source.length);
+      if (/(?:^|\s|[\\/])git(?:\.exe|\.cmd|\.bat|\.com)?(?:\s|$)/i.test(body)) expandedGitExecutable = true;
       i -= 1;
       continue;
     }
     if (next !== undefined && /[A-Za-z0-9_]/.test(next)) {
+      const nameStart = i + 1;
       i += 1;
       while (i + 1 < source.length && /[A-Za-z0-9_]/.test(source[i + 1])) i += 1;
+      if (/^GIT(?:_|$)/i.test(source.slice(nameStart, i + 1))) expandedGitExecutable = true;
     } else if (next !== undefined) {
       i += 1;
     }
@@ -544,7 +557,13 @@ function terminalVerbFromExpandedWord(token) {
   if (!expanded || quote !== null) return null;
   const normalized = compact.replace(/\\/g, "/").split("/").pop()?.toLowerCase() ?? "";
   const shapes = /^(?:builtin)?(?:command|exec)?git(?:\.exe|\.cmd|\.bat|\.com)?(commit|push)$/;
-  return shapes.exec(normalized)?.[1] ?? null;
+  const exact = shapes.exec(normalized)?.[1];
+  if (exact !== undefined) return exact;
+  if (expandedGitExecutable) {
+    const firstLiteralWord = compact.trim().split(/\s+/, 1)[0]?.toLowerCase();
+    if (firstLiteralWord === "commit" || firstLiteralWord === "push") return firstLiteralWord;
+  }
+  return null;
 }
 
 function isRetargetingEnvironmentName(name) {
@@ -669,6 +688,8 @@ export function isTerminalGitCommand(command) {
   }
   const segments = shellSegments(command);
   for (const seg of segments) {
+    const composedVerb = terminalVerbFromExpandedWord(seg.trim());
+    if (composedVerb !== null) return composedVerb;
     const tokens = shellWords(seg.trim());
     for (const token of tokens) {
       const expandedVerb = terminalVerbFromExpandedWord(token);
