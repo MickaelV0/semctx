@@ -1,10 +1,12 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
+import * as fs from "node:fs";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDefaultConfig, type SemctxConfig } from "@semantic-context/core";
 import {
   discoverFiles,
+  countTypeScriptFiles,
   discoverRepository,
   isPathSelected,
 } from "@semantic-context/ts-analyzer";
@@ -99,6 +101,38 @@ describe("versioned source selection", () => {
     );
     expect(discoverRepository(globConfig(root, { include: ["**/*.ts"] })).candidates)
       .not.toContainEqual(expect.objectContaining({ relPath: "nested-worktree/hidden.ts" }));
+  });
+
+  it("keeps root sources for repository and worktree Git markers", () => {
+    for (const directory of [true, false]) {
+      const root = fixture();
+      if (directory) mkdirSync(join(root, ".git"));
+      else writeFileSync(join(root, ".git"), "gitdir: elsewhere\n");
+      for (const config of [createDefaultConfig(root), globConfig(root)]) {
+        expect(discoverFiles(config).map((file) => file.relPath)).toContain("src/legacy.ts");
+        expect(countTypeScriptFiles(config)).toBe(1);
+      }
+    }
+  });
+
+  it("fails closed on Git marker inspection errors in both config versions", () => {
+    const root = fixture();
+    const original = fs.lstatSync;
+    const probe = spyOn(fs, "lstatSync").mockImplementation(((path, options) => {
+      if (String(path) === join(root, "src", ".git")) {
+        throw Object.assign(new Error("marker access denied"), { code: "EACCES" });
+      }
+      return original(path, options);
+    }) as typeof fs.lstatSync);
+    try {
+      for (const config of [createDefaultConfig(root), globConfig(root)]) {
+        for (const discover of [discoverFiles, discoverRepository, countTypeScriptFiles]) {
+          expect(() => discover(config)).toThrow(expect.objectContaining({ code: "IO_ERROR" }));
+        }
+      }
+    } finally {
+      probe.mockRestore();
+    }
   });
 
   it("records every considered candidate in deterministic code-unit order", () => {
