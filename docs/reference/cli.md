@@ -56,6 +56,14 @@ not the version a session already running has loaded. `restartRequired` marks th
 left for later, `cleanupDeferred` is the boolean synthesis and `deferrals` lists each obligation
 (`kind`, `detail`, and whether a background retry was `scheduled`); several can coexist.
 
+A host whose CLI rejects the initial marketplace/plugin inventory query with a recognized
+command-parser diagnostic (for example `error: unexpected argument 'marketplace' found`) fails with
+the additive `interfaceUnsupported: true`, and the recovery step names the host CLI upgrade instead
+of the generic "resolve the command error" message. `--dry-run` performs the same read-only
+inventory probe up front, so a plan can already be known-failed; the recovery step never recommends
+blindly re-running without `--dry-run` when a requested host or the workspace step has already
+failed or conflicted.
+
 ## `setup`
 
 Idempotently create or preserve configuration and authored semantic files, index the repository,
@@ -287,6 +295,16 @@ Any requested but missing host, failed query, malformed JSON, unreadable cache, 
 release yields an explicit `UNKNOWN` with no install or update command attached — though the
 activation step stays visible, because how a running session picks up what is already on disk does
 not become unknown just because the release could not be attested.
+
+Since schema `2` (HOK-585), `marketplace.configured` is `boolean | null`: `false` only when a
+successfully read, empty inventory proves the marketplace is not configured, and `null` whenever the
+inventory itself is unavailable — the host was not detected, the query failed, timed out, returned
+oversized or malformed output, or its CLI does not support the inventory command at all.
+`installed.enabled` follows the same rule: a host that reports no boolean for it is `null`, not an
+optimistic `false`. A recognized command-parser rejection on the marketplace or plugin inventory
+query (for example `error: unexpected argument 'marketplace' found`) — as opposed to an ordinary
+failure, timeout, or malformed result, which keep their existing distinct reasons — reports
+`detected: true`, `HOST_INTERFACE_UNSUPPORTED`, `UNKNOWN`, and no convergence command.
 
 Exit status follows `delivery`, the dimension a caller can act on: 0 for `UP_TO_DATE`, 2 for
 `UPDATE_AVAILABLE`, 3 for `UNKNOWN`.

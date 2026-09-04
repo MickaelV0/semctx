@@ -1,4 +1,5 @@
 import packageJson from "../../package.json";
+import { isHostInterfaceUnsupportedFailure } from "@semantic-context/app-services";
 import { isSemctxError, SemctxError } from "@semantic-context/core";
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
@@ -142,6 +143,11 @@ interface HostInstallReport {
   deferrals?: CodexDeferral[];
   steps: InstallStep[];
   error?: string;
+  /**
+   * Additive install reason: a recognized host-CLI parser rejection on the initial inventory
+   * query, as distinct from an ordinary command failure. Never set for any other `failed` cause.
+   */
+  interfaceUnsupported?: boolean;
 }
 
 function addDeferral(report: HostInstallReport, deferral: CodexDeferral): void {
@@ -1015,6 +1021,9 @@ function installCodex(
     report.error = marketplaces === null
       ? `cannot inspect Codex marketplaces: ${compactError(marketplacesResult)}`
       : `cannot inspect Codex plugins: ${compactError(pluginsResult)}`;
+    report.interfaceUnsupported = isHostInterfaceUnsupportedFailure(
+      marketplaces === null ? marketplacesResult : pluginsResult,
+    );
     return;
   }
 
@@ -1184,6 +1193,9 @@ function installClaude(
     report.error = marketplaces === null
       ? `cannot inspect Claude marketplaces: ${compactError(marketplacesResult)}`
       : `cannot inspect Claude plugins: ${compactError(pluginsResult)}`;
+    report.interfaceUnsupported = isHostInterfaceUnsupportedFailure(
+      marketplaces === null ? marketplacesResult : pluginsResult,
+    );
     return;
   }
 
@@ -1357,19 +1369,32 @@ function nextSteps(
   workspace: WorkspaceInstallReport,
   dryRun: boolean,
 ): string[] {
-  if (dryRun) return ["re-run without --dry-run to apply this plan"];
   const next: string[] = [];
-  if (hosts.codex.cleanupDeferred) {
-    next.push(
-      "open a new Codex task: the installed version is what a new task resolves, while a running one"
-        + " keeps the version it started with",
-    );
-    // Every outstanding obligation is named; none is summarised away.
-    for (const deferral of hosts.codex.deferrals ?? []) next.push(deferral.detail);
-  } else if (hosts.codex.restartRequired) {
-    next.push("open a new Codex task so the refreshed plugin is loaded");
+  const requestedReports = (["codex", "claude"] as const)
+    .map((host) => hosts[host])
+    .filter((report) => report.requested);
+  // A dry run still probes each host's inventory before planning anything (#91's read is not
+  // gated on --dry-run), so a plan can already be known-failed. Recommending a blind re-run would
+  // repeat the exact same failure instead of naming the fix.
+  const anyRequestedFailedOrConflicted = requestedReports.some(
+    (report) => report.status === "failed" || report.status === "conflict",
+  ) || workspace.status === "failed";
+
+  if (dryRun) {
+    if (!anyRequestedFailedOrConflicted) next.push("re-run without --dry-run to apply this plan");
+  } else {
+    if (hosts.codex.cleanupDeferred) {
+      next.push(
+        "open a new Codex task: the installed version is what a new task resolves, while a running one"
+          + " keeps the version it started with",
+      );
+      // Every outstanding obligation is named; none is summarised away.
+      for (const deferral of hosts.codex.deferrals ?? []) next.push(deferral.detail);
+    } else if (hosts.codex.restartRequired) {
+      next.push("open a new Codex task so the refreshed plugin is loaded");
+    }
+    if (hosts.claude.restartRequired) next.push("restart Claude Code so the refreshed plugin is loaded");
   }
-  if (hosts.claude.restartRequired) next.push("restart Claude Code so the refreshed plugin is loaded");
   for (const host of ["codex", "claude"] as const) {
     const report = hosts[host];
     const label = host === "codex" ? "Codex" : "Claude Code";
@@ -1380,7 +1405,12 @@ function nextSteps(
         `resolve the ${label} marketplace conflict with '${host} plugin marketplace list --json', then re-run`,
       );
     } else if (report.status === "failed") {
-      next.push(`resolve the ${label} command error above, then re-run`);
+      next.push(
+        report.interfaceUnsupported === true
+          ? `${label}'s CLI does not support the plugin commands semctx needs; update ${label} to a`
+            + " version with plugin support, then re-run"
+          : `resolve the ${label} command error above, then re-run`,
+      );
     }
   }
   if (hosts.codex.status === "not-detected" && hosts.claude.status === "not-detected") {
