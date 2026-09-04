@@ -578,6 +578,34 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
     ]);
   });
 
+  test("an unsupported Claude inventory preserves the successful Codex installation without Claude mutations", () => {
+    const runtime = fakeRuntime({
+      codex: true,
+      claude: true,
+      queryOutcomes: {
+        "claude plugin marketplace list --json": {
+          code: 1,
+          err: "error: unknown command 'plugin'",
+        },
+      },
+    });
+    const report = executeInstall(
+      "C:\\work\\project",
+      parseArgs(["install", "--host", "all", "--skip-setup"]),
+      runtime,
+    );
+    expect(report.ok).toBe(false);
+    expect(report.hosts.codex.status).toBe("installed");
+    expect(report.hosts.claude.status).toBe("failed");
+    expect(report.hosts.claude.interfaceUnsupported).toBe(true);
+    expect(report.next.some((step) => step.includes("does not support the plugin commands"))).toBe(true);
+    expect(runtime.commands.filter((command) => command[0] === "claude")).toEqual([
+      ["claude", "--version"],
+      ["claude", "plugin", "marketplace", "list", "--json"],
+      ["claude", "plugin", "list", "--json"],
+    ]);
+  });
+
   test("an ordinary inventory query failure keeps the generic remedy, not the host-CLI upgrade message", () => {
     const runtime = fakeRuntime({
       codex: true,
