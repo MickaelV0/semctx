@@ -114,7 +114,6 @@ describe("semantic lifecycle hygiene", () => {
       `${JSON.stringify({
         version: 2,
         headCommit: "a".repeat(40),
-        analyzedSourceHash: `sha256:${"0".repeat(64)}`,
         workingStateHash: `sha256:${"0".repeat(64)}`,
         verdict: "PASS",
         recordedAt: "2026-07-23T00:00:00.000Z",
@@ -255,7 +254,6 @@ describe("semantic lifecycle hygiene", () => {
       `${JSON.stringify({
         version: 2,
         headCommit: "a".repeat(40),
-        analyzedSourceHash: `sha256:${"0".repeat(64)}`,
         workingStateHash: `sha256:${"0".repeat(64)}`,
         verdict: "PASS",
         recordedAt: "2026-07-23T00:00:00.000Z",

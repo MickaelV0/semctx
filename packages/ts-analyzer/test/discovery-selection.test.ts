@@ -87,6 +87,9 @@ describe("versioned source selection", () => {
     );
     expect(discoverRepository(globConfig(root, { include: ["**/*.ts"] })).candidates)
       .not.toContainEqual(expect.objectContaining({ relPath: "nested-worktree/hidden.ts" }));
+    for (const config of [createDefaultConfig(root), globConfig(root)]) {
+      expect(countTypeScriptFiles(config)).toBe(1);
+    }
   });
 
   itOnPosix("does not discover sources when the nested Git marker is a symlink", () => {
