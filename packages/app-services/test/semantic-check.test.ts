@@ -9,7 +9,7 @@ import {
   writeActiveChange,
   writeChangeFile,
 } from "@semantic-context/semantic-engine";
-import { captureVerificationGitState, checkSemanticState, indexRepository } from "../src";
+import { captureVerificationGitState, checkSemanticState, controlStatus, indexRepository } from "../src";
 
 const roots: string[] = [];
 
@@ -269,6 +269,8 @@ describe("semantic lifecycle hygiene", () => {
     // be gated on already having one. The only previous exit was deleting the file, which nothing
     // told the operator to do.
     expect(() => indexRepository(dir, "2026-07-23T00:00:00.000Z")).not.toThrow();
+    expect(["FRESH", "DIRTY_KNOWN"]).toContain(controlStatus(dir).verdict);
+    expect(checkSemanticState(dir).reasonCodes).toEqual(["EVIDENCE_BASELINE_SUPERSEDED"]);
   }, 15_000);
 
   it("refuses to seal an index while lifecycle inputs are invalid", () => {
