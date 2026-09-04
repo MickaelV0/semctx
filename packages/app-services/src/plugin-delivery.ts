@@ -751,6 +751,18 @@ function readHostQueries(
     : plugins;
   if (!Array.isArray(marketplaceList) || !Array.isArray(pluginList)) return "HOST_OUTPUT_MALFORMED";
 
+  // An unidentifiable entry might be Semctx: dropping it cannot prove absence.
+  const marketplaceEntries = objectEntries(marketplaceList);
+  const pluginEntries = objectEntries(pluginList);
+  if (marketplaceEntries.length !== marketplaceList.length
+    || pluginEntries.length !== pluginList.length
+    || marketplaceEntries.some((entry) => typeof entry["name"] !== "string" || entry["name"].trim() === "")
+    || pluginEntries.some((entry) => host === "codex"
+      ? typeof entry["pluginId"] !== "string" || entry["pluginId"].trim() === "" || typeof entry["installed"] !== "boolean"
+      : typeof entry["id"] !== "string" || entry["id"].trim() === "" || typeof entry["scope"] !== "string" || entry["scope"].trim() === "")) {
+    return "HOST_OUTPUT_MALFORMED";
+  }
+
   return { marketplaces: marketplaceList, plugins: pluginList };
 }
 

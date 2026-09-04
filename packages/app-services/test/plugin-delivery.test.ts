@@ -997,11 +997,35 @@ describe("plugin delivery — partial evidence never yields UP_TO_DATE", () => {
     expect(report.hosts.codex.reasons).toContain("HOST_OUTPUT_MALFORMED");
   });
 
-  test("incomplete host JSON entries are dropped instead of crashing", () => {
-    const report = statusOf({ codexPlugins: { installed: [null, 42, { pluginId: 7 }] } });
-
-    expect(report.hosts.codex.verdict).toBe("UNKNOWN");
-    expect(report.hosts.codex.reasons).toContain("PLUGIN_NOT_INSTALLED");
+  test("malformed inventory entries cannot prove marketplace or plugin absence", () => {
+    for (const host of ["codex", "claude"] as const) {
+      for (const entry of [null, 42, [], {}, { name: 7 }, { name: "" }]) {
+        for (const entries of [[entry], [{ name: "unrelated" }, entry]]) {
+          const options = host === "codex"
+            ? { codexMarketplaces: { marketplaces: entries } }
+            : { claudeMarketplaces: entries };
+          const report = statusOf(options).hosts[host];
+          expect(report.verdict).toBe("UNKNOWN");
+          expect(report.reasons).toContain("HOST_OUTPUT_MALFORMED");
+          expect(report.marketplace.configured).toBeNull();
+          expect(report.installed.installed).toBeNull();
+        }
+      }
+      const malformedPlugins = host === "codex"
+        ? [null, 42, {}, { pluginId: 7 }, { pluginId: "semctx-control@semctx-stable" }]
+        : [null, 42, {}, { id: 7 }, { id: "semctx@semctx-stable" }];
+      for (const entry of malformedPlugins) {
+        const options = host === "codex"
+          ? { codexPlugins: { installed: [entry] } }
+          : { claudePlugins: [entry] };
+        const report = statusOf(options).hosts[host];
+        expect(report.verdict).toBe("UNKNOWN");
+        expect(report.reasons).toContain("HOST_OUTPUT_MALFORMED");
+        expect(report.marketplace.configured).toBeNull();
+        expect(report.installed.installed).toBeNull();
+        expect(report.reasons).not.toContain("PLUGIN_NOT_INSTALLED");
+      }
+    }
   });
 
   test("an unreadable installed cache yields UNKNOWN", () => {

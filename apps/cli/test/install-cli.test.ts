@@ -541,6 +541,41 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
     expect(report.hosts.codex.interfaceUnsupported).toBe(true);
     expect(report.next.some((step) => step.includes("does not support the plugin commands"))).toBe(true);
     expect(report.next).not.toContain("resolve the Codex command error above, then re-run");
+    expect(runtime.commands.filter((command) => command[0] === "codex")).toEqual([
+      ["codex", "--version"],
+      ["codex", "plugin", "marketplace", "list", "--json"],
+      ["codex", "plugin", "list", "--json"],
+    ]);
+  });
+
+  test("an unsupported Codex inventory does not prevent the requested Claude installation", () => {
+    const runtime = fakeRuntime({
+      codex: true,
+      claude: true,
+      queryOutcomes: {
+        "codex plugin marketplace list --json": {
+          code: 2,
+          err: "error: unexpected argument 'marketplace' found",
+        },
+      },
+    });
+    const report = executeInstall(
+      "C:\\work\\project",
+      parseArgs(["install", "--host", "all", "--skip-setup"]),
+      runtime,
+    );
+    expect(report.ok).toBe(false);
+    expect(report.hosts.codex.status).toBe("failed");
+    expect(report.hosts.codex.interfaceUnsupported).toBe(true);
+    expect(report.hosts.claude.status).toBe("installed");
+    expect(runtime.commands).toContainEqual([
+      "claude", "plugin", "install", "semctx@semctx-stable", "--scope", "user",
+    ]);
+    expect(runtime.commands.filter((command) => command[0] === "codex")).toEqual([
+      ["codex", "--version"],
+      ["codex", "plugin", "marketplace", "list", "--json"],
+      ["codex", "plugin", "list", "--json"],
+    ]);
   });
 
   test("an ordinary inventory query failure keeps the generic remedy, not the host-CLI upgrade message", () => {
