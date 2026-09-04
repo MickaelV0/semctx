@@ -75,6 +75,19 @@ strings. `semctx plugin-status` reports that comparison read-only, and never adv
 
 ### Proving stable delivery (`deliver`)
 
+The verified host baseline is Codex CLI **0.147.0** and Claude Code **2.1.229**:
+[the successful v0.1.18 delivery replay](https://github.com/hoklims/semctx/actions/runs/33556339309)
+records both resolved binary versions, successful marketplace/plugin installs, and passing
+CLI/MCP smokes. These are tested versions, not a claim about the earliest historical version
+that supported plugins. Local Codex CLI 0.148.0 also exposes `plugin` and `marketplace`.
+
+Hosts without that interface have degraded support: Semctx cannot inspect or install their
+plugins through its supported CLI path. Since v0.1.19, recognized parser rejections produce
+`HOST_INTERFACE_UNSUPPORTED` and an upgrade remedy, not a retry of the same failed plan.
+`plugin-status` JSON uses schema 2: unavailable inventory has `marketplace.configured: null`;
+only a successfully observed absence is `false`. Consumers must accept schema 2 and handle
+unknown values explicitly. Semctx does not read private host configuration as a fallback.
+
 A fourth job runs after `promote`, never before: installing from a marketplace that has not been
 advanced yet would prove the *previous* release. It stands up one throwaway home per host, installs
 through each host's own supported interface — Codex `plugin marketplace add hoklims/semctx --ref
