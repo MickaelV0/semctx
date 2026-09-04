@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDefaultConfig, type SemctxConfig } from "@semantic-context/core";
@@ -10,6 +10,7 @@ import {
 } from "@semantic-context/ts-analyzer";
 
 const roots: string[] = [];
+const itOnPosix = process.platform === "win32" ? it.skip : it;
 
 function fixture(): string {
   const root = mkdtempSync(join(tmpdir(), "semctx-selection-"));
@@ -71,6 +72,33 @@ describe("versioned source selection", () => {
         selectionDecision: "excluded",
         reason: "EXCLUDE_MATCH",
       });
+  });
+
+  it("does not discover sources inside a nested Git worktree", () => {
+    const root = fixture();
+    mkdirSync(join(root, "nested-worktree"), { recursive: true });
+    writeFileSync(join(root, "nested-worktree", ".git"), "gitdir: ../.git/worktrees/nested\n");
+    writeFileSync(join(root, "nested-worktree", "hidden.ts"), "export const hidden = true;\n");
+
+    expect(discoverFiles(createDefaultConfig(root)).map((file) => file.relPath)).not.toContain(
+      "nested-worktree/hidden.ts",
+    );
+    expect(discoverRepository(globConfig(root, { include: ["**/*.ts"] })).candidates)
+      .not.toContainEqual(expect.objectContaining({ relPath: "nested-worktree/hidden.ts" }));
+  });
+
+  itOnPosix("does not discover sources when the nested Git marker is a symlink", () => {
+    const root = fixture();
+    mkdirSync(join(root, "nested-worktree"), { recursive: true });
+    writeFileSync(join(root, "git-marker"), "gitdir: ../.git/worktrees/nested\n");
+    symlinkSync("../git-marker", join(root, "nested-worktree", ".git"));
+    writeFileSync(join(root, "nested-worktree", "hidden.ts"), "export const hidden = true;\n");
+
+    expect(discoverFiles(createDefaultConfig(root)).map((file) => file.relPath)).not.toContain(
+      "nested-worktree/hidden.ts",
+    );
+    expect(discoverRepository(globConfig(root, { include: ["**/*.ts"] })).candidates)
+      .not.toContainEqual(expect.objectContaining({ relPath: "nested-worktree/hidden.ts" }));
   });
 
   it("records every considered candidate in deterministic code-unit order", () => {
