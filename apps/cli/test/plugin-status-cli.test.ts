@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -54,6 +54,40 @@ afterEach(() => {
   }
 });
 
+/**
+ * A real host executable, on real `PATH`, that answers `--version` but rejects every `plugin`
+ * subcommand with a clap-style parser diagnostic — the exact shape a Codex/Claude host reports when
+ * its installed CLI predates plugin support. Exercises the classifier at the real process boundary
+ * rather than through the injected `runQuery` seam.
+ */
+function unsupportedHostShim(name: "codex" | "claude"): string {
+  const directory = mkdtempSync(join(tmpdir(), `semctx-plugin-status-${name}-shim-`));
+  roots.push(directory);
+  const script = join(directory, `${name}-shim.js`);
+  writeFileSync(
+    script,
+    `const argv = process.argv.slice(2).join(" ");
+if (argv === "--version") {
+  process.stdout.write("${name}-cli 0.148.0\\n");
+  process.exit(0);
+}
+process.stderr.write("error: unexpected argument 'marketplace' found\\n\\nFor more information, try '--help'.\\n");
+process.exit(2);
+`,
+  );
+  if (process.platform === "win32") {
+    writeFileSync(
+      join(directory, `${name}.cmd`),
+      `@echo off\r\n"${process.execPath}" "${script}" %*\r\n`,
+    );
+  } else {
+    const executable = join(directory, name);
+    writeFileSync(executable, `#!/bin/sh\n"${process.execPath}" "${script}" "$@"\n`);
+    chmodSync(executable, 0o755);
+  }
+  return directory;
+}
+
 describe("semctx plugin-status — read-only cross-host delivery report", () => {
   test("is listed in the CLI help", () => {
     const result = Bun.spawnSync([process.execPath, "run", CLI, "--help"], {
@@ -71,7 +105,7 @@ describe("semctx plugin-status — read-only cross-host delivery report", () => 
     const result = runPluginStatus(temporaryRoot(), { json: true, args: ["--host", "all"] });
     const report = JSON.parse(result.out);
 
-    expect(report.schemaVersion).toBe(1);
+    expect(report.schemaVersion).toBe(2);
     expect(report.kind).toBe("plugin_delivery_status");
     // No host, no git, therefore no proof — and therefore never UP_TO_DATE.
     expect(report.verdict).toBe("UNKNOWN");
@@ -81,6 +115,26 @@ describe("semctx plugin-status — read-only cross-host delivery report", () => 
     expect(report.hosts.claude.detected).toBe(false);
     expect(report.hosts.codex.reasons).toContain("HOST_NOT_DETECTED");
     expect(report.hosts.codex.updateAvailable).toBeNull();
+    // An absent host has no inventory at all — never an optimistic `false`.
+    expect(report.hosts.codex.marketplace.configured).toBeNull();
+    expect(result.code).toBe(3);
+  }, SPAWN_TIMEOUT_MS);
+
+  test("a real host CLI that rejects the plugin subcommand reports HOST_INTERFACE_UNSUPPORTED, not a generic failure", () => {
+    const shimDirectory = unsupportedHostShim("codex");
+    const result = runPluginStatus(temporaryRoot(), {
+      json: true,
+      path: shimDirectory,
+      args: ["--host", "codex"],
+    });
+    const report = JSON.parse(result.out);
+
+    expect(report.hosts.codex.detected).toBe(true);
+    expect(report.hosts.codex.reasons).toContain("HOST_INTERFACE_UNSUPPORTED");
+    expect(report.hosts.codex.reasons).not.toContain("HOST_QUERY_FAILED");
+    expect(report.hosts.codex.verdict).toBe("UNKNOWN");
+    expect(report.hosts.codex.marketplace.configured).toBeNull();
+    expect(report.hosts.codex.convergence).toEqual([]);
     expect(result.code).toBe(3);
   }, SPAWN_TIMEOUT_MS);
 

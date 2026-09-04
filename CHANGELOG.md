@@ -9,6 +9,57 @@ GitHub Release advance together through the tag-driven lockstep workflow documen
 
 ## [Unreleased]
 
+## [0.1.19] - 2026-09-04
+
+### Fixed
+
+- **Keep nested Git worktrees out of the parent index**
+  ([#136](https://github.com/hoklims/semctx/pull/136)): source and workspace discovery skip
+  nested worktree markers while still accepting a worktree as the requested repository root.
+  An unreadable Git marker fails discovery instead of silently omitting source files.
+
+- **Replay and complete stable delivery proofs**
+  ([#130](https://github.com/hoklims/semctx/pull/130),
+  [#131](https://github.com/hoklims/semctx/pull/131),
+  [#132](https://github.com/hoklims/semctx/pull/132)): published releases can be rechecked,
+  isolated Codex homes exist before installation, and Git-backed marketplace identity is
+  accepted without weakening commit or bundle verification.
+
+- **Keep quality-tool versions consistent**
+  ([#133](https://github.com/hoklims/semctx/pull/133),
+  [#135](https://github.com/hoklims/semctx/pull/135)): Ruff's configuration and requirement
+  share version 0.16.5; ESLint 10.9.1, typescript-eslint 8.68.0, and Bun 1.4 types are
+  validated together with the existing Bun 1.4.0 runtime.
+
+- **Distinguish an unsupported host plugin CLI from an absent host or a generic query error**
+  (HOK-585): `semctx plugin-status` and `semctx install` recognize a closed set of host-CLI
+  command-parser rejections (for example `error: unexpected argument 'marketplace' found`) and
+  report `HOST_INTERFACE_UNSUPPORTED` — distinct from `HOST_NOT_DETECTED` and from an ordinary
+  `HOST_QUERY_FAILED`/timeout/malformed-output failure, which keep their existing precedence and
+  reasons. No convergence or install command is ever emitted for an unsupported interface.
+  `plugin_delivery_status` advances to `schemaVersion: 2`: `marketplace.configured` is now
+  `boolean | null` — `false` only for a proven, successfully read, empty inventory, `null` whenever
+  the inventory itself could not be read. `installed.enabled` is audited the same way: a host that
+  reports no boolean for it is `null`, never an optimistic `false`. `semctx install --dry-run` no
+  longer recommends re-running without `--dry-run` when its own read-only inventory probe already
+  failed or conflicted; the recovery step names the specific host CLI upgrade instead.
+
+- **Reindex a repository whose baseline predates this build**
+  ([#134](https://github.com/hoklims/semctx/pull/134)): a `.semctx/verification-state.json` written
+  by an earlier schema is now reported as `EVIDENCE_BASELINE_SUPERSEDED`, a warning, instead of
+  `EVIDENCE_BASELINE_INVALID`, an error. The distinction matters because `index` refuses to seal on
+  any lifecycle error: a superseded baseline gated the one operation that produces a current one,
+  while `verify diff` answered `BLOCK` and advised re-running `index`. The only exit was to delete
+  the file, which no message named. `semctx doctor` reported `OK workspace healthy` throughout.
+
+  A superseded baseline is still never evidence: it is replaced, never reinterpreted, and the
+  guarded hook already refuses every pre-v3 shape as `legacy`. Only a version this build
+  recognises with its complete historical shape is superseded — an unknown version, an absent one,
+  or malformed fields in any recognised version stay `EVIDENCE_BASELINE_INVALID`, so recognition does not extend
+  trust to whatever names itself one. The warning carries the remedy, and the model stays
+  consistent, so a repository that has crossed the v2 to v3 migration reindexes and reseals without
+  manual file surgery.
+
 ## [0.1.18] - 2026-09-01
 
 ### Added
@@ -469,6 +520,7 @@ declared stable).
 - GitHub Action passes all user-controlled inputs through the step `env:` (no `${{ }}` template
   interpolation into run scripts) to prevent Actions injection.
 
-[Unreleased]: https://github.com/hoklims/semctx/compare/v0.1.18...HEAD
+[Unreleased]: https://github.com/hoklims/semctx/compare/v0.1.19...HEAD
+[0.1.19]: https://github.com/hoklims/semctx/compare/v0.1.18...v0.1.19
 [0.1.18]: https://github.com/hoklims/semctx/compare/v0.1.17...v0.1.18
 [0.1.17]: https://github.com/hoklims/semctx/compare/v0.1.16...v0.1.17

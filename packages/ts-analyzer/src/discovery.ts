@@ -133,6 +133,20 @@ function enabledLanguage(
   return config.languages[language];
 }
 
+function isNestedGitWorktree(directory: string, root: string): boolean {
+  const marker = join(directory, ".git");
+  try {
+    const markerStat = lstatSync(marker);
+    return markerStat.isFile() || markerStat.isSymbolicLink();
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return false;
+    throw new SemctxError("IO_ERROR", "repository discovery could not inspect a Git marker", {
+      path: normalizePath(relative(root, marker)),
+      cause: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 function walk(dir: string, root: string, acc: string[], strict = false): void {
   let entries: string[];
   try {
@@ -165,6 +179,7 @@ function walk(dir: string, root: string, acc: string[], strict = false): void {
     // and leak external file content into the graph/pack (CWE-59).
     if (stat.isSymbolicLink()) continue;
     if (stat.isDirectory()) {
+      if (isNestedGitWorktree(abs, root)) continue;
       walk(abs, root, acc, strict);
     } else if (stat.isFile()) {
       acc.push(abs);

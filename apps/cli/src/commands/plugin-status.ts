@@ -1,9 +1,9 @@
 import {
   pluginDeliveryStatus,
   PLUGIN_DELIVERY_HOSTS,
-  type HostPluginDeliveryV1,
+  type HostPluginDeliveryV2,
   type PluginDeliveryHost,
-  type PluginDeliveryReportV1,
+  type PluginDeliveryReportV2,
   type PluginDeliveryScope,
 } from "@semantic-context/app-services";
 import { SemctxError } from "@semantic-context/core";
@@ -32,7 +32,7 @@ function parseScope(args: ParsedArgs): PluginDeliveryScope {
  * host exposes the plugin version a running session loaded, so gating the exit code on it would
  * make every run exit non-zero and say nothing.
  */
-function exitCode(report: PluginDeliveryReportV1): 0 | 2 | 3 {
+function exitCode(report: PluginDeliveryReportV2): 0 | 2 | 3 {
   if (report.delivery === "UP_TO_DATE") return 0;
   if (report.delivery === "UPDATE_AVAILABLE") return 2;
   return 3;
@@ -42,12 +42,12 @@ function label(host: PluginDeliveryHost): string {
   return host === "codex" ? "Codex" : "Claude Code";
 }
 
-function mark(delivery: PluginDeliveryReportV1["delivery"]): string {
+function mark(delivery: PluginDeliveryReportV2["delivery"]): string {
   if (delivery === "UP_TO_DATE") return c.green("ok");
   return delivery === "UPDATE_AVAILABLE" ? c.yellow("!!") : c.dim("??");
 }
 
-function renderHost(host: PluginDeliveryHost, state: HostPluginDeliveryV1): void {
+function renderHost(host: PluginDeliveryHost, state: HostPluginDeliveryV2): void {
   if (!state.requested) return;
   info(`  ${mark(state.delivery)} ${label(host).padEnd(7)} ${state.delivery}`);
   if (!state.detected) {

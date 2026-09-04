@@ -17,6 +17,7 @@ import {
   PLUGIN_DELIVERY_MAX_MANIFEST_BYTES,
   PLUGIN_DELIVERY_RELEASE_URL,
   PLUGIN_RUNTIME_BUNDLES,
+  isHostInterfaceUnsupportedFailure,
   pluginDeliveryStatus,
   readConfinedFile,
   type InstalledPayloadProbe,
@@ -24,7 +25,7 @@ import {
   type PluginDeliveryDependencies,
   type PluginDeliveryHost,
   type PluginDeliveryQueryOutcome,
-  type PluginDeliveryReportV1,
+  type PluginDeliveryReportV2,
   type PublicReleaseBundleWitnesses,
   type PublicReleaseProbe,
 } from "../src/plugin-delivery";
@@ -292,7 +293,7 @@ function fakeDependencies(
   };
 }
 
-function statusOf(options: FakeOptions = {}): PluginDeliveryReportV1 {
+function statusOf(options: FakeOptions = {}): PluginDeliveryReportV2 {
   return pluginDeliveryStatus(
     {
       repositoryRoot: "/work/project",
@@ -303,11 +304,72 @@ function statusOf(options: FakeOptions = {}): PluginDeliveryReportV1 {
   );
 }
 
+describe("isHostInterfaceUnsupportedFailure — closed recognition, shared with the installer", () => {
+  test("recognizes a clap-style unexpected-argument rejection", () => {
+    expect(isHostInterfaceUnsupportedFailure({
+      code: 2,
+      out: "",
+      err: "error: unexpected argument 'marketplace' found\n\nUsage: codex plugin <COMMAND>\n",
+    })).toBe(true);
+  });
+
+  test("recognizes an unrecognized-subcommand rejection", () => {
+    expect(isHostInterfaceUnsupportedFailure({
+      code: 2,
+      out: "",
+      err: "error: unrecognized subcommand 'marketplace'",
+    })).toBe(true);
+  });
+
+  test("recognizes a Claude-style unknown-command rejection", () => {
+    expect(isHostInterfaceUnsupportedFailure({
+      code: 1, out: "", err: "error: unknown command 'plugin'\r\n",
+    })).toBe(true);
+    expect(isHostInterfaceUnsupportedFailure({
+      code: 1, out: "", err: "error: unknown command 'login'\n",
+    })).toBe(false);
+  });
+
+  test("never recognizes a successful outcome, whatever its text", () => {
+    expect(isHostInterfaceUnsupportedFailure({
+      code: 0,
+      out: "",
+      err: "error: unexpected argument 'marketplace' found",
+    })).toBe(false);
+  });
+
+  test("never recognizes an arbitrary failure text as an interface incompatibility", () => {
+    expect(isHostInterfaceUnsupportedFailure({ code: 1, out: "", err: "permission denied" })).toBe(false);
+    expect(isHostInterfaceUnsupportedFailure({ code: 1, out: "", err: "connection timed out" })).toBe(false);
+  });
+
+  test("never recognizes a rejection naming a token this diagnostic never queried", () => {
+    expect(isHostInterfaceUnsupportedFailure({
+      code: 2,
+      out: "",
+      err: "error: unexpected argument 'foobar' found",
+    })).toBe(false);
+    expect(isHostInterfaceUnsupportedFailure({
+      code: 2,
+      out: "",
+      err: "error: unrecognized subcommand 'status'",
+    })).toBe(false);
+  });
+
+  test("never recognizes a quoted parser message embedded inside a larger generic error line", () => {
+    expect(isHostInterfaceUnsupportedFailure({
+      code: 1,
+      out: "",
+      err: "warning: legacy mode; error: unexpected argument 'marketplace' found; retrying",
+    })).toBe(false);
+  });
+});
+
 describe("plugin delivery — five distinct layers", () => {
   test("emits a versioned, deterministic contract envelope", () => {
     const report = statusOf();
 
-    expect(report.schemaVersion).toBe(1);
+    expect(report.schemaVersion).toBe(2);
     expect(report.kind).toBe("plugin_delivery_status");
     // Determinism: two evaluations of identical evidence are byte-identical.
     expect(JSON.stringify(statusOf())).toBe(JSON.stringify(report));
@@ -865,7 +927,67 @@ describe("plugin delivery — partial evidence never yields UP_TO_DATE", () => {
 
     expect(report.hosts.codex.verdict).toBe("UNKNOWN");
     expect(report.hosts.codex.reasons).toContain("HOST_QUERY_FAILED");
+    expect(report.hosts.codex.reasons).not.toContain("HOST_INTERFACE_UNSUPPORTED");
+    // Unavailable inventory — not a proven empty one — must report `null`, never an optimistic `false`.
+    expect(report.hosts.codex.marketplace.configured).toBeNull();
     expect(report.verdict).toBe("UNKNOWN");
+  });
+
+  test("a recognized host-CLI parser rejection reports HOST_INTERFACE_UNSUPPORTED, not a generic failure", () => {
+    const report = statusOf({
+      queryOutcomes: {
+        "codex plugin marketplace list --json": {
+          code: 2,
+          err: "error: unexpected argument 'marketplace' found\n\nUsage: codex plugin <COMMAND>\n",
+        },
+      },
+    });
+
+    expect(report.hosts.codex.detected).toBe(true);
+    expect(report.hosts.codex.reasons).toContain("HOST_INTERFACE_UNSUPPORTED");
+    expect(report.hosts.codex.reasons).not.toContain("HOST_QUERY_FAILED");
+    expect(report.hosts.codex.verdict).toBe("UNKNOWN");
+    expect(report.hosts.codex.delivery).toBe("UNKNOWN");
+    // Unavailable inventory, never an optimistic `false`.
+    expect(report.hosts.codex.marketplace.configured).toBeNull();
+    // No convergence or installation write is ever proposed for an incompatible interface.
+    expect(report.hosts.codex.convergence).toEqual([]);
+    expect(report.hosts.codex.activation).toBeNull();
+  });
+
+  test("a bounded failure takes precedence over a parser-rejection-shaped message", () => {
+    const report = statusOf({
+      queryOutcomes: {
+        "codex plugin marketplace list --json": {
+          code: 1,
+          err: "error: unexpected argument 'marketplace' found",
+          timedOut: true,
+        },
+      },
+    });
+
+    expect(report.hosts.codex.reasons).toContain("HOST_QUERY_TIMEOUT");
+    expect(report.hosts.codex.reasons).not.toContain("HOST_INTERFACE_UNSUPPORTED");
+  });
+
+  test("a generic error string never masquerades as an unsupported interface", () => {
+    const report = statusOf({
+      queryOutcomes: {
+        "codex plugin marketplace list --json": { code: 1, err: "permission denied" },
+      },
+    });
+
+    expect(report.hosts.codex.reasons).toContain("HOST_QUERY_FAILED");
+    expect(report.hosts.codex.reasons).not.toContain("HOST_INTERFACE_UNSUPPORTED");
+  });
+
+  test("a plugin installed with no reported enablement boolean is unproven, not disabled", () => {
+    const report = statusOf({ codexPlugins: codexPlugins({ enabled: undefined }) });
+
+    expect(report.hosts.codex.installed.enabled).toBeNull();
+    expect(report.hosts.codex.reasons).toContain("PLUGIN_ENABLEMENT_UNKNOWN");
+    expect(report.hosts.codex.reasons).not.toContain("PLUGIN_DISABLED");
+    expect(report.hosts.codex.verdict).not.toBe("UP_TO_DATE");
   });
 
   test("malformed host JSON yields UNKNOWN instead of throwing", () => {
@@ -875,11 +997,35 @@ describe("plugin delivery — partial evidence never yields UP_TO_DATE", () => {
     expect(report.hosts.codex.reasons).toContain("HOST_OUTPUT_MALFORMED");
   });
 
-  test("incomplete host JSON entries are dropped instead of crashing", () => {
-    const report = statusOf({ codexPlugins: { installed: [null, 42, { pluginId: 7 }] } });
-
-    expect(report.hosts.codex.verdict).toBe("UNKNOWN");
-    expect(report.hosts.codex.reasons).toContain("PLUGIN_NOT_INSTALLED");
+  test("malformed inventory entries cannot prove marketplace or plugin absence", () => {
+    for (const host of ["codex", "claude"] as const) {
+      for (const entry of [null, 42, [], {}, { name: 7 }, { name: "" }]) {
+        for (const entries of [[entry], [{ name: "unrelated" }, entry]]) {
+          const options = host === "codex"
+            ? { codexMarketplaces: { marketplaces: entries } }
+            : { claudeMarketplaces: entries };
+          const report = statusOf(options).hosts[host];
+          expect(report.verdict).toBe("UNKNOWN");
+          expect(report.reasons).toContain("HOST_OUTPUT_MALFORMED");
+          expect(report.marketplace.configured).toBeNull();
+          expect(report.installed.installed).toBeNull();
+        }
+      }
+      const malformedPlugins = host === "codex"
+        ? [null, 42, {}, { pluginId: 7 }, { pluginId: "semctx-control@semctx-stable" }]
+        : [null, 42, {}, { id: 7 }, { id: "semctx@semctx-stable" }];
+      for (const entry of malformedPlugins) {
+        const options = host === "codex"
+          ? { codexPlugins: { installed: [entry] } }
+          : { claudePlugins: [entry] };
+        const report = statusOf(options).hosts[host];
+        expect(report.verdict).toBe("UNKNOWN");
+        expect(report.reasons).toContain("HOST_OUTPUT_MALFORMED");
+        expect(report.marketplace.configured).toBeNull();
+        expect(report.installed.installed).toBeNull();
+        expect(report.reasons).not.toContain("PLUGIN_NOT_INSTALLED");
+      }
+    }
   });
 
   test("an unreadable installed cache yields UNKNOWN", () => {
@@ -1433,7 +1579,7 @@ function releaseRunner(script: ReleaseScript = {}): {
 function releaseOf(
   script: ReleaseScript = {},
   attest = true,
-): { report: PluginDeliveryReportV1; recorded: RecordedQuery[] } {
+): { report: PluginDeliveryReportV2; recorded: RecordedQuery[] } {
   const { runQuery, recorded } = releaseRunner(script);
   const report = pluginDeliveryStatus(
     { repositoryRoot: CONSUMER_ROOT, version: RELEASE_VERSION, hosts: [], attest },
@@ -1887,7 +2033,7 @@ describe("plugin delivery — the three delivery states over real artifacts", ()
     home: string,
     paths: ReturnType<typeof materialise>,
     attest: boolean,
-  ): PluginDeliveryReportV1 {
+  ): PluginDeliveryReportV2 {
     const { runQuery } = releaseRunner({ inventories: inventoriesFor(paths) });
     return pluginDeliveryStatus(
       { repositoryRoot: CONSUMER_ROOT, version: RELEASE_VERSION, scope: "all", attest },

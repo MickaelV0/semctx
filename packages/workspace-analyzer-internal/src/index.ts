@@ -430,6 +430,7 @@ async function inspectRepository(
         continue;
       }
       if (entry.isDirectory()) {
+        if (await isNestedGitWorktree(resolve(absolute, entry.name))) continue;
         directories.push({ root: child, safe: true });
         pending.push(child);
         if (isConventionalCandidate(child)) {
@@ -515,6 +516,7 @@ function inspectRepositorySync(
         continue;
       }
       if (entry.isDirectory()) {
+        if (isNestedGitWorktreeSync(resolve(absolute, entry.name))) continue;
         directories.push({ root: child, safe: true });
         pending.push(child);
         if (isConventionalCandidate(child)) {
@@ -952,6 +954,26 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isMissing(error: unknown): boolean {
   return isRecord(error) && error.code === "ENOENT";
+}
+
+async function isNestedGitWorktree(directory: string): Promise<boolean> {
+  try {
+    const markerStat = await lstat(resolve(directory, ".git"));
+    return markerStat.isFile() || markerStat.isSymbolicLink();
+  } catch (error) {
+    if (isMissing(error)) return false;
+    throw error;
+  }
+}
+
+function isNestedGitWorktreeSync(directory: string): boolean {
+  try {
+    const markerStat = lstatSync(resolve(directory, ".git"));
+    return markerStat.isFile() || markerStat.isSymbolicLink();
+  } catch (error) {
+    if (isMissing(error)) return false;
+    throw error;
+  }
 }
 
 function emptyProjection(

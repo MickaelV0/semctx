@@ -27,6 +27,7 @@ export const SEMANTIC_CHECK_REASON_ORDER = [
   "ACTIVE_CHANGE_OBSOLETE",
   "EVIDENCE_BASELINE_INVALID",
   "EVIDENCE_BASELINE_STALE",
+  "EVIDENCE_BASELINE_SUPERSEDED",
 ] as const;
 
 export type SemanticCheckReasonCode = (typeof SEMANTIC_CHECK_REASON_ORDER)[number];
@@ -40,6 +41,7 @@ export interface SemanticLifecycleFinding {
     | "ACTIVE_CHANGE_OBSOLETE"
     | "EVIDENCE_BASELINE_INVALID"
     | "EVIDENCE_BASELINE_STALE"
+    | "EVIDENCE_BASELINE_SUPERSEDED"
   >;
   severity: "error" | "warning";
   message: string;
