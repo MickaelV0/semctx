@@ -9,7 +9,7 @@ import {
   writeActiveChange,
   writeChangeFile,
 } from "@semantic-context/semantic-engine";
-import { captureVerificationGitState, checkSemanticState, indexRepository } from "../src";
+import { captureVerificationGitState, checkSemanticState, controlStatus, indexRepository } from "../src";
 
 const roots: string[] = [];
 
@@ -92,7 +92,7 @@ describe("semantic lifecycle hygiene", () => {
     expect(checkSemanticState(closedRoot).reasonCodes).toEqual(["ACTIVE_CHANGE_OBSOLETE"]);
   });
 
-  it("detects invalid and stale evidence baselines with canonical reason ordering", () => {
+  it("separates a corrupt evidence baseline from a superseded one and a stale one", () => {
     const invalidRoot = root();
     writeFileSync(join(invalidRoot, ".semctx", "verification-state.json"), "{broken", "utf8");
     expect(checkSemanticState(invalidRoot).reasonCodes).toEqual(["EVIDENCE_BASELINE_INVALID"]);
@@ -108,20 +108,40 @@ describe("semantic lifecycle hygiene", () => {
       })}\n`,
       "utf8",
     );
-    expect(checkSemanticState(legacyRoot).reasonCodes).toEqual(["EVIDENCE_BASELINE_INVALID"]);
+    expect(checkSemanticState(legacyRoot).reasonCodes).toEqual(["EVIDENCE_BASELINE_SUPERSEDED"]);
     writeFileSync(
       join(legacyRoot, ".semctx", "verification-state.json"),
       `${JSON.stringify({
         version: 2,
         headCommit: "a".repeat(40),
-        analyzedSourceHash: `sha256:${"0".repeat(64)}`,
         workingStateHash: `sha256:${"0".repeat(64)}`,
         verdict: "PASS",
         recordedAt: "2026-07-23T00:00:00.000Z",
       })}\n`,
       "utf8",
     );
-    expect(checkSemanticState(legacyRoot).reasonCodes).toEqual(["EVIDENCE_BASELINE_INVALID"]);
+    const superseded = checkSemanticState(legacyRoot);
+    expect(superseded.reasonCodes).toEqual(["EVIDENCE_BASELINE_SUPERSEDED"]);
+    expect(superseded.lifecycleFindings.map((finding) => finding.severity)).toEqual(["warning"]);
+    expect(superseded.lifecycleFindings[0]?.message).toBe(
+      "The recorded verification baseline uses a schema this build no longer reads; re-record it with semctx verify diff --record.",
+    );
+
+    // Recognising a schema is not trusting whatever names itself one. An unknown version, an
+    // absent version, and a v3 that fails its own shape all stay invalid.
+    for (const unrecognised of [
+      { version: 99, verdict: "PASS", recordedAt: "2026-07-23T00:00:00.000Z" },
+      { verdict: "PASS", recordedAt: "2026-07-23T00:00:00.000Z" },
+      { version: 3, headCommit: "a".repeat(40), verdict: "PASS", recordedAt: "2026-07-23T00:00:00.000Z" },
+    ]) {
+      writeFileSync(
+        join(legacyRoot, ".semctx", "verification-state.json"),
+        `${JSON.stringify(unrecognised)}
+`,
+        "utf8",
+      );
+      expect(checkSemanticState(legacyRoot).reasonCodes).toEqual(["EVIDENCE_BASELINE_INVALID"]);
+    }
 
     const staleRoot = root();
     mkdirSync(join(staleRoot, ".semctx", "working"), { recursive: true });
@@ -145,6 +165,29 @@ describe("semantic lifecycle hygiene", () => {
     ]);
     expect(report.lifecycleFindings.find((finding) => finding.code === "EVIDENCE_BASELINE_STALE")?.message)
       .toBe("The recorded verification baseline does not match the current analyzed content state.");
+  });
+
+  it("rejects malformed recognized legacy baselines before indexing", () => {
+    const repositoryRoot = root();
+    const common = { verdict: "PASS", recordedAt: "2026-07-23T00:00:00.000Z" };
+    const states = [
+      { ...common, version: 1, diffHash: `sha256:${"0".repeat(64)}` },
+      { ...common, version: 2, headCommit: "a".repeat(40), workingStateHash: `sha256:${"0".repeat(64)}` },
+    ];
+    for (const state of states) {
+      for (const field of Object.keys(state)) {
+        if (field === "version") continue;
+        for (const value of [undefined, false, "invalid"]) {
+          writeFileSync(join(repositoryRoot, ".semctx", "verification-state.json"),
+            JSON.stringify({ ...state, [field]: value }));
+          const report = checkSemanticState(repositoryRoot);
+          expect(report.reasonCodes).toEqual(["EVIDENCE_BASELINE_INVALID"]);
+          expect(report.ok).toBe(false);
+          expect(() => indexRepository(repositoryRoot, "2026-07-23T00:00:00.000Z"))
+            .toThrow("semantic model cannot be sealed during indexing");
+        }
+      }
+    }
   });
 
   it("survives an exact commit but invalidates changed committed or untracked content", () => {
@@ -202,6 +245,30 @@ describe("semantic lifecycle hygiene", () => {
     );
     writeFileSync(join(untracked, "untracked-source.ts"), "export const value = 1;\n", "utf8");
     expect(checkSemanticState(untracked).reasonCodes).toEqual(["EVIDENCE_BASELINE_STALE"]);
+  }, 15_000);
+
+  it("indexes a repository whose baseline was written by a superseded schema", () => {
+    const dir = root();
+    writeFileSync(
+      join(dir, ".semctx", "verification-state.json"),
+      `${JSON.stringify({
+        version: 2,
+        headCommit: "a".repeat(40),
+        workingStateHash: `sha256:${"0".repeat(64)}`,
+        verdict: "PASS",
+        recordedAt: "2026-07-23T00:00:00.000Z",
+      })}
+`,
+      "utf8",
+    );
+    expect(checkSemanticState(dir).reasonCodes).toEqual(["EVIDENCE_BASELINE_SUPERSEDED"]);
+
+    // The point of the whole change: `index` is what produces a current baseline, so it must not
+    // be gated on already having one. The only previous exit was deleting the file, which nothing
+    // told the operator to do.
+    expect(() => indexRepository(dir, "2026-07-23T00:00:00.000Z")).not.toThrow();
+    expect(["FRESH", "DIRTY_KNOWN"]).toContain(controlStatus(dir).verdict);
+    expect(checkSemanticState(dir).reasonCodes).toEqual(["EVIDENCE_BASELINE_SUPERSEDED"]);
   }, 15_000);
 
   it("refuses to seal an index while lifecycle inputs are invalid", () => {

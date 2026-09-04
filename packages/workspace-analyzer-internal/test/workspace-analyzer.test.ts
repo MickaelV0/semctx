@@ -1,4 +1,6 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
+import * as fs from "node:fs";
+import * as fsp from "node:fs/promises";
 import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -384,6 +386,76 @@ describe("ADR-C08 workspace detection", () => {
     const synchronous = analyzeWorkspaceSync(input);
 
     expect(JSON.stringify(synchronous)).toBe(JSON.stringify(asynchronous));
+  });
+
+  it("does not inspect manifests inside a nested Git worktree", async () => {
+    const root = await fixture();
+    await json(root, "package.json", { name: "repository" });
+    await text(root, "nested-worktree/.git", "gitdir: ../.git/worktrees/nested\n");
+    await json(root, "nested-worktree/package.json", { name: "nested-worktree" });
+
+    const asynchronous = await analyzeWorkspace({ repositoryRoot: root });
+    const synchronous = analyzeWorkspaceSync({ repositoryRoot: root });
+
+    expect(JSON.stringify(synchronous)).toBe(JSON.stringify(asynchronous));
+    expect(asynchronous.nodes.map((node) => node.root)).toEqual(["."]);
+    expect(asynchronous.candidates).toEqual([]);
+    expect(asynchronous.diagnostics).toEqual([]);
+  });
+
+  itOnPosix("does not inspect manifests when the nested Git marker is a symlink", async () => {
+    const root = await fixture();
+    await json(root, "package.json", { name: "repository" });
+    await text(root, "git-marker", "gitdir: ../.git/worktrees/nested\n");
+    await json(root, "nested-worktree/package.json", { name: "nested-worktree" });
+    await symlink("../git-marker", join(root, "nested-worktree", ".git"));
+
+    const asynchronous = await analyzeWorkspace({ repositoryRoot: root });
+    const synchronous = analyzeWorkspaceSync({ repositoryRoot: root });
+
+    expect(JSON.stringify(synchronous)).toBe(JSON.stringify(asynchronous));
+    expect(asynchronous.nodes.map((node) => node.root)).toEqual(["."]);
+    expect(asynchronous.candidates).toEqual([]);
+    expect(asynchronous.diagnostics).toEqual([]);
+  });
+
+  it("accepts a repository root with either kind of Git marker", async () => {
+    for (const directory of [true, false]) {
+      const root = await fixture();
+      await json(root, "package.json", { name: "repository" });
+      if (directory) await mkdir(join(root, ".git"));
+      else await text(root, ".git", "gitdir: elsewhere\n");
+      const asynchronous = await analyzeWorkspace({ repositoryRoot: root });
+      expect(analyzeWorkspaceSync({ repositoryRoot: root })).toEqual(asynchronous);
+      expect(asynchronous.nodes.map((node) => node.root)).toEqual(["."]);
+      expect(asynchronous.diagnostics).toEqual([]);
+    }
+  });
+
+  it("propagates marker inspection errors in both discovery paths", async () => {
+    const root = await fixture();
+    await json(root, "packages/a/package.json", { name: "a" });
+    const marker = join(root, "packages", ".git");
+    const failure = Object.assign(new Error("marker access denied"), { code: "EACCES" });
+    const originalSync = fs.lstatSync;
+    const syncProbe = spyOn(fs, "lstatSync").mockImplementation(((path, options) => {
+      if (String(path) === marker) throw failure;
+      return originalSync(path, options);
+    }) as typeof fs.lstatSync);
+    const originalAsync = fsp.lstat;
+    const asyncProbe = spyOn(fsp, "lstat").mockImplementation(((path, options) => {
+      if (String(path) === marker) return Promise.reject(failure);
+      return originalAsync(path, options);
+    }) as typeof fsp.lstat);
+    try {
+      expect(() => analyzeWorkspaceSync({ repositoryRoot: root })).toThrow(failure);
+      const outcome = await analyzeWorkspace({ repositoryRoot: root })
+        .then(() => null, (error: unknown) => error);
+      expect(outcome).toBe(failure);
+    } finally {
+      syncProbe.mockRestore();
+      asyncProbe.mockRestore();
+    }
   });
 
   it("is deterministic, acyclic, and gives every package exactly one parent", async () => {

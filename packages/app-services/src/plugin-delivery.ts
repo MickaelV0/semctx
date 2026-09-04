@@ -44,7 +44,12 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
  *   attestation store.
  */
 
-export const PLUGIN_DELIVERY_SCHEMA_VERSION = 1;
+/**
+ * `2` since the HOK-585 amendment to ADR 0014: `marketplace.configured` is `boolean | null`, because
+ * a host whose plugin inventory interface is unavailable must report unknown rather than an
+ * optimistic `false`. Within a major version, changes stay additive per ADR 0008.
+ */
+export const PLUGIN_DELIVERY_SCHEMA_VERSION = 2;
 
 /** The release-managed channel both installers register. `main` is never a delivery channel. */
 export const PLUGIN_DELIVERY_RELEASE_REF = "stable";
@@ -161,6 +166,7 @@ export type PluginDeliveryReason =
   | "HOST_QUERY_TIMEOUT"
   | "HOST_OUTPUT_TOO_LARGE"
   | "HOST_OUTPUT_MALFORMED"
+  | "HOST_INTERFACE_UNSUPPORTED"
   | "HOST_PATH_REJECTED"
   | "MARKETPLACE_NOT_CONFIGURED"
   | "MARKETPLACE_SOURCE_MISMATCH"
@@ -174,6 +180,7 @@ export type PluginDeliveryReason =
   | "SNAPSHOT_CONTENT_DIVERGED"
   | "PLUGIN_NOT_INSTALLED"
   | "PLUGIN_DISABLED"
+  | "PLUGIN_ENABLEMENT_UNKNOWN"
   | "INSTALLED_CACHE_UNREADABLE"
   | "INSTALLED_CACHE_BEHIND_SNAPSHOT"
   | "INSTALLED_CACHE_NOT_PUBLIC_RELEASE"
@@ -190,6 +197,7 @@ const UNPROVABLE_REASONS: ReadonlySet<PluginDeliveryReason> = new Set([
   "HOST_QUERY_TIMEOUT",
   "HOST_OUTPUT_TOO_LARGE",
   "HOST_OUTPUT_MALFORMED",
+  "HOST_INTERFACE_UNSUPPORTED",
   "HOST_PATH_REJECTED",
   "MARKETPLACE_NOT_CONFIGURED",
   "MARKETPLACE_SOURCE_MISMATCH",
@@ -199,6 +207,7 @@ const UNPROVABLE_REASONS: ReadonlySet<PluginDeliveryReason> = new Set([
   "SNAPSHOT_VERSION_UNKNOWN",
   "SNAPSHOT_CONTENT_UNPROVEN",
   "PLUGIN_NOT_INSTALLED",
+  "PLUGIN_ENABLEMENT_UNKNOWN",
   "INSTALLED_CACHE_UNREADABLE",
   "INSTALLED_CACHE_CONTENT_UNPROVEN",
   "PUBLIC_RELEASE_UNRESOLVED",
@@ -395,24 +404,30 @@ function omitsUndetectedHosts(command: PluginDeliveryCommand): boolean {
   return command.hosts === undefined && (command.scope ?? "auto") === "auto";
 }
 
-export interface HostMarketplaceStateV1 {
+export interface HostMarketplaceStateV2 {
   name: string;
-  configured: boolean;
+  /**
+   * `boolean | null` since schema `2` (HOK-585): a successfully read, empty inventory proves
+   * `false`; an unavailable inventory — the host interface is unsupported, the query failed, timed
+   * out, or the host was never detected — must report `null` instead of an optimistic `false`.
+   */
+  configured: boolean | null;
   source: string | null;
   ref: string | null;
   matchesSemctx: boolean | null;
 }
 
-export interface HostSnapshotStateV1 {
+export interface HostSnapshotStateV2 {
   commit: string | null;
   version: string | null;
   path: string | null;
 }
 
-export interface HostInstalledStateV1 {
+export interface HostInstalledStateV2 {
   version: string | null;
   path: string | null;
   installed: boolean | null;
+  /** `null` when the host did not report a boolean at all — never an optimistic `false`. */
   enabled: boolean | null;
   /** Whether every runtime bundle in the cache digests equal to the snapshot. `null` if unproven. */
   contentMatchesSnapshot: boolean | null;
@@ -420,19 +435,19 @@ export interface HostInstalledStateV1 {
   contentMatchesPublicRelease: boolean | null;
 }
 
-export interface HostSessionStateV1 {
+export interface HostSessionStateV2 {
   status: "observed" | "unknown";
   version: string | null;
   reason: string | null;
 }
 
-export interface HostPluginDeliveryV1 {
+export interface HostPluginDeliveryV2 {
   requested: boolean;
   detected: boolean;
-  marketplace: HostMarketplaceStateV1;
-  snapshot: HostSnapshotStateV1;
-  installed: HostInstalledStateV1;
-  session: HostSessionStateV1;
+  marketplace: HostMarketplaceStateV2;
+  snapshot: HostSnapshotStateV2;
+  installed: HostInstalledStateV2;
+  session: HostSessionStateV2;
   /** `null` whenever the state is unprovable — never a default of `false`. */
   updateAvailable: boolean | null;
   /**
@@ -450,7 +465,7 @@ export interface HostPluginDeliveryV1 {
   activation: string | null;
 }
 
-export interface RepositoryChannelV1 {
+export interface RepositoryChannelV2 {
   version: string;
   commit: string | null;
   originIsSemctx: boolean;
@@ -460,7 +475,7 @@ export interface RepositoryChannelV1 {
   conveysDelivery: false;
 }
 
-export interface PublicReleaseV1 {
+export interface PublicReleaseV2 {
   /** Typed provenance; only `attested-release` can license a converged delivery verdict. */
   authority: PublicReleaseAuthority | "unrecognised";
   status: "resolved" | "unknown";
@@ -470,16 +485,16 @@ export interface PublicReleaseV1 {
   reasons: string[];
 }
 
-export interface PluginDeliveryReportV1 {
+export interface PluginDeliveryReportV2 {
   schemaVersion: typeof PLUGIN_DELIVERY_SCHEMA_VERSION;
   kind: "plugin_delivery_status";
   /** Delivery and activation together; `UP_TO_DATE` only when nothing is left to do. */
   verdict: PluginDeliveryVerdict;
   /** Delivery alone: whether every observed host executes the public `stable` release. */
   delivery: PluginDeliveryVerdict;
-  repository: RepositoryChannelV1;
-  publicRelease: PublicReleaseV1;
-  hosts: Record<PluginDeliveryHost, HostPluginDeliveryV1>;
+  repository: RepositoryChannelV2;
+  publicRelease: PublicReleaseV2;
+  hosts: Record<PluginDeliveryHost, HostPluginDeliveryV2>;
   reasons: PluginDeliveryReason[];
   next: string[];
 }
@@ -657,6 +672,46 @@ function boundedFailure(outcome: PluginDeliveryQueryOutcome): PluginDeliveryReas
   return null;
 }
 
+/**
+ * The only tokens this diagnostic ever passes to a host CLI, across both queries
+ * (`[host, "plugin", "marketplace", "list", "--json"]` and `[host, "plugin", "list", "--json"]`).
+ * A parser rejection naming anything else is not a rejection of *this* query shape.
+ */
+const QUERIED_ARGUMENT_TOKENS = ["plugin", "marketplace", "list", "--json"] as const;
+const QUERIED_ARGUMENT_ALTERNATION = QUERIED_ARGUMENT_TOKENS
+  .map((token) => token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+  .join("|");
+
+/**
+ * Recognized command-parser rejections: the host CLI does not support this subcommand shape at
+ * all, as distinct from an ordinary runtime, timeout, auth or configuration failure. Recognition is
+ * closed and exact on two axes — only the tokens this diagnostic actually queried may be named, and
+ * the diagnostic must be a complete parser error line by itself, not a quoted fragment sitting
+ * inside a longer, generic error sentence — so only known parser-rejection diagnostics qualify, and
+ * every other non-zero exit stays `HOST_QUERY_FAILED`.
+ */
+const HOST_INTERFACE_UNSUPPORTED_PATTERNS: readonly RegExp[] = [
+  new RegExp(`^error:\\s*unknown command '(?:${QUERIED_ARGUMENT_ALTERNATION})'\\s*$`, "im"),
+  new RegExp(`^error:\\s*unexpected argument '(?:${QUERIED_ARGUMENT_ALTERNATION})' found\\s*$`, "im"),
+  new RegExp(`^error:\\s*unrecognized subcommand '(?:${QUERIED_ARGUMENT_ALTERNATION})'\\s*$`, "im"),
+];
+
+/**
+ * Whether a failed command outcome is a recognized host-CLI parser rejection rather than a generic
+ * failure. Pure and dependency-free so installer parity (`apps/cli/src/commands/install.ts`) can
+ * share the exact same recognition instead of re-deriving it.
+ */
+export function isHostInterfaceUnsupportedFailure(outcome: {
+  code: number;
+  out: string;
+  err: string;
+}): boolean {
+  if (outcome.code === 0) return false;
+  // Normalize CRLF so the `^`/`$` line anchors work identically on Windows and POSIX hosts.
+  const text = `${outcome.out}\n${outcome.err}`.replace(/\r\n/g, "\n");
+  return HOST_INTERFACE_UNSUPPORTED_PATTERNS.some((pattern) => pattern.test(text));
+}
+
 function readHostQueries(
   host: PluginDeliveryHost,
   cwd: string,
@@ -670,11 +725,19 @@ function readHostQueries(
   );
   const marketplacesBound = boundedFailure(marketplacesResult);
   if (marketplacesBound !== null) return marketplacesBound;
-  if (marketplacesResult.code !== 0) return "HOST_QUERY_FAILED";
+  if (marketplacesResult.code !== 0) {
+    return isHostInterfaceUnsupportedFailure(marketplacesResult)
+      ? "HOST_INTERFACE_UNSUPPORTED"
+      : "HOST_QUERY_FAILED";
+  }
   const pluginsResult = dependencies.runQuery([host, "plugin", "list", "--json"], cwd, limits);
   const pluginsBound = boundedFailure(pluginsResult);
   if (pluginsBound !== null) return pluginsBound;
-  if (pluginsResult.code !== 0) return "HOST_QUERY_FAILED";
+  if (pluginsResult.code !== 0) {
+    return isHostInterfaceUnsupportedFailure(pluginsResult)
+      ? "HOST_INTERFACE_UNSUPPORTED"
+      : "HOST_QUERY_FAILED";
+  }
 
   const marketplaces = parseJsonValue(marketplacesResult.out);
   const plugins = parseJsonValue(pluginsResult.out);
@@ -688,14 +751,31 @@ function readHostQueries(
     : plugins;
   if (!Array.isArray(marketplaceList) || !Array.isArray(pluginList)) return "HOST_OUTPUT_MALFORMED";
 
+  // An unidentifiable entry might be Semctx: dropping it cannot prove absence.
+  const marketplaceEntries = objectEntries(marketplaceList);
+  const pluginEntries = objectEntries(pluginList);
+  if (marketplaceEntries.length !== marketplaceList.length
+    || pluginEntries.length !== pluginList.length
+    || marketplaceEntries.some((entry) => typeof entry["name"] !== "string" || entry["name"].trim() === "")
+    || pluginEntries.some((entry) => host === "codex"
+      ? typeof entry["pluginId"] !== "string" || entry["pluginId"].trim() === "" || typeof entry["installed"] !== "boolean"
+      : typeof entry["id"] !== "string" || entry["id"].trim() === "" || typeof entry["scope"] !== "string" || entry["scope"].trim() === "")) {
+    return "HOST_OUTPUT_MALFORMED";
+  }
+
   return { marketplaces: marketplaceList, plugins: pluginList };
 }
 
-function emptyHost(requested: boolean, detected: boolean): HostPluginDeliveryV1 {
+/**
+ * `configured` defaults to `null` — unavailable, never observed — because most callers reach this
+ * before a valid marketplace inventory exists. The one legitimate `false` (a real, successfully
+ * read, empty inventory) is set explicitly by the caller that proved it.
+ */
+function emptyHost(requested: boolean, detected: boolean): HostPluginDeliveryV2 {
   return {
     requested,
     detected,
-    marketplace: { name: MARKETPLACE_NAME, configured: false, source: null, ref: null, matchesSemctx: null },
+    marketplace: { name: MARKETPLACE_NAME, configured: null, source: null, ref: null, matchesSemctx: null },
     snapshot: { commit: null, version: null, path: null },
     installed: {
       version: null,
@@ -752,10 +832,10 @@ function compareBundleRecords(
 function evaluateHost(
   host: PluginDeliveryHost,
   command: PluginDeliveryCommand,
-  publicRelease: PublicReleaseV1,
+  publicRelease: PublicReleaseV2,
   publicReleaseBundles: Record<string, string | null> | null,
   dependencies: PluginDeliveryDependencies,
-): HostPluginDeliveryV1 {
+): HostPluginDeliveryV2 {
   const detection = dependencies.runQuery([host, "--version"], command.repositoryRoot, {
     timeoutMs: PLUGIN_DELIVERY_QUERY_TIMEOUT_MS,
     maxBytes: PLUGIN_DELIVERY_MAX_HOST_OUTPUT_BYTES,
@@ -789,6 +869,9 @@ function evaluateHost(
     (entry) => entry["name"] === MARKETPLACE_NAME,
   );
   if (marketplace === undefined) {
+    // A successfully read, empty inventory *proves* the marketplace is not configured — this is the
+    // one path allowed to report `false` rather than `null`.
+    report.marketplace.configured = false;
     report.reasons = sortedUnique([...reasons, "MARKETPLACE_NOT_CONFIGURED"]);
     report.verdict = "UNKNOWN";
     return report;
@@ -844,8 +927,12 @@ function evaluateHost(
   }
 
   report.installed.installed = true;
-  report.installed.enabled = installedEntry?.["enabled"] === true;
-  if (report.installed.enabled !== true) reasons.push("PLUGIN_DISABLED");
+  // Host JSON is untrusted, and a missing field is not proof of `false`: only a boolean the host
+  // actually reported counts as known, everything else stays an unprovable `null`.
+  const enabledRaw = installedEntry?.["enabled"];
+  report.installed.enabled = typeof enabledRaw === "boolean" ? enabledRaw : null;
+  if (report.installed.enabled === false) reasons.push("PLUGIN_DISABLED");
+  else if (report.installed.enabled === null) reasons.push("PLUGIN_ENABLEMENT_UNKNOWN");
 
   const hostVersion = safeText(installedEntry?.["version"]);
   // `source.path` is the approved marketplace snapshot, never the executed cache entry.
@@ -949,7 +1036,7 @@ function evaluateHost(
 }
 
 function aggregate(
-  hosts: readonly HostPluginDeliveryV1[],
+  hosts: readonly HostPluginDeliveryV2[],
   dimension: "verdict" | "delivery",
 ): PluginDeliveryVerdict {
   const requested = hosts.filter((host) => host.requested);
@@ -960,7 +1047,7 @@ function aggregate(
 }
 
 function nextSteps(
-  report: Omit<PluginDeliveryReportV1, "next">,
+  report: Omit<PluginDeliveryReportV2, "next">,
 ): string[] {
   const next: string[] = [];
   if (report.publicRelease.source === "git-remote-tracking-ref") {
@@ -979,6 +1066,16 @@ function nextSteps(
     if (!state.requested) continue;
     if (!state.detected) {
       next.push(`${label} is not available on PATH; its delivery state stays unknown`);
+      continue;
+    }
+    // A recognized parser rejection means the installed CLI cannot run the commands this report
+    // needs at all — recommending the ordinary convergence commands here would repeat the same
+    // rejection; the actionable remedy is upgrading the host CLI itself.
+    if (state.reasons.includes("HOST_INTERFACE_UNSUPPORTED")) {
+      next.push(
+        `${label}'s CLI does not support the plugin commands semctx needs; update ${label} to a`
+          + " version with plugin support, then re-run",
+      );
       continue;
     }
     for (const command of state.convergence) next.push(command.join(" "));
@@ -1003,7 +1100,7 @@ function nextSteps(
 export function pluginDeliveryStatus(
   command: PluginDeliveryCommand,
   dependencies: Partial<PluginDeliveryDependencies> = {},
-): PluginDeliveryReportV1 {
+): PluginDeliveryReportV2 {
   // Every default is bound to the resolved query seam, so a test that injects `runQuery` observes
   // the Git reads too and the read-only guarantee is provable, not merely asserted.
   const runQuery = dependencies.runQuery ?? defaultRunQuery;
@@ -1059,7 +1156,7 @@ export function pluginDeliveryStatus(
       ? ["PUBLIC_RELEASE_HOST_ARTIFACTS_DIVERGED"]
       : []),
   ];
-  const publicRelease: PublicReleaseV1 = {
+  const publicRelease: PublicReleaseV2 = {
     authority: authorityRecognised ? releaseProbe.authority : "unrecognised",
     status: releaseComplete ? "resolved" : "unknown",
     version: releaseProbe.version,
@@ -1103,7 +1200,7 @@ export function pluginDeliveryStatus(
     ...contributing.flatMap((host) => host.reasons),
   ]);
 
-  const partial: Omit<PluginDeliveryReportV1, "next"> = {
+  const partial: Omit<PluginDeliveryReportV2, "next"> = {
     schemaVersion: PLUGIN_DELIVERY_SCHEMA_VERSION,
     kind: "plugin_delivery_status",
     verdict: aggregate([hosts.codex, hosts.claude], "verdict"),
