@@ -81,6 +81,8 @@ interface FakeOptions {
   codexHome?: string | null;
   platform?: NodeJS.Platform;
   setup?: SetupExecution;
+  /** Per-command outcome overrides, keyed by the joined argv, applied before any hardcoded branch. */
+  queryOutcomes?: Record<string, Partial<CommandResult>>;
 }
 
 function fakeRuntime(
@@ -112,6 +114,10 @@ function fakeRuntime(
       const argv = [...command];
       commands.push(argv);
       const [program, ...args] = argv;
+      const override = options.queryOutcomes?.[argv.join(" ")];
+      if (override !== undefined) {
+        return { code: 1, out: "", err: "", ...override };
+      }
 
       if (program === "codex" && args[0] === "--version") {
         return options.codex === false ? missing("codex") : ok("codex-cli 0.144.6\n");
@@ -511,6 +517,85 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
       "personal",
       "--json",
     ]);
+  });
+
+  test("reports interfaceUnsupported and a host-CLI upgrade remedy when the host CLI rejects the plugin inventory query", () => {
+    const runtime = fakeRuntime({
+      codex: true,
+      claude: false,
+      queryOutcomes: {
+        "codex plugin marketplace list --json": {
+          code: 2,
+          err: "error: unexpected argument 'marketplace' found\n\nUsage: codex plugin <COMMAND>\n",
+        },
+      },
+    });
+    const report = executeInstall(
+      "C:\\work\\project",
+      parseArgs(["install", "--skip-setup"]),
+      runtime,
+    );
+
+    expect(report.ok).toBe(false);
+    expect(report.hosts.codex.status).toBe("failed");
+    expect(report.hosts.codex.interfaceUnsupported).toBe(true);
+    expect(report.next.some((step) => step.includes("does not support the plugin commands"))).toBe(true);
+    expect(report.next).not.toContain("resolve the Codex command error above, then re-run");
+  });
+
+  test("an ordinary inventory query failure keeps the generic remedy, not the host-CLI upgrade message", () => {
+    const runtime = fakeRuntime({
+      codex: true,
+      claude: false,
+      queryOutcomes: {
+        "codex plugin marketplace list --json": { code: 1, err: "permission denied" },
+      },
+    });
+    const report = executeInstall(
+      "C:\\work\\project",
+      parseArgs(["install", "--skip-setup"]),
+      runtime,
+    );
+
+    expect(report.hosts.codex.status).toBe("failed");
+    expect(report.hosts.codex.interfaceUnsupported).toBe(false);
+    expect(report.next).toContain("resolve the Codex command error above, then re-run");
+  });
+
+  test("a failed dry run names the specific remedy instead of recommending a blind re-run", () => {
+    const runtime = fakeRuntime({
+      codex: true,
+      claude: false,
+      queryOutcomes: {
+        "codex plugin marketplace list --json": {
+          code: 2,
+          err: "error: unexpected argument 'marketplace' found",
+        },
+      },
+    });
+    const report = executeInstall(
+      "C:\\work\\project",
+      parseArgs(["install", "--skip-setup", "--dry-run"]),
+      runtime,
+    );
+
+    expect(report.dryRun).toBe(true);
+    expect(report.hosts.codex.status).toBe("failed");
+    expect(report.next).not.toContain("re-run without --dry-run to apply this plan");
+    expect(report.next.some((step) => step.includes("does not support the plugin commands"))).toBe(true);
+  });
+
+  test("a successful dry run still recommends applying the plan", () => {
+    const runtime = fakeRuntime({ codex: true, claude: false });
+    const report = executeInstall(
+      "C:\\work\\project",
+      parseArgs(["install", "--skip-setup", "--dry-run"]),
+      runtime,
+    );
+
+    expect(report.dryRun).toBe(true);
+    expect(report.hosts.codex.status).toBe("planned");
+    expect(report.next).toContain("re-run without --dry-run to apply this plan");
   });
 
   test("defers a locked legacy Codex cleanup after the replacement verifies", () => {

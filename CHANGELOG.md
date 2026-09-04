@@ -11,6 +11,19 @@ GitHub Release advance together through the tag-driven lockstep workflow documen
 
 ### Fixed
 
+- **Distinguish an unsupported host plugin CLI from an absent host or a generic query error**
+  (HOK-585): `semctx plugin-status` and `semctx install` recognize a closed set of host-CLI
+  command-parser rejections (for example `error: unexpected argument 'marketplace' found`) and
+  report `HOST_INTERFACE_UNSUPPORTED` — distinct from `HOST_NOT_DETECTED` and from an ordinary
+  `HOST_QUERY_FAILED`/timeout/malformed-output failure, which keep their existing precedence and
+  reasons. No convergence or install command is ever emitted for an unsupported interface.
+  `plugin_delivery_status` advances to `schemaVersion: 2`: `marketplace.configured` is now
+  `boolean | null` — `false` only for a proven, successfully read, empty inventory, `null` whenever
+  the inventory itself could not be read. `installed.enabled` is audited the same way: a host that
+  reports no boolean for it is `null`, never an optimistic `false`. `semctx install --dry-run` no
+  longer recommends re-running without `--dry-run` when its own read-only inventory probe already
+  failed or conflicted; the recovery step names the specific host CLI upgrade instead.
+
 - **Reindex a repository whose baseline predates this build**
   ([#134](https://github.com/hoklims/semctx/pull/134)): a `.semctx/verification-state.json` written
   by an earlier schema is now reported as `EVIDENCE_BASELINE_SUPERSEDED`, a warning, instead of
