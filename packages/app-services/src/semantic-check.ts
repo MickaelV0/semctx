@@ -148,12 +148,18 @@ export function inspectSemanticLifecycle(root: string, changes: readonly ChangeC
  * error closed the only exit: `index` refuses to seal on any lifecycle error, so the operation
  * that produces a current baseline was gated on already having one.
  */
-const SUPERSEDED_VERIFICATION_VERSIONS: ReadonlySet<number> = new Set([1, 2]);
-
 function isSupersededVerificationState(value: unknown): boolean {
-  if (typeof value !== "object" || value === null) return false;
-  const { version } = value as { version?: unknown };
-  return typeof version === "number" && SUPERSEDED_VERIFICATION_VERSIONS.has(version);
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const state = value as Record<string, unknown>;
+  if ((state.verdict !== "PASS" && state.verdict !== "WARN" && state.verdict !== "BLOCK")
+    || typeof state.recordedAt !== "string"
+    || !Number.isFinite(Date.parse(state.recordedAt))) return false;
+  if (state.version === 1) {
+    return typeof state.diffHash === "string" && /^sha256:[0-9a-f]{64}$/.test(state.diffHash);
+  }
+  return state.version === 2
+    && typeof state.headCommit === "string" && /^[0-9a-f]{40,64}$/.test(state.headCommit)
+    && typeof state.workingStateHash === "string" && /^sha256:[0-9a-f]{64}$/.test(state.workingStateHash);
 }
 
 function inspectVerificationBaseline(
