@@ -168,6 +168,29 @@ describe("semantic lifecycle hygiene", () => {
       .toBe("The recorded verification baseline does not match the current analyzed content state.");
   });
 
+  it("rejects malformed recognized legacy baselines before indexing", () => {
+    const repositoryRoot = root();
+    const common = { verdict: "PASS", recordedAt: "2026-07-23T00:00:00.000Z" };
+    const states = [
+      { ...common, version: 1, diffHash: `sha256:${"0".repeat(64)}` },
+      { ...common, version: 2, headCommit: "a".repeat(40), workingStateHash: `sha256:${"0".repeat(64)}` },
+    ];
+    for (const state of states) {
+      for (const field of Object.keys(state)) {
+        if (field === "version") continue;
+        for (const value of [undefined, false, "invalid"]) {
+          writeFileSync(join(repositoryRoot, ".semctx", "verification-state.json"),
+            JSON.stringify({ ...state, [field]: value }));
+          const report = checkSemanticState(repositoryRoot);
+          expect(report.reasonCodes).toEqual(["EVIDENCE_BASELINE_INVALID"]);
+          expect(report.ok).toBe(false);
+          expect(() => indexRepository(repositoryRoot, "2026-07-23T00:00:00.000Z"))
+            .toThrow("semantic model cannot be sealed during indexing");
+        }
+      }
+    }
+  });
+
   it("survives an exact commit but invalidates changed committed or untracked content", () => {
     const exactCommit = root();
     writeFileSync(join(exactCommit, "README.md"), "verified change\n", "utf8");
