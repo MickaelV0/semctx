@@ -9,6 +9,24 @@ GitHub Release advance together through the tag-driven lockstep workflow documen
 
 ## [Unreleased]
 
+### Fixed
+
+- **Reindex a repository whose baseline predates this build**
+  ([#134](https://github.com/hoklims/semctx/pull/134)): a `.semctx/verification-state.json` written
+  by an earlier schema is now reported as `EVIDENCE_BASELINE_SUPERSEDED`, a warning, instead of
+  `EVIDENCE_BASELINE_INVALID`, an error. The distinction matters because `index` refuses to seal on
+  any lifecycle error: a superseded baseline gated the one operation that produces a current one,
+  while `verify diff` answered `BLOCK` and advised re-running `index`. The only exit was to delete
+  the file, which no message named. `semctx doctor` reported `OK workspace healthy` throughout.
+
+  A superseded baseline is still never evidence: it is replaced, never reinterpreted, and the
+  guarded hook already refuses every pre-v3 shape as `legacy`. Only a version this build
+  recognises is superseded — an unknown version, an absent one, and a `version: 3` that fails its
+  own field shapes all stay `EVIDENCE_BASELINE_INVALID`, so recognising a schema does not extend
+  trust to whatever names itself one. The warning carries the remedy, and the model stays
+  consistent, so a repository that has crossed the v2 to v3 migration reindexes and reseals without
+  manual file surgery.
+
 ## [0.1.18] - 2026-09-01
 
 ### Added
