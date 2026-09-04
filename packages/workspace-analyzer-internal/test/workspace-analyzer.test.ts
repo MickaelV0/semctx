@@ -449,7 +449,9 @@ describe("ADR-C08 workspace detection", () => {
     }) as typeof fsp.lstat);
     try {
       expect(() => analyzeWorkspaceSync({ repositoryRoot: root })).toThrow(failure);
-      await expect(analyzeWorkspace({ repositoryRoot: root })).rejects.toThrow(failure);
+      const outcome = await analyzeWorkspace({ repositoryRoot: root })
+        .then(() => null, (error: unknown) => error);
+      expect(outcome).toBe(failure);
     } finally {
       syncProbe.mockRestore();
       asyncProbe.mockRestore();
