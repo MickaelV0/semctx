@@ -89,6 +89,43 @@ const skillOutputs: Record<SkillHost, string> = {
 };
 
 /**
+ * Oh My Pi bash expands `skill://<name>` to that skill's directory before execution.
+ * Agent Skills layout is `<plugin-root>/skills/<name>/SKILL.md`, so two dirnames are the
+ * plugin root on any install layout (user, project, XDG, link). Do not hardcode `$HOME/.omp`.
+ *
+ * Claude Code and Grok do **not** expand `skill://`. Unexpanded
+ * `dirname "$(dirname skill://…)"` is `.`, which would become `./dist/semctx.js`
+ * from the user repo — the relative path the Codex ladder forbids. Callers must
+ * run the CLI only when `$root` is absolute (`/*`).
+ */
+export const UNSUBSTITUTED_PLUGIN_CLI = `bun "$root/dist/semctx.js"`;
+
+export function unsubstitutedPluginRootAssignment(skillName: string): string {
+  if (!/^[a-z][a-z0-9-]*$/.test(skillName)) {
+    throw new Error(`invalid skill name for unsubstituted CLI rung: ${skillName}`);
+  }
+  return `root="$(dirname "$(dirname skill://${skillName})")"`;
+}
+
+/** Fail-loud fence: run `commands` only when skill:// expanded to an absolute plugin root. */
+export function unsubstitutedPluginCliGuard(skillName: string, commands: readonly string[]): string {
+  const bun = UNSUBSTITUTED_PLUGIN_CLI;
+  const body = commands.map((args) => `    ${bun} ${args}`).join("\n");
+  return `${unsubstitutedPluginRootAssignment(skillName)}
+case "$root" in
+  /*)
+${body}
+    ;;
+  *) echo "semctx: skill://${skillName} did not expand to an absolute plugin root (Oh My Pi bash only); use MCP" >&2; false ;;
+esac`;
+}
+
+export const CLAUDE_FOCUSED_SKILL_FILES = [
+  { name: "semctx-verify", relativePath: "plugins/claude-code/skills/semctx-verify/SKILL.md" },
+  { name: "semctx-semantic", relativePath: "plugins/claude-code/skills/semctx-semantic/SKILL.md" },
+] as const;
+
+/**
  * The one lifecycle checkpoint a host event can carry on its own. The other three need the task
  * altitude, the observed touched coordinates, or the Handoff v2 payload — none of which a hook
  * envelope holds — so they stay manual and are deliberately absent from the shipped hook contract.
@@ -175,10 +212,16 @@ export function readLifecycleHookSource(): string {
 
 /**
  * Claude: load-time `${CLAUDE_PLUGIN_ROOT}` placeholder + global fallback.
+ * Oh My Pi reads this skill unsubstituted — do not run the placeholder; discover via skill://.
  * Codex: global `semctx` only — no plugin-root substitution on that host.
  */
 export function hostCliLadder(host: SkillHost): string {
   if (host === "claude-code") {
+    const ompGuard = unsubstitutedPluginCliGuard("semctx-control", [
+      "status --json",
+      "semantic check --json",
+      "verify diff --base origin/main",
+    ]);
     return `Prefer MCP tools when they are connected. For shell fallbacks, resolve the CLI in this order
 (stop at the first that works):
 
@@ -188,9 +231,15 @@ export function hostCliLadder(host: SkillHost): string {
    in the shell — where it is set at all, it is exported to hooks and MCP servers, not to your
    terminal. Do not try to guess the plugin directory, and do not assume the shell's cwd is the
    plugin package root: it is the user's repository.
-2. **Global \`semctx\` on PATH** (\`bun install -g semctx@latest\` / \`bunx semctx@latest\`) — keep it on the **same
+2. **Unsubstituted plugin-root (Oh My Pi only)** — if the path below still contains the literal
+   \`\${CLAUDE_PLUGIN_ROOT}\` placeholder, do not run it (the shell would collapse it to
+   \`bun "/dist/semctx.js"\`). The Oh My Pi block assigns \`$root\` from
+   \`skill://semctx-control\` and runs the CLI **only when \`$root\` is absolute**. Claude Code
+   and Grok do not expand \`skill://\` (\`$root\` becomes \`.\`); the block fails closed — use
+   MCP, never \`./dist/semctx.js\`.
+3. **Global \`semctx\` on PATH** (\`bun install -g semctx@latest\` / \`bunx semctx@latest\`) — keep it on the **same
    version** as the plugin (\`semctx --version\` should match the marketplace plugin version).
-3. If neither is available, say so and continue with MCP-only or ask the user to update the plugin /
+4. If none are available, say so and continue with MCP-only or ask the user to update the plugin /
    install the CLI — do not invent results.
 
 \`\`\`text
@@ -210,6 +259,9 @@ bun "\${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" control resume-handoff <capsule-hash
 # Legacy Plane-B Handoff v1 compatibility
 bun "\${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" semantic handoff
 bun "\${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" semantic resume
+
+# Unsubstituted plugin-root (Oh My Pi only; fails closed if skill:// does not expand)
+${ompGuard}
 
 # Global / CI fallback — same subcommands, no path
 semctx --version
@@ -690,6 +742,24 @@ async function main(): Promise<void> {
     }
     mkdirSync(dirname(output), { recursive: true });
     await Bun.write(output, expected);
+  }
+
+  for (const focused of CLAUDE_FOCUSED_SKILL_FILES) {
+    const focusedPath = resolve(root, focused.relativePath);
+    if (!existsSync(focusedPath)) {
+      throw new Error(`missing focused skill: ${focusedPath}`);
+    }
+    const current = readFileSync(focusedPath, "utf8");
+    const assignment = unsubstitutedPluginRootAssignment(focused.name);
+    if (
+      !current.includes(assignment) ||
+      !current.includes('case "$root" in') ||
+      !current.includes(UNSUBSTITUTED_PLUGIN_CLI)
+    ) {
+      throw new Error(
+        `focused skill missing fail-loud unsubstituted CLI guard (${assignment}): ${focusedPath}`,
+      );
+    }
   }
 
   // Shadow lifecycle hook: one shared body plus one generated contract, byte-identical per host.
