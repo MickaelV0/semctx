@@ -1,6 +1,6 @@
 {
   "name": "semctx-stable",
-  "description": "Local semctx plugins for proof-honest repository changes (Claude Code, Codex, Oh My Pi)",
+  "description": "Fork dogfood — Claude plugin tree from MickaelV0/semctx, pinned sha (not hoklims stable)",
   "owner": {
     "name": "hoklims",
     "email": "hoklims@gmail.com"
@@ -10,9 +10,9 @@
       "name": "semctx",
       "source": {
         "source": "git-subdir",
-        "url": "https://github.com/hoklims/semctx.git",
+        "url": "https://github.com/MickaelV0/semctx.git",
         "path": "plugins/claude-code",
-        "ref": "stable"
+        "ref": "omp-dogfood-1"
       },
       "description": "Trace repository impact, authored intent and fail-closed migration plans in Oh My Pi.",
       "version": "0.1.20",
@@ -21,7 +21,12 @@
         "email": "hoklims@gmail.com"
       },
       "category": "Development",
-      "tags": ["change-impact", "semantic-context", "migration", "verification"]
+      "tags": [
+        "change-impact",
+        "semantic-context",
+        "migration",
+        "verification"
+      ]
     }
   ]
 }
