@@ -1,12 +1,22 @@
 # Getting started
 
+<!-- semctx:compatibility:start -->
+Semctx **0.1.20** requires **Bun >=1.4.0**.
+The supported, tested host baseline is **Codex 0.147.0** and
+**Claude Code 2.1.229**. Other host versions are **unknown** until tested;
+these pins do not claim the earliest historically compatible versions.
+[Baseline delivery evidence](https://github.com/hoklims/semctx/actions/runs/33921551614).
+Installation does not reload an active session: open a new Codex task, or run
+`/reload-plugins` in Claude Code (restart if reload fails).
+<!-- semctx:compatibility:end -->
+
 `semctx` verifies the semantic blast radius of a change: it maps a diff to affected symbols,
 exported contracts, declared invariants and relevant tests, and returns a PASS/WARN/BLOCK verdict.
 It is local-first, deterministic, and needs no LLM, network, or service.
 
 ## Prerequisites
 
-- [Bun](https://bun.sh) ≥ 1.3 (the engine runs under Bun).
+- [Bun](https://bun.sh) ≥ 1.4.0 (the engine runs under Bun).
 - A git repository with TypeScript sources.
 - Optional: Codex and/or Claude Code with plugin support. `semctx install` detects whichever hosts
   are already available; it never installs the host applications themselves.
@@ -26,6 +36,20 @@ with `--host codex|claude|all`, or update only the machine plugins with `--skip-
 After a successful run, open a new Codex task and/or restart Claude Code as reported.
 If Windows has the legacy Codex cache locked in an active task, the install still succeeds after
 verifying the replacement and completes that legacy cleanup automatically in the background.
+
+### Upgrade or recover an existing installation
+
+Before recovery, inventory and back up `.semctx/config.json`, authored `.sem` files and any
+authored baselines. Preview machine changes with `bunx semctx@latest install --dry-run --skip-setup`,
+then use `bunx semctx@latest install --skip-setup` to update the plugins without changing this
+repository. Update a global CLI with `bun add -g semctx@latest`, and check `semctx --version` in
+each shell you use; an old executable earlier in PATH can shadow the update.
+
+Use `semctx doctor --json` and `semctx index-health --json` to distinguish installation problems,
+source/index drift and missing coverage. Follow the reported repair for that state. Do not delete
+`.semctx` or regenerate authored baselines to make a diagnostic green. If a repair cannot preserve
+the authored state, stop and retain the backup for diagnosis. A plugin refresh does not refresh a
+repository index or the version loaded by an already-open agent session.
 
 ## 2. CLI-only bootstrap
 

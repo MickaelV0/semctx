@@ -9,9 +9,11 @@ import { initWorkspace, openStore } from "@semantic-context/repository-store";
 import {
   fingerprintRepositoryFacts,
   indexHealth,
+  indexHealthStatus,
   indexRepository,
   runVerify,
 } from "../src";
+import type { IndexHealthReportV1 } from "../src";
 import {
   CONTROL_INDEX_SNAPSHOT_META_KEY,
   PLANE_A_INDEX_SNAPSHOT_META_KEY,
@@ -173,6 +175,77 @@ function mutateAndResealPlaneA(
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+function baseIndexHealthReport(overrides: {
+  binding?: IndexHealthReportV1["binding"]["status"];
+  canRunHighRiskControl?: boolean;
+  coverage?: IndexHealthReportV1["coverage"]["status"];
+} = {}): IndexHealthReportV1 {
+  return {
+    schemaVersion: 1,
+    kind: "index_health",
+    capturedAt: "2026-07-28T10:00:00.000Z",
+    binding: {
+      status: overrides.binding ?? "valid",
+      sidecarDigest: null,
+      workspaceDigest: null,
+    },
+    freshness: {
+      verdict: (overrides.canRunHighRiskControl ?? true) ? "FRESH" : "UNSEALED",
+      canRunHighRiskControl: overrides.canRunHighRiskControl ?? true,
+      reasons: [],
+    },
+    coverage: {
+      status: overrides.coverage ?? "complete",
+      candidates: 0,
+      selected: 0,
+      excluded: 0,
+      analyzed: 0,
+      disabled: 0,
+      unsupported: 0,
+      failed: 0,
+    },
+    candidates: [],
+    capabilities: [],
+    workspace: null,
+    evaluations: { schemaVersion: 1, decisions: [], reasonSummary: [] },
+    reasonSummary: [],
+  };
+}
+
+describe("indexHealthStatus (doctor-facing verdict derived from an index health report)", () => {
+  it("is healthy only when binding is valid, freshness can run the high-risk control, and coverage is complete", () => {
+    expect(indexHealthStatus(baseIndexHealthReport())).toBe("healthy");
+  });
+
+  it("is degraded, not healthy, when coverage is only partial despite valid binding and fresh control", () => {
+    expect(indexHealthStatus(baseIndexHealthReport({ coverage: "partial" }))).toBe("degraded");
+  });
+
+  it("blocks when binding is invalid even though freshness and coverage look fine", () => {
+    expect(indexHealthStatus(baseIndexHealthReport({ binding: "invalid" }))).toBe("blocked");
+  });
+
+  it("blocks when binding is absent", () => {
+    expect(indexHealthStatus(baseIndexHealthReport({ binding: "absent" }))).toBe("blocked");
+  });
+
+  it("blocks when freshness cannot run the high-risk control even with a valid binding", () => {
+    expect(indexHealthStatus(baseIndexHealthReport({ canRunHighRiskControl: false }))).toBe("blocked");
+  });
+
+  it("blocks when coverage is insufficient even with a valid binding and fresh control", () => {
+    expect(indexHealthStatus(baseIndexHealthReport({ coverage: "insufficient" }))).toBe("blocked");
+  });
+
+  it("never falls back to healthy or degraded when multiple dimensions fail at once", () => {
+    expect(indexHealthStatus(baseIndexHealthReport({
+      binding: "invalid",
+      canRunHighRiskControl: false,
+      coverage: "insufficient",
+    }))).toBe("blocked");
+  });
 });
 
 describe("IndexHealth persistence and verification preflight", () => {

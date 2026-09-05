@@ -34,6 +34,44 @@ do not invent a historical minimum from a single passing version.
 
 ## Context
 
+### HOK-627 amendment — asynchronous registry availability (2026-09-05)
+
+Accepted for v0.1.20 under the maintainer's next-release instruction. npm acceptance is not
+public availability. Keep publication and registry readiness in separate jobs: `publish` validates
+the immutable artifact and publishes at most once; `registry-ready` performs read-only checks;
+`promote` depends on successful registry readiness. Re-running failed jobs after a successful
+publication therefore cannot publish again. Re-running all jobs while the version is still hidden
+is outside that guarantee and must not be used to recover a pending publication.
+
+Readiness polls the exact version's `gitHead` for at most 30 minutes, with 30-second spacing and
+bounded network calls. Only an exact commit match allows promotion. E404 means pending; visible
+missing/wrong identity, access/transport failures and deadline expiry block with distinct messages.
+The wait job has no write permissions or publisher identity. Expiry leaves the accepted package
+alone and asks for a retry of failed jobs; it does not unpublish, advance stable or infer success.
+No public report schema, package identity, tag validation or host-delivery evidence is relaxed.
+
+The 30-minute allowance is an operational budget, not an npm service guarantee. npm documents
+typical scanning around five minutes, sometimes fifteen or more:
+[npm availability announcement](https://github.blog/changelog/2026-07-28-npm-publish-time-malware-scanning-and-dual-use-metadata/).
+Tests execute the actual workflow shell with an isolated fake registry and virtual sleep, and
+assert the parsed job dependency/permission graph. They must cover delayed availability, wrong
+identity, lookup failure, deadline expiry and resumption without another publication.
+
+### HOK-631 amendment — checked compatibility declarations (2026-09-05)
+
+Accepted for v0.1.20 under the maintainer's next-release instruction. Product version and Bun
+minimum stay owned by `apps/cli/package.json`. `compatibility.json` owns exact tested host pins,
+their evidence reference and the explicit unknown status of other host versions. The delivery
+verifier imports those pins; documentation blocks are generated from both sources and checked
+by the canonical pre-PR gate. CI and release workflow pins must match the same declarations.
+
+These are the supported test baseline, not the earliest historically compatible versions.
+Changing a pin does not establish passing evidence: the existing exact-version host delivery
+proof remains required. Previous-release notes remain historical. This change adds a contributor
+consistency gate and no runtime host restriction, private-interface fallback or public schema.
+Negative tests must detect drift in documentation, package engine requirements and workflow pins.
+Recovery documentation must preserve user configuration and authored semantic declarations.
+
 Semctx ships a CLI and two host plugins in lockstep, but they reach a user through different
 channels. `main` is the development branch. The tag workflow publishes npm, advances the
 automation-owned `stable` branch to that exact commit, then creates the GitHub Release
