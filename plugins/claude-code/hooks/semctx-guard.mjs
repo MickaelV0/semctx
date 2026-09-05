@@ -1210,13 +1210,16 @@ export function shellQuote(value) {
  *
  * Claude Code exports CLAUDE_PLUGIN_ROOT to *hook processes* (and to MCP/LSP subprocesses) — it is
  * NOT exported to the agent's shell, and `${CLAUDE_PLUGIN_ROOT}` is a load-time placeholder for
- * skill/hook/MCP fields only. A guard reason string is neither, so the path must be resolved here.
+ * skill/hook/MCP fields only. Oh My Pi substitutes `${OMP_PLUGIN_ROOT}` the same way in MCP
+ * config. A guard reason string is neither, so the path must be resolved here.
  * Falls back to this hook's own location so a plugin copy without the env var still works.
  */
 export function pluginCliPath(env = process.env, exists = existsSync) {
   const candidates = [];
-  const declared = String(env?.CLAUDE_PLUGIN_ROOT ?? "").trim();
-  if (declared) candidates.push(join(declared, "dist", "semctx.js"));
+  for (const key of ["CLAUDE_PLUGIN_ROOT", "OMP_PLUGIN_ROOT"]) {
+    const declared = String(env?.[key] ?? "").trim();
+    if (declared) candidates.push(join(declared, "dist", "semctx.js"));
+  }
   candidates.push(resolve(dirname(fileURLToPath(import.meta.url)), "..", "dist", "semctx.js"));
   for (const candidate of candidates) {
     try {
@@ -1603,31 +1606,28 @@ export function captureVerificationGitState(cwd) {
   };
 }
 
-function main() {
-  let input = {};
-  try {
-    input = JSON.parse(readFileSync(0, "utf8"));
-  } catch {
-    process.exit(0); // no/invalid input → do not block
-  }
-  const toolName = input.tool_name ?? input.toolName;
-  if (toolName !== "Bash") process.exit(0);
-  const command = input.tool_input?.command ?? input.toolInput?.command ?? "";
+/**
+ * Host-neutral evaluation of one shell tool call. Claude `main()` and the OMP `tool_call`
+ * adapter both call this. `toolName` is compared case-insensitively to `bash`.
+ * @returns {{ block: true, reason: string } | { block: false }}
+ */
+export function evaluateBashGuard({ toolName, command, cwd: inputCwd, env = process.env }) {
+  if (String(toolName ?? "").toLowerCase() !== "bash") return { block: false };
   const terminalVerb = isTerminalGitCommand(command);
-  if (!terminalVerb) process.exit(0);
+  if (!terminalVerb) return { block: false };
 
-  const inputCwd = input.cwd ?? process.cwd();
+  const rawCwd = inputCwd ?? process.cwd();
+  const sessionCwd = resolveGitRoot(rawCwd);
   const commandIsolated = isIsolatedTerminalGitCommand(command);
   const scopeRequiresSessionGuard = gitScopeRequiresSessionGuard(command);
-  const sessionCwd = resolveGitRoot(inputCwd);
-  const cwd = resolveGitRoot(resolveGitCwd(command, inputCwd)); // the repo the git command targets, not the session cwd
+  const cwd = resolveGitRoot(resolveGitCwd(command, rawCwd)); // the repo the git command targets, not the session cwd
   const targetGuard = readJson(join(cwd, ".semctx", "guard.json"));
   const sessionGuard = scopeRequiresSessionGuard
     ? readJson(join(sessionCwd, ".semctx", "guard.json"))
     : null;
-  const enabled = guardEnabled(process.env, targetGuard)
-    || (scopeRequiresSessionGuard && guardEnabled(process.env, sessionGuard));
-  if (!enabled) process.exit(0); // advisory (default)
+  const enabled = guardEnabled(env, targetGuard)
+    || (scopeRequiresSessionGuard && guardEnabled(env, sessionGuard));
+  if (!enabled) return { block: false };
 
   const state = commandIsolated
     ? readJson(join(cwd, ".semctx", "verification-state.json"))
@@ -1645,7 +1645,7 @@ function main() {
   const commitContentAuthorized = terminalVerb !== "commit" || commitUsesWholeIndex(command);
   const commitHooksAbsent = terminalVerb !== "commit" || (commandIsolated && commitHookSurfaceClear(cwd));
   const pushHooksAbsent = terminalVerb !== "push" || (commandIsolated && pushHookSurfaceClear(cwd));
-  const decision = guardDecision({
+  return guardDecision({
     enabled,
     terminalVerb,
     commandIsolated,
@@ -1655,7 +1655,22 @@ function main() {
     pushHooksAbsent,
     state,
     currentState,
-    verifyCommand: verifyRecordCommand(process.env),
+    verifyCommand: verifyRecordCommand(env),
+  });
+}
+
+function main() {
+  let input = {};
+  try {
+    input = JSON.parse(readFileSync(0, "utf8"));
+  } catch {
+    process.exit(0); // no/invalid input → do not block
+  }
+  const decision = evaluateBashGuard({
+    toolName: input.tool_name ?? input.toolName,
+    command: input.tool_input?.command ?? input.toolInput?.command ?? "",
+    cwd: input.cwd ?? process.cwd(),
+    env: process.env,
   });
   if (decision.block) {
     process.stderr.write(decision.reason + "\n");
