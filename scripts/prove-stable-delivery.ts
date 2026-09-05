@@ -35,6 +35,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { HOST_CLI_SPECIFICATION } from "./compatibility";
 import {
   codexCacheEntryFromMarketplaceRoot,
   PLUGIN_DELIVERY_RELEASE_REF,
@@ -65,19 +66,12 @@ export const EXPECTED_PLUGIN_ID: Record<ProofHost, string> = {
 };
 
 /**
- * The exact host CLIs this proof is defined against. Versioned *here*, in the repository, rather
+ * The exact host CLIs this proof is defined against. Versioned in compatibility.json rather
  * than read from a mutable GitHub Actions variable: a proof whose only authority for "which Codex"
  * lives outside the commit cannot be replayed, and an unset variable would make the pin vacuous.
  * Ratified 2026-08-13; changing either specifier is a deliberate, reviewable commit.
  */
-export const HOST_CLI_SPECIFICATION: Record<ProofHost, { package: string; version: string; specifier: string }> = {
-  codex: { package: "@openai/codex", version: "0.147.0", specifier: "@openai/codex@0.147.0" },
-  claude: {
-    package: "@anthropic-ai/claude-code",
-    version: "2.1.229",
-    specifier: "@anthropic-ai/claude-code@2.1.229",
-  },
-};
+export { HOST_CLI_SPECIFICATION };
 
 /**
  * What a host operator must still do for a *running* session to pick up a delivered cache. Kept

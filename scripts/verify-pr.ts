@@ -62,6 +62,7 @@ export function verificationSteps(options: VerifyOptions): VerificationStep[] {
 
   return [
     ...diffSteps,
+    { label: "compatibility declarations", argv: ["bun", "scripts/compatibility.ts"] },
     { label: "quality", argv: ["bun", "run", "quality"] },
     {
       label: "Python compileall",

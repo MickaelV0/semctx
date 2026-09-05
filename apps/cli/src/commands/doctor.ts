@@ -1,56 +1,18 @@
-import { probeCliCompatibility } from "@semantic-context/app-services";
-import { isInitialized, loadConfig, openStore } from "@semantic-context/repository-store";
+import { probeCliCompatibility, workspaceHealth, type WorkspaceHealthCheck } from "@semantic-context/app-services";
 import packageJson from "../../package.json";
 import type { ParsedArgs } from "../args";
 import { flagBool } from "../args";
 import { info, heading, json, c, success, fail } from "../output";
 
-interface Check {
-  name: string;
-  ok: boolean;
-  detail: string;
-}
-
-/** `semctx doctor` — verify the workspace is healthy and indexed. */
+/** `semctx doctor` — report workspace health without modifying it. */
 export function runDoctor(root: string, args: ParsedArgs): number {
-  const checks: Check[] = [];
   const cliCompatibility = probeCliCompatibility(packageJson.version);
-
-  // Informational row, like `runtime` below: reports the running version, never fails. The global
-  // CLI compatibility probe is an advisory and therefore stays outside the authoritative checks.
-  checks.push({ name: "cli", ok: true, detail: `semctx ${packageJson.version}` });
-
-  const initialized = isInitialized(root);
-  checks.push({ name: "workspace", ok: initialized, detail: initialized ? ".semctx/ present" : "run 'semctx init'" });
-
-  if (initialized) {
-    let configOk: boolean;
-    try {
-      loadConfig(root);
-      configOk = true;
-    } catch (cause) {
-      configOk = false;
-      checks.push({ name: "config", ok: false, detail: String(cause) });
-    }
-    if (configOk) checks.push({ name: "config", ok: true, detail: "config.json valid" });
-
-    const store = openStore(root);
-    const indexed = store.isIndexed();
-    const nodeCount = Number(store.getMeta("node_count") ?? "0");
-    const claimCount = store.loadClaims().length;
-    const indexedAt = store.getMeta("indexed_at");
-    store.close();
-    checks.push({
-      name: "index",
-      ok: indexed,
-      detail: indexed ? `${nodeCount} nodes, ${claimCount} claims (indexed ${indexedAt ?? "?"})` : "run 'semctx index'",
-    });
-  }
-
-  checks.push({ name: "runtime", ok: true, detail: `bun ${Bun.version}` });
-
-  const healthy = checks.every((chk) => chk.ok);
-
+  const { healthy, checks: workspaceChecks } = workspaceHealth(root);
+  const checks: WorkspaceHealthCheck[] = [
+    { name: "cli", ok: true, detail: `semctx ${packageJson.version}` },
+    ...workspaceChecks,
+    { name: "runtime", ok: true, detail: `bun ${Bun.version}` },
+  ];
   if (flagBool(args, "json")) {
     json({ healthy, version: packageJson.version, cliCompatibility, checks });
     return healthy ? 0 : 1;
@@ -58,7 +20,7 @@ export function runDoctor(root: string, args: ParsedArgs): number {
 
   heading("Doctor");
   for (const chk of checks) {
-    const mark = chk.ok ? c.green("ok ") : c.red("bad");
+    const mark = chk.ok ? c.green("ok ") : chk.status === "degraded" ? c.yellow("warn") : c.red("bad");
     info(`  [${mark}] ${chk.name.padEnd(10)} ${c.dim(chk.detail)}`);
   }
   const globalCliMark = cliCompatibility.compatible ? c.green("ok  ") : c.yellow("warn");

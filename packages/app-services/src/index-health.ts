@@ -788,6 +788,22 @@ function invalidBindingReport(
   };
 }
 
+export type IndexHealthStatus = "healthy" | "degraded" | "blocked";
+
+/**
+ * Doctor-facing verdict derived from an index health report. An invalid/absent binding, a
+ * freshness verdict that cannot run the high-risk control, or insufficient coverage all block;
+ * only a valid binding, control-runnable freshness, and complete coverage together are healthy.
+ * Partial coverage stays visibly degraded rather than reporting a false healthy.
+ */
+export function indexHealthStatus(health: IndexHealthReportV1): IndexHealthStatus {
+  const bindingOk = health.binding.status === "valid";
+  const freshnessOk = health.freshness.canRunHighRiskControl;
+  if (!bindingOk || !freshnessOk) return "blocked";
+  if (health.coverage.status === "complete") return "healthy";
+  return health.coverage.status === "partial" ? "degraded" : "blocked";
+}
+
 /** Read-only coverage report. Freshness remains a separate, explicitly nested dimension. */
 export function indexHealth(root: string): IndexHealthReportV1 {
   const freshness = controlStatus(root);

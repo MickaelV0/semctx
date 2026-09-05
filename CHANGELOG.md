@@ -9,6 +9,27 @@ GitHub Release advance together through the tag-driven lockstep workflow documen
 
 ## [Unreleased]
 
+## [0.1.20] - 2026-09-05
+
+### Fixed
+
+- `doctor` checks source binding, freshness and coverage before reporting a healthy index.
+  Partial usable coverage is visibly degraded; stale, missing or corrupt evidence is blocked.
+  Diagnostics use an immutable database reader and preserve configuration and authored files.
+- npm acceptance and public availability are separate release steps. The read-only availability
+  job tolerates asynchronous scanning for up to 30 minutes; wrong commit identity and registry
+  access failures still block promotion. Retrying failed jobs does not republish an accepted package.
+- Installation documentation and delivery host pins are checked against machine-owned versions.
+  The packaged README now requires Bun 1.4.0, matching the package. Other host versions remain
+  unproven; the tested baseline does not claim the earliest historical plugin support.
+
+### Compatibility
+
+- Doctor retains its existing JSON fields and exit codes (0 healthy, 1 otherwise). The index check
+  adds `status` (`healthy`, `degraded`, `blocked`); callers must no longer expect a stale index to
+  report healthy merely because its database exists. CLI compatibility advice remains non-blocking.
+- No repository data migration, automatic index rebuild or baseline reseal is performed.
+
 ## [0.1.19] - 2026-09-04
 
 ### Fixed
