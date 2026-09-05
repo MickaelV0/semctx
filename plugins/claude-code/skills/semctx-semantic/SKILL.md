@@ -84,10 +84,11 @@ short, stable capsule. These are explicit tools — do not rely on any implicit 
 ## Local equivalents (no MCP)
 
 Prefer the plugin-bundled CLI (`dist/semctx.js`, same release as MCP). Claude Code substitutes the
-plugin root into this skill at load time, so the path below is already absolute; if it still reads
-as a literal `${…}` placeholder, use a global `semctx` on PATH instead (same version: `semctx
---version`), or report that no shell CLI is available. `CLAUDE_PLUGIN_ROOT` is never exported to
-your terminal — do not rely on the shell to expand it.
+plugin root into this skill at load time, so the path below is already absolute. Never expect
+`CLAUDE_PLUGIN_ROOT` to exist in the shell. If the path still contains the literal `${…}`
+placeholder, do not run it. The Oh My Pi block below runs the CLI **only when `$root` is
+absolute**. Claude Code / Grok do not expand `skill://` (`$root` is `.`); it fails closed — use
+MCP, never `./dist/semctx.js`.
 
 ```
 bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" semantic init                         # scaffold .semctx/semantic/ (versioned)
@@ -97,6 +98,14 @@ bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" semantic slice --change change.<slug>
 bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" verify diff --base origin/main         # Plane A impact
 bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" change verify change.<slug> --base origin/main   # composed verdict
 bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" semantic handoff                       # / semctx semantic resume
+
+root="$(dirname "$(dirname skill://semctx-semantic)")"
+case "$root" in
+  /*)
+    bun "$root/dist/semctx.js" semantic check --json
+    ;;
+  *) echo "semctx: skill://semctx-semantic did not expand to an absolute plugin root (Oh My Pi bash only); use MCP" >&2; false ;;
+esac
 
 semctx semantic check --json                                                     # global fallback
 ```
