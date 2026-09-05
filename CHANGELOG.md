@@ -9,11 +9,133 @@ GitHub Release advance together through the tag-driven lockstep workflow documen
 
 ## [Unreleased]
 
+## [0.1.19] - 2026-09-04
+
+### Fixed
+
+- **Keep nested Git worktrees out of the parent index**
+  ([#136](https://github.com/hoklims/semctx/pull/136)): source and workspace discovery skip
+  nested worktree markers while still accepting a worktree as the requested repository root.
+  An unreadable Git marker fails discovery instead of silently omitting source files.
+
+- **Replay and complete stable delivery proofs**
+  ([#130](https://github.com/hoklims/semctx/pull/130),
+  [#131](https://github.com/hoklims/semctx/pull/131),
+  [#132](https://github.com/hoklims/semctx/pull/132)): published releases can be rechecked,
+  isolated Codex homes exist before installation, and Git-backed marketplace identity is
+  accepted without weakening commit or bundle verification.
+
+- **Keep quality-tool versions consistent**
+  ([#133](https://github.com/hoklims/semctx/pull/133),
+  [#135](https://github.com/hoklims/semctx/pull/135)): Ruff's configuration and requirement
+  share version 0.16.5; ESLint 10.9.1, typescript-eslint 8.68.0, and Bun 1.4 types are
+  validated together with the existing Bun 1.4.0 runtime.
+
+- **Distinguish an unsupported host plugin CLI from an absent host or a generic query error**
+  (HOK-585): `semctx plugin-status` and `semctx install` recognize a closed set of host-CLI
+  command-parser rejections (for example `error: unexpected argument 'marketplace' found`) and
+  report `HOST_INTERFACE_UNSUPPORTED` — distinct from `HOST_NOT_DETECTED` and from an ordinary
+  `HOST_QUERY_FAILED`/timeout/malformed-output failure, which keep their existing precedence and
+  reasons. No convergence or install command is ever emitted for an unsupported interface.
+  `plugin_delivery_status` advances to `schemaVersion: 2`: `marketplace.configured` is now
+  `boolean | null` — `false` only for a proven, successfully read, empty inventory, `null` whenever
+  the inventory itself could not be read. `installed.enabled` is audited the same way: a host that
+  reports no boolean for it is `null`, never an optimistic `false`. `semctx install --dry-run` no
+  longer recommends re-running without `--dry-run` when its own read-only inventory probe already
+  failed or conflicted; the recovery step names the specific host CLI upgrade instead.
+
+- **Reindex a repository whose baseline predates this build**
+  ([#134](https://github.com/hoklims/semctx/pull/134)): a `.semctx/verification-state.json` written
+  by an earlier schema is now reported as `EVIDENCE_BASELINE_SUPERSEDED`, a warning, instead of
+  `EVIDENCE_BASELINE_INVALID`, an error. The distinction matters because `index` refuses to seal on
+  any lifecycle error: a superseded baseline gated the one operation that produces a current one,
+  while `verify diff` answered `BLOCK` and advised re-running `index`. The only exit was to delete
+  the file, which no message named. `semctx doctor` reported `OK workspace healthy` throughout.
+
+  A superseded baseline is still never evidence: it is replaced, never reinterpreted, and the
+  guarded hook already refuses every pre-v3 shape as `legacy`. Only a version this build
+  recognises with its complete historical shape is superseded — an unknown version, an absent one,
+  or malformed fields in any recognised version stay `EVIDENCE_BASELINE_INVALID`, so recognition does not extend
+  trust to whatever names itself one. The warning carries the remedy, and the model stays
+  consistent, so a repository that has crossed the v2 to v3 migration reindexes and reseals without
+  manual file surgery.
+
+## [0.1.18] - 2026-09-01
+
 ### Added
 - **Oh My Pi commit/push guard**: `plugins/claude-code/hooks/pre/semctx-guard.ts` registers
   `pi.on("tool_call")` and calls the same `evaluateBashGuard` as Claude's `PreToolUse` hook.
   Advisory by default. `pluginCliPath` honors `OMP_PLUGIN_ROOT`.
 
+
+- **Explain and replay change decisions**
+  ([#125](https://github.com/hoklims/semctx/pull/125),
+  [#126](https://github.com/hoklims/semctx/pull/126)): Semctx can seal the intent, source state,
+  diff, evidence, unknowns, policy, and `ALLOW`, `DENY`, or `REQUIRE_EVIDENCE` verdict in a closed,
+  content-addressed `ChangeAuthorizationCapsuleV1`. `semctx control verify-authorization` and the
+  read-only `semctx_control_verify_authorization` MCP tool replay that decision outside the host and
+  process that produced it. The caller pins the expected authority; a capsule never grants write,
+  commit, push, merge, or deployment authority.
+
+- **Prove fresh delivery on Codex and Claude Code**
+  ([#98](https://github.com/hoklims/semctx/pull/98)): after npm publication and `stable` promotion,
+  the release workflow installs both plugins through fresh, isolated host homes. It binds the
+  marketplace commit, manifests, and executed CLI/MCP bundle digests to the tagged release, runs
+  real `doctor` and MCP smokes, and archives one JSON proof for 90 days. The proof establishes
+  delivery to the next session; it does not claim that an already running session reloaded.
+
+- **Oh My Pi marketplace catalog**
+  ([#112](https://github.com/hoklims/semctx/pull/112)): OMP users can install the same Claude plugin
+  tree from the repository's `stable` channel, with manifest and runtime parity checked alongside
+  Codex and Claude Code.
+
+- **Stable symbol identities and anchor diagnostics**
+  ([#118](https://github.com/hoklims/semctx/pull/118)): Semctx separates semantic identity from a
+  declaration's current line and reports when an anchor migrated, degraded, or became ambiguous.
+  Reindexing no longer silently turns a moved symbol into a different symbol.
+
+- **Bounded multicore TypeScript indexing**
+  ([#115](https://github.com/hoklims/semctx/pull/115),
+  [#117](https://github.com/hoklims/semctx/pull/117)): large repositories can release discovery
+  memory before rescans and analyze isolated file shards with Bun workers, while deterministic
+  ordering and the single-process fallback preserve the same graph.
+
+- **Shadow lifecycle hook for `before_completion`**
+  ([#28](https://github.com/hoklims/semctx/issues/28)): both plugins now ship
+  `hooks/semctx-lifecycle.mjs`, a Node ESM observer that automates exactly one checkpoint of
+  `AgentLifecyclePolicyV1`. A `PostToolUse` entry matched on the bundled `semctx` MCP namespace records the canonical
+  `AgentWorkflowStageIdV1` of each Semctx MCP tool that ran, into a session-local git-ignored
+  ledger under `.semctx/working/agent-lifecycle/`, and a `Stop` entry evaluates
+  `before_completion` at end of turn and writes the advisory to stderr, only when the observed
+  set has changed since the last advisory — a host ends a turn many times per session, so a
+  completed cycle must not keep reporting a stale green over turns that produced no evidence.
+  The same observed
+  sequence produces the same report and the same `reportHash` on Codex and Claude Code, and the
+  report is byte-identical to `evaluateAgentLifecycleCheckpointV1` for every checkpoint input a
+  matrix test exercises.
+
+  It never blocks: every path exits with success, nothing is written to stdout, and no output
+  carries a host decision field. It reads four envelope fields (`hook_event_name`, `session_id`,
+  `cwd`, `tool_name`) and never a prompt, transcript, tool payload or source file; the ledger
+  holds stage enums only and its file name is a SHA-256 digest, so the host session id never
+  reaches the disk. It binds to `cwd` itself and never to an ancestor, so a scratch directory
+  inside a Semctx repository stays a no-op instead of writing that repository's ledger. It never
+  starts the Semctx runtime, so it never asserts `semctx_ready`. It stays silent when it observed
+  nothing, so a host that does not deliver tool events is never reported as an agent that skipped
+  its completion stages. `SEMCTX_LIFECYCLE=off` disables it.
+
+  `hooks/semctx-lifecycle-contract.json` is generated by `plugin:build` from
+  `AGENT_WORKFLOW_CONTRACT_V1` and `AGENT_LIFECYCLE_POLICY_V1`, so the out-of-process evaluator
+  cannot restate a policy that has moved; `plugin:check` fails on drift and on any divergence
+  between the two host copies.
+
+  Scope is deliberately one checkpoint. `before_implementation_write` needs the task altitude,
+  `after_repository_edits` needs observed touched coordinates and `before_compaction` needs the
+  Handoff v2 payload — none of which a host hook envelope carries — so those three stay manual
+  with no automatic host hook. Enforcement stays `shadow`, and the ledger is operational state,
+  not product telemetry: nothing is measured, aggregated or retained across repositories. The
+  measured shadow-mode milestone in [`ROADMAP.md`](ROADMAP.md) is therefore not reached, and #28
+  stays open.
 
 - **Bun 1.4 and native macOS verification**: the runtime, plugin generator, release workflow and
   composite GitHub Action now share the Bun 1.4.0 baseline. The required CI matrix also runs on
@@ -74,6 +196,33 @@ GitHub Release advance together through the tag-driven lockstep workflow documen
   [ADR 0014](docs/adr/0014-plugin-delivery-is-observed-across-five-states.md).
 
 ### Fixed
+
+- **Reuse verification across content-preserving commits and pushes**
+  ([#127](https://github.com/hoklims/semctx/pull/127)): the guard binds proof to the complete source,
+  index, configuration, and Git content state instead of invalidating it merely because a commit
+  changed the repository object ID. A developer can verify, commit the same bytes, and push without
+  a ritual reindex; hidden state, submodule drift, unsafe ref expansion, hooks, helpers, and
+  transport retargeting still fail closed.
+
+- **Ignore declarations that only moved to another line**
+  ([#128](https://github.com/hoklims/semctx/pull/128)): diff impact now uses the coordinate side that
+  owns the indexed declaration. Inserting lines above an unchanged export no longer reports
+  `contract_changed_without_test`; insertions and edits inside the declaration remain visible for
+  working-tree, staged, and commit-range verification.
+
+- **Bind semantic authority to the sources actually analyzed**
+  ([#102](https://github.com/hoklims/semctx/pull/102)): readiness and freshness refuse stale or
+  incomplete source coverage instead of treating repository-level metadata as proof that every
+  selected file was analyzed.
+
+- **Start the MCP runtime from portable plugin paths**
+  ([#100](https://github.com/hoklims/semctx/pull/100),
+  [#106](https://github.com/hoklims/semctx/pull/106)): supported hosts no longer depend on an
+  unexpanded or relative `SEMCTX_ROOT` when they launch the bundled server from another directory.
+
+- **Clean persistent SQLite WAL sidecars**
+  ([#114](https://github.com/hoklims/semctx/pull/114)): repository stores checkpoint and remove
+  obsolete `-wal` and `-shm` files without deleting live database state.
 
 - **Reconcile a converged Codex update behind an active-cache lock**
   ([#91](https://github.com/hoklims/semctx/issues/91)): on Windows, `codex plugin add` writes the new
@@ -375,5 +524,7 @@ declared stable).
 - GitHub Action passes all user-controlled inputs through the step `env:` (no `${{ }}` template
   interpolation into run scripts) to prevent Actions injection.
 
-[Unreleased]: https://github.com/hoklims/semctx/compare/v0.1.17...HEAD
+[Unreleased]: https://github.com/hoklims/semctx/compare/v0.1.19...HEAD
+[0.1.19]: https://github.com/hoklims/semctx/compare/v0.1.18...v0.1.19
+[0.1.18]: https://github.com/hoklims/semctx/compare/v0.1.17...v0.1.18
 [0.1.17]: https://github.com/hoklims/semctx/compare/v0.1.16...v0.1.17

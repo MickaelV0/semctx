@@ -75,6 +75,19 @@ strings. `semctx plugin-status` reports that comparison read-only, and never adv
 
 ### Proving stable delivery (`deliver`)
 
+The verified host baseline is Codex CLI **0.147.0** and Claude Code **2.1.229**:
+[the successful v0.1.18 delivery replay](https://github.com/hoklims/semctx/actions/runs/33556339309)
+records both resolved binary versions, successful marketplace/plugin installs, and passing
+CLI/MCP smokes. These are tested versions, not a claim about the earliest historical version
+that supported plugins. Local Codex CLI 0.148.0 also exposes `plugin` and `marketplace`.
+
+Hosts without that interface have degraded support: Semctx cannot inspect or install their
+plugins through its supported CLI path. Since v0.1.19, recognized parser rejections produce
+`HOST_INTERFACE_UNSUPPORTED` and an upgrade remedy, not a retry of the same failed plan.
+`plugin-status` JSON uses schema 2: unavailable inventory has `marketplace.configured: null`;
+only a successfully observed absence is `false`. Consumers must accept schema 2 and handle
+unknown values explicitly. Semctx does not read private host configuration as a fallback.
+
 A fourth job runs after `promote`, never before: installing from a marketplace that has not been
 advanced yet would prove the *previous* release. It stands up one throwaway home per host, installs
 through each host's own supported interface — Codex `plugin marketplace add hoklims/semctx --ref
@@ -222,6 +235,30 @@ The hostile scenarios each carry a deterministic regression in
 `scripts/test/prove-stable-delivery.test.ts`; the decision layer is pure, so they run without a
 release. The first real post-release execution remains a live witness that no offline test replaces.
 
+**The CLI smoke's exit code is not the verdict; `doctor --json`'s named checks are (schema v2,
+HOK-582).** `semctx doctor --json` exits 1 whenever *any* of its checks is red, including
+`workspace` on the throwaway foreign repository this smoke deliberately never runs `semctx init`
+against — that is the expected, legitimate state, not a broken runtime. Exit 0 or 1 is accepted only
+when the report is parseable, its `version` is the released one, and the two checks that actually
+prove the runtime rather than the workspace — `cli` and `runtime` — are both present and `ok: true`;
+any other exit code, an unparseable report, a wrong version, or a
+missing/red required check stays red. The archived proof also carries `installAttempts` per host —
+every official install command's argv, exit code and character-bounded stdout/stderr, whether it succeeded or
+not — so a `HOST_INSTALL_FAILED` verdict is diagnosable from the artifact alone.
+
+**Re-proving an already-published release without republishing anything.** A red `deliver` job on a
+release npm, `stable` and the GitHub Release already agree on does not warrant another tag: the
+`stable delivery proof (manual rerun)` workflow (`workflow_dispatch`, input `tag`) re-runs the same
+proof against that exact commit. Its `identity` job fails closed — before either host CLI is
+provisioned — unless the tag is annotated, the tagged commit's own `apps/cli/package.json` version
+matches the tag, and npm's `gitHead`, `stable` and the GitHub Release all still resolve to that same
+SHA. `deliver` then checks out the reparative `main` for the (possibly since-fixed) proof script and
+its dependencies, and checks out the tag *separately* as the sole source `SEMCTX_RELEASE_CHECKOUT`
+witnesses from — so a repaired `main` can never license itself with its own bundles. The workflow
+archives the exact `main` commit that supplied the verifier separately from the released SHA, and
+refuses a dirty tracked verifier checkout immediately before execution. It
+holds no publish, tag, `stable` or Release permission; it only reads and uploads an artifact.
+
 Local/manual fallback remains:
 
 ```bash
@@ -268,6 +305,14 @@ Codex gets only global `semctx` instructions (#40). The template's
 `AGENT_WORKFLOW_CONTRACT_V1` policy in `packages/control-model/src/agent-workflow.ts`. Edit that
 policy for workflow semantics, the shared template for surrounding prose, and never edit the
 generated host leaves.
+
+`plugin:build` also renders the shadow lifecycle hook into `plugins/*/hooks/`:
+`semctx-lifecycle.mjs` is copied from `plugins/shared/hooks/semctx-lifecycle.mjs`, and
+`semctx-lifecycle-contract.json` is projected from `AGENT_WORKFLOW_CONTRACT_V1` and
+`AGENT_LIFECYCLE_POLICY_V1`. Both land byte-identically in each host tree and `plugin:check`
+fails on drift, which is what keeps the out-of-process evaluator from restating a policy that
+has moved. Edit the shared hook for behaviour and the two contracts for policy; never edit the
+generated host copies. `hooks/hooks.json` is host-specific wiring and stays hand-written.
 
 Agent sessions should prefer the plugin-bundled CLI so a marketplace update keeps MCP and CLI in
 lockstep. The npm `semctx` package remains the channel for CI, GitHub Actions, and non-plugin shells.

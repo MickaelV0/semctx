@@ -41,7 +41,7 @@ import {
   PLUGIN_RUNTIME_BUNDLES,
 } from "@semantic-context/app-services";
 
-export const STABLE_DELIVERY_PROOF_SCHEMA_VERSION = 1;
+export const STABLE_DELIVERY_PROOF_SCHEMA_VERSION = 2;
 export const STABLE_DELIVERY_PROOF_KIND = "stable_delivery_proof";
 
 export const MARKETPLACE_NAME = "semctx-stable";
@@ -181,6 +181,8 @@ export interface RunIdentity {
   repository: string;
   runId: string;
   runAttempt: string;
+  /** Exact commit whose proof implementation and dependencies produced the artifact. */
+  verifierSha: string;
 }
 
 export interface SmokeOutcome {
@@ -189,6 +191,19 @@ export interface SmokeOutcome {
   ok: boolean;
   /** Command or capability exercised, for the archived artifact. */
   detail: string;
+}
+
+/**
+ * One official install command as it actually ran. Archived whether it succeeded or not: a failed
+ * install that names only `HOST_INSTALL_FAILED` cannot be diagnosed from the artifact alone, which
+ * is exactly the gap the HOK-582 incident exposed. `stdout`/`stderr` are bounded so a chatty CLI
+ * cannot bloat the artifact: it retains a fixed-length prefix plus a truncation note.
+ */
+export interface InstallAttempt {
+  argv: readonly string[];
+  code: number;
+  stdout: string;
+  stderr: string;
 }
 
 /** Where a path the proof consumed came from, and whether it was admitted. */
@@ -228,6 +243,8 @@ export interface HostObservation {
   environmentUsable: boolean;
   /** Whether every official install command succeeded. */
   installSucceeded: boolean;
+  /** Every official install command actually run, in order, with its argv, exit code and output. */
+  installAttempts: InstallAttempt[];
   cli: HostCliObservation;
   /** The temporary root this host was confined to. `null` when it could not be established. */
   root: string | null;
@@ -301,6 +318,7 @@ export interface HostProof {
   pluginId: string;
   root: string | null;
   cli: HostCliObservation;
+  installAttempts: InstallAttempt[];
   marketplaceRoot: string | null;
   marketplaceCommit: string | null;
   marketplaceRef: string | null;
@@ -365,6 +383,10 @@ export interface StableDeliveryProof {
 
 function isNonEmpty(value: string | null | undefined): value is string {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+function isSha(value: string | null | undefined): value is string {
+  return typeof value === "string" && /^[0-9a-f]{40}$/.test(value);
 }
 
 // --- Host-supplied path admission ---------------------------------------------------------------
@@ -514,6 +536,33 @@ export class ConfinedAccess {
   read(label: string, candidate: string | null, anchor: string | null = null): string | null {
     const path = this.reAdmit(label, candidate, anchor, "#use");
     return path === null ? null : this.runtime.readTextFile(path);
+  }
+
+  /**
+   * Read a declaration that newer host releases may legitimately omit. The containing snapshot is
+   * re-admitted before even asking whether the leaf exists: otherwise a swapped cache root could
+   * redirect that apparently harmless existence check outside the sandbox. A missing leaf is an
+   * archived observation, not a failed admission; every present leaf still follows the strict
+   * admission path immediately before it is read.
+   */
+  readOptional(label: string, candidate: string | null, anchor: string): string | null {
+    if (this.admit(`${label}#anchor`, anchor) === null) return null;
+    if (candidate === null || !isLocalCanonicalPath(candidate, this.runtime.platform)
+      || !isWithinRoot(candidate, this.sandboxRoot, this.runtime.platform)) {
+      this.admit(`${label}#use`, candidate);
+      return null;
+    }
+    if (this.runtime.pathKind(candidate) === "absent") {
+      this.admissions.push({ label: `${label}#absent`, candidate, admitted: null, reason: null });
+      return null;
+    }
+    const path = this.admit(`${label}#use`, candidate);
+    if (path === null) return null;
+    const contents = this.runtime.readTextFile(path);
+    if (contents === null) {
+      this.admissions.push({ label: `${label}#read`, candidate: path, admitted: null, reason: "HOST_PATH_UNREADABLE" });
+    }
+    return contents;
   }
 
   digest(label: string, candidate: string | null, anchor: string | null = null): string | null {
@@ -675,6 +724,7 @@ function evaluateHost(
     pluginId: EXPECTED_PLUGIN_ID[observation.host],
     root: observation.root,
     cli: observation.cli,
+    installAttempts: observation.installAttempts,
     marketplaceRoot: observation.marketplaceRoot,
     marketplaceCommit: observation.marketplaceCommit,
     marketplaceRef: observation.marketplaceRef,
@@ -775,12 +825,15 @@ function evaluateRelease(release: ReleaseIdentity): ProofReason[] {
     reasons.push("RELEASE_IDENTITY_INCOMPLETE");
     return reasons;
   }
-  if (versionFromTag(release.tag) !== release.version) reasons.push("RELEASE_TAG_VERSION_MISMATCH");
+  if (release.tag !== `v${release.version}`) reasons.push("RELEASE_TAG_VERSION_MISMATCH");
   return reasons;
 }
 
 function evaluateRun(run: RunIdentity): ProofReason[] {
-  return isNonEmpty(run.repository) && isNonEmpty(run.runId) && isNonEmpty(run.runAttempt)
+  return isNonEmpty(run.repository)
+    && isNonEmpty(run.runId)
+    && isNonEmpty(run.runAttempt)
+    && isSha(run.verifierSha)
     ? []
     : ["RUN_IDENTITY_INCOMPLETE"];
 }
@@ -861,6 +914,7 @@ export function evaluateDeliveryProof(input: DeliveryProofInput): StableDelivery
         pluginId: EXPECTED_PLUGIN_ID[host],
         root: null,
         cli: emptyCliObservation(host),
+        installAttempts: [],
         marketplaceRoot: null,
         marketplaceCommit: null,
         marketplaceRef: null,
@@ -935,7 +989,8 @@ export function proofBelongsToRun(
     && proof.release.version === release.version
     && proof.run.repository === run.repository
     && proof.run.runId === run.runId
-    && proof.run.runAttempt === run.runAttempt;
+    && proof.run.runAttempt === run.runAttempt
+    && proof.run.verifierSha === run.verifierSha;
 }
 
 export function digest(bytes: Uint8Array): string {
@@ -960,6 +1015,7 @@ export function runFromEnvironment(env: Record<string, string | undefined>): Run
     repository: env["GITHUB_REPOSITORY"] ?? "",
     runId: env["GITHUB_RUN_ID"] ?? "",
     runAttempt: env["GITHUB_RUN_ATTEMPT"] ?? "",
+    verifierSha: env["SEMCTX_PROOF_TOOL_SHA"] ?? env["GITHUB_SHA"] ?? "",
   };
 }
 
@@ -1259,6 +1315,53 @@ function text(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
+/** Bound so a chatty install command cannot bloat the archived artifact. */
+const MAX_CAPTURED_COMMAND_OUTPUT = 4000;
+
+/** Keep the first characters and name what was cut, rather than silently discarding the rest. */
+export function boundedCommandOutput(value: string): string {
+  if (value.length <= MAX_CAPTURED_COMMAND_OUTPUT) return value;
+  const cut = value.length - MAX_CAPTURED_COMMAND_OUTPUT;
+  return `${value.slice(0, MAX_CAPTURED_COMMAND_OUTPUT)}\n… [truncated ${cut} more characters]`;
+}
+
+/** The two `doctor --json` checks that prove the *runtime* rather than the workspace. */
+const CLI_SMOKE_REQUIRED_CHECKS: readonly string[] = ["cli", "runtime"];
+
+/**
+ * `doctor --json` exits 1 whenever any of its checks is red — including `workspace`, which is
+ * legitimately red against the foreign, never-`semctx init`-ed repository this smoke runs against.
+ * Exit 0 or 1 is green only when the report is parseable, its version is the released one, and the
+ * two checks that prove the *runtime* rather than the workspace — `cli` and `runtime` — are both
+ * present and `ok: true`; any other exit code, an unparseable
+ * report, a wrong version, or a missing or red required check stays red. This is the exact boundary
+ * the HOK-582 incident crossed by reading a bare non-zero exit as "the runtime is broken".
+ */
+export function evaluateCliSmokeReport(raw: string, expectedVersion: string, detail: string): SmokeOutcome {
+  let payload: unknown;
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+    return { ran: true, ok: false, detail: `${detail}: unparseable report` };
+  }
+  if (!isRecord(payload)) return { ran: true, ok: false, detail: `${detail}: report is not an object` };
+  const version = payload["version"];
+  if (version !== expectedVersion) {
+    return { ran: true, ok: false, detail: `${detail}: reported v${String(version)}` };
+  }
+  const checks = payload["checks"];
+  if (!Array.isArray(checks)) return { ran: true, ok: false, detail: `${detail}: report carries no checks` };
+  for (const name of CLI_SMOKE_REQUIRED_CHECKS) {
+    const namedChecks = (checks as unknown[]).filter((entry) => isRecord(entry) && entry["name"] === name);
+    if (namedChecks.length === 0) return { ran: true, ok: false, detail: `${detail}: missing the ${name} check` };
+    if (namedChecks.length !== 1) return { ran: true, ok: false, detail: `${detail}: duplicate ${name} checks` };
+    if ((namedChecks[0] as Record<string, unknown>)["ok"] !== true) {
+      return { ran: true, ok: false, detail: `${detail}: the ${name} check is red` };
+    }
+  }
+  return { ran: true, ok: true, detail };
+}
+
 /**
  * Exercise the delivered cache itself, from a directory that is neither the cache nor the release
  * checkout. Reading a manifest proves nothing about whether the payload runs, so both entrypoints
@@ -1277,17 +1380,10 @@ export function cliSmoke(
     options.foreignRepository,
     env,
   );
-  if (result.code !== 0) return { ran: true, ok: false, detail: `${detail}: exit ${result.code}` };
-  try {
-    const payload: unknown = JSON.parse(result.out);
-    const version = (payload as { version?: unknown } | null)?.version;
-    if (version !== options.release.version) {
-      return { ran: true, ok: false, detail: `${detail}: reported v${String(version)}` };
-    }
-  } catch {
-    return { ran: true, ok: false, detail: `${detail}: unparseable report` };
+  if (result.code !== 0 && result.code !== 1) {
+    return { ran: true, ok: false, detail: `${detail}: exit ${result.code}` };
   }
-  return { ran: true, ok: true, detail };
+  return evaluateCliSmokeReport(result.out, options.release.version, detail);
 }
 
 /**
@@ -1337,12 +1433,12 @@ export function readMarketplaceSnapshotIdentity(
   let commit: string | null = null;
   let ref: string | null = null;
   let source: string | null = null;
+  const codexMetadata = runtime.joinPath(snapshotRoot, ".codex-marketplace-install.json");
+  // Current Codex releases may omit this legacy declaration. Absence is not an unreadable path:
+  // the admitted Git snapshot remains the authority for commit/ref, while a present-but-unsafe
+  // declaration is still passed through the strict admission and read path below.
   const declared = host === "codex"
-    ? access.read(
-        "marketplace.metadata",
-        runtime.joinPath(snapshotRoot, ".codex-marketplace-install.json"),
-        snapshotRoot,
-      )
+    ? access.readOptional("marketplace.metadata", codexMetadata, snapshotRoot)
     : null;
   if (declared !== null) {
     const record: unknown = parseJson(declared);
@@ -1426,6 +1522,7 @@ export async function exerciseHost(
     cliAvailable: false,
     environmentUsable: environmentIsUsable(env),
     installSucceeded: false,
+    installAttempts: [],
     cli,
     root: hostRoot,
     marketplaceConfigured: false,
@@ -1457,8 +1554,11 @@ export async function exerciseHost(
 
   runtime.makeDirectory(hostRoot);
   runtime.makeDirectory(runtime.joinPath(hostRoot, "tmp"));
+  const codexHome = env["CODEX_HOME"];
+  if (isNonEmpty(codexHome)) runtime.makeDirectory(codexHome);
   // The `--version` probe is read-only and is what *establishes* identity, so it is allowed
-  // before the gates below. Nothing that mutates a host runs until they pass.
+  // before the gates below. No mutating host CLI command runs until they pass; creating the
+  // confined sandbox roots above is proof scaffolding, not host state inherited from a user.
   const probe = runtime.run([host, "--version"], options.foreignRepository, env);
   cli.rawVersion = text(probe.out) ?? text(probe.err);
   cli.reportedVersion = normaliseCliVersion(cli.rawVersion);
@@ -1477,6 +1577,12 @@ export async function exerciseHost(
 
   for (const command of installCommands(host)) {
     const result = runtime.run(command, options.foreignRepository, env);
+    observation.installAttempts.push({
+      argv: command,
+      code: result.code,
+      stdout: boundedCommandOutput(result.out),
+      stderr: boundedCommandOutput(result.err),
+    });
     if (result.code !== 0) return observation;
   }
   observation.installSucceeded = true;

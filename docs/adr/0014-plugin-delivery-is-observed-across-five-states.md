@@ -4,6 +4,34 @@
 - Date: 2026-08-10
 - Issue: [#89](https://github.com/hoklims/semctx/issues/89)
 
+## HOK-585 amendment — unavailable host interfaces (2026-09-04)
+
+Accepted for v0.1.19 under the maintainer's release continuation. Host inventory remains
+observable only through supported CLI queries. Do not fall back to reading private host
+configuration, enabling feature flags, or using an undocumented replacement interface.
+
+`plugin_delivery_status` advances to `schemaVersion: 2`: `marketplace.configured` is
+`boolean | null`. A successful inventory can establish `true` or `false`; absence of a
+usable inventory establishes only `null`. Existing consumers must accept schema 2 and
+handle unknown explicitly rather than treating it as false. Other report kinds keep
+their current schema versions. This is a disclosed JSON compatibility change.
+
+A detected host whose plugin command returns a recognized command-parser rejection
+reports `HOST_INTERFACE_UNSUPPORTED`, `UNKNOWN` delivery and no convergence actions.
+Timeout, truncated output, malformed output and other command failures retain their
+distinct reasons; arbitrary error text alone must not establish incompatibility.
+An absent executable remains distinct from a present but incompatible interface.
+
+The installer must detect unsupported inventory before any host mutation, preserve the
+other host's independent result, and give an interface-specific recovery message. A
+failed dry run must not recommend blindly applying the same failed plan. No interface
+failure licenses inferred marketplace, cache, enablement or session facts.
+
+Tests must distinguish unsupported commands, generic failures, malformed output and
+successful empty inventories, prove no host mutation on incompatibility, and retain
+bounded-probe and host-parity guarantees. Document observed working host versions;
+do not invent a historical minimum from a single passing version.
+
 ## Context
 
 Semctx ships a CLI and two host plugins in lockstep, but they reach a user through different

@@ -16,10 +16,15 @@ import { captureVerificationGitState } from "./verification-state";
 const ACTIVE_LIFECYCLES = new Set<ChangeContract["lifecycle"]>(["active", "partial", "blocked", "stale"]);
 const TERMINAL_LIFECYCLES = new Set<ChangeContract["lifecycle"]>(["verified", "superseded"]);
 
-interface VerificationStateV2 {
-  version: 2;
+interface VerificationStateV3 {
+  version: 3;
   headCommit: string;
+  analyzedSourceHash: string;
   workingStateHash: string;
+  contentStateHash: string;
+  repositoryStateHash: string;
+  indexStateHash: string;
+  headTreeHash: string;
   verdict: "PASS" | "WARN" | "BLOCK";
   recordedAt: string;
 }
@@ -120,14 +125,46 @@ export function inspectSemanticLifecycle(root: string, changes: readonly ChangeC
     findings.push({
       code: "EVIDENCE_BASELINE_STALE",
       severity: "error",
-      message: "The recorded verification baseline does not match the current commit-bound working state.",
+      message: "The recorded verification baseline does not match the current analyzed content state.",
+      subjectIds: [],
+    });
+  } else if (baseline === "superseded") {
+    findings.push({
+      code: "EVIDENCE_BASELINE_SUPERSEDED",
+      severity: "warning",
+      message: "The recorded verification baseline uses a schema this build no longer reads; re-record it with semctx verify diff --record.",
       subjectIds: [],
     });
   }
   return findings;
 }
 
-function inspectVerificationBaseline(root: string): "missing" | "valid" | "invalid" | "stale" {
+/**
+ * Schema versions a previous build wrote and this one recognises without reading.
+ *
+ * A superseded baseline is not evidence and never becomes one: it is replaced, never
+ * reinterpreted. It is a warning rather than an error because it reports an absence, not a
+ * contradiction — the same reason `DURABLE_ANCHOR_IS_TRANSIENT` is a warning. Treating it as an
+ * error closed the only exit: `index` refuses to seal on any lifecycle error, so the operation
+ * that produces a current baseline was gated on already having one.
+ */
+function isSupersededVerificationState(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const state = value as Record<string, unknown>;
+  if ((state.verdict !== "PASS" && state.verdict !== "WARN" && state.verdict !== "BLOCK")
+    || typeof state.recordedAt !== "string"
+    || !Number.isFinite(Date.parse(state.recordedAt))) return false;
+  if (state.version === 1) {
+    return typeof state.diffHash === "string" && /^sha256:[0-9a-f]{64}$/.test(state.diffHash);
+  }
+  return state.version === 2
+    && typeof state.headCommit === "string" && /^[0-9a-f]{40,64}$/.test(state.headCommit)
+    && typeof state.workingStateHash === "string" && /^sha256:[0-9a-f]{64}$/.test(state.workingStateHash);
+}
+
+function inspectVerificationBaseline(
+  root: string,
+): "missing" | "valid" | "invalid" | "stale" | "superseded" {
   const path = join(root, ".semctx", "verification-state.json");
   if (!existsSync(path)) return "missing";
   let parsed: unknown;
@@ -136,10 +173,13 @@ function inspectVerificationBaseline(root: string): "missing" | "valid" | "inval
   } catch {
     return "invalid";
   }
-  if (!isVerificationState(parsed)) return "invalid";
+  if (!isVerificationState(parsed)) {
+    return isSupersededVerificationState(parsed) ? "superseded" : "invalid";
+  }
   try {
     const current = captureVerificationGitState(root);
-    return current.headCommit === parsed.headCommit && current.workingStateHash === parsed.workingStateHash
+    return current.contentStateHash === parsed.contentStateHash
+        && current.repositoryStateHash === parsed.repositoryStateHash
       ? "valid"
       : "stale";
   } catch {
@@ -147,14 +187,24 @@ function inspectVerificationBaseline(root: string): "missing" | "valid" | "inval
   }
 }
 
-function isVerificationState(value: unknown): value is VerificationStateV2 {
+function isVerificationState(value: unknown): value is VerificationStateV3 {
   if (typeof value !== "object" || value === null) return false;
-  const state = value as Partial<VerificationStateV2>;
-  return state.version === 2
+  const state = value as Partial<VerificationStateV3>;
+  return state.version === 3
     && typeof state.headCommit === "string"
     && /^[0-9a-f]{40,64}$/.test(state.headCommit)
+    && typeof state.analyzedSourceHash === "string"
+    && /^sha256:[0-9a-f]{64}$/.test(state.analyzedSourceHash)
     && typeof state.workingStateHash === "string"
     && /^sha256:[0-9a-f]{64}$/.test(state.workingStateHash)
+    && typeof state.contentStateHash === "string"
+    && /^sha256:[0-9a-f]{64}$/.test(state.contentStateHash)
+    && typeof state.repositoryStateHash === "string"
+    && /^sha256:[0-9a-f]{64}$/.test(state.repositoryStateHash)
+    && typeof state.indexStateHash === "string"
+    && /^sha256:[0-9a-f]{64}$/.test(state.indexStateHash)
+    && typeof state.headTreeHash === "string"
+    && /^sha256:[0-9a-f]{64}$/.test(state.headTreeHash)
     && (state.verdict === "PASS" || state.verdict === "WARN" || state.verdict === "BLOCK")
     && typeof state.recordedAt === "string"
     && Number.isFinite(Date.parse(state.recordedAt));

@@ -171,7 +171,7 @@ automatically.
     history. The older `semctx_handoff` / `semctx_resume` pair remains the separate Plane-B Handoff
     v1 compatibility surface. Read-only work remains mutation-free.
 
-## MCP-only lifecycle foundation
+## Lifecycle foundation
 
 Codex and Claude Code expose the same strict lifecycle policy and report through
 `semctx_control_agent_lifecycle`. Agents must invoke it explicitly at four points:
@@ -204,9 +204,36 @@ content-addressed ignored local record; a non-Semctx repository is a write-free 
 surface is shadow-only, non-blocking, grants `executionAuthority: "none"`, and does not prove that a
 Claude lifecycle event invoked it.
 
-There are no automatic lifecycle hooks for Claude. Persisted or measured telemetry and enforcement
-remain open. Claude's existing optional commit/push guard remains separate and does not invoke
-either lifecycle surface.
+The plugin ships one shadow lifecycle hook that automates only the before_completion checkpoint.
+A `PostToolUse` entry matched on the bundled `semctx` MCP namespace records which Semctx MCP tool ran, as a canonical
+stage id in a session-local git-ignored ledger under `.semctx/working/agent-lifecycle/`, and a
+`Stop` entry reports the checkpoint at end of turn on stderr, only when the observed set has
+changed since the last advisory - the host ends a turn many times per session, so a completed
+cycle must not keep reporting a stale green over turns that produced no evidence. It never blocks: every path exits
+0 and nothing is written to stdout, so no output can be read as a decision. It parses the envelope
+the host sends and uses exactly `hook_event_name`, `session_id`, `cwd` and `tool_name`; every
+other field — prompt, `transcript_path`, `tool_input`, `tool_response` — is not retained, used, or
+reproduced, and the hook never opens the transcript file or reads repository source. It
+never starts the Semctx runtime, so it never asserts `semctx_ready`. It stays silent when it observed nothing, so a session it could not observe is
+never reported as a skipped one. `SEMCTX_LIFECYCLE=off` disables it without touching the
+unrelated guard.
+
+The observer sees MCP tool calls only. An agent that runs the documented shell fallback instead
+— `semctx verify diff`, `semctx change verify` — performs the stage without being observed, and
+the advisory will name it missing. Read `INCOMPLETE` as *not observed over MCP*, never as
+*not done*: this surface reports stage presence, and presence was never proof.
+
+Two limits are inherent to observing a host event rather than being called by an agent. First,
+the advisory goes to the hook's stderr and nowhere else: it appears wherever the host surfaces
+hook output, and it is deliberately **not** injected into the agent's context, because doing so
+would mean emitting a host-interpreted control field on stdout — the exact channel a blocking
+decision travels on. Second, the host ends a turn whenever the assistant finishes responding, not
+only when work is done, so every turn end is treated as a possible completion claim. The
+change-only rule keeps that from becoming noise, but it cannot tell a finished task from a pause.
+
+The other three checkpoints have no automatic host hook. Persisted or measured telemetry and
+enforcement remain open. Claude's existing optional commit/push guard remains separate and does
+not invoke either lifecycle surface.
 
 ## Decision semantics
 
@@ -243,8 +270,10 @@ When the user asks for a repository-independent demonstration, the shared skill 
 ## Claude-specific guarded mode
 
 The `PreToolUse` hook is advisory by default. When `.semctx/guard.json` enables guarded mode, it
-blocks only `git commit` and `git push` until the current commit-bound working-state hash has a recorded non-`BLOCK`
-verification. It never blocks edits, tests, exploration, trace or plan tools. See
+blocks only `git commit` and `git push` until the current analyzed-content state has a recorded
+non-`BLOCK` verification. An exact commit can reuse that proof for push; content drift or a partial
+commit cannot. Push additionally requires an explicit non-delegating remote and exact `HEAD` source.
+It never blocks edits, tests, exploration, trace or plan tools. See
 [`claude-code-guarded-mode.md`](./claude-code-guarded-mode.md).
 
 ## MCP without the plugin

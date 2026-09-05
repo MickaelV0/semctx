@@ -1,6 +1,8 @@
 {
   "name": "@semantic-context/control-model",
   "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
   "type": "module",
   "main": "./src/index.ts",
   "module": "./src/index.ts",
@@ -8,6 +10,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./control-handoff": "./src/control-handoff-public.ts",
+    "./change-authorization": "./src/change-authorization-public.ts",
+    "./link-resolution": "./src/link-resolution.ts",
     "./reconciliation-migration": "./src/reconciliation-migration.ts",
     "./reconciliation": "./src/reconciliation.ts",
     "./test/fixtures/l0-conformance": "./test/fixtures/l0-conformance.ts"

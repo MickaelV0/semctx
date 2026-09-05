@@ -181,15 +181,20 @@ describe("verify diff --base (CLI, real git)", () => {
     expect(semctx(["verify", "diff", "--base", "main", "--fail-on", "maybe"], repo).code).not.toBe(0);
   });
 
-  it("--record writes a commit-bound complete working-state baseline for guarded mode", () => {
+  it("--record writes a versioned analyzed-content baseline for guarded mode", () => {
     const r = semctx(["verify", "diff", "--record", "--fail-on", "none"], repo);
     expect(r.code).toBe(0);
     const statePath = join(repo, ".semctx", "verification-state.json");
     expect(existsSync(statePath)).toBe(true);
     const state = JSON.parse(readFileSync(statePath, "utf8"));
-    expect(state.version).toBe(2);
+    expect(state.version).toBe(3);
     expect(state.headCommit).toMatch(/^[0-9a-f]{40,64}$/);
+    expect(state.analyzedSourceHash).toMatch(/^sha256:[0-9a-f]{64}$/);
     expect(state.workingStateHash).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(state.contentStateHash).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(state.repositoryStateHash).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(state.indexStateHash).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(state.headTreeHash).toMatch(/^sha256:[0-9a-f]{64}$/);
     expect(["PASS", "WARN", "BLOCK"]).toContain(state.verdict);
   });
 
@@ -210,6 +215,27 @@ describe("verify diff --base (CLI, real git)", () => {
     expect(existsSync(output)).toBe(false);
   });
 
+  it("refuses to record tracked bytes hidden from the analyzed diff", () => {
+    const path = join(repo, "src", "a.ts");
+    const original = readFileSync(path, "utf8");
+    for (const [enable, disable] of [
+      ["--assume-unchanged", "--no-assume-unchanged"],
+      ["--skip-worktree", "--no-skip-worktree"],
+    ] as const) {
+      try {
+        expect(git(repo, ["update-index", enable, "src/a.ts"])).toBe(0);
+        writeFileSync(path, `${original}\n// hidden mutation\n`);
+        expect(gitOutput(repo, ["diff", "--name-only", "--", "src/a.ts"])).toBe("");
+        const result = semctx(["verify", "diff", "--record", "--fail-on", "none"], repo);
+        expect(result.code, enable).not.toBe(0);
+        expect(result.err + result.out, enable).toContain("hidden from the analyzed Git diff");
+      } finally {
+        writeFileSync(path, original);
+        git(repo, ["update-index", disable, "src/a.ts"]);
+      }
+    }
+  });
+
   it("rejects --record for ranges, staged diffs, and supplied files", () => {
     const supplied = join(repo, "supplied.diff");
     writeFileSync(supplied, "", "utf8");
@@ -219,11 +245,28 @@ describe("verify diff --base (CLI, real git)", () => {
   });
 
   it("refuses to record when repository state changes during verification", () => {
-    const before = { headCommit: "a".repeat(40), workingStateHash: `sha256:${"1".repeat(64)}` };
+    const before = {
+      headCommit: "a".repeat(40),
+      analyzedSourceHash: `sha256:${"0".repeat(64)}`,
+      workingStateHash: `sha256:${"1".repeat(64)}`,
+      contentStateHash: `sha256:${"2".repeat(64)}`,
+      repositoryStateHash: `sha256:${"3".repeat(64)}`,
+      indexStateHash: `sha256:${"3".repeat(64)}`,
+      headTreeHash: `sha256:${"4".repeat(64)}`,
+    };
     const after = { ...before, workingStateHash: `sha256:${"2".repeat(64)}` };
     expect(() => requireStableVerificationGitState(before, after)).toThrow(
       "repository state changed while verification was running",
     );
+    expect(() => requireStableVerificationGitState(
+      before,
+      before,
+      `sha256:${"9".repeat(64)}`,
+    )).toThrow("repository state changed while verification was running");
+    expect(() => requireStableVerificationGitState(
+      before,
+      { ...before, indexStateHash: `sha256:${"8".repeat(64)}` },
+    )).toThrow("repository state changed while verification was running");
   });
 });
 

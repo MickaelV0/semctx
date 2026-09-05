@@ -6,14 +6,17 @@ import {
   abortedProof,
   ACTIVATION_ACTION,
   admitHostPath,
+  boundedCommandOutput,
   bundlesAttested,
   cliIdentityProven,
+  cliSmoke,
   ConfinedAccess,
   CONTROL_STATUS_TOOL,
   defaultMcpHandshake,
   evaluatePreflight,
   defaultProofRuntime,
   environmentIsUsable,
+  evaluateCliSmokeReport,
   evaluateControlStatusResponse,
   evaluateDeliveryProof,
   evaluateJsonRpcResponse,
@@ -66,7 +69,12 @@ const RELEASE: ReleaseIdentity = {
   version: "1.2.3",
 };
 
-const RUN: RunIdentity = { repository: "hoklims/semctx", runId: "40412", runAttempt: "1" };
+const RUN: RunIdentity = {
+  repository: "hoklims/semctx",
+  runId: "40412",
+  runAttempt: "1",
+  verifierSha: "2".repeat(40),
+};
 
 const WITNESS: Record<string, string> = {
   "semctx-index-worker.js": "d".repeat(64),
@@ -141,6 +149,7 @@ function host(name: ProofHost, overrides: Partial<HostObservation> = {}): HostOb
   return {
     host: name,
     cliAvailable: true,
+    installAttempts: [],
     environmentUsable: true,
     installSucceeded: true,
     cli: cli(name),
@@ -362,6 +371,12 @@ describe("hostile 2 — every layer carries the same commit, not merely the same
     expect(versionFromTag("v9.9.9")).toBe("9.9.9");
   });
 
+  test("a bare SemVer tag is not the canonical release tag", () => {
+    const proof = proveWith({}, {}, { sha: RELEASE.sha, tag: "1.2.3", version: "1.2.3" });
+    expect(proof.ok).toBe(false);
+    expect(proof.reasons).toContain("RELEASE_TAG_VERSION_MISMATCH");
+  });
+
   test("a partial release identity never yields a proof", () => {
     const proof = proveWith({}, {}, { sha: "", tag: "v1.2.3", version: "1.2.3" });
     expect(proof.ok).toBe(false);
@@ -560,6 +575,7 @@ describe("hostile 6 — the archived proof belongs to the run consuming it", () 
     expect(proofBelongsToRun(proof, RELEASE, { ...RUN, runAttempt: "2" })).toBe(false);
     expect(proofBelongsToRun(proof, RELEASE, { ...RUN, runId: "40413" })).toBe(false);
     expect(proofBelongsToRun(proof, RELEASE, { ...RUN, repository: "someone/fork" })).toBe(false);
+    expect(proofBelongsToRun(proof, RELEASE, { ...RUN, verifierSha: "3".repeat(40) })).toBe(false);
   });
 
   test("identity is checked on commit, tag and version — not on any single field", () => {
@@ -573,7 +589,7 @@ describe("hostile 6 — the archived proof belongs to the run consuming it", () 
   test("a run identity the workflow did not supply is incomplete, not empty-but-fine", () => {
     const proof = evaluateDeliveryProof({
       release: RELEASE,
-      run: { repository: "hoklims/semctx", runId: "", runAttempt: "1" },
+      run: { repository: "hoklims/semctx", runId: "", runAttempt: "1", verifierSha: RUN.verifierSha },
       checkout: checkout(),
       witnesses: witnesses(),
       isolation: isolation(),
@@ -582,7 +598,21 @@ describe("hostile 6 — the archived proof belongs to the run consuming it", () 
     });
     expect(proof.ok).toBe(false);
     expect(proof.reasons).toContain("RUN_IDENTITY_INCOMPLETE");
-    expect(runFromEnvironment({})).toEqual({ repository: "", runId: "", runAttempt: "" });
+    expect(runFromEnvironment({})).toEqual({ repository: "", runId: "", runAttempt: "", verifierSha: "" });
+  });
+
+  test("a verifier identity must be an exact commit SHA", () => {
+    const proof = evaluateDeliveryProof({
+      release: RELEASE,
+      run: { ...RUN, verifierSha: "main" },
+      checkout: checkout(),
+      witnesses: witnesses(),
+      isolation: isolation(),
+      hosts: [host("codex"), host("claude")],
+      platform: "linux",
+    });
+    expect(proof.ok).toBe(false);
+    expect(proof.reasons).toContain("RUN_IDENTITY_INCOMPLETE");
   });
 });
 
@@ -847,6 +877,8 @@ interface FakeOptions {
   cacheVersion?: string;
   manifestVersion?: string;
   cliExit?: number;
+  /** Overrides the `doctor --json` body entirely, for exercising the `checks` contract. */
+  doctorPayload?: unknown;
   mcpTools?: number;
   mcpOk?: boolean;
   head?: string | null;
@@ -875,6 +907,10 @@ interface FakeOptions {
   /** Bundles the published commit does not carry, so the witness is incomplete. */
   missingBlobs?: string[];
   throwOnCommand?: string;
+  /** Current Codex releases may leave snapshot identity solely to Git. */
+  missingCodexMetadata?: boolean;
+  /** Files that remain present and admitted but cannot be read as text. */
+  unreadableTextPaths?: string[];
 }
 
 function fakeRuntime(options: FakeOptions = {}) {
@@ -882,6 +918,7 @@ function fakeRuntime(options: FakeOptions = {}) {
   const files = new Map<string, string>();
   const blobs = new Map<string, Uint8Array>();
   const rewritten = new Set<string>();
+  const madeDirectories = new Set<string>();
   const ledger: LedgerEntry[] = [];
   const observations = new Map<string, number>();
   let token = 0;
@@ -927,6 +964,12 @@ function fakeRuntime(options: FakeOptions = {}) {
           return { code: 0, out: `${name}-cli ${reported}\n`, err: "" };
         }
         if (rest[0] === "plugin" && rest[1] === "marketplace" && rest[2] === "add") {
+          if (name === "codex") {
+            const codexHome = env["CODEX_HOME"];
+            if (codexHome === undefined || !madeDirectories.has(codexHome)) {
+              return { code: 1, out: "", err: "CODEX_HOME path does not exist" };
+            }
+          }
           return { code: 0, out: "{}", err: "" };
         }
         if (rest[0] === "plugin" && (rest[1] === "add" || rest[1] === "install")) {
@@ -986,7 +1029,16 @@ function fakeRuntime(options: FakeOptions = {}) {
             }
           }
         }
-        return { code: options.cliExit ?? 0, out: JSON.stringify({ healthy: true, version }), err: "" };
+        const doctorBody = options.doctorPayload ?? {
+          healthy: true,
+          version,
+          checks: [
+            { name: "cli", ok: true, detail: `semctx ${version}` },
+            { name: "workspace", ok: true, detail: "configured" },
+            { name: "runtime", ok: true, detail: "bun" },
+          ],
+        };
+        return { code: options.cliExit ?? 0, out: JSON.stringify(doctorBody), err: "" };
       }
       throw new Error(`fake runtime: unknown command: ${line}`);
     },
@@ -1002,11 +1054,12 @@ function fakeRuntime(options: FakeOptions = {}) {
       }
       return null;
     },
-    makeDirectory(target) { note("make", target); },
+    makeDirectory(target) { note("make", target); madeDirectories.add(target); },
     readTextFile(target) {
       note("read", target);
+      if ((options.unreadableTextPaths ?? []).includes(target)) return null;
       if (files.has(target)) return files.get(target) ?? null;
-      if (target.endsWith(".codex-marketplace-install.json")) {
+      if (target.endsWith(".codex-marketplace-install.json") && options.missingCodexMetadata !== true) {
         return JSON.stringify({
           revision,
           ...(options.codexRef === "" ? {} : { ref_name: options.codexRef ?? "stable" }),
@@ -1051,6 +1104,9 @@ function fakeRuntime(options: FakeOptions = {}) {
     },
     pathKind(target) {
       note("stat", target);
+      if (target.endsWith(".codex-marketplace-install.json") && options.missingCodexMetadata === true) {
+        return "absent";
+      }
       if ((options.linkPaths ?? []).includes(target)) return "link";
       if ((options.swappedPaths ?? []).includes(target)) {
         // A directory when it is checked, a junction when it is used: the exact race a single
@@ -1140,6 +1196,17 @@ describe("live orchestration — real host contracts", () => {
     }
   });
 
+  test("creates the configured CODEX_HOME before Codex mutates its profile", async () => {
+    const { runtime, calls, ledger } = fakeRuntime();
+    const proof = await runStableDeliveryProof(LIVE_OPTIONS, runtime);
+    const codexCall = calls.find((call) => call.command[0] === "codex");
+    const codexHome = codexCall?.env["CODEX_HOME"];
+    expect(codexHome).toBe(hostEnvironment("codex", join(SANDBOX, "codex"))["CODEX_HOME"]);
+    if (codexHome === undefined) throw new Error("the Codex call carried no CODEX_HOME");
+    expect(ledger).toContainEqual({ operation: "make", path: codexHome });
+    expect(proof.hosts.codex.ok).toBe(true);
+  });
+
   test("a runner environment with no PATH fails the hosts instead of blaming them", async () => {
     const { runtime, calls } = fakeRuntime();
     const proof = await runStableDeliveryProof({ ...LIVE_OPTIONS, inheritedEnvironment: {} }, runtime);
@@ -1187,7 +1254,7 @@ describe("live orchestration — real host contracts", () => {
   });
 
   test("a CLI entrypoint that will not run from a foreign directory fails", async () => {
-    const { runtime } = fakeRuntime({ cliExit: 1 });
+    const { runtime } = fakeRuntime({ cliExit: 2 });
     const proof = await runStableDeliveryProof(LIVE_OPTIONS, runtime);
     expect(proof.ok).toBe(false);
     expect(proof.reasons).toContain("CLI_SMOKE_FAILED");
@@ -1398,6 +1465,7 @@ function liveEnvironment(overrides: Record<string, string | undefined> = {}): Re
     GITHUB_REPOSITORY: RUN.repository,
     GITHUB_RUN_ID: RUN.runId,
     GITHUB_RUN_ATTEMPT: RUN.runAttempt,
+    SEMCTX_PROOF_TOOL_SHA: RUN.verifierSha,
     SEMCTX_DELIVERY_SANDBOX: SANDBOX,
     SEMCTX_RELEASE_CHECKOUT: CHECKOUT,
     SEMCTX_FOREIGN_REPOSITORY: FOREIGN,
@@ -2245,6 +2313,44 @@ describe("hostile 13 — an invalid authority authorises no effect", () => {
     expect(proof.hosts.codex.ok).toBe(true);
   });
 
+  test("Codex falls back to the admitted Git snapshot when legacy metadata is absent", async () => {
+    const { runtime } = fakeRuntime({ missingCodexMetadata: true });
+    const proof = await runStableDeliveryProof(LIVE_OPTIONS, runtime);
+    expect(proof.hosts.codex.marketplaceCommit).toBe(RELEASE.sha);
+    expect(proof.hosts.codex.marketplaceRef).toBe("stable");
+    expect(proof.hosts.codex.pathAdmissions).toContainEqual(
+      expect.objectContaining({ label: "marketplace.metadata#absent", reason: null }),
+    );
+    expect(proof.hosts.codex.ok).toBe(true);
+  });
+
+  test("a swapped Codex snapshot is refused before optional metadata is consulted", async () => {
+    const metadata = join(CODEX_MARKETPLACE_ROOT, ".codex-marketplace-install.json");
+    const { runtime, ledger, calls } = fakeRuntime({
+      missingCodexMetadata: true,
+      swappedPaths: [CODEX_MARKETPLACE_ROOT],
+    });
+    const proof = await runStableDeliveryProof(LIVE_OPTIONS, runtime);
+    expect(proof.hosts.codex.reasons).toContain("HOST_PATH_IS_LINK");
+    expect(ledger).not.toContainEqual({ operation: "stat", path: metadata });
+    expect(ledger).not.toContainEqual({ operation: "read", path: metadata });
+    expect(launchedPayloads(calls).some((entry) => entry.includes("codex"))).toBe(false);
+  });
+
+  test("present but unreadable Codex metadata fails closed before payload execution", async () => {
+    const metadata = join(CODEX_MARKETPLACE_ROOT, ".codex-marketplace-install.json");
+    const { runtime, calls } = fakeRuntime({ unreadableTextPaths: [metadata] });
+    const proof = await runStableDeliveryProof(LIVE_OPTIONS, runtime);
+    expect(proof.hosts.codex.pathAdmissions).toContainEqual(expect.objectContaining({
+      label: "marketplace.metadata#read",
+      candidate: metadata,
+      admitted: null,
+      reason: "HOST_PATH_UNREADABLE",
+    }));
+    expect(proof.hosts.codex.reasons).toContain("HOST_PATH_UNREADABLE");
+    expect(launchedPayloads(calls).some((entry) => entry.includes("codex"))).toBe(false);
+  });
+
   test("an incidental Codex list ref cannot override snapshot ref_name", async () => {
     const { runtime } = fakeRuntime({ codexListRef: "main", codexRef: "stable" });
     const proof = await runStableDeliveryProof(LIVE_OPTIONS, runtime);
@@ -2446,5 +2552,174 @@ describe("proof contract", () => {
 
   test("a non-ok proof exits non-zero", () => {
     expect(proofExitCode(proveWith({ codex: { pluginResolved: false } }))).toBe(1);
+  });
+});
+
+// --- The CLI smoke's exit-1 contract ------------------------------------------------------------
+
+function doctorReport(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    healthy: false,
+    version: RELEASE.version,
+    checks: [
+      { name: "cli", ok: true, detail: `semctx ${RELEASE.version}` },
+      { name: "workspace", ok: false, detail: "run 'semctx init'" },
+      { name: "runtime", ok: true, detail: "bun 1.4.0" },
+    ],
+    ...overrides,
+  };
+}
+
+describe("hostile 16 — a CLI smoke's exit 1 is a runtime verdict, not a workspace verdict", () => {
+  // Anti-vacuity: this is the exact HOK-582 shape — doctor exits 1 solely because the foreign
+  // fixture was never `semctx init`-ed. If this ever reads as broken, the whole boundary is void.
+  test("exit 1 with a red workspace but green cli/runtime checks is accepted", () => {
+    const report = evaluateCliSmokeReport(JSON.stringify(doctorReport()), RELEASE.version, "detail");
+    expect(report.ok).toBe(true);
+    expect(report.ran).toBe(true);
+  });
+
+  test("exit 1 with a red cli check is refused", () => {
+    const report = evaluateCliSmokeReport(
+      JSON.stringify(doctorReport({ checks: [
+        { name: "cli", ok: false, detail: "broken" },
+        { name: "runtime", ok: true, detail: "bun 1.4.0" },
+      ] })),
+      RELEASE.version,
+      "detail",
+    );
+    expect(report.ok).toBe(false);
+    expect(report.detail).toContain("cli");
+  });
+
+  test("exit 1 with the runtime check missing entirely is refused, not treated as an absence", () => {
+    const report = evaluateCliSmokeReport(
+      JSON.stringify(doctorReport({ checks: [{ name: "cli", ok: true, detail: "ok" }] })),
+      RELEASE.version,
+      "detail",
+    );
+    expect(report.ok).toBe(false);
+    expect(report.detail).toContain("runtime");
+  });
+
+  test("duplicate required checks are refused even when the first duplicate is green", () => {
+    const report = evaluateCliSmokeReport(
+      JSON.stringify(doctorReport({ checks: [
+        { name: "cli", ok: true, detail: "ok" },
+        { name: "runtime", ok: true, detail: "first" },
+        { name: "runtime", ok: false, detail: "contradiction" },
+      ] })),
+      RELEASE.version,
+      "detail",
+    );
+    expect(report.ok).toBe(false);
+    expect(report.detail).toContain("duplicate runtime");
+  });
+
+  test("exit 1 with the wrong version is refused even when every check is green", () => {
+    const report = evaluateCliSmokeReport(JSON.stringify(doctorReport({ version: "9.9.9" })), RELEASE.version, "detail");
+    expect(report.ok).toBe(false);
+    expect(report.detail).toContain("9.9.9");
+  });
+
+  test("an unparseable exit-1 report is refused, not treated as an absent check", () => {
+    expect(evaluateCliSmokeReport("{not json", RELEASE.version, "detail").ok).toBe(false);
+    expect(evaluateCliSmokeReport(JSON.stringify(["not", "an", "object"]), RELEASE.version, "detail").ok).toBe(false);
+    expect(evaluateCliSmokeReport(JSON.stringify(doctorReport({ checks: "nope" })), RELEASE.version, "detail").ok)
+      .toBe(false);
+  });
+
+  test("a live smoke passes on exit 1 with a red workspace, and fails on any other exit code", async () => {
+    const green = fakeRuntime({ cliExit: 1, doctorPayload: doctorReport() });
+    const passed = await runStableDeliveryProof(LIVE_OPTIONS, green.runtime);
+    expect(passed.reasons).not.toContain("CLI_SMOKE_FAILED");
+    expect(passed.hosts.codex.cliSmoke.ok).toBe(true);
+
+    const brokenRuntime = fakeRuntime({ cliExit: 2, doctorPayload: doctorReport() });
+    const broken = await runStableDeliveryProof(LIVE_OPTIONS, brokenRuntime.runtime);
+    expect(broken.reasons).toContain("CLI_SMOKE_FAILED");
+
+    const redCli = fakeRuntime({
+      cliExit: 1,
+      doctorPayload: doctorReport({ checks: [
+        { name: "cli", ok: false, detail: "broken" },
+        { name: "runtime", ok: true, detail: "bun 1.4.0" },
+      ] }),
+    });
+    const redCliProof = await runStableDeliveryProof(LIVE_OPTIONS, redCli.runtime);
+    expect(redCliProof.reasons).toContain("CLI_SMOKE_FAILED");
+  });
+
+  test("exit 0 still refuses an unreadable, wrong-version or runtime-red report", async () => {
+    const unreadable = cliSmoke(
+      fakeRuntime({ doctorPayload: "not-json" }).runtime,
+      "dist/semctx.js",
+      LIVE_OPTIONS,
+      { PATH: "/usr/bin" },
+    );
+    expect(unreadable.ok).toBe(false);
+
+    const wrongVersion = cliSmoke(
+      fakeRuntime({ doctorPayload: doctorReport({ version: "9.9.9" }) }).runtime,
+      "dist/semctx.js",
+      LIVE_OPTIONS,
+      { PATH: "/usr/bin" },
+    );
+    expect(wrongVersion.ok).toBe(false);
+
+    const runtimeRed = cliSmoke(
+      fakeRuntime({ doctorPayload: doctorReport({ checks: [
+        { name: "cli", ok: true, detail: "ok" },
+        { name: "runtime", ok: false, detail: "broken" },
+      ] }) }).runtime,
+      "dist/semctx.js",
+      LIVE_OPTIONS,
+      { PATH: "/usr/bin" },
+    );
+    expect(runtimeRed.ok).toBe(false);
+  });
+
+  test("bounded output keeps short text verbatim and truncates long text with a character marker", () => {
+    expect(boundedCommandOutput("short")).toBe("short");
+    const long = "x".repeat(5000);
+    const bounded = boundedCommandOutput(long);
+    expect(bounded.length).toBeLessThan(long.length);
+    expect(bounded).toContain("truncated");
+    expect(bounded.startsWith("x".repeat(100))).toBe(true);
+  });
+
+  test("cliSmoke wires the report gate to the actual doctor invocation", async () => {
+    const { runtime } = fakeRuntime({ cliExit: 1, doctorPayload: doctorReport() });
+    const outcome = cliSmoke(runtime, "dist/semctx.js", LIVE_OPTIONS, { PATH: "/usr/bin" });
+    expect(outcome.ran).toBe(true);
+    expect(outcome.ok).toBe(true);
+  });
+});
+
+describe("hostile 17 — a failed install is diagnosed, never silently reduced to a bare reason", () => {
+  test("a refused install archives every attempted command with its argv, exit code and output", async () => {
+    const { runtime } = fakeRuntime({ failingInstall: ["codex"] });
+    const proof = await runStableDeliveryProof(LIVE_OPTIONS, runtime);
+    expect(proof.ok).toBe(false);
+    expect(proof.hosts.codex.reasons).toContain("HOST_INSTALL_FAILED");
+    expect(proof.hosts.codex.installAttempts.length).toBeGreaterThan(0);
+    const failed = proof.hosts.codex.installAttempts.at(-1);
+    expect(failed?.code).not.toBe(0);
+    expect(failed?.argv[0]).toBe("codex");
+    expect(failed?.stderr).toContain("install refused");
+  });
+
+  test("a successful install still archives every command it actually ran", async () => {
+    const { runtime } = fakeRuntime();
+    const proof = await runStableDeliveryProof(LIVE_OPTIONS, runtime);
+    expect(proof.ok).toBe(true);
+    for (const name of PROOF_HOSTS) {
+      expect(proof.hosts[name].installAttempts).toEqual(installCommands(name).map((argv) => ({
+        argv,
+        code: 0,
+        stdout: "{}",
+        stderr: "",
+      })));
+    }
   });
 });
