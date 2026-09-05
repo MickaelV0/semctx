@@ -7,8 +7,14 @@ import {
   AGENT_WORKFLOW_CONTRACT_V1,
 } from "@semantic-context/control-model";
 import {
+  AGENT_MCP_SCHEMA,
+  AGENT_PLUGIN_SCHEMA,
   CLAUDE_FOCUSED_SKILL_FILES,
   HOST_CLI_STRIP,
+  assertAgentPluginManifest,
+  assertAgentPluginMcp,
+  assertCatalogRefPolicy,
+  assertOmpPluginVersionParity,
   hostCliLadder,
   renderControlSkill,
   renderSharedLifecycleContract,
@@ -326,7 +332,7 @@ describe("Codex and Claude Code plugin parity", () => {
       "plugins/shared/hooks/semctx-lifecycle.mjs",
       "plugins/semctx-control/hooks/hooks.json",
       "plugins/claude-code/.mcp.json",
-      "plugins/claude-code/mcp-omp.json",
+      "plugins/claude-code/mcp.json",
       "plugins/claude-code/README.md",
       "plugins/claude-code/examples/guard.json",
       "README.md",
@@ -368,7 +374,7 @@ describe("Codex and Claude Code plugin parity", () => {
       "docs/examples/claude-code-integration.md",
       "plugins/claude-code/README.md",
       "plugins/claude-code/.mcp.json",
-      "plugins/claude-code/mcp-omp.json",
+      "plugins/claude-code/mcp.json",
       "plugins/semctx-control/.mcp.json",
     ];
     expect(shipped.length).toBeGreaterThan(0);
@@ -554,7 +560,7 @@ describe("Codex and Claude Code plugin parity", () => {
     expect(ompMarketplace.plugins.find((plugin) => plugin.name === "semctx")?.version).toBe(
       claudeManifest.version,
     );
-    expect(json<{ version: string }>("plugins/claude-code/.omp-plugin/plugin.json").version).toBe(
+    expect(json<{ version: string }>("plugins/claude-code/plugin.json").version).toBe(
       claudeManifest.version,
     );
     const serverSource = read("packages/mcp-server/src/server.ts");
@@ -818,5 +824,112 @@ describe("Codex and Claude Code plugin parity", () => {
       expect(codexHooks.hooks[event]![0]!.hooks[0]!.command)
         .toBe('node "${PLUGIN_ROOT}/hooks/semctx-lifecycle.mjs"');
     }
+  });
+});
+
+describe("Agent-Plugins OMP manifests fail closed", () => {
+  const validPlugin = {
+    $schema: AGENT_PLUGIN_SCHEMA,
+    name: "semctx",
+    version: "0.1.20",
+    description: "x",
+    author: { name: "hoklims", email: "hoklims@gmail.com" },
+  };
+  const validMcp = {
+    $schema: AGENT_MCP_SCHEMA,
+    mcpServers: {
+      semctx: {
+        type: "stdio",
+        command: "bun",
+        args: ["./dist/semctx-mcp.js"],
+      },
+    },
+  };
+
+  test("rejects wrong $schema on plugin.json", () => {
+    expect(() =>
+      assertAgentPluginManifest(
+        { ...validPlugin, $schema: "https://agent-plugins.org/schemas/2.0.0/plugin.schema.json" },
+        "plugin.json",
+      ),
+    ).toThrow(
+      /\$schema must be exactly https:\/\/agent-plugins\.org\/schemas\/1\.0\.0\/plugin\.schema\.json \(wrong \$schema ⇒ kind:invalid ⇒ omp-plugins refuses skills\+MCP too\)/,
+    );
+  });
+
+  test("rejects unknown author key", () => {
+    expect(() =>
+      assertAgentPluginManifest(
+        { ...validPlugin, author: { name: "hoklims", github: "hoklims" } },
+        "plugin.json",
+      ),
+    ).toThrow(/unknown author key "github" ⇒ kind:invalid ⇒ omp-plugins refuses skills\+MCP too/);
+  });
+
+  test("rejects extra top-level key in mcp.json", () => {
+    expect(() => assertAgentPluginMcp({ ...validMcp, extra: true }, "/tmp", "mcp.json")).toThrow(
+      /extra top-level key "extra" disables the entire file silently at runtime/,
+    );
+  });
+
+  test('rejects cwd: "."', () => {
+    expect(() =>
+      assertAgentPluginMcp(
+        {
+          ...validMcp,
+          mcpServers: {
+            semctx: {
+              type: "stdio",
+              command: "bun",
+              args: ["./dist/semctx-mcp.js"],
+              cwd: ".",
+            },
+          },
+        },
+        "/tmp",
+        "mcp.json",
+      ),
+    ).toThrow(/cwd: "\." silently skips the server/);
+  });
+
+  test("rejects version skew across the four manifests", () => {
+    expect(() =>
+      assertOmpPluginVersionParity({
+        "plugins/claude-code/package.json": "0.1.19",
+        "plugins/claude-code/plugin.json": "0.1.20",
+        "plugins/claude-code/.claude-plugin/plugin.json": "0.1.20",
+        ".omp-plugin/marketplace.json plugins[semctx]": "0.1.20",
+      }),
+    ).toThrow(/OMP plugin version skew:.*package\.json=0\.1\.19/);
+  });
+
+  test("rejects a commit id written into source.ref", () => {
+    // OMP clones shallow without source.sha and feeds source.ref to
+    // `git clone --branch`, which cannot resolve a raw commit id.
+    expect(() =>
+      assertCatalogRefPolicy({ ref: "0123456789abcdef0123456789abcdef01234567" }, "catalog"),
+    ).toThrow(/is a commit id — OMP feeds source\.ref to `git clone --branch`/);
+  });
+
+  test('rejects a moving branch with no pinned sha', () => {
+    expect(() => assertCatalogRefPolicy({ ref: "main" }, "catalog")).toThrow(
+      /source\.ref "main" is a moving branch and source\.sha is unset/,
+    );
+  });
+
+  test("accepts an immutable tag, or a branch pinned by source.sha", () => {
+    expect(() => assertCatalogRefPolicy({ ref: "stable" }, "catalog")).not.toThrow();
+    expect(() =>
+      assertCatalogRefPolicy(
+        { ref: "main", sha: "0123456789abcdef0123456789abcdef01234567" },
+        "catalog",
+      ),
+    ).not.toThrow();
+  });
+
+  test("rejects a malformed source.sha", () => {
+    expect(() => assertCatalogRefPolicy({ ref: "main", sha: "abc" }, "catalog")).toThrow(
+      /source\.sha must be a 40-hex commit id/,
+    );
   });
 });

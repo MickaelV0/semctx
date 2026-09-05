@@ -4,18 +4,56 @@
 stable-proven delivery target: it has no `plugin-status` support and no `deliver` attestation.
 Tracked in HOK-456.
 
-Oh My Pi installs the Claude plugin directory (`plugins/claude-code`) through `.omp-plugin/marketplace.json`. The catalog entry pins the plugin to `source: { source: "git-subdir", url: "https://github.com/hoklims/semctx.git", path: "plugins/claude-code", ref: "stable" }` — the marketplace name (`semctx-stable`) is a label, not a Git pin; only `source.ref` keeps the installed bytes off `main`. MCP launch is `plugins/claude-code/mcp-omp.json` (relative `bun ./dist/semctx-mcp.js`, `cwd: "."`). Claude `.mcp.json` placeholders are not used.
+`plugins/claude-code/` is an Agent-Plugins-standard plugin root: `plugin.json` (`$schema` exactly
+`https://agent-plugins.org/schemas/1.0.0/plugin.schema.json`) plus a schema-closed `mcp.json` at
+that same root. Oh My Pi installs it through `.omp-plugin/marketplace.json`. The catalog entry
+pins the plugin to `source: { source: "git-subdir", url: "https://github.com/hoklims/semctx.git", path: "plugins/claude-code", ref: "stable" }`
+— the marketplace name (`semctx-stable`) is a label, not a Git pin; only `source.ref` keeps the
+installed bytes off `main`. Claude `.mcp.json` placeholders are not used.
 
-Requirements: Oh My Pi `>=17.1.8` (marketplace-capable, honors the manifest's `mcpServers` pointer), Bun `>=1.3.14` on PATH.
+Skills and MCP are served by OMP's `agent-plugins` provider (priority 75). The commit/push guard
+is served by `package.json#omp.extensions`. This works with `claude-plugins` **disabled** — the
+operator standing configuration. The resulting MCP server id is `semctx:semctx`; on-wire tool
+names stay `semctx_*`.
+
+Verified on Oh My Pi **18.1.11**. Bun `>=1.3.14` on PATH.
+
+Install is two commands, and the first is mandatory. OMP's `classifyInstallTarget` only treats
+`name@marketplace` as a marketplace spec when that marketplace name is already registered
+locally; otherwise it silently falls through to an npm spec and the install fails with a
+confusing name error.
 
 ```bash
 omp plugin marketplace add hoklims/semctx
-omp plugin install semctx@semctx-stable --scope project
+omp plugin install semctx@semctx-stable
 ```
 
-Then `/reload-plugins` or restart the session. Every MCP tool call must pass an absolute `repositoryRoot`, except `semctx_control_verify_authorization`, whose entire input is `{ request }` and which rejects `repositoryRoot`. Prefer MCP tools. For shell fallbacks use a global CLI on the same version as the plugin (`semctx --version` / `bunx semctx@latest`). Do not run `bun ./dist/semctx.js` from the user repository cwd.
+Then **restart** the session. `/reload-plugins` refreshes skills, commands and MCP but does **not**
+re-import extension modules, so the guard factory will not load until a restart.
 
-OMP substitutes `${CLAUDE_PLUGIN_ROOT}` and its own `${OMP_PLUGIN_ROOT}` inside MCP server config fields, but never inside skill/agent markdown body text — the Claude skill still contains a literal, unsubstituted `${CLAUDE_PLUGIN_ROOT}` when read on OMP, so agents must prefer connected MCP tools over that text.
+Every MCP tool call must pass an absolute `repositoryRoot`, except `semctx_control_verify_authorization`,
+whose entire input is `{ request }` and which rejects `repositoryRoot`. Prefer MCP tools. For shell
+fallbacks use a global CLI on the same version as the plugin (`semctx --version` / `bunx semctx@latest`).
+Do not run `bun ./dist/semctx.js` from the user repository cwd.
+
+OMP substitutes `${CLAUDE_PLUGIN_ROOT}` and its own `${OMP_PLUGIN_ROOT}` inside MCP server config
+fields, but never inside skill/agent markdown body text — the Claude skill still contains a
+literal, unsubstituted `${CLAUDE_PLUGIN_ROOT}` when read on OMP, so agents must prefer connected
+MCP tools over that text.
+
+## Migration from the retired B.3 mirror
+
+The B.3 mirror `MickaelV0/semctx-plugin` (installed as package `semctx` via the git pipe) and the
+marketplace install occupy the same `~/.omp/plugins/node_modules/semctx` path. This is a clobber,
+not a coexistence.
+
+1. `omp plugin uninstall semctx`
+2. Verify the `"semctx"` key is gone from `~/.omp/plugins/package.json` (not just from
+   `omp-plugins.lock.json`). A stale dependency key alongside a marketplace symlink is a
+   half-state that `omp plugin list` / `doctor` hide.
+3. `omp plugin marketplace add hoklims/semctx`
+4. `omp plugin install semctx@semctx-stable`
+5. Restart.
 
 ## Commit/push guard
 

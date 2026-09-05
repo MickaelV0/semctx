@@ -686,6 +686,352 @@ function textEqual(current: string, expected: string): boolean {
   return current.replaceAll("\r\n", "\n") === expected.replaceAll("\r\n", "\n");
 }
 
+export const AGENT_PLUGIN_SCHEMA =
+  "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json";
+export const AGENT_MCP_SCHEMA =
+  "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json";
+
+const AGENT_PLUGIN_TOP_LEVEL_KEYS: Record<string, true> = {
+  $schema: true,
+  name: true,
+  version: true,
+  description: true,
+  author: true,
+  homepage: true,
+  repository: true,
+  license: true,
+  keywords: true,
+  extensions: true,
+};
+const AGENT_PLUGIN_AUTHOR_KEYS: Record<string, true> = {
+  name: true,
+  email: true,
+  url: true,
+};
+const AGENT_PLUGIN_NAME_PATTERN = /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/;
+const AGENT_MCP_TOP_LEVEL_KEYS: Record<string, true> = {
+  $schema: true,
+  mcpServers: true,
+};
+const AGENT_MCP_SERVER_KEYS: Record<string, true> = {
+  type: true,
+  command: true,
+  args: true,
+  env: true,
+  cwd: true,
+};
+const AGENT_MCP_SERVER_TYPES: Record<string, true> = {
+  stdio: true,
+  "streamable-http": true,
+  sse: true,
+};
+const CATALOG_SHA40 = /^[0-9a-f]{40}$/;
+const CATALOG_MOVING_BRANCHES: Record<string, true> = {
+  main: true,
+  master: true,
+  HEAD: true,
+  develop: true,
+  trunk: true,
+};
+const KIND_INVALID_CONSEQUENCE =
+  "kind:invalid ⇒ omp-plugins refuses skills+MCP too";
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function readJsonObject(path: string): Record<string, unknown> {
+  if (!existsSync(path)) {
+    throw new Error(`missing Agent-Plugins manifest: ${path}`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(path, "utf8"));
+  } catch (error) {
+    throw new Error(
+      `invalid JSON: ${path}: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
+  }
+  if (!isPlainObject(parsed)) {
+    throw new Error(`${path}: must be a JSON object`);
+  }
+  return parsed;
+}
+
+function requiredString(value: Record<string, unknown>, key: string, label: string): string {
+  const field = value[key];
+  if (typeof field !== "string" || field.length === 0) {
+    throw new Error(`${label}: ${key} must be a non-empty string`);
+  }
+  return field;
+}
+
+/**
+ * Fail closed on the Agent-Plugins `plugin.json` that `classifyUncached` reads.
+ * A typo here is `kind:invalid`, which is worse than no file: omp-plugins then
+ * refuses skills and MCP too.
+ */
+export function assertAgentPluginManifest(value: unknown, label: string): void {
+  if (!isPlainObject(value)) {
+    throw new Error(`${label}: must be a JSON object (${KIND_INVALID_CONSEQUENCE})`);
+  }
+  if (value.$schema !== AGENT_PLUGIN_SCHEMA) {
+    throw new Error(
+      `${label}: $schema must be exactly ${AGENT_PLUGIN_SCHEMA} (wrong $schema ⇒ ${KIND_INVALID_CONSEQUENCE})`,
+    );
+  }
+  for (const key of Object.keys(value)) {
+    if (AGENT_PLUGIN_TOP_LEVEL_KEYS[key] !== true) {
+      throw new Error(
+        `${label}: unknown top-level key "${key}" (allowed: ${Object.keys(AGENT_PLUGIN_TOP_LEVEL_KEYS).join(", ")}); extra keys are warnings at runtime but this check fails closed`,
+      );
+    }
+  }
+  if (typeof value.name !== "string") {
+    throw new Error(`${label}: name must be a string (${KIND_INVALID_CONSEQUENCE})`);
+  }
+  const pluginName = value.name;
+  if (
+    pluginName.length < 1
+    || pluginName.length > 64
+    || !AGENT_PLUGIN_NAME_PATTERN.test(pluginName)
+    || pluginName.includes("--")
+    || pluginName.includes("..")
+  ) {
+    throw new Error(
+      `${label}: name "${pluginName}" does not match [a-z0-9]([a-z0-9.-]*[a-z0-9])? (1-64, no --, no ..) ⇒ ${KIND_INVALID_CONSEQUENCE}`,
+    );
+  }
+  for (const field of ["version", "description", "homepage", "repository", "license"] as const) {
+    if (field in value && typeof value[field] !== "string") {
+      throw new Error(
+        `${label}: ${field} must be a string when present (${KIND_INVALID_CONSEQUENCE})`,
+      );
+    }
+  }
+  if ("keywords" in value) {
+    if (!Array.isArray(value.keywords) || value.keywords.some((entry) => typeof entry !== "string")) {
+      throw new Error(
+        `${label}: keywords must be a string[] when present (${KIND_INVALID_CONSEQUENCE})`,
+      );
+    }
+  }
+  if (!("author" in value)) return;
+  if (!isPlainObject(value.author)) {
+    throw new Error(`${label}: author must be an object (${KIND_INVALID_CONSEQUENCE})`);
+  }
+  for (const key of Object.keys(value.author)) {
+    if (AGENT_PLUGIN_AUTHOR_KEYS[key] !== true) {
+      throw new Error(
+        `${label}: unknown author key "${key}" ⇒ ${KIND_INVALID_CONSEQUENCE}`,
+      );
+    }
+    if (typeof value.author[key] !== "string") {
+      throw new Error(
+        `${label}: author.${key} must be a string (${KIND_INVALID_CONSEQUENCE})`,
+      );
+    }
+  }
+}
+
+/**
+ * Fail closed on the Agent-Plugins `mcp.json`. The top-level object is closed:
+ * any extra key disables the whole file silently (zero servers, no error).
+ * `cwd: "."` is the measured skip — omit cwd so OMP defaults to the plugin root.
+ */
+export function assertAgentPluginMcp(
+  value: unknown,
+  pluginRoot: string,
+  label: string,
+): void {
+  if (!isPlainObject(value)) {
+    throw new Error(
+      `${label}: must be a JSON object (malformed top-level disables the entire file silently at runtime)`,
+    );
+  }
+  if (value.$schema !== AGENT_MCP_SCHEMA) {
+    throw new Error(
+      `${label}: $schema must be exactly ${AGENT_MCP_SCHEMA} (wrong $schema disables the entire file silently at runtime)`,
+    );
+  }
+  for (const key of Object.keys(value)) {
+    if (AGENT_MCP_TOP_LEVEL_KEYS[key] !== true) {
+      throw new Error(
+        `${label}: extra top-level key "${key}" disables the entire file silently at runtime (zero servers registered, no error); only $schema and mcpServers are allowed`,
+      );
+    }
+  }
+  if (!("mcpServers" in value)) {
+    throw new Error(
+      `${label}: missing mcpServers disables the entire file silently at runtime (zero servers registered, no error)`,
+    );
+  }
+  if (!isPlainObject(value.mcpServers)) {
+    throw new Error(`${label}: mcpServers must be an object`);
+  }
+  for (const [serverName, server] of Object.entries(value.mcpServers)) {
+    const serverLabel = `${label}: mcpServers.${serverName}`;
+    if (!isPlainObject(server)) {
+      throw new Error(`${serverLabel} must be an object (unknown shape skips that server)`);
+    }
+    for (const key of Object.keys(server)) {
+      if (AGENT_MCP_SERVER_KEYS[key] !== true) {
+        throw new Error(
+          `${serverLabel}: unknown key "${key}" skips that server at runtime; allowed: type, command, args, env, cwd`,
+        );
+      }
+    }
+    if (typeof server.type !== "string" || AGENT_MCP_SERVER_TYPES[server.type] !== true) {
+      throw new Error(
+        `${serverLabel}: type must be one of stdio, streamable-http, sse (missing/invalid type skips that server)`,
+      );
+    }
+    if ("cwd" in server) {
+      if (server.cwd === ".") {
+        throw new Error(
+          `${serverLabel}: cwd: "." silently skips the server (cwd must match ^(?:\\./|\\$\\{PLUGIN_ROOT\\}(?:/|$)|\\$\\{PLUGIN_DATA\\}(?:/|$)); omit cwd to default to the plugin root)`,
+        );
+      }
+      if (
+        typeof server.cwd !== "string"
+        || !(
+          server.cwd.startsWith("./")
+          || server.cwd === "${PLUGIN_ROOT}"
+          || server.cwd.startsWith("${PLUGIN_ROOT}/")
+          || server.cwd === "${PLUGIN_DATA}"
+          || server.cwd.startsWith("${PLUGIN_DATA}/")
+        )
+      ) {
+        throw new Error(
+          `${serverLabel}: cwd ${JSON.stringify(server.cwd)} silently skips the server (cwd must match ^(?:\\./|\\$\\{PLUGIN_ROOT\\}(?:/|$)|\\$\\{PLUGIN_DATA\\}(?:/|$)); omit cwd to default to the plugin root)`,
+        );
+      }
+    }
+    if (server.type !== "stdio") continue;
+    if (typeof server.command !== "string") {
+      throw new Error(`${serverLabel}: stdio command must be a string`);
+    }
+    const rawArgs = server.args;
+    if (!Array.isArray(rawArgs) || !rawArgs.every((entry): entry is string => typeof entry === "string")) {
+      throw new Error(`${serverLabel}: stdio args must be a string[]`);
+    }
+    const scriptArgs = rawArgs.filter((arg) => arg.startsWith("./"));
+    if (scriptArgs.length === 0) {
+      throw new Error(
+        `${serverLabel}: stdio args must include a plugin-relative ./ path so a renamed bundle is caught at build time`,
+      );
+    }
+    for (const arg of scriptArgs) {
+      const resolved = resolve(pluginRoot, arg);
+      if (!existsSync(resolved)) {
+        throw new Error(
+          `${serverLabel}: stdio args path "${arg}" does not resolve to a file under ${pluginRoot} (renamed bundle would launch nothing)`,
+        );
+      }
+    }
+  }
+}
+
+export function assertOmpPluginVersionParity(
+  versions: Readonly<Record<string, string>>,
+): void {
+  const entries = Object.entries(versions);
+  if (entries.length === 0) {
+    throw new Error("OMP plugin version parity requires at least one manifest");
+  }
+  if (entries.some(([, version]) => version.length === 0)) {
+    throw new Error(
+      `OMP plugin version missing: ${entries.map(([path, version]) => `${path}=${version || "<empty>"}`).join(", ")}`,
+    );
+  }
+  const unique = new Set(entries.map(([, version]) => version));
+  if (unique.size !== 1) {
+    throw new Error(
+      `OMP plugin version skew: ${entries.map(([path, version]) => `${path}=${version}`).join(", ")} (all four must match or the catalog installs a different tree than the packaged plugin)`,
+    );
+  }
+}
+
+/**
+ * A catalog entry is reproducible when the installed bytes cannot move under it.
+ *
+ * `ref` and `sha` are NOT interchangeable. OMP clones shallow when `source.sha`
+ * is absent and passes `source.ref` straight to `git clone --branch`, which
+ * rejects a raw commit id; a full clone plus `git checkout <sha>` only happens
+ * when `source.sha` is set (oh-my-pi `crates/pi-vcs/src/git/cli.rs`). So a
+ * commit is pinned through `source.sha`, never by writing it into `source.ref`.
+ */
+export function assertCatalogRefPolicy(
+  source: { ref?: unknown; sha?: unknown },
+  label: string,
+): void {
+  const { ref, sha } = source;
+  if (typeof ref !== "string" || ref.length === 0) {
+    throw new Error(`${label}: source.ref must be a non-empty branch or tag name`);
+  }
+  if (CATALOG_SHA40.test(ref)) {
+    throw new Error(
+      `${label}: source.ref "${ref}" is a commit id — OMP feeds source.ref to \`git clone --branch\`, which rejects it. Put the commit in source.sha and leave source.ref on the branch or tag that contains it.`,
+    );
+  }
+  if (sha !== undefined && (typeof sha !== "string" || !CATALOG_SHA40.test(sha))) {
+    throw new Error(`${label}: source.sha must be a 40-hex commit id when present`);
+  }
+  const moving = CATALOG_MOVING_BRANCHES[ref] === true || ref.includes("/");
+  if (moving && sha === undefined) {
+    throw new Error(
+      `${label}: source.ref "${ref}" is a moving branch and source.sha is unset — installs would track the branch tip with no rollback. Pin source.sha, or point source.ref at an immutable tag.`,
+    );
+  }
+}
+
+export function assertClaudeCodeAgentPluginStandard(
+  pluginRoot: string = resolve(root, "plugins/claude-code"),
+  marketplacePath: string = resolve(root, ".omp-plugin/marketplace.json"),
+): void {
+  const pluginJsonPath = resolve(pluginRoot, "plugin.json");
+  const mcpJsonPath = resolve(pluginRoot, "mcp.json");
+  const packageJsonPath = resolve(pluginRoot, "package.json");
+  const claudePluginJsonPath = resolve(pluginRoot, ".claude-plugin/plugin.json");
+
+  const pluginManifest = readJsonObject(pluginJsonPath);
+  assertAgentPluginManifest(pluginManifest, pluginJsonPath);
+
+  const mcpManifest = readJsonObject(mcpJsonPath);
+  assertAgentPluginMcp(mcpManifest, pluginRoot, mcpJsonPath);
+
+  const packageJson = readJsonObject(packageJsonPath);
+  const claudePlugin = readJsonObject(claudePluginJsonPath);
+  const marketplace = readJsonObject(marketplacePath);
+  if (!Array.isArray(marketplace.plugins)) {
+    throw new Error(`${marketplacePath}: plugins must be an array`);
+  }
+  const semctx = marketplace.plugins.find(
+    (entry): entry is Record<string, unknown> => isPlainObject(entry) && entry.name === "semctx",
+  );
+  if (semctx === undefined) {
+    throw new Error(`${marketplacePath}: missing plugins[] entry name "semctx"`);
+  }
+
+  assertOmpPluginVersionParity({
+    [packageJsonPath]: requiredString(packageJson, "version", packageJsonPath),
+    [pluginJsonPath]: requiredString(pluginManifest, "version", pluginJsonPath),
+    [claudePluginJsonPath]: requiredString(claudePlugin, "version", claudePluginJsonPath),
+    [`${marketplacePath} plugins[semctx]`]: requiredString(
+      semctx,
+      "version",
+      `${marketplacePath} plugins[semctx]`,
+    ),
+  });
+
+  if (!isPlainObject(semctx.source)) {
+    throw new Error(`${marketplacePath}: plugins[semctx].source must be an object`);
+  }
+  assertCatalogRefPolicy(semctx.source, `${marketplacePath} plugins[semctx].source`);
+}
+
+
 async function main(): Promise<void> {
   const built = await buildPortablePluginArtifacts();
 
@@ -783,6 +1129,9 @@ async function main(): Promise<void> {
       await Bun.write(output, expected);
     }
   }
+
+  // Agent-Plugins standard root: fail closed so a typo cannot silently kill skills+MCP at runtime.
+  assertClaudeCodeAgentPluginStandard();
 
   const sizes = [...built].map(([path, bytes]) => `${path}=${bytes.length}`).join(", ");
   process.stdout.write(

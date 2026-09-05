@@ -9,6 +9,15 @@ GitHub Release advance together through the tag-driven lockstep workflow documen
 
 ## [Unreleased]
 
+### Changed
+
+- **Oh My Pi installs the Claude plugin tree as an Agent-Plugins-standard package**
+  (plugin `0.1.20`): the marketplace catalog (`semctx@semctx-stable`) delivers
+  `plugins/claude-code/` through `plugin.json` plus a schema-closed `mcp.json`. Skills and MCP
+  are served by `agent-plugins`; the guard stays on `package.json#omp.extensions`.
+  `mcp-omp.json` and `plugins/claude-code/.omp-plugin/plugin.json` are removed. The B.3
+  mirror snapshotter (`scripts/snapshot-omp-plugin.ts`) is removed.
+
 ## [0.1.20] - 2026-09-05
 
 ### Fixed

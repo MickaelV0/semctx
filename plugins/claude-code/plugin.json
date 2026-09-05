@@ -1,0 +1,11 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "semctx",
+  "version": "0.1.20",
+  "description": "Trace repository impact, authored intent and fail-closed migration plans in Oh My Pi.",
+  "author": { "name": "hoklims", "email": "hoklims@gmail.com" },
+  "homepage": "https://github.com/hoklims/semctx#readme",
+  "repository": "https://github.com/hoklims/semctx",
+  "license": "Apache-2.0",
+  "keywords": ["verify", "change-impact", "semantic-context", "invariants", "contracts", "migration", "control-plane"]
+}
