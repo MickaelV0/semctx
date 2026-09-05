@@ -1,200 +1,148 @@
-# SEM Context product roadmap
+# Semctx roadmap
 
-> Public narrative snapshot: 2026-08-14
+> Revised 2026-09-05. Released baseline: **v0.1.19**.
+> Future versions are outcome targets, not available features or promised dates.
 
-This document explains where SEM Context is going and why it matters. It deliberately stays at
-product level and remains self-contained for readers outside the project team. Public delivery
-status and technical evidence are available through the repository, its releases and its tests.
+## Understand the risk of a change before running the checks
 
-## The promise
+Semctx helps a maintainer or coding agent answer three questions: **what could this diff affect,
+why does it matter, and what should I verify next?** It connects repository facts to declared
+contracts and invariants, explains findings, and keeps missing evidence visible.
 
-Coding agents are increasingly good at producing code. The harder problem is deciding whether a
-change should be trusted.
+Our first audience is TypeScript maintainers using a CLI, Codex, or Claude Code. They should get
+useful advice without adopting an ontology, writing semantic declarations, or installing another
+service first. Authored contracts, replay, and policy controls form a progressive path beyond the
+first useful report.
 
-SEM Context turns a proposed code change into a reviewable decision:
+The adoption thesis: make one real risk understandable, make the next action easy, and make
+repeated use cheaper than rediscovering the same context. We will measure that thesis.
 
-- what outcome the change is meant to deliver;
-- what parts of the product it is allowed to affect;
-- what is known, uncertain or outside the analysis;
-- which evidence supports the change;
-- whether the available evidence is sufficient to proceed.
+## Available today
 
-The goal is not to replace Codex, Claude Code, code search, CI or human review. The goal is to give
-all of them a shared, deterministic and independently verifiable basis for change authorization.
+[v0.1.19](https://github.com/hoklims/semctx/releases/tag/v0.1.19) provides local change-impact
+analysis, explainable PASS/WARN/BLOCK reports, source-bound index health, authored intent and
+contracts, read-only control/replay surfaces, and Codex/Claude integrations.
 
-## Who it is for
+TypeScript is the semantic baseline. Python support is bounded through Python 3.12; Markdown and
+SQL provide structural facts, not equivalent semantic analysis. Suggested tests are inferred from
+static links, not measured coverage. PASS does not prove that a program works. Installation evidence
+does not prove that an already-open agent session loaded the update. See the
+[current capability matrix](README.md#current-delivery-status).
 
-- **Maintainers** who want fewer silent regressions and a clearer review trail.
-- **Teams using several coding agents** who need consistent rules across hosts and sessions.
-- **Reviewers and auditors** who need to understand why a change was accepted, refused or sent
-  back for more evidence.
-- **Tool builders** who need a local, versioned control layer without granting it execution
-  authority.
+The old task-to-context retriever failed its comparison. Its
+[negative result](benchmarks/change-impact-eval/RESULTS.md) remains published. That result neither
+refutes the current impact analyzer nor demonstrates its practical benefit.
 
-## Product principles
+## Version progression
 
-1. **Evidence before confidence.** A green test or a plausible explanation is not enough on its
-   own.
-2. **Unknown stays unknown.** Missing, stale or contradictory information must never become an
-   optimistic verdict.
-3. **Intent survives the implementation.** The expected outcome, constraints and accepted scope
-   must remain visible from planning through review.
-4. **Same inputs, same decision.** Supported hosts must reach the same bounded verdict from the
-   same sealed task and repository state.
-5. **Advisory before enforcement.** SEM Context must first demonstrate useful, low-noise guidance
-   before it is allowed to block work.
-6. **No executor before proof.** Execution and rollback are a later product decision, not an
-   assumed destination.
-
-## What users can rely on today
-
-SEM Context already provides a local-first foundation for governed change:
-
-- deterministic repository analysis and change-impact reports;
-- Git-versioned semantic intent, invariants and change contracts;
-- read-only planning, reconciliation and handoff contracts;
-- explicit freshness and source-state binding;
-- shared Codex and Claude Code plugin contracts;
-- multi-language repository facts with honest capability limits;
-- a publicly released and reproducible [v0.1.17](https://github.com/hoklims/semctx/releases/tag/v0.1.17).
-
-The product still has important limits: host lifecycle integration remains mainly shadow-mode,
-competitive evidence has not been produced, and SEM Context has no authority to execute changes.
-
-## Roadmap at a glance
-
-| Stage | User-visible outcome | Public status on 2026-08-14 |
+| Target | User outcome | Evidence required |
 | --- | --- | --- |
-| **M1 — Reliable distribution** | Install and update the same product across supported hosts, with portable configuration and reproducible artifacts. | Core v0.1.17 outcome delivered; operational hardening continues. |
-| **M2 — Trustworthy change decisions** | Keep intent, source state, scope and evidence aligned across agents before any enforcement. | Active. |
-| **M3 — Independent product proof** | Demonstrate, on reproducible and independent cases, whether SEM Context improves change quality without unacceptable cost or false blocks. | Queued behind M2. |
-| **M4 — Decide whether to enforce or execute** | Make an explicit `GO`, `DEFER` or `NO-GO` decision from the M3 evidence and a credible rollback contract. | Gated by M3 evidence. |
+| **0.1.20 — Reliable first contact** | Install, diagnose and update without contradictory health messages or destructive recovery advice. | Tested compatibility; stale-index diagnosis; configuration preservation; registry availability and delivery proof. |
+| **0.2 — Useful in ten minutes** | Try an example, understand a risk and choose the next check, then repeat on your repository. | Reproducible demo, concise report, independent onboarding and impact pilots with raw results, misses, noise and costs. |
+| **0.3 — Indexes you can live with** | Keep useful context across edits, branches and worktrees within a declared resource budget. | Cold/warm/update measurements; supported incremental paths match full rebuilds; drift/crash/recovery tests; matching source, artifact and consumer generations. |
+| **0.4 — Connected, evidence-aware context** | Reuse useful symbol, build, test and retrieval sources with provenance and limits. | Scoped provider conformance, failure cases, native-only comparison and independent replay evidence. Native retrieval remains a conditional research track. |
+| **1.0 — A dependable supported contract** | Adopt the proven workflow with predictable compatibility, upgrades and support boundaries. | Support policy, migration/rollback tests, repeated independent use and evidence for every advertised capability. |
 
-## Now — make the trust foundation dependable
+Patch releases correct shipped behavior. Minor releases add a coherent capability and disclose
+pre-1.0 breaking changes. Future work cannot be assigned retroactively to a published version.
+Product versions, machine schemas and index generations remain distinct. Closed-issue percentages
+are not release-readiness scores.
 
-The current product focus is M2. Three visible workstreams carry it:
+## 0.1.20: remove reasons to give up
 
-### Stable semantic identity
+- Align doctor, index health and control readiness while preserving their different meanings.
+- Publish one tested Bun/host compatibility matrix; reconcile docs and package metadata.
+- Give existing installations configuration-preserving upgrade/recovery instructions.
+- Handle delayed npm availability before plugin-channel promotion, without duplicate publication.
 
-This work ensures that harmless code movement does not invalidate meaning, while real ambiguity or
-removal still fails safely.
+A supported host minimum is an explicit support decision, distinct from the oldest historically
+compatible binary. Untested versions stay unknown. No new control layer is needed for these fixes.
 
-**Expected user outcome:** fewer false stale warnings, no silent rebinding, and migration guidance
-that never rewrites authored intent from uncertain evidence.
+## 0.2: show the benefit, then test whether people return
 
-### Portable host connection
+Provide a public example with a harmless change, a meaningful risk, and an unresolved case. Show
+source, explanation, suggested checks and limits together. Pilot a frozen packaged candidate first
+(or an opt-in prerelease when supported); never move the stable channel for an experiment. After
+publication, regenerate the public demo from the exact release. Record both artifact identities;
+changed behavior requires new measurements. Screenshots alone are not evidence.
 
-This work removes assumptions that prevent some hosts from starting the SEM Context connection
-reliably.
+The first report should make the next action obvious. Detailed contracts and machine output remain
+accessible. Existing configured gates retain their behavior; this roadmap neither disables them
+nor authorizes new automatic blocking.
 
-### Native Grok integration
+Distribution starts with the README, a lightweight documentation/demo page, task-focused recipes
+for CLI/Codex/Claude, and release notes explaining a before/after outcome. Collect opt-in feedback
+on confusing or ignored findings. Public case studies require consent and reproducible examples
+or an explicit explanation of unavailable private evidence.
 
-The Grok integration builds on the portable connection work so Grok can use the same governed
-workflow without depending on a global CLI.
+The initial pilot targets five independent maintainers: four should reach a correctly understood
+first report within ten minutes on the documented demo; three should use it on a second real change
+within fourteen days. These are **proposed thresholds, not observed adoption or statistical proof**.
+Separate download/setup time and retain unsuccessful sessions.
 
-**Expected user outcome for both host workstreams:** a supported host either connects through the
-same product contract or fails with a clear, bounded reason. It must never appear healthy while
-using the wrong repository or runtime.
+Evaluate at least thirty real changes across three independent repositories against changed-files-only
+and simple dependency-neighborhood advice. Measure relevant findings, misses, false alerts, time
+to choose checks and total operator effort. Freeze protocol and independent adjudication before
+scoring. This early impact pilot does not replace P4 or unlock enforcement.
 
-## Next — measure the workflow before blocking anyone
+## 0.3: make indexes an understandable capability
 
-Once the current trust work is closed, the next outcome is automatic Codex and Claude Code
-lifecycle checkpoints in measured shadow mode.
+An index must be current for the question, affordable to maintain and recoverable. Expose scope,
+freshness, changed inputs, resource cost and the smallest safe recovery action. An updated artifact
+does not prove that a stateful consumer loaded it.
 
-This stage observes what SEM Context would have advised without interrupting the user. It must
-measure:
+| Need | Direction |
+| --- | --- |
+| Exact text or known path | Keep direct source search available without a persistent index. |
+| Definitions and references | Reuse native language tooling; evaluate portable SCIP artifacts where useful. |
+| Dependencies and architectural neighbors | Bounded structural traversal with provenance. |
+| Intent, invariants and change impact | Semctx's source-bound semantic index and authored declarations, within their scope. |
+| Discovery by meaning | Existing content retrievers remain usable; investigate optional content-first retrieval separately. |
 
-- useful warnings versus false blocks;
-- missed risks and unsupported cases;
-- consistency between hosts;
-- added latency, token cost and operator effort;
-- whether handoffs preserve intent and evidence across long-running work.
+Prioritize memory, safe reuse, update cost and worktree isolation before increasing worker counts.
+Incremental outputs must match supported full rebuilds; unsupported changes fall back visibly.
+A watcher/daemon needs measured benefit, bounded lifetime, cancellation and crash recovery.
+No global background service is required to try Semctx.
 
-Only measured, acceptable results may justify enforcement.
+## 0.4: connect tools before replacing them
 
-## After that — create an independently verifiable decision record
+Start with one provider selected from an observed pilot need. Reuse interchange formats and existing
+indexers; avoid building a universal language server, vector database or execution platform.
+Report provider identity, revision, coverage and confidence separately. An attestation establishes
+attribution and integrity, not semantic truth.
 
-The next major product capability after stable anchors and measured host workflows is a versioned,
-evidence-bound change decision.
+Native retrieval follows [ADR 0005](docs/adr/0005-context-retrieval-pipeline-rejected.md) and the
+[content-first protocol](docs/research/content-first-context-retrieval.md): CONTINUE permits only the
+measured capability; NULL RESULT closes the direction without delaying impact/index improvements.
 
-Its outcome is a versioned change-authorization record that binds:
+Replacing CCC, Graphify or another persistent provider requires **REPLACEMENT_READY**, first
+claimable in 1.0 or later: 30–50 tasks on three independent repositories, every replaced use case
+measured, supported OS/host parity, generation safety, acceptable total cost, and an independently
+reproduced migration. Inventory actual tools, preview cutover, verify backups/restoration, run both
+paths in shadow, switch atomically and retain rollback through a predefined stability window.
+Keep source/LSP fallbacks. The existing provider stays until its replacement is proven.
 
-- the requested outcome and accepted scope;
-- the exact repository and tool state;
-- known, approximated and unknown impacts;
-- tests, runtime observations and human approvals with provenance;
-- the policy used to reach `ALLOW`, `DENY` or `REQUIRE_EVIDENCE`.
+## 1.0 and beyond
 
-The first version remains read-only. An independent verifier must be able to replay the decision;
-the record itself grants no permission to modify a repository.
+1.0 stabilizes the demonstrated product scope. It does not require native search, replacement of
+every index, or an executor. Publish supported platforms/languages, compatibility/deprecation
+windows, migration guarantees, limits and resource budgets. Test upgrades from supported previous
+versions, not only fresh installs. Review adoption and support evidence after each minor release.
 
-## Then — prove whether the product is actually better
+Stronger automatic enforcement and persisted execution remain a separate decision after accepted
+P4 evidence, explicit authority, rollback and kill-switch validation. P4 is the independent evaluation
+of change authorization: compare impact alone, added authored intent, and added control/replay with
+simpler baselines, then have the maintainer accept a scoped positive, negative or inconclusive verdict.
+It is separate from the early adoption pilot and retrieval research. Read-only replay is useful on
+its own. This roadmap grants no new execution authority.
 
-M3 is an evidence programme, not a marketing milestone.
+## Tooling and execution
 
-This stage will compare SEM Context with strong, reproducible alternatives on real change tasks.
-The protocol, datasets, budgets and success thresholds must be fixed before results are observed.
+Reuse Bun, Python and the existing GitHub Actions verification/release stack. Build the missing
+product instruments: a reproducible demo, impact-pilot runner, compatibility manifest, public
+evidence report and index lifecycle/resource matrix. Basic use needs no hosted telemetry, paid
+service or model API.
 
-The product must demonstrate that it can:
-
-- preserve intended outcomes and constraints;
-- keep changes inside the accepted scope;
-- refuse stale, forged or insufficient evidence;
-- avoid degrading the functional result;
-- stay within declared false-block, latency, token and operator-effort budgets;
-- provide value on independent repositories, not only on SEM Context itself.
-
-Null and negative results are part of the deliverable. No state-of-the-art or market-leadership
-claim is allowed before this gate clears.
-
-## Only after proof — decide on enforcement and execution
-
-M4 is a decision gate, not a promised feature. Persisted control state, blocking enforcement or an
-isolated executor may be explored only if M3 is independently accepted and a rollback, cutover and
-kill-switch contract is explicit.
-
-Until then, `executionAuthority` remains `none`.
-
-## Separate research track
-
-This track tests whether SEM Context adds measurable value on top of strong content retrieval. It is
-deliberately separate from the shipping path.
-
-SEM Context is not positioned as a generic code-search replacement. If the graph and authority
-layers do not improve a strong content-first baseline, the retrieval direction will close with a
-documented null result.
-
-## Operational follow-ups
-
-The v0.1.17 product outcome is delivered, but follow-up work remains and should not be mistaken for
-a new release promise:
-
-- independent stable-delivery proof across Codex and Claude Code;
-- Windows cache-lock reconciliation after successful updates;
-- additional configuration-sharing robustness;
-- dependency upgrades reviewed by compatibility risk rather than merged blindly.
-
-These tasks are prioritized by user risk and the evidence needed to close them.
-
-## How progress is judged
-
-Roadmap progress is based on observed outcomes, not volume of code or number of closed tickets.
-
-A stage is complete only when its own evidence is available. In particular:
-
-- local code and targeted tests do not prove a shipped product;
-- a shipped package does not prove that every active host loaded it;
-- `FRESH` does not mean complete analysis or sufficient evidence;
-- a signed or sealed assertion proves integrity and provenance, not semantic truth;
-- a successful internal demonstration does not prove independent product value.
-
-GitHub is the public technical history and contribution surface. The repository, tests, release
-artifacts and target environments carry delivery evidence; this roadmap records the public product
-direction and its proof gates.
-
-## References
-
-- [GitHub repository](https://github.com/hoklims/semctx)
-- [Current product status and limits](README.md#current-delivery-status)
-- [Architecture overview](docs/architecture/overview.md)
-- [Research decisions](docs/research/)
+The [adoption plan](docs/product/adoption-plan.md) defines measurements and sequencing.
+The [tooling plan](docs/product/tooling-plan.md) records reuse/build/evaluate/defer choices.
+These planning documents do not change current runtime or release gates.

@@ -47,7 +47,10 @@ short-lived OIDC credentials; no long-lived `NPM_TOKEN` is stored. Its permissio
    commit as `gitHead`, and uploads the tarball plus its SHA-256;
 2. `publish` has only `id-token: write`, performs no checkout or repository script, verifies the
    downloaded checksum and manifest, and publishes that exact tarball with npm trusted publishing;
-3. `promote` has only `contents: write` and advances `stable` with a non-forced GitHub API update
+3. `registry-ready` has no write permissions and waits up to 30 minutes for the exact published
+   version to expose the tag's `gitHead`; temporary E404 means pending, while wrong/missing identity,
+   access errors and deadline expiry block promotion;
+4. `promote` has only `contents: write` and advances `stable` with a non-forced GitHub API update
    before creating the GitHub Release.
 
 The jobs use Node 24 and pinned npm. The verification gate covers TypeScript, ESLint, Ruff,
@@ -66,6 +69,12 @@ plugin marketplaces on the same public version. Do not push `stable` manually. A
 rerunnable only for the same commit: an existing npm version must expose a `gitHead` exactly equal
 to the tag commit before `stable` can move. An unchanged `stable` ref or GitHub Release is treated
 as already complete. npm trusted publishing also emits provenance automatically.
+
+npm can accept a package while its availability scan is still pending. A successful `publish`
+job is therefore followed by a separate read-only `registry-ready` job. If that wait times out,
+use **Re-run failed jobs** after checking registry status: the already successful publisher is not
+re-executed. Do not rerun all jobs while the accepted version remains hidden. The wait never
+publishes or promotes anything, and a timeout does not mean npm rejected the accepted package.
 
 `main` is not a channel. npm `latest` and the plugin `stable` branch are the two public channels;
 `main` is where development lands and no host tracks it, so **merging `main` does not update an
@@ -88,7 +97,7 @@ plugins through its supported CLI path. Since v0.1.19, recognized parser rejecti
 only a successfully observed absence is `false`. Consumers must accept schema 2 and handle
 unknown values explicitly. Semctx does not read private host configuration as a fallback.
 
-A fourth job runs after `promote`, never before: installing from a marketplace that has not been
+The `deliver` job runs after `promote`, never before: installing from a marketplace that has not been
 advanced yet would prove the *previous* release. It stands up one throwaway home per host, installs
 through each host's own supported interface — Codex `plugin marketplace add hoklims/semctx --ref
 stable` then `plugin add semctx-control@semctx-stable`; Claude `plugin marketplace add
@@ -223,7 +232,7 @@ identity, so the attempt is what separates them, and an artifact left by an earl
 genuine, whole proof of the wrong run.
 
 **Host CLIs are pinned in the repository.** `HOST_CLI_SPECIFICATION` in
-`scripts/prove-stable-delivery.ts` is the authority — `@openai/codex@0.147.0` and
+`scripts/compatibility.ts`, derived from `compatibility.json`, is the authority — `@openai/codex@0.147.0` and
 `@anthropic-ai/claude-code@2.1.229` — and `plugins/plugin-parity.test.ts` fails when the workflow
 drifts from it. A repository variable would put the identity of the interface under proof outside the
 commit: an unset one is silently empty, and a changed one rewrites what a past run meant. The proof

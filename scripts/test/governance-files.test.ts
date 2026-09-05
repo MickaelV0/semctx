@@ -288,15 +288,18 @@ describe("release governance", () => {
   test("separates read-only verification, OIDC publication, and repository promotion", () => {
     const verify = job(releaseWorkflow, "verify");
     const publish = job(releaseWorkflow, "publish");
+    const registryReady = job(releaseWorkflow, "registry-ready");
     const promote = job(releaseWorkflow, "promote");
 
     expect(releaseWorkflow.permissions).toEqual({});
     expect(verify.permissions).toEqual({ contents: "read" });
     expect(publish.permissions).toEqual({ "id-token": "write" });
+    expect(registryReady.permissions).toEqual({});
+    expect(registryReady.needs).toBe("publish");
     expect(promote.permissions).toEqual({ contents: "write" });
     expect(publish.environment).toBe("npm");
     expect(publish.needs).toBe("verify");
-    expect(promote.needs).toBe("publish");
+    expect(promote.needs).toBe("registry-ready");
     expect(verify["timeout-minutes"]).toBe(30);
     expect(publish["timeout-minutes"]).toBe(10);
     expect(promote["timeout-minutes"]).toBe(10);

@@ -12,7 +12,12 @@ import { join } from "node:path";
 const root = join(import.meta.dir, "..", "..");
 const workflowPath = join(root, ".github", "workflows", "release.yml");
 const workflow = Bun.YAML.parse(readFileSync(workflowPath, "utf8")) as {
-  jobs: Record<string, { steps: Array<{ name?: string; run?: string }> }>;
+  jobs: Record<string, {
+    needs?: string;
+    permissions?: Record<string, string>;
+    "timeout-minutes"?: number;
+    steps: Array<{ name?: string; run?: string }>;
+  }>;
 };
 const temporaryDirectories: string[] = [];
 
@@ -42,6 +47,79 @@ const githubReleaseScript = releaseScript(
   "promote",
   "Create the GitHub Release after npm is public",
 );
+
+function runRegistry(mode: string): ShellResult {
+  const script = releaseScript("registry-ready", "Wait for the accepted npm package to become public");
+  return runShell(script, `
+SECONDS=0
+sleep() { SECONDS=$((SECONDS + $1)); printf 'SLEEP %s\\n' "$1" >> "$TEST_LOG"; }
+npm() {
+  printf '%s\\n' "$*" >> "$TEST_LOG"
+  if [[ "$1" != "view" || "$2" != "semctx@1.2.3" || "$3" != "gitHead" ]]; then return 99; fi
+  case "$NPM_SCENARIO" in
+    delayed) if [[ "$SECONDS" -lt 450 ]]; then printf 'E404 pending\\n' >&2; return 1; fi ;;
+    timeout) printf 'E404 pending\\n' >&2; return 1 ;;
+    wrong) printf 'different-sha\\n'; return 0 ;;
+    empty) return 0 ;;
+    denied) printf 'E403 forbidden\\n' >&2; return 23 ;;
+  esac
+  printf '%s\\n' "$GITHUB_SHA"
+}
+`, { NPM_SCENARIO: mode });
+}
+
+describe("registry availability gate", () => {
+  test("promotion depends on a separate read-only, bounded availability job", () => {
+    expect(workflow.jobs["registry-ready"]?.needs).toBe("publish");
+    expect(workflow.jobs["registry-ready"]?.permissions).toEqual({});
+    expect(workflow.jobs["registry-ready"]?.["timeout-minutes"]).toBe(35);
+    expect(workflow.jobs.promote?.needs).toBe("registry-ready");
+    expect(workflow.jobs.deliver?.needs).toBe("promote");
+  });
+
+  test("accepted publication survives a 7.5-minute delay without republishing", () => {
+    const result = runRegistry("delayed");
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("NPM_AVAILABLE");
+    expect(result.log.match(/^SLEEP /gm)?.length).toBe(15);
+    expect(result.log).not.toContain("publish");
+    expect(result.log).toContain("--fetch-retries=0 --fetch-timeout=10000");
+  });
+
+  test("failed-job retry checks the same version and commit without publication", () => {
+    const result = runRegistry("same");
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("expected-sha");
+    expect(result.log).not.toContain("publish");
+    expect(result.log).not.toContain("SLEEP");
+  });
+
+  for (const mode of ["wrong", "empty"]) {
+    test(`blocks immediately on ${mode} visible identity`, () => {
+      const result = runRegistry(mode);
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toContain("NPM_IDENTITY_MISMATCH");
+      expect(result.log).not.toContain("SLEEP");
+    });
+  }
+
+  test("preserves registry access failure without retry or publication", () => {
+    const result = runRegistry("denied");
+    expect(result.exitCode).toBe(23);
+    expect(result.stderr).toContain("E403");
+    expect(result.log).not.toContain("SLEEP");
+    expect(result.log).not.toContain("publish");
+  });
+
+  test("expires at thirty minutes with pending distinct from publish failure", () => {
+    const result = runRegistry("timeout");
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toContain("NPM_AVAILABILITY_TIMEOUT");
+    expect(result.stdout).toContain("rerun failed jobs");
+    expect(result.log.match(/^SLEEP /gm)?.length).toBe(60);
+    expect(result.log).not.toContain("publish");
+  });
+});
 
 function bashExecutable(): string {
   const gitBash = "C:\\Program Files\\Git\\bin\\bash.exe";

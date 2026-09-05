@@ -161,24 +161,57 @@ jobs:
           else
             npm publish "$tarball" --access public --ignore-scripts
           fi
-          for attempt in {1..12}; do
-            lookup_status=0
-            confirmed_sha="$(npm_view_field gitHead)" || lookup_status=$?
-            if [[ "$lookup_status" -eq 0 ]]; then
-              if [[ "$confirmed_sha" == "$GITHUB_SHA" ]]; then
-                exit 0
+          echo "NPM_ACCEPTED: semctx@$version; public availability is checked separately"
+
+  registry-ready:
+    name: wait for npm availability
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions: {}
+    steps:
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
+      - run: npm install --global npm@12.0.1 # zizmor: ignore[adhoc-packages] exact read-only registry client pin
+      - name: Wait for the accepted npm package to become public
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          deadline=$((SECONDS + 1800))
+          error_file="$RUNNER_TEMP/npm-availability.err"
+          while (( SECONDS < deadline )); do
+            if confirmed_sha="$(npm view "semctx@$version" gitHead --fetch-retries=0 --fetch-timeout=10000 2>"$error_file")"; then
+              confirmed_sha="$(printf '%s' "$confirmed_sha" | tr -d '\r\n')"
+              if [[ "$confirmed_sha" != "$GITHUB_SHA" ]]; then
+                echo "::error::NPM_IDENTITY_MISMATCH: semctx@$version does not identify $GITHUB_SHA"
+                exit 1
               fi
-            elif [[ "$lookup_status" -ne 44 ]]; then
-              exit "$lookup_status"
+              echo "NPM_AVAILABLE: semctx@$version identifies $GITHUB_SHA"
+              exit 0
+            else
+              lookup_status=$?
+              if ! grep -q 'E404' "$error_file"; then
+                cat "$error_file" >&2
+                echo "::error::NPM_LOOKUP_FAILED: availability was not established"
+                exit "$lookup_status"
+              fi
             fi
-            sleep 5
+            echo "NPM_PENDING: semctx@$version accepted; registry availability pending"
+            remaining=$((deadline - SECONDS))
+            if (( remaining <= 0 )); then break; fi
+            delay=30
+            if (( remaining < delay )); then delay=$remaining; fi
+            sleep "$delay"
           done
-          echo "::error::npm never exposed semctx@$version with gitHead $GITHUB_SHA"
+          echo "::error::NPM_AVAILABILITY_TIMEOUT: semctx@$version is still pending; rerun failed jobs only, do not republish"
           exit 1
 
   promote:
     name: promote verified release
-    needs: publish
+    needs: registry-ready
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

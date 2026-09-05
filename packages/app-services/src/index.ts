@@ -2,6 +2,7 @@ export { analyzeAndBuildClaims, indexRepository, indexRepositoryAsync } from "./
 export { controlAgentLifecycleCheckpoint } from "./agent-lifecycle";
 export { captureControlHandoffV2, resumeControlHandoffV2 } from "./control-handoff";
 export { probeCliCompatibility } from "./cli-compatibility";
+export { workspaceHealth, type WorkspaceHealthCheck } from "./doctor";
 export type {
   CliCompatibilityProbeDependencies,
   CliCompatibilityReason,
@@ -72,10 +73,11 @@ export type {
 } from "./plugin-delivery";
 export { openReadyRepository, openReadyRepositoryWriter } from "./readiness";
 export type { RepositoryAnalysis, RepositoryIndex } from "./indexing";
-export { indexHealth } from "./index-health";
+export { indexHealth, indexHealthStatus } from "./index-health";
 export type {
   IndexHealthCandidateV1,
   IndexHealthReportV1,
+  IndexHealthStatus,
 } from "./index-health";
 export { anchorMigrationAuthority } from "./anchor-migration-authority";
 export { planVerify, runVerify } from "./verify";
