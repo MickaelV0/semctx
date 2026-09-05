@@ -1,9 +1,23 @@
 # Contributing to semctx
 
+<!-- semctx:compatibility:start -->
+Semctx **0.1.20** requires **Bun >=1.4.0**.
+The supported, tested host baseline is **Codex 0.147.0** and
+**Claude Code 2.1.229**. Other host versions are **unknown** until tested;
+these pins do not claim the earliest historically compatible versions.
+[Baseline delivery evidence](https://github.com/hoklims/semctx/actions/runs/33921551614).
+Installation does not reload an active session: open a new Codex task, or run
+`/reload-plugins` in Claude Code (restart if reload fails).
+<!-- semctx:compatibility:end -->
+
 Thanks for your interest. semctx is a local-first, deterministic change-impact analyzer. Changes
 must preserve its evidence, authority, compatibility, and transport-parity guarantees.
 
 ## Development setup
+
+Compatibility declarations are derived from `apps/cli/package.json` and `compatibility.json`.
+After an intentional version change, run `bun run compatibility:write`; the canonical pre-PR
+gate checks these declarations. A changed host pin still needs the real delivery proof.
 
 ```bash
 bun install

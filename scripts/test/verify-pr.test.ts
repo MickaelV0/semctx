@@ -76,6 +76,7 @@ describe("argument parsing and command construction", () => {
   test("skip-diff removes the diff commands", () => {
     const steps = verificationSteps({ base: "origin/main", skipDiff: true });
     expect(steps.map((step) => step.argv)).toEqual([
+      ["bun", "scripts/compatibility.ts"],
       ["bun", "run", "quality"],
       ["python", "-m", "compileall", "-q", "benchmarks/change-impact-eval/scripts"],
       ["python", "benchmarks/change-impact-eval/scripts/smoke_test.py"],
@@ -141,7 +142,7 @@ describe("execution", () => {
 
     expect(exitCode).toBe(0);
     expect(listCalls).toBe(0);
-    expect(commands[0]).toEqual(["bun", "run", "quality"]);
+    expect(commands[0]).toEqual(["bun", "scripts/compatibility.ts"]);
   });
 
   test("runs in canonical order and stops at the first failure with its exit code", async () => {
@@ -154,13 +155,14 @@ describe("execution", () => {
         log: (message) => logs.push(message),
         run: async (argv) => {
           commands.push([...argv]);
-          return commands.length === 2 ? 17 : 0;
+          return commands.length === 3 ? 17 : 0;
         },
       },
     );
 
     expect(exitCode).toBe(17);
     expect(commands).toEqual([
+      ["bun", "scripts/compatibility.ts"],
       ["bun", "run", "quality"],
       ["python", "-m", "compileall", "-q", "benchmarks/change-impact-eval/scripts"],
     ]);
