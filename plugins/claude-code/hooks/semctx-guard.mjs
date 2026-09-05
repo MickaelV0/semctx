@@ -1616,10 +1616,11 @@ export function evaluateBashGuard({ toolName, command, cwd: inputCwd, env = proc
   const terminalVerb = isTerminalGitCommand(command);
   if (!terminalVerb) return { block: false };
 
-  const sessionCwd = resolveGitRoot(inputCwd ?? process.cwd());
+  const rawCwd = inputCwd ?? process.cwd();
+  const sessionCwd = resolveGitRoot(rawCwd);
   const commandIsolated = isIsolatedTerminalGitCommand(command);
   const scopeRequiresSessionGuard = gitScopeRequiresSessionGuard(command);
-  const cwd = resolveGitRoot(resolveGitCwd(command, inputCwd)); // the repo the git command targets, not the session cwd
+  const cwd = resolveGitRoot(resolveGitCwd(command, rawCwd)); // the repo the git command targets, not the session cwd
   const targetGuard = readJson(join(cwd, ".semctx", "guard.json"));
   const sessionGuard = scopeRequiresSessionGuard
     ? readJson(join(sessionCwd, ".semctx", "guard.json"))
