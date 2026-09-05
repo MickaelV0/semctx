@@ -594,7 +594,7 @@ describe("Codex and Claude Code plugin parity", () => {
     expect(workflow).toContain("pkg.gitHead = process.env.GITHUB_SHA");
 
     const publish = workflow.indexOf('npm publish "$tarball" --access public --ignore-scripts');
-    const confirm = workflow.indexOf('"$confirmed_sha" == "$GITHUB_SHA"');
+    const confirm = workflow.indexOf('"$confirmed_sha" != "$GITHUB_SHA"');
     const stable = workflow.indexOf('git/ref/heads/stable"');
     const release = workflow.indexOf('gh release create "$GITHUB_REF_NAME"');
     expect(publish).toBeGreaterThanOrEqual(0);
@@ -616,7 +616,8 @@ describe("Codex and Claude Code plugin parity", () => {
 
     // Ordering is the invariant: installing from a marketplace that has not been promoted would
     // prove the previous release. `needs` is what enforces it, so it is asserted structurally.
-    expect(parsed.jobs["promote"]?.needs).toBe("publish");
+    expect(parsed.jobs["registry-ready"]?.needs).toBe("publish");
+    expect(parsed.jobs["promote"]?.needs).toBe("registry-ready");
     expect(deliver?.needs).toBe("promote");
 
     const steps = deliver?.steps ?? [];

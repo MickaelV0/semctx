@@ -1,5 +1,15 @@
 # semctx — repository change-impact analyzer
 
+<!-- semctx:compatibility:start -->
+Semctx **0.1.20** requires **Bun >=1.4.0**.
+The supported, tested host baseline is **Codex 0.147.0** and
+**Claude Code 2.1.229**. Other host versions are **unknown** until tested;
+these pins do not claim the earliest historically compatible versions.
+[Baseline delivery evidence](https://github.com/hoklims/semctx/actions/runs/33921551614).
+Installation does not reload an active session: open a new Codex task, or run
+`/reload-plugins` in Claude Code (restart if reload fails).
+<!-- semctx:compatibility:end -->
+
 > A deterministic, local-first tool that computes the **semantic blast radius of a change** and
 > enforces a repository's **contracts and invariants**. Given a diff, it reports the impacted
 > symbols, the contracts and invariants at risk, the tests that should run, and a
@@ -16,10 +26,13 @@ Analysis and verification outputs are **deterministic** (a pure function of repo
 one injected timestamp) and **inspectable**. After installation, the analysis pipeline uses
 **no LLM, network call, or vector database**.
 
-> **Release 0.1.18.** This README and every release-bearing manifest describe the lockstep 0.1.18
-> CLI and plugins. The annotated `v0.1.18` tag drives npm publication, the `stable` plugin channel,
-> and the GitHub Release from one immutable commit. Pin an exact release when reproducibility
-> matters.
+The version in the compatibility block above is shared by the CLI and plugins. Its annotated
+version tag drives npm publication, the `stable` plugin channel and the GitHub Release from one
+immutable commit. Pin an exact release when reproducibility matters.
+
+See the [roadmap](ROADMAP.md) for the next outcomes: easier first use, measurable impact advice,
+affordable indexes, and connected context. Planned capabilities are separate from the delivered
+status below.
 
 **What semctx does**
 
@@ -106,7 +119,7 @@ commit/CI gate.
 
 ## Get started
 
-Requires [Bun](https://bun.sh) ≥ 1.3. From a Git repository using the legacy TypeScript-family
+Requires [Bun](https://bun.sh) ≥ 1.4.0. From a Git repository using the legacy TypeScript-family
 baseline, one command detects Codex and/or Claude Code, installs or updates the matching plugins,
 prepares the repository, and verifies the result:
 

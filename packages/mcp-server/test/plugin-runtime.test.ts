@@ -73,9 +73,11 @@ describe("packaged MCP runtime", () => {
       stdout: "pipe",
       stderr: "pipe",
     });
-    expect(doctor.exitCode).toBe(0);
+    expect(doctor.exitCode).toBe(1);
     const doctorPayload = JSON.parse(new TextDecoder().decode(doctor.stdout));
-    expect(doctorPayload.healthy).toBe(true);
+    expect(doctorPayload.healthy).toBe(false);
+    expect(doctorPayload.checks.find((check: { name: string }) => check.name === "index"))
+      .toMatchObject({ ok: false, status: "degraded" });
     expect(doctorPayload.version).toBe(packageJson.version);
     const health = Bun.spawnSync(
       ["bun", packagedCli, "index-health", "--root", target, "--json"],
