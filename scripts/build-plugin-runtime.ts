@@ -839,6 +839,13 @@ export function assertAgentPluginManifest(value: unknown, label: string): void {
  * Fail closed on the Agent-Plugins `mcp.json`. The top-level object is closed:
  * any extra key disables the whole file silently (zero servers, no error).
  * `cwd: "."` is the measured skip — omit cwd so OMP defaults to the plugin root.
+ *
+ * `args` are never path-resolved by the host: it only expands `${PLUGIN_ROOT}`
+ * and `${PLUGIN_DATA}`, then hands the strings to the command, which resolves
+ * a `./` entry against its own cwd. So both spellings are legal, but a `./`
+ * bundle path only survives while the launch cwd stays the plugin root —
+ * measured: `bun ./dist/semctx-mcp.js` from `/` dies with "Module not found".
+ * Anchoring the arg on `${PLUGIN_ROOT}/` is cwd-independent.
  */
 export function assertAgentPluginMcp(
   value: unknown,
@@ -916,19 +923,43 @@ export function assertAgentPluginMcp(
     if (!Array.isArray(rawArgs) || !rawArgs.every((entry): entry is string => typeof entry === "string")) {
       throw new Error(`${serverLabel}: stdio args must be a string[]`);
     }
-    const scriptArgs = rawArgs.filter((arg) => arg.startsWith("./"));
-    if (scriptArgs.length === 0) {
+    const relativeArgs = rawArgs.filter((arg) => arg.startsWith("./"));
+    const anchoredArgs = rawArgs.filter((arg) => arg.startsWith("${PLUGIN_ROOT}/"));
+    if (relativeArgs.length === 0 && anchoredArgs.length === 0) {
       throw new Error(
-        `${serverLabel}: stdio args must include a plugin-relative ./ path so a renamed bundle is caught at build time`,
+        `${serverLabel}: stdio args must carry the bundle as "./<path>" or "\${PLUGIN_ROOT}/<path>" so a renamed bundle is caught at build time`,
       );
     }
-    for (const arg of scriptArgs) {
-      const resolved = resolve(pluginRoot, arg);
+    for (const arg of anchoredArgs) {
+      const resolved = resolve(pluginRoot, arg.slice("${PLUGIN_ROOT}/".length));
       if (!existsSync(resolved)) {
         throw new Error(
           `${serverLabel}: stdio args path "${arg}" does not resolve to a file under ${pluginRoot} (renamed bundle would launch nothing)`,
         );
       }
+    }
+    if (relativeArgs.length === 0) continue;
+    const declaredCwd = typeof server.cwd === "string" ? server.cwd : undefined;
+    if (declaredCwd !== undefined && declaredCwd.startsWith("${PLUGIN_DATA}")) {
+      throw new Error(
+        `${serverLabel}: stdio args ${JSON.stringify(relativeArgs)} are "./"-relative while cwd is ${JSON.stringify(declaredCwd)} — args are never path-resolved by the host, so the command resolves them against that cwd and the bundle under the plugin root is unreachable (anchor the arg on \${PLUGIN_ROOT}/ instead)`,
+      );
+    }
+    const launchDir = declaredCwd === undefined || declaredCwd === "${PLUGIN_ROOT}"
+      ? pluginRoot
+      : resolve(
+        pluginRoot,
+        declaredCwd.startsWith("${PLUGIN_ROOT}/")
+          ? declaredCwd.slice("${PLUGIN_ROOT}/".length)
+          : declaredCwd,
+      );
+    for (const arg of relativeArgs) {
+      if (existsSync(resolve(launchDir, arg))) continue;
+      throw new Error(
+        declaredCwd === undefined
+          ? `${serverLabel}: stdio args path "${arg}" does not resolve to a file under ${pluginRoot} (renamed bundle would launch nothing)`
+          : `${serverLabel}: stdio args path "${arg}" is resolved by the command against cwd ${JSON.stringify(declaredCwd)} (${launchDir}), where it does not exist — args are never path-resolved by the host, so moving cwd moves the target (anchor the arg on \${PLUGIN_ROOT}/ instead)`,
+      );
     }
   }
 }
