@@ -90,7 +90,7 @@ evidence proof.semctx.typed-refinement-contract
 
 change change.semctx.control-plane-mvp
   statement: Add deterministic semantic coordinates, architecture delta planning, and fail-closed proof authorization without execution authority.
-  status: active
+  status: superseded
   provenance: author
   appliesAtLevel: 1
   serves: goal.semctx.reconstructive-control
