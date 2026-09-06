@@ -70,3 +70,36 @@ Claude's `hooks/hooks.json` `PreToolUse` registration remains Claude-only; OMP d
 
 The shadow lifecycle observer in `hooks/` is not loaded on OMP: `hooks/hooks.json` stays a Claude
 surface (ADR 0015), so the lifecycle checkpoint remains fully manual on this host.
+
+### Coverage by execution surface
+
+`evaluateBashGuard` returns `{ block: false }` for every tool name other than `bash`
+(`plugins/claude-code/hooks/semctx-guard.mjs:1615`), so the guard's reach is exactly the reach of
+OMP's `bash` tool. Measured on a throwaway repository armed with `.semctx/guard.json`
+`{ "enabled": true }`:
+
+| Execution surface | Covered |
+| --- | --- |
+| `bash`, main agent, isolated `git commit` | yes — blocked with `no verification on record`, then allowed after `verify diff --record` (both directions observed) |
+| `bash` issued by a subagent | yes — same block, `git log` unchanged |
+| `cd <guarded repo> && git commit` from a session rooted elsewhere | yes — the `enabled` predicate also consults the session cwd, and a compound command fails isolation |
+| `eval` (`py` / `js` / `rb` / `jl`, e.g. `subprocess.run`) | no — commit created, exit 0 |
+| `hub` `op: "start"` (binary launched directly, no shell) | no — commit created |
+
+`eval` cannot be closed by widening a tool allowlist. Its per-call input schema is
+`{ language, code }` with no `command` field (OMP's `packages/coding-agent/src/tools/eval.ts:108-112`),
+so an allowlisted `eval` would reach the decision function with `command` empty and
+`isTerminalGitCommand("")` false — no block, only a slower `{ block: false }`. Closing it for real
+means analysing arbitrary source in four languages whose kernel state persists across calls
+(`eval.ts:102-103`), which is not a predicate over a command string. `hub` `op: "start"` is
+closable: its `application` plus `args` map onto a command, so the existing
+`isTerminalGitCommand` predicate would apply once an adapter forwards them.
+
+Operationally: on OMP the guard covers the normal path — the shell an agent actually uses to
+commit, including its subagents — but it is **not fail-closed**. Read a block as a real block, and
+the absence of one as no statement at all; it is a speed bump on the default route, not a guarantee
+that no unverified commit can land (the manual lifecycle checkpoint noted above has the same
+character).
+
+Claude carries the same predicate — `hooks/hooks.json` matches `"Bash"` — but exposes no code
+execution kernel, so the same hole is theoretical there and reachable here.
