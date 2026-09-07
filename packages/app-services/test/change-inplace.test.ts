@@ -54,7 +54,7 @@ describe("change declarations mutate in place", () => {
     expect(after).toContain("# between comment stays");
     expect(after).toContain("# trailing comment stays");
     expect(after).toContain("goal goal.keep-me\n  statement: sibling declaration\n  status: declared");
-    expect(after).toMatch(/change change\.inline-mvp\n(?:.*\n)*?  status: superseded/);
+    expect(after).toMatch(/change change\.inline-mvp\n(?:.*\n)*? {2}status: superseded/);
 
     const loaded = loadSemanticModel(dir);
     expect(loaded.duplicateIds).toEqual([]);
