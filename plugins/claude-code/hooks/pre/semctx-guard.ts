@@ -9,6 +9,7 @@ import { evaluateBashGuard, shellQuote, synthesizeHubCommand } from "../semctx-g
  *
  * Measured tool names: `bash` (lowercase) and `hub` (HubTool.name, no prefix). Hub `op: "start"`
  * carries `application` + `args` as sibling fields of `op` — there is no `command` string.
+ * Hub `op: "restart"` carries only `name`; argv comes from the retained launch spec.
  */
 type ToolCallEvent = {
   toolName?: string;
@@ -53,6 +54,8 @@ function commandCwd(event: ToolCallEvent, ctx: ToolCallCtx): string {
 
 function baseCommand(event: ToolCallEvent): string {
   const name = String(event?.toolName ?? "").toLowerCase();
+  // `op: "restart"` has no argv on the call; synthesizeHubCommand returns null and
+  // evaluateBashGuard resolves `input.name` against the retained spec.
   if (name === "hub") return synthesizeHubCommand(event?.input) ?? "";
   return typeof event?.input?.command === "string" ? event.input.command : "";
 }
@@ -87,6 +90,7 @@ export default function semctxGuard(pi: PiApi) {
         op: typeof event?.input?.op === "string" ? event.input.op : undefined,
         application: typeof event?.input?.application === "string" ? event.input.application : undefined,
         args: Array.isArray(event?.input?.args) ? event.input.args.map(String) : undefined,
+        name: typeof event?.input?.name === "string" ? event.input.name : undefined,
       });
       if (decision.block) {
         return { block: true, reason: decision.reason };

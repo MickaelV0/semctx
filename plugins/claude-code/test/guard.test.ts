@@ -1407,6 +1407,37 @@ function makeGuardedTestRepo(options: { enabled?: boolean } = {}) {
   return repo;
 }
 
+function writeHubLaunchSpec(
+  runtimeRoot: string,
+  scope: string,
+  daemonName: string,
+  spec: { application: string; args?: string[]; cwd?: string | null; env?: Record<string, string> },
+) {
+  const dir = join(runtimeRoot, scope, "daemons", daemonName);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, "meta.json"),
+    JSON.stringify({
+      daemon: { name: daemonName, state: "exited" },
+      spec: {
+        name: daemonName,
+        application: spec.application,
+        args: spec.args ?? [],
+        env: spec.env ?? {},
+        cwd: spec.cwd ?? undefined,
+        pty: true,
+        restart: "no",
+        persist: false,
+        detached: false,
+      },
+    }),
+  );
+}
+
+function daemonEnv(runtimeRoot: string): NodeJS.ProcessEnv {
+  return { ...process.env, SEMCTX_DAEMON_RUNTIME_ROOT: runtimeRoot };
+}
+
 describe("evaluateBashGuard — host-neutral shell tool gate", () => {
   it("non-bash tool names are never blocked", () => {
     const repo = makeGuardedTestRepo({ enabled: true });
@@ -1482,28 +1513,38 @@ describe("evaluateBashGuard — hub op:start uses the same predicates as bash", 
 
   it("forwards hub launch fields through the stdin adapter, not only the in-process one", () => {
     const repo = makeGuardedTestRepo({ enabled: true });
+    const runtimeRoot = mkdtempSync(join(tmpdir(), "semctx-guard-stdin-restart-"));
     try {
       const guard = resolve(import.meta.dir, "../hooks/semctx-guard.mjs");
       const status = (tool_input: unknown) =>
         spawnSync("node", [guard], {
           cwd: repo,
+          env: daemonEnv(runtimeRoot),
           input: JSON.stringify({ tool_name: "hub", tool_input, cwd: repo }),
           encoding: "utf8",
-        }).status;
+        });
       // A `main()` that forwards only tool_name/command/cwd leaves synthesizeHubCommand with
       // undefined inputs, so it returns null and the launch sails through unguarded. That
       // asymmetry between the two adapters is the regression this pins.
-      expect(status({ op: "start", application: "git", args: ["commit", "-m", "x"] })).toBe(2);
-      expect(status({ op: "logs", name: "web" })).toBe(0);
+      expect(status({ op: "start", application: "git", args: ["commit", "-m", "x"] }).status).toBe(2);
+      expect(status({ op: "logs", name: "web" }).status).toBe(0);
+      writeHubLaunchSpec(runtimeRoot, "scope", "probe", {
+        application: "git",
+        args: ["commit", "-m", "x"],
+        cwd: repo,
+      });
+      const restart = status({ op: "restart", name: "probe" });
+      expect(restart.status).toBe(2);
+      expect(restart.stderr).toContain("verify diff --record");
     } finally {
       rmSync(repo, { recursive: true, force: true });
+      rmSync(runtimeRoot, { recursive: true, force: true });
     }
   });
 
-  it("does not treat hub restart, send, or missing application as a terminal git command", () => {
+  it("does not treat hub send or missing application as a terminal git command", () => {
     const repo = makeGuardedTestRepo({ enabled: true });
     try {
-      expect(evaluateBashGuard({ toolName: "hub", op: "restart", cwd: repo }).block).toBe(false);
       expect(evaluateBashGuard({ toolName: "hub", op: "send", cwd: repo }).block).toBe(false);
       expect(evaluateBashGuard({ toolName: "hub", op: "start", cwd: repo }).block).toBe(false);
       expect(evaluateBashGuard({
@@ -1538,6 +1579,200 @@ describe("evaluateBashGuard — hub op:start uses the same predicates as bash", 
       expect(hub).toEqual({ block: false });
     } finally {
       rmSync(repo, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("evaluateBashGuard — hub op:restart resolves the retained launch spec", () => {
+  it("blocks restart of git commit in an armed repo with no verification", () => {
+    const repo = makeGuardedTestRepo({ enabled: true });
+    const runtimeRoot = mkdtempSync(join(tmpdir(), "semctx-guard-restart-armed-"));
+    try {
+      writeHubLaunchSpec(runtimeRoot, "scope", "probe", {
+        application: "git",
+        args: ["commit", "-m", "x"],
+        cwd: repo,
+      });
+      const decision = evaluateBashGuard({
+        toolName: "hub",
+        op: "restart",
+        name: "probe",
+        cwd: repo,
+        env: daemonEnv(runtimeRoot),
+      });
+      if (!decision.block) throw new Error("expected hub restart of unverified git commit to block");
+      expect(decision.reason).toContain("verify diff --record");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+      rmSync(runtimeRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("allows restart of git commit when the spec cwd is an unarmed repo", () => {
+    const repo = makeGuardedTestRepo();
+    const runtimeRoot = mkdtempSync(join(tmpdir(), "semctx-guard-restart-unarmed-"));
+    try {
+      writeHubLaunchSpec(runtimeRoot, "scope", "probe", {
+        application: "git",
+        args: ["commit", "-m", "x"],
+        cwd: repo,
+      });
+      expect(evaluateBashGuard({
+        toolName: "hub",
+        op: "restart",
+        name: "probe",
+        cwd: repo,
+        env: daemonEnv(runtimeRoot),
+      }).block).toBe(false);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+      rmSync(runtimeRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks a restart that retargets an armed repo through the spec env", () => {
+    const armed = makeGuardedTestRepo({ enabled: true });
+    const unarmed = makeGuardedTestRepo();
+    const runtimeRoot = mkdtempSync(join(tmpdir(), "semctx-guard-restart-env-"));
+    try {
+      // The realistic exploit: the spec was retained while the repo was unarmed, the repo is armed
+      // now, and the agent restarts it from its own session. `spec.cwd` names an unrelated unarmed
+      // repo and only the structured `env` reveals the real target — so the block has to come from
+      // the session anchor, which is what collapsing both anchors onto `spec.cwd` would lose.
+      writeHubLaunchSpec(runtimeRoot, "scope", "probe", {
+        application: "git",
+        args: ["commit", "-m", "x"],
+        cwd: unarmed,
+        env: { GIT_DIR: join(armed, ".git"), GIT_WORK_TREE: armed },
+      });
+      const decision = evaluateBashGuard({
+        toolName: "hub",
+        op: "restart",
+        name: "probe",
+        cwd: armed,
+        env: daemonEnv(runtimeRoot),
+      });
+      if (!decision.block) throw new Error("expected env-retargeted hub restart to block");
+    } finally {
+      rmSync(armed, { recursive: true, force: true });
+      rmSync(unarmed, { recursive: true, force: true });
+      rmSync(runtimeRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("allows restart of a non-git process even when the spec cwd is armed", () => {
+    const repo = makeGuardedTestRepo({ enabled: true });
+    const runtimeRoot = mkdtempSync(join(tmpdir(), "semctx-guard-restart-nongit-"));
+    try {
+      writeHubLaunchSpec(runtimeRoot, "scope", "probe", {
+        application: "bun",
+        args: ["run", "dev"],
+        cwd: repo,
+      });
+      expect(evaluateBashGuard({
+        toolName: "hub",
+        op: "restart",
+        name: "probe",
+        cwd: repo,
+        env: daemonEnv(runtimeRoot),
+      }).block).toBe(false);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+      rmSync(runtimeRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("fail-closes unresolved restart when the session repo is armed", () => {
+    const repo = makeGuardedTestRepo({ enabled: true });
+    const runtimeRoot = mkdtempSync(join(tmpdir(), "semctx-guard-restart-missing-"));
+    try {
+      const decision = evaluateBashGuard({
+        toolName: "hub",
+        op: "restart",
+        name: "missing-daemon",
+        cwd: repo,
+        env: daemonEnv(runtimeRoot),
+      });
+      if (!decision.block) throw new Error("expected unresolved hub restart to fail closed");
+      expect(decision.reason).toContain("hub stop");
+      expect(decision.reason).toContain("hub start");
+      expect(decision.reason).not.toContain("SEMCTX_GUARD=off");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+      rmSync(runtimeRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("allows unresolved restart when the session repo is not armed", () => {
+    const repo = makeGuardedTestRepo();
+    const runtimeRoot = mkdtempSync(join(tmpdir(), "semctx-guard-restart-missing-unarmed-"));
+    try {
+      expect(evaluateBashGuard({
+        toolName: "hub",
+        op: "restart",
+        name: "missing-daemon",
+        cwd: repo,
+        env: daemonEnv(runtimeRoot),
+      }).block).toBe(false);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+      rmSync(runtimeRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("treats a traversal daemon name as unresolved and does not read outside the runtime root", () => {
+    const repo = makeGuardedTestRepo({ enabled: true });
+    const runtimeRoot = mkdtempSync(join(tmpdir(), "semctx-guard-restart-trav-"));
+    try {
+      mkdirSync(join(runtimeRoot, "scope", "daemons"), { recursive: true });
+      mkdirSync(join(runtimeRoot, "etc"), { recursive: true });
+      writeFileSync(
+        join(runtimeRoot, "scope", "daemons", "../../etc", "meta.json"),
+        JSON.stringify({ spec: { application: "git", args: ["commit", "-m", "x"], cwd: repo } }),
+      );
+      const decision = evaluateBashGuard({
+        toolName: "hub",
+        op: "restart",
+        name: "../../etc",
+        cwd: repo,
+        env: daemonEnv(runtimeRoot),
+      });
+      if (!decision.block) throw new Error("expected traversal name to fail closed");
+      expect(decision.reason).toContain("hub stop");
+      expect(decision.reason).toContain("hub start");
+      expect(decision.reason).not.toContain("verify diff --record");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+      rmSync(runtimeRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks when one of several matching scopes retains a git commit in an armed repo", () => {
+    const repo = makeGuardedTestRepo({ enabled: true });
+    const runtimeRoot = mkdtempSync(join(tmpdir(), "semctx-guard-restart-scopes-"));
+    try {
+      writeHubLaunchSpec(runtimeRoot, "aaa", "probe", {
+        application: "bun",
+        args: ["run", "dev"],
+        cwd: repo,
+      });
+      writeHubLaunchSpec(runtimeRoot, "zzz", "probe", {
+        application: "git",
+        args: ["commit", "-m", "x"],
+        cwd: repo,
+      });
+      const decision = evaluateBashGuard({
+        toolName: "hub",
+        op: "restart",
+        name: "probe",
+        cwd: repo,
+        env: daemonEnv(runtimeRoot),
+      });
+      if (!decision.block) throw new Error("expected a git-commit spec in one scope to block");
+      expect(decision.reason).toContain("verify diff --record");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+      rmSync(runtimeRoot, { recursive: true, force: true });
     }
   });
 });
@@ -1698,17 +1933,42 @@ describe("semctxGuard — OMP tool_call adapter", () => {
     }
   });
 
-  it("does not block hub restart or hub start of a non-terminal command", async () => {
+  it("does not block hub start of a non-terminal command", async () => {
     const repo = makeGuardedTestRepo({ enabled: true });
     try {
       const invoke = installHandler();
-      expect(await invoke({ toolName: "hub", input: { op: "restart", name: "web" } }, { cwd: repo })).toBeUndefined();
       expect(await invoke(
         { toolName: "hub", input: { op: "start", application: "git", args: ["status"] } },
         { cwd: repo },
       )).toBeUndefined();
     } finally {
       rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks hub restart of an unverified git commit via forwarded name", async () => {
+    const repo = makeGuardedTestRepo({ enabled: true });
+    const runtimeRoot = mkdtempSync(join(tmpdir(), "semctx-guard-omp-restart-"));
+    const previous = process.env.SEMCTX_DAEMON_RUNTIME_ROOT;
+    try {
+      writeHubLaunchSpec(runtimeRoot, "scope", "probe", {
+        application: "git",
+        args: ["commit", "-m", "x"],
+        cwd: repo,
+      });
+      process.env.SEMCTX_DAEMON_RUNTIME_ROOT = runtimeRoot;
+      const invoke = installHandler();
+      const result = await invoke(
+        { toolName: "hub", input: { op: "restart", name: "probe" } },
+        { cwd: repo },
+      );
+      expect(result).toEqual(expect.objectContaining({ block: true }));
+      expect((result as { reason: string }).reason).toContain("verify diff --record");
+    } finally {
+      if (previous === undefined) delete process.env.SEMCTX_DAEMON_RUNTIME_ROOT;
+      else process.env.SEMCTX_DAEMON_RUNTIME_ROOT = previous;
+      rmSync(repo, { recursive: true, force: true });
+      rmSync(runtimeRoot, { recursive: true, force: true });
     }
   });
 
