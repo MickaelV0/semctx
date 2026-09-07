@@ -1480,6 +1480,26 @@ describe("evaluateBashGuard — hub op:start uses the same predicates as bash", 
     }
   });
 
+  it("forwards hub launch fields through the stdin adapter, not only the in-process one", () => {
+    const repo = makeGuardedTestRepo({ enabled: true });
+    try {
+      const guard = resolve(import.meta.dir, "../hooks/semctx-guard.mjs");
+      const status = (tool_input: unknown) =>
+        spawnSync("node", [guard], {
+          cwd: repo,
+          input: JSON.stringify({ tool_name: "hub", tool_input, cwd: repo }),
+          encoding: "utf8",
+        }).status;
+      // A `main()` that forwards only tool_name/command/cwd leaves synthesizeHubCommand with
+      // undefined inputs, so it returns null and the launch sails through unguarded. That
+      // asymmetry between the two adapters is the regression this pins.
+      expect(status({ op: "start", application: "git", args: ["commit", "-m", "x"] })).toBe(2);
+      expect(status({ op: "logs", name: "web" })).toBe(0);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
   it("does not treat hub restart, send, or missing application as a terminal git command", () => {
     const repo = makeGuardedTestRepo({ enabled: true });
     try {
