@@ -1614,7 +1614,7 @@ export function captureVerificationGitState(cwd) {
  *
  * @param {unknown} name Daemon name from the tool call. Rejected unless it is a single path segment.
  * @param {NodeJS.ProcessEnv} [env] Injected by the caller — never read from `process.env` here.
- * @returns {Array<{ application: string, args: string[], cwd: string|null }>}
+ * @returns {Array<{ application: string, args: string[], cwd: string|null, env: Record<string, unknown>|null }>}
  */
 function resolveHubLaunchSpecs(name, env) {
   if (!isHubDaemonName(name)) return [];
@@ -1688,9 +1688,13 @@ function prefixSpecEnv(command, env) {
  * `op`, `commandSpec` in `tools/hub/launch.ts`): `start` launches the binary directly, no shell.
  * `restart` is `{ op: "restart", name }` only — it replays a broker-retained spec and carries no
  * application/args, so this function still returns null (the return type stays a command string).
- * Resolve restart with `synthesizeHubRestartInvocations`. Auto-restart
- * (`restart: "on-failure"|"always"`) is broker-side of an already-admitted start; if `start`
- * was blocked, nothing is retained to replay. Other hub ops (send/wait/logs/...) do not spawn an argv.
+ * Resolve restart with `synthesizeHubRestartInvocations`.
+ *
+ * Residue, deliberately not closed: broker auto-restart (`restart: "on-failure"|"always"`) replays
+ * a retained spec with NO tool call, so no hook fires. When the spec was retained while the
+ * repository was unarmed and the repository is armed afterwards, that replay reaches `git commit`
+ * out of this hook's reach. Admitting the initial `start` is the only gate on that path, and it
+ * did not exist at the time the spec was created. Other hub ops (send/wait/logs/...) spawn no argv.
  *
  * Arguments that are not plain tokens are POSIX-single-quoted so a space cannot reshape the parse
  * the existing git predicates run. `cwd` is NOT inlined as `cd` — hub's `cwd` is the process
