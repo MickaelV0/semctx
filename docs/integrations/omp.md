@@ -117,7 +117,9 @@ plugin-bundled CLI → unsubstituted `skill://` root (Oh My Pi only, fail-closed
 URI does not expand) → global `semctx` on PATH → say so and continue MCP-only.
 
 **Decision: do not install a global `semctx`.** On Oh My Pi the second rung works
-(`skill://semctx-control` expands to an absolute plugin root; measured). The global
+(`skill://semctx-control` expands to an absolute plugin root — measured 2026-09-07:
+`$root` = `~/.omp/plugins/cache/plugins/semctx-stable___semctx___0.1.20`,
+`dist/semctx.js` present). The global
 rung is a last-resort that already fails closed ("If none are available, say so…
 do not invent results") and the skill forbids installing it automatically
 ("Never install or upgrade the global CLI automatically from a compatibility
