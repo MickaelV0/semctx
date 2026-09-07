@@ -97,9 +97,31 @@ so an allowlisted `eval` would reach the decision function with `command` empty 
 means analysing arbitrary source in four languages whose kernel state persists across calls
 (`eval.ts:102-103`), which is not a predicate over a command string.
 
+**Decision: do not add a textual heuristic.** A deny-if-the-source-contains-`git commit`
+scanner would catch the accidental case and nothing else — four languages, persistent
+kernel state, `eval` of `eval` of a string. That is not fail-closed; it is a pretence of
+it. The hole stays documented. An agent that wants to commit through `eval` still can;
+the operational rule is the same as for the wrapper: do not.
+
 Operationally: on OMP the guard covers the shell an agent uses to commit, including its subagents,
 and the `hub op:start` process launcher. It is still **not fail-closed** against `eval`. Read a
 block as a real block, and the absence of one as no statement at all.
 
 Claude carries the same bash predicate — `hooks/hooks.json` matches `"Bash"` — but exposes no code
 execution kernel, so the remaining `eval` hole is theoretical there and reachable here.
+
+### CLI ladder, third rung
+
+The skill's host ladder (`scripts/build-plugin-runtime.ts#hostCliLadder`) is, in order:
+plugin-bundled CLI → unsubstituted `skill://` root (Oh My Pi only, fail-closed if the
+URI does not expand) → global `semctx` on PATH → say so and continue MCP-only.
+
+**Decision: do not install a global `semctx`.** On Oh My Pi the second rung works
+(`skill://semctx-control` expands to an absolute plugin root; measured). The global
+rung is a last-resort that already fails closed ("If none are available, say so…
+do not invent results") and the skill forbids installing it automatically
+("Never install or upgrade the global CLI automatically from a compatibility
+advisory"). Installing one would add a version-skew surface (`semctx --version`
+must match the marketplace plugin version) for a path that is not needed.
+`semctx_cli_compatibility` returning `CLI_NOT_FOUND` is the expected advisory,
+not a defect.
