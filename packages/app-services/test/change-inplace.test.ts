@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { changeFilePath, loadSemanticModel, newChangeContract, writeChangeFile } from "@semantic-context/semantic-engine";
-import { closeChange } from "../src";
+import { closeChange, updateChange } from "../src";
 
 const roots: string[] = [];
 
@@ -76,5 +76,26 @@ describe("change declarations mutate in place", () => {
     const loaded = loadSemanticModel(dir);
     expect(loaded.duplicateIds).toEqual([]);
     expect(loaded.model.changes.map((change) => change.id).sort()).toEqual(["change.brand-new", "change.inline-mvp"]);
+  });
+
+  it("update patches the original inline block instead of duplicating the id", () => {
+    const dir = root();
+    updateChange(dir, { id: "change.inline-mvp", provenance: "author", statement: "patched in place" });
+
+    expect(changeSemFiles(dir)).toEqual([]);
+    expect(existsSync(changeFilePath(dir, "change.inline-mvp"))).toBe(false);
+
+    const after = readFileSync(join(dir, ".semctx", "semantic", "project", "control.sem"), "utf8");
+    expect(after).toContain("# header comment stays");
+    expect(after).toContain("# between comment stays");
+    expect(after).toContain("# trailing comment stays");
+    expect(after).toContain("goal goal.keep-me\n  statement: sibling declaration\n  status: declared");
+    expect(after).toContain("statement: patched in place");
+
+    const loaded = loadSemanticModel(dir);
+    expect(loaded.duplicateIds).toEqual([]);
+    expect(loaded.model.changes.map((change) => change.id)).toEqual(["change.inline-mvp"]);
+    expect(loaded.model.changes[0]?.statement).toBe("patched in place");
+    expect(loaded.model.nodes.map((node) => node.id)).toEqual(["goal.keep-me"]);
   });
 });
