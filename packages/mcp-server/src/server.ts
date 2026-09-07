@@ -628,7 +628,7 @@ export function createSemctxServer(
   );
 
   tools.registerTool(
-    "control_authorize_transition",
+    "semctx_control_authorize_transition",
     {
       title: "Report transition authorization",
       description: "Read-only authorization report. Resolves attestation references from the sealed index and never executes a transition.",
@@ -652,7 +652,7 @@ export function createSemctxServer(
   );
 
   tools.registerTool(
-    "control_authorize_step",
+    "semctx_control_authorize_step",
     {
       title: "Report step authorization",
       description: "Read-only authorization report for an exact planned step. It never executes or schedules the step.",
@@ -674,7 +674,7 @@ export function createSemctxServer(
   );
 
   tools.registerTool(
-    "control_authorize_deletion",
+    "semctx_control_authorize_deletion",
     {
       title: "Report deletion authorization",
       description: "Read-only deletion authorization report. It exposes no deletion or mutation capability.",
