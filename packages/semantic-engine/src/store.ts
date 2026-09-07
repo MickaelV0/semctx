@@ -5,7 +5,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, renameSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { compareIds, SemctxError } from "@semantic-context/core";
 import { parseSemanticSource, formatChange, formatModel } from "@semantic-context/semantic-dsl";
 import type { Diagnostic } from "@semantic-context/semantic-dsl";
@@ -106,8 +106,66 @@ export function writeKindFile(root: string, kind: Exclude<SemanticNodeKind, "cha
   writeAtomic(kindFilePath(root, kind), formatModel({ nodes, changes: [] }));
 }
 
-/** Write a change contract to its versioned file `.semctx/semantic/changes/<id>.sem`. */
+/** Replace one change block in a mixed `.sem` file, leaving every other byte alone. */
+function rewriteChangeDeclaration(path: string, change: ChangeContract, hintedLine: number): void {
+  const text = readFileSync(path, "utf8");
+  const newline = text.includes("\r\n") ? "\r\n" : "\n";
+  const endsWithNewline = text.endsWith("\n");
+  const lines = text.split(/\r?\n/);
+  if (endsWithNewline && lines[lines.length - 1] === "") lines.pop();
+
+  const isHeader = (raw: string): boolean => {
+    let indent = 0;
+    while (indent < raw.length && (raw[indent] === " " || raw[indent] === "\t")) indent += 1;
+    if (indent !== 0) return false;
+    const content = raw.trim();
+    const space = content.search(/\s/);
+    if (space === -1) return false;
+    return content.slice(0, space) === "change" && content.slice(space + 1).trim() === change.id;
+  };
+
+  const hinted = hintedLine - 1;
+  let headerIndex = hinted >= 0 && hinted < lines.length && isHeader(lines[hinted] ?? "") ? hinted : -1;
+  if (headerIndex === -1) headerIndex = lines.findIndex((line) => isHeader(line));
+  if (headerIndex === -1) {
+    throw new SemctxError("CONFIG_INVALID", `change "${change.id}" block was not found in ${path}`);
+  }
+
+  let end = headerIndex;
+  for (let i = headerIndex + 1; i < lines.length; i += 1) {
+    const raw = lines[i] ?? "";
+    const trimmed = raw.trim();
+    if (trimmed === "" || trimmed.startsWith("#")) continue;
+    let indent = 0;
+    while (indent < raw.length && (raw[indent] === " " || raw[indent] === "\t")) indent += 1;
+    if (indent === 0) break;
+    end = i;
+  }
+
+  const next = [...lines.slice(0, headerIndex), ...formatChange(change).split("\n"), ...lines.slice(end + 1)];
+  writeAtomic(path, `${next.join(newline)}${endsWithNewline ? newline : ""}`);
+}
+
+/**
+ * Persist a change contract. An id that already exists in the versioned model is rewritten at its
+ * original `sourceRefs` file (inline project files included). A new id is written to
+ * `.semctx/semantic/changes/<id>.sem`.
+ */
 export function writeChangeFile(root: string, change: ChangeContract): void {
+  const declared = loadSemanticModel(root).model.changes.find((candidate) => candidate.id === change.id);
+  const source = declared?.sourceRefs[0];
+  if (source !== undefined && source.file !== "") {
+    const abs = resolve(root, source.file);
+    const fromSemanticDir = relative(resolve(semanticDir(root)), abs);
+    if (fromSemanticDir.startsWith("..") || isAbsolute(fromSemanticDir)) {
+      throw new SemctxError("CONFIG_INVALID", `change "${change.id}" source file is outside the semantic directory: ${source.file}`);
+    }
+    if (!existsSync(abs)) {
+      throw new SemctxError("CONFIG_INVALID", `change "${change.id}" source file is missing: ${source.file}`);
+    }
+    rewriteChangeDeclaration(abs, change, source.line);
+    return;
+  }
   writeAtomic(changeFilePath(root, change.id), formatModel({ nodes: [], changes: [change] }));
 }
 
