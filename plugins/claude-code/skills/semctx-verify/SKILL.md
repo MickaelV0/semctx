@@ -46,8 +46,11 @@ After a non-trivial change, **before** committing or pushing:
 ## Optional: guarded mode
 
 If the project has guarded mode enabled (`.semctx/guard.json` with `{"enabled": true}`), a
-pre-commit/push hook will **block** `git commit` / `git push` until the current diff has been
-verified. Record a verification with:
+harness pre-tool-call hook intercepts the agent's `git commit` / `git push` until the current
+diff has been verified. It is not a git hook; a human terminal `git` is not intercepted.
+Repository git hooks must stay absent (`pre-commit`, `prepare-commit-msg`, `commit-msg` for a
+commit; `pre-push` for a push) — otherwise the guard blocks, because a hook can change the
+index after verification. Record a verification with:
 
 ```
 bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" verify diff --record   # or: semctx verify diff --record

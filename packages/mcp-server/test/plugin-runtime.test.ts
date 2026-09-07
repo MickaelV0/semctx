@@ -141,9 +141,9 @@ describe("packaged MCP runtime", () => {
       expect(tools.some((tool) => tool.name === "semctx_control_reconcile_diff")).toBe(true);
       expect(tools.some((tool) => tool.name === "semctx_control_handoff")).toBe(true);
       expect(tools.some((tool) => tool.name === "semctx_control_resume")).toBe(true);
-      expect(tools.some((tool) => tool.name === "control_authorize_transition")).toBe(true);
-      expect(tools.some((tool) => tool.name === "control_authorize_step")).toBe(true);
-      expect(tools.some((tool) => tool.name === "control_authorize_deletion")).toBe(true);
+      expect(tools.some((tool) => tool.name === "semctx_control_authorize_transition")).toBe(true);
+      expect(tools.some((tool) => tool.name === "semctx_control_authorize_step")).toBe(true);
+      expect(tools.some((tool) => tool.name === "semctx_control_authorize_deletion")).toBe(true);
       const status = await client.callTool({
         name: "semctx_control_status",
         arguments: { repositoryRoot: target },
