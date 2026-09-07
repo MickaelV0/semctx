@@ -165,6 +165,7 @@ describe("execution", () => {
       { base: "origin/main", skipDiff: true },
       {
         cwd: "ignored",
+        python: "python-from-test",
         log: (message) => logs.push(message),
         run: async (argv) => {
           commands.push([...argv]);
@@ -177,7 +178,7 @@ describe("execution", () => {
     expect(commands).toEqual([
       ["bun", "scripts/compatibility.ts"],
       ["bun", "run", "quality"],
-      [resolvePythonBin(), "-m", "compileall", "-q", "benchmarks/change-impact-eval/scripts"],
+      ["python-from-test", "-m", "compileall", "-q", "benchmarks/change-impact-eval/scripts"],
     ]);
     expect(logs.at(-1)).toBe("[verify:pr] FAIL  Python compileall (exit 17)");
   });

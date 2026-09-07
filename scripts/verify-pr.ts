@@ -128,6 +128,7 @@ export async function runVerification(
     run?: CommandRunner;
     listUntracked?: UntrackedFileLister;
     log?: Log;
+    python?: string;
   } = {},
 ): Promise<number> {
   const cwd = dependencies.cwd ?? process.cwd();
@@ -153,7 +154,7 @@ export async function runVerification(
     log(`[verify:pr] PASS  ${label}`);
   }
 
-  for (const step of verificationSteps(options)) {
+  for (const step of verificationSteps(options, dependencies.python ?? resolvePythonBin())) {
     log(`[verify:pr] START ${step.label}`);
     const exitCode = await run(step.argv, cwd);
     if (exitCode !== 0) {
