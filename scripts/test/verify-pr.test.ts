@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   parseVerifyArgs,
+  resolvePythonBin,
   runVerification,
   verificationSteps,
   type CommandRunner,
@@ -74,15 +75,27 @@ describe("argument parsing and command construction", () => {
   });
 
   test("skip-diff removes the diff commands", () => {
-    const steps = verificationSteps({ base: "origin/main", skipDiff: true });
+    const steps = verificationSteps({ base: "origin/main", skipDiff: true }, "python3");
     expect(steps.map((step) => step.argv)).toEqual([
       ["bun", "scripts/compatibility.ts"],
       ["bun", "run", "quality"],
-      ["python", "-m", "compileall", "-q", "benchmarks/change-impact-eval/scripts"],
-      ["python", "benchmarks/change-impact-eval/scripts/smoke_test.py"],
+      ["python3", "-m", "compileall", "-q", "benchmarks/change-impact-eval/scripts"],
+      ["python3", "benchmarks/change-impact-eval/scripts/smoke_test.py"],
       ["bun", "run", "plugin:check"],
       ["bun", "run", "test"],
     ]);
+  });
+
+  test("resolves python3 when present and falls back to python when it is not", () => {
+    expect(resolvePythonBin((command) => (command === "python3" ? "/usr/bin/python3" : null), {})).toBe("python3");
+    expect(resolvePythonBin(() => null, {})).toBe("python");
+  });
+
+  test("PYTHON overrides the resolved interpreter", () => {
+    expect(resolvePythonBin(() => "/usr/bin/python3", { PYTHON: "/opt/py/bin/python3.12" })).toBe(
+      "/opt/py/bin/python3.12",
+    );
+    expect(resolvePythonBin(() => "/usr/bin/python3", { PYTHON: "   " })).toBe("python3");
   });
 });
 
@@ -164,7 +177,7 @@ describe("execution", () => {
     expect(commands).toEqual([
       ["bun", "scripts/compatibility.ts"],
       ["bun", "run", "quality"],
-      ["python", "-m", "compileall", "-q", "benchmarks/change-impact-eval/scripts"],
+      [resolvePythonBin(), "-m", "compileall", "-q", "benchmarks/change-impact-eval/scripts"],
     ]);
     expect(logs.at(-1)).toBe("[verify:pr] FAIL  Python compileall (exit 17)");
   });

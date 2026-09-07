@@ -42,7 +42,26 @@ export function parseVerifyArgs(
   return { base, skipDiff };
 }
 
-export function verificationSteps(options: VerifyOptions): VerificationStep[] {
+/**
+ * Resolve the Python interpreter to invoke.
+ *
+ * Debian/Ubuntu ship `python3` only — a hardcoded `python` makes `verify:pr` unrunnable there,
+ * while GitHub's `setup-python` provides `python` on every runner. Resolving instead of pinning
+ * keeps one command working on both, and `PYTHON` lets a caller force a specific interpreter.
+ */
+export function resolvePythonBin(
+  lookup: (command: string) => string | null = (command) => Bun.which(command),
+  env: Record<string, string | undefined> = process.env,
+): string {
+  const explicit = env.PYTHON?.trim();
+  if (explicit !== undefined && explicit.length > 0) return explicit;
+  return lookup("python3") !== null ? "python3" : "python";
+}
+
+export function verificationSteps(
+  options: VerifyOptions,
+  python: string = resolvePythonBin(),
+): VerificationStep[] {
   const diffSteps: VerificationStep[] = options.skipDiff
     ? []
     : [
@@ -66,11 +85,11 @@ export function verificationSteps(options: VerifyOptions): VerificationStep[] {
     { label: "quality", argv: ["bun", "run", "quality"] },
     {
       label: "Python compileall",
-      argv: ["python", "-m", "compileall", "-q", "benchmarks/change-impact-eval/scripts"],
+      argv: [python, "-m", "compileall", "-q", "benchmarks/change-impact-eval/scripts"],
     },
     {
       label: "Python smoke",
-      argv: ["python", "benchmarks/change-impact-eval/scripts/smoke_test.py"],
+      argv: [python, "benchmarks/change-impact-eval/scripts/smoke_test.py"],
     },
     { label: "plugin parity", argv: ["bun", "run", "plugin:check"] },
     { label: "tests", argv: ["bun", "run", "test"] },
