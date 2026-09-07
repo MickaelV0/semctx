@@ -5,6 +5,6 @@
   "description": "OMP extension host for semctx (guard hook + MCP + skills).",
   "license": "Apache-2.0",
   "omp": {
-    "extensions": ["./hooks/pre/semctx-guard.ts"]
+    "extensions": ["./hooks/pre/semctx-guard.ts", "./hooks/pre/semctx-lifecycle.ts"]
   }
 }

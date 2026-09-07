@@ -130,16 +130,17 @@ export function normalizeHookEnvelope(input) {
 
 /**
  * Reduce a host tool name to the canonical Semctx MCP tool it invoked, or null.
- * Exactly two runtime namespaces are eligible: `mcp__semctx__` (the Codex `.mcp.json` server name)
- * and `mcp__plugin_semctx_semctx__` (Claude Code's `mcp__plugin_<pluginName>_<serverName>__` form
- * for the bundled `semctx` MCP server inside the `semctx` plugin, loaded via `--plugin-dir`). Both
- * name the same bundled server; accepting a matching trailing token from any other prefix — an
- * arbitrary server, a near-miss plugin or server name — would let that server manufacture Semctx
- * lifecycle evidence.
+ * Exactly three runtime namespaces are eligible: `mcp__semctx__` (the Codex `.mcp.json` server name),
+ * `mcp__plugin_semctx_semctx__` (Claude Code's `mcp__plugin_<pluginName>_<serverName>__` form
+ * for the bundled `semctx` MCP server inside the `semctx` plugin, loaded via `--plugin-dir`), and
+ * `mcp__semctx_semctx_` (Oh My Pi's `mcp__<plugin>_<server>_<tool>` mint for plugin `semctx` +
+ * server `semctx`). All three name the same bundled server; accepting a matching trailing token
+ * from any other prefix — an arbitrary server, a near-miss plugin or server name — would let that
+ * server manufacture Semctx lifecycle evidence. Do not relax this to a regex over trailing tokens.
  */
 export function canonicalSemctxTool(contract, toolName) {
   if (typeof toolName !== "string" || toolName.length === 0) return null;
-  const prefixes = ["mcp__semctx__", "mcp__plugin_semctx_semctx__"];
+  const prefixes = ["mcp__semctx__", "mcp__plugin_semctx_semctx__", "mcp__semctx_semctx_"];
   const prefix = prefixes.find((candidate) => toolName.startsWith(candidate));
   if (prefix === undefined) return null;
   const canonical = toolName.slice(prefix.length);
@@ -528,6 +529,32 @@ function invalidLedger() {
 }
 
 /**
+ * Host-neutral lifecycle dispatch. Claude/Codex `main()` and the OMP in-process adapter both call
+ * this. Never throws, never writes stdout, never returns a block/deny decision — an unexpected
+ * failure is a silent no-op so a host cannot parse authorization out of this surface.
+ */
+export function processLifecycleEnvelope(envelope, env = process.env) {
+  try {
+    if (!lifecycleEnabled(env)) return;
+    if (envelope === null) return;
+    if (envelope.event !== OBSERVE_EVENT && envelope.event !== REPORT_EVENT) return;
+    // Without a session identity the ledger cannot be isolated, and a shared ledger would let one
+    // session's tool calls satisfy another session's checkpoint.
+    if (envelope.sessionId === null) return;
+    const contract = loadHookContract();
+    if (contract === null) return;
+    const root = resolveRepositoryRoot(envelope.cwd);
+    if (root === null) return;
+    const repositoryState = hookRepositoryState(root);
+    if (repositoryState === "non_semctx") return; // no read, no write, no output
+    if (envelope.event === OBSERVE_EVENT) observe(contract, envelope, root);
+    else report(contract, envelope, root, repositoryState);
+  } catch {
+    // Advisory only: an unexpected failure is a silent no-op, never a blocked host.
+  }
+}
+
+/**
  * Never calls `process.exit`. Node writes stderr asynchronously to a pipe on macOS, so exiting right
  * after the advisory truncates it there; returning instead lets the stream flush and leaves the exit
  * code at its default success. `process.exitCode` is pinned and never reassigned, and the two global
@@ -542,27 +569,13 @@ function main() {
     process.exitCode = 0;
   });
   try {
-    if (!lifecycleEnabled(process.env)) return;
     let input;
     try {
       input = JSON.parse(readFileSync(0, "utf8"));
     } catch {
       return;
     }
-    const envelope = normalizeHookEnvelope(input);
-    if (envelope === null) return;
-    if (envelope.event !== OBSERVE_EVENT && envelope.event !== REPORT_EVENT) return;
-    // Without a session identity the ledger cannot be isolated, and a shared ledger would let one
-    // session's tool calls satisfy another session's checkpoint.
-    if (envelope.sessionId === null) return;
-    const contract = loadHookContract();
-    if (contract === null) return;
-    const root = resolveRepositoryRoot(envelope.cwd);
-    if (root === null) return;
-    const repositoryState = hookRepositoryState(root);
-    if (repositoryState === "non_semctx") return; // no read, no write, no output
-    if (envelope.event === OBSERVE_EVENT) observe(contract, envelope, root);
-    else report(contract, envelope, root, repositoryState);
+    processLifecycleEnvelope(normalizeHookEnvelope(input));
   } catch {
     // Advisory only: an unexpected failure is a silent no-op, never a blocked host.
   }
