@@ -1607,20 +1607,76 @@ export function captureVerificationGitState(cwd) {
 }
 
 /**
+ * Synthesize the argv Oh My Pi's `hub` tool will exec for `op: "start"`.
+ *
+ * Measured (oh-my-pi `HubTool.name = "hub"`, schema `application` + `args` as sibling fields of
+ * `op`, `commandSpec` in `tools/hub/launch.ts`): `start` launches the binary directly, no shell.
+ * `restart` is `{ op: "restart", name }` only — it replays a broker-retained spec and carries no
+ * application/args, so this function returns null. Auto-restart (`restart: "on-failure"|"always"`)
+ * is likewise broker-side of an already-admitted start; if `start` was blocked, nothing is retained
+ * to replay. Other hub ops (send/wait/logs/...) do not spawn an argv.
+ *
+ * Arguments that are not plain tokens are POSIX-single-quoted so a space cannot reshape the parse
+ * the existing git predicates run. `cwd` is NOT inlined as `cd` — hub's `cwd` is the process
+ * working directory, equivalent to bash `input.cwd`, and is passed separately to `evaluateBashGuard`.
+ */
+export function synthesizeHubCommand(input) {
+  if (input === null || typeof input !== "object" || Array.isArray(input)) return null;
+  if (String(input.op ?? "") !== "start") return null;
+  const application = input.application;
+  if (typeof application !== "string" || application.length === 0) return null;
+  const args = Array.isArray(input.args) ? input.args.map((value) => String(value)) : [];
+  return [application, ...args].map(quoteHubArg).join(" ");
+}
+
+function quoteHubArg(word) {
+  return /^[A-Za-z0-9_./:=+-]+$/.test(word) ? word : shellQuote(word);
+}
+
+/**
  * Host-neutral evaluation of one shell tool call. Claude `main()` and the OMP `tool_call`
- * adapter both call this. `toolName` is compared case-insensitively to `bash`.
+ * adapter both call this. `toolName` is compared case-insensitively to `bash` or `hub`.
+ * A `hub` call is admitted only when `op === "start"`; its argv is synthesized once and then
+ * evaluated by the same predicates as `bash`. No second decision path.
+ * @param {{
+ *   toolName?: string,
+ *   command?: string,
+ *   cwd?: string,
+ *   env?: NodeJS.ProcessEnv,
+ *   op?: string,
+ *   application?: string,
+ *   args?: string[],
+ * }} args
  * @returns {{ block: true, reason: string } | { block: false }}
  */
-export function evaluateBashGuard({ toolName, command, cwd: inputCwd, env = process.env }) {
-  if (String(toolName ?? "").toLowerCase() !== "bash") return { block: false };
-  const terminalVerb = isTerminalGitCommand(command);
+export function evaluateBashGuard({
+  toolName,
+  command = "",
+  cwd: inputCwd,
+  env = process.env,
+  op = undefined,
+  application = undefined,
+  args = undefined,
+}) {
+  const name = String(toolName ?? "").toLowerCase();
+  let resolvedCommand = typeof command === "string" ? command : "";
+  if (name === "hub") {
+    if (String(op ?? "") !== "start") return { block: false };
+    if (resolvedCommand === "") {
+      resolvedCommand = synthesizeHubCommand({ op: "start", application, args }) ?? "";
+    }
+    if (resolvedCommand === "") return { block: false };
+  } else if (name !== "bash") {
+    return { block: false };
+  }
+  const terminalVerb = isTerminalGitCommand(resolvedCommand);
   if (!terminalVerb) return { block: false };
 
   const rawCwd = inputCwd ?? process.cwd();
   const sessionCwd = resolveGitRoot(rawCwd);
-  const commandIsolated = isIsolatedTerminalGitCommand(command);
-  const scopeRequiresSessionGuard = gitScopeRequiresSessionGuard(command);
-  const cwd = resolveGitRoot(resolveGitCwd(command, rawCwd)); // the repo the git command targets, not the session cwd
+  const commandIsolated = isIsolatedTerminalGitCommand(resolvedCommand);
+  const scopeRequiresSessionGuard = gitScopeRequiresSessionGuard(resolvedCommand);
+  const cwd = resolveGitRoot(resolveGitCwd(resolvedCommand, rawCwd)); // the repo the git command targets, not the session cwd
   const targetGuard = readJson(join(cwd, ".semctx", "guard.json"));
   const sessionGuard = scopeRequiresSessionGuard
     ? readJson(join(sessionCwd, ".semctx", "guard.json"))
@@ -1641,8 +1697,8 @@ export function evaluateBashGuard({ toolName, command, cwd: inputCwd, env = proc
     }
   }
   const pushSourceAuthorized = terminalVerb !== "push"
-    || (currentState !== null && pushSourceMatchesHead(command, cwd, currentState.headCommit));
-  const commitContentAuthorized = terminalVerb !== "commit" || commitUsesWholeIndex(command);
+    || (currentState !== null && pushSourceMatchesHead(resolvedCommand, cwd, currentState.headCommit));
+  const commitContentAuthorized = terminalVerb !== "commit" || commitUsesWholeIndex(resolvedCommand);
   const commitHooksAbsent = terminalVerb !== "commit" || (commandIsolated && commitHookSurfaceClear(cwd));
   const pushHooksAbsent = terminalVerb !== "push" || (commandIsolated && pushHookSurfaceClear(cwd));
   return guardDecision({

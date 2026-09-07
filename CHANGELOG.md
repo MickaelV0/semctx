@@ -9,6 +9,20 @@ GitHub Release advance together through the tag-driven lockstep workflow documen
 
 ## [Unreleased]
 
+### Fixed
+
+- **Oh My Pi `hub op:start` no longer bypasses the commit/push guard**: `evaluateBashGuard`
+  recognizes the `hub` tool. When `op === "start"`, `application` + `args` are synthesized into
+  the same command string the bash predicates already evaluate, so a `git commit` / `git push`
+  launched via hub is blocked or allowed with the same message as via `bash`. `hub restart` is
+  not gated: its payload carries only `name`, and the retained spec is not in the tool_call
+  event. `eval` remains out of scope.
+- **Oh My Pi shadow `before_completion` advisory**: the lifecycle whitelist accepts the minted
+  prefix `mcp__semctx_semctx_` in addition to `mcp__semctx__` and `mcp__plugin_semctx_semctx__`,
+  without relaxing the Claude/Codex PostToolUse regex. `hooks/pre/semctx-lifecycle.ts` observes
+  Semctx MCP tools in-process and emits the advisory on stderr at `turn_end`. Enforcement stays
+  `shadow`; blocking stays disabled.
+
 ### Changed
 
 - **Oh My Pi installs the Claude plugin tree as an Agent-Plugins-standard package**

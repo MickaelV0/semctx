@@ -31,7 +31,7 @@ runtime behaviour. The analysis is local and deterministic; semctx itself needs 
 - **Focused skills**: `skills/semctx-verify` for Plane A and `skills/semctx-semantic` for Plane B.
 - **Guard hook**: Claude registers a `PreToolUse` guard via `hooks/hooks.json` (`hooks/semctx-guard.mjs`);
   Oh My Pi loads a sibling adapter at `hooks/pre/semctx-guard.ts` (`pi.on("tool_call")` on the
-  `bash` tool). Both call the same `evaluateBashGuard` decision (ADR 0007). The guard is **inert by
+  `bash` and `hub` tools). Both call the same `evaluateBashGuard` decision (ADR 0007). The guard is **inert by
   default** (advisory) and, when the project opts into guarded mode, blocks non-isolated
   `git commit` / `git push` commands or an unverified working state. Verification disables external diff/textconv helpers; commit-time
   selection abbreviations and repository commit hooks that could restage after the pre-check are
@@ -185,8 +185,9 @@ If an older direct MCP registration is still present, remove it after the plugin
   backward compatibility.
 - To remove the guard entirely (zero footprint), delete `hooks/hooks.json` (Claude) and
   `hooks/pre/semctx-guard.ts` (OMP), or keep advisory mode (the default) where it never blocks.
-  Deleting `hooks/hooks.json` also removes the shadow lifecycle hook; to disable only the lifecycle
-  observer, set `SEMCTX_LIFECYCLE=off`.
+  Deleting `hooks/hooks.json` also removes the Claude/Codex shadow lifecycle hook; OMP loads
+  `hooks/pre/semctx-lifecycle.ts` instead. To disable only the lifecycle observer, set
+  `SEMCTX_LIFECYCLE=off`.
 
 See `docs/integrations/claude-code.md`, `docs/integrations/claude-code-guarded-mode.md`,
 `docs/integrations/omp.md`, and `docs/integrations/grok.md`.

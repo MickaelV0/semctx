@@ -16,6 +16,7 @@ import {
   resolveGitCwd,
   verifyRecordCommand,
   shellQuote,
+  synthesizeHubCommand,
   GLOBAL_VERIFY_COMMAND,
 } from "../hooks/semctx-guard.mjs";
 import semctxGuard from "../hooks/pre/semctx-guard.ts";
@@ -1449,6 +1450,78 @@ describe("evaluateBashGuard — host-neutral shell tool gate", () => {
   });
 });
 
+describe("evaluateBashGuard — hub op:start uses the same predicates as bash", () => {
+  it("synthesizes application+args and quotes only non-plain tokens", () => {
+    expect(synthesizeHubCommand({ op: "start", application: "git", args: ["commit", "-m", "x"] }))
+      .toBe("git commit -m x");
+    expect(synthesizeHubCommand({ op: "start", application: "git", args: ["commit", "-m", "hello world"] }))
+      .toBe(`git commit -m 'hello world'`);
+    expect(synthesizeHubCommand({ op: "restart", application: "git", args: ["commit", "-m", "x"] })).toBeNull();
+    expect(synthesizeHubCommand({ op: "start" })).toBeNull();
+    expect(synthesizeHubCommand({ op: "logs", name: "web" })).toBeNull();
+  });
+
+  it("blocks hub start git commit with the same reason as bash", () => {
+    const repo = makeGuardedTestRepo({ enabled: true });
+    try {
+      const bash = evaluateBashGuard({ toolName: "bash", command: "git commit -m x", cwd: repo });
+      const hub = evaluateBashGuard({
+        toolName: "hub",
+        op: "start",
+        application: "git",
+        args: ["commit", "-m", "x"],
+        cwd: repo,
+      });
+      if (!bash.block || !hub.block) throw new Error("expected both paths to block");
+      expect(hub.reason).toBe(bash.reason);
+      expect(hub.reason).toContain("verify diff --record");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("does not treat hub restart, send, or missing application as a terminal git command", () => {
+    const repo = makeGuardedTestRepo({ enabled: true });
+    try {
+      expect(evaluateBashGuard({ toolName: "hub", op: "restart", cwd: repo }).block).toBe(false);
+      expect(evaluateBashGuard({ toolName: "hub", op: "send", cwd: repo }).block).toBe(false);
+      expect(evaluateBashGuard({ toolName: "hub", op: "start", cwd: repo }).block).toBe(false);
+      expect(evaluateBashGuard({
+        toolName: "hub",
+        op: "start",
+        application: "git",
+        args: ["status"],
+        cwd: repo,
+      }).block).toBe(false);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("allows hub start git commit after a matching recorded PASS baseline", () => {
+    const repo = makeGuardedTestRepo({ enabled: true });
+    try {
+      const verified = captureVerificationGitState(repo);
+      writeFileSync(
+        join(repo, ".semctx", "verification-state.json"),
+        JSON.stringify({ version: 3, ...verified, verdict: "PASS", recordedAt: "2026-08-31T00:00:00.000Z" }),
+      );
+      const bash = evaluateBashGuard({ toolName: "bash", command: "git commit -m x", cwd: repo });
+      const hub = evaluateBashGuard({
+        toolName: "hub",
+        op: "start",
+        application: "git",
+        args: ["commit", "-m", "x"],
+        cwd: repo,
+      });
+      expect(bash).toEqual({ block: false });
+      expect(hub).toEqual({ block: false });
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("verifyRecordCommand — OMP plugin root", () => {
   it("resolves OMP_PLUGIN_ROOT the same as CLAUDE_PLUGIN_ROOT", () => {
     const root = mkdtempSync(join(tmpdir(), "semctx-guard-omp-plugin-root-"));
@@ -1467,7 +1540,18 @@ describe("verifyRecordCommand — OMP plugin root", () => {
 describe("semctxGuard — OMP tool_call adapter", () => {
   function installHandler() {
     let handler: (
-      event: { toolName: string; input?: { command?: string; cwd?: string; env?: Record<string, unknown> } },
+      event: {
+        toolName: string;
+        input?: {
+          command?: string;
+          cwd?: string;
+          env?: Record<string, unknown>;
+          op?: string;
+          application?: string;
+          args?: string[];
+          name?: string;
+        };
+      },
       ctx: { cwd?: string },
     ) => Promise<unknown>;
     const pi = {
@@ -1575,6 +1659,57 @@ describe("semctxGuard — OMP tool_call adapter", () => {
     const invoke = installHandler();
     const event = new Proxy({}, { get() { throw new Error("boom"); } });
     expect(await invoke(event as never, {})).toBeUndefined();
+  });
+
+  it("blocks hub start git commit with the same reason as bash", async () => {
+    const repo = makeGuardedTestRepo({ enabled: true });
+    try {
+      const invoke = installHandler();
+      const bash = await invoke({ toolName: "bash", input: { command: "git commit -m x" } }, { cwd: repo });
+      const hub = await invoke(
+        { toolName: "hub", input: { op: "start", application: "git", args: ["commit", "-m", "x"] } },
+        { cwd: repo },
+      );
+      expect(bash).toEqual(expect.objectContaining({ block: true }));
+      expect(hub).toEqual(expect.objectContaining({ block: true }));
+      expect((hub as { reason: string }).reason).toBe((bash as { reason: string }).reason);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("does not block hub restart or hub start of a non-terminal command", async () => {
+    const repo = makeGuardedTestRepo({ enabled: true });
+    try {
+      const invoke = installHandler();
+      expect(await invoke({ toolName: "hub", input: { op: "restart", name: "web" } }, { cwd: repo })).toBeUndefined();
+      expect(await invoke(
+        { toolName: "hub", input: { op: "start", application: "git", args: ["status"] } },
+        { cwd: repo },
+      )).toBeUndefined();
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("treats hub input.cwd as the target repository, equivalent to a bash cd prefix", async () => {
+    const guarded = makeGuardedTestRepo({ enabled: true });
+    const elsewhere = makeGuardedTestRepo({ enabled: false });
+    try {
+      const invoke = installHandler();
+      const result = await invoke(
+        {
+          toolName: "hub",
+          input: { op: "start", application: "git", args: ["commit", "-m", "x"], cwd: guarded },
+        },
+        { cwd: elsewhere },
+      );
+      expect(result).toEqual(expect.objectContaining({ block: true }));
+      expect((result as { reason: string }).reason).toContain("verify diff --record");
+    } finally {
+      rmSync(guarded, { recursive: true, force: true });
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
   });
 
 });
