@@ -81,7 +81,7 @@ describe("Oh My Pi plugin manifests", () => {
         semctx: {
           type: "stdio",
           command: "bun",
-          args: ["./dist/semctx-mcp.js"],
+          args: ["${PLUGIN_ROOT}/dist/semctx-mcp.js"],
         },
       },
     });
