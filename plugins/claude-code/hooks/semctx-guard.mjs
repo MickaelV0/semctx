@@ -1722,9 +1722,15 @@ function main() {
   } catch {
     process.exit(0); // no/invalid input → do not block
   }
+  // Both adapters must forward the same fields, or `hub op:start` is covered on one host and not
+  // the other. Claude ships no `hub` tool today, so these three are inert there — but a divergent
+  // adapter is the defect class this guard exists to prevent, not one to reintroduce.
   const decision = evaluateBashGuard({
     toolName: input.tool_name ?? input.toolName,
     command: input.tool_input?.command ?? input.toolInput?.command ?? "",
+    op: input.tool_input?.op ?? input.toolInput?.op,
+    application: input.tool_input?.application ?? input.toolInput?.application,
+    args: input.tool_input?.args ?? input.toolInput?.args,
     cwd: input.cwd ?? process.cwd(),
     env: process.env,
   });
