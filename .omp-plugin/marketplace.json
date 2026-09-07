@@ -1,6 +1,6 @@
 {
   "name": "semctx-stable",
-  "description": "Fork dogfood — Claude plugin tree from MickaelV0/semctx at tag omp-dogfood-3 (not hoklims stable)",
+  "description": "Fork dogfood — Claude plugin tree from MickaelV0/semctx at tag omp-dogfood-4 (not hoklims stable)",
   "owner": {
     "name": "hoklims",
     "email": "hoklims@gmail.com"
@@ -12,7 +12,7 @@
         "source": "git-subdir",
         "url": "https://github.com/MickaelV0/semctx.git",
         "path": "plugins/claude-code",
-        "ref": "omp-dogfood-3"
+        "ref": "omp-dogfood-4"
       },
       "description": "Trace repository impact, authored intent and fail-closed migration plans in Oh My Pi.",
       "version": "0.1.20",
