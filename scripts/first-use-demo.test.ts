@@ -44,8 +44,11 @@ function fakeCli(options: {
   const path = join(folder, "index.js");
   writeFileSync(path, `import { appendFileSync } from 'node:fs';
 const cmd = process.argv[2];
-const forbidden = Object.keys(process.env).filter(key => /^GIT_/i.test(key) || key.toUpperCase() === 'SEMCTX_ROOT');
-if (${options.rejectAmbientRepositoryEnv ?? false} && forbidden.length > 0) { console.error(forbidden.join(',')); process.exit(17); }
+const controlledGit = new Set(['GIT_CONFIG_NOSYSTEM', 'GIT_CONFIG_GLOBAL']);
+const forbidden = Object.keys(process.env).filter(key => (/^GIT_/i.test(key) && !controlledGit.has(key.toUpperCase())) || key.toUpperCase() === 'SEMCTX_ROOT');
+const expectedGlobalConfig = process.platform === 'win32' ? 'NUL' : '/dev/null';
+const controlledConfigMissing = process.env.GIT_CONFIG_NOSYSTEM !== '1' || process.env.GIT_CONFIG_GLOBAL !== expectedGlobalConfig;
+if (${options.rejectAmbientRepositoryEnv ?? false} && (forbidden.length > 0 || controlledConfigMissing)) { console.error([...forbidden, 'controlled=' + !controlledConfigMissing].join(',')); process.exit(17); }
 if (cmd === '--version') { console.log('0.0.0'); }
 else if (cmd === 'setup') { console.log(${JSON.stringify(options.setup ?? '{"setupReady":true}')}); process.exit(${options.setupCode ?? 0}); }
 else if (cmd === 'index') { console.log('{}'); }
@@ -194,8 +197,11 @@ test.each(["fail", "malformed"] as const)("a %s result from fixture HEAD lookup 
   }
 });
 
-test("ambient repository-routing variables are removed from Git and CLI children", () => {
-  const keys = ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_EXTERNAL_DIFF", "SEMCTX_ROOT"];
+test("children receive controlled Git config without ambient repository-routing variables", () => {
+  const keys = [
+    "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_EXTERNAL_DIFF",
+    "GIT_CONFIG_COUNT", "GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_GLOBAL", "SEMCTX_ROOT",
+  ];
   const previous = new Map(keys.map(key => [key, process.env[key]]));
   for (const key of keys) process.env[key] = fresh(`hostile-${key}`);
   try {

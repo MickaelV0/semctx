@@ -18,7 +18,11 @@ function sanitizedEnvironment(): Record<string, string> {
       sanitized[key] = value;
     }
   }
-  return sanitized;
+  return {
+    ...sanitized,
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+  };
 }
 
 /** Spawn a real process and capture its exit code and raw output verbatim. */
@@ -56,10 +60,6 @@ export function runPackagedCli(
 export function runGit(args: readonly string[], cwd: string): ChildOutcome {
   return runChild(["git", "-c", "core.hooksPath=", "-c", "commit.gpgsign=false", "-c", "core.autocrlf=false", ...args], {
     cwd,
-    env: {
-      ...sanitizedEnvironment(),
-      GIT_CONFIG_NOSYSTEM: "1",
-      GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
-    },
+    env: sanitizedEnvironment(),
   });
 }
