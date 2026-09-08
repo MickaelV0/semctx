@@ -515,6 +515,39 @@ describe("OMP extension adapter wiring (omp/semctx-guard.ts)", () => {
     )).toBeUndefined();
   });
 
+  test("blocks evaluator exceptions when real guard enablement is unknown but preserves advisory and off", () => {
+    const sessionRepo = mkdtempSync(join(tmpdir(), "semctx-omp-evaluator-fallback-"));
+    execFileSync("git", ["init"], { cwd: sessionRepo, stdio: "ignore" });
+    const guardDir = join(sessionRepo, ".semctx");
+    const guardPath = join(guardDir, "guard.json");
+    mkdirSync(guardDir);
+    const terminal = {
+      type: "tool_call" as const,
+      toolCallId: "fallback-unknown",
+      toolName: "bash",
+      input: { command: "git commit -m x" },
+    };
+    const throwing = () => { throw new Error("probe failure"); };
+    try {
+      writeFileSync(guardPath, "{not-json");
+      expect(evaluateOmpToolCall(terminal, { cwd: sessionRepo }, throwing)).toEqual({
+        block: true,
+        reason: "semctx guarded mode: guard evaluation failed; terminal Git operation is not authorized.",
+      });
+
+      rmSync(guardPath);
+      expect(evaluateOmpToolCall(terminal, { cwd: sessionRepo }, throwing)).toBeUndefined();
+
+      writeFileSync(guardPath, "{not-json");
+      expect(evaluateOmpToolCall({
+        ...terminal,
+        input: { ...terminal.input, env: { SEMCTX_GUARD: "off" } },
+      }, { cwd: sessionRepo }, throwing)).toBeUndefined();
+    } finally {
+      rmSync(sessionRepo, { recursive: true, force: true });
+    }
+  });
+
   test("registers exactly one tool_call handler; ignores non-bash tools; never authorizes a blocked evaluation", () => {
     const repo = createGuardedRepo("semctx-omp-adapter-");
     try {
