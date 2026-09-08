@@ -5,6 +5,7 @@ import { delimiter, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { FIXTURE_CASES } from "./first-use-demo/fixture";
 import { identifyPackagedCli, sha256Hex } from "./first-use-demo/identity";
+import { runChild } from "./first-use-demo/process";
 import { asVerifyReport, runFirstUseDemo, MANIFEST_FILENAME } from "./first-use-demo/runner";
 
 const repoRoot = resolve(import.meta.dir, "..");
@@ -269,6 +270,93 @@ test("a finding without a case anchor cannot silently disappear", () => {
   expect(outcome.status).toBe("BLOCKED");
   expect(outcome.reason).toBe("UNEXPECTED_ANALYSIS");
   expect(outcome.detail).toContain("unassigned_warning");
+});
+
+test.each([
+  [
+    "blocking rule",
+    {
+      rule: "security_surface_without_verification", tier: "strict", severity: "block",
+      message: "blocking finding on the exported contract", nodeIds: [], locations: [{ file: "src/cart.ts", line: 1 }],
+    },
+    "BLOCK",
+    3,
+    { blockCount: 1, warnCount: 1 },
+  ],
+  [
+    "duplicate advisory rule",
+    {
+      rule: "contract_changed_without_test", tier: "advisory", severity: "warn",
+      message: "duplicate warning on the exported contract", nodeIds: [], locations: [{ file: "src/cart.ts", line: 1 }],
+    },
+    "WARN",
+    0,
+    { blockCount: 0, warnCount: 2 },
+  ],
+] as const)("an additional %s cannot satisfy the exact frozen WARN expectation", (_name, extraFinding, verdict, verifyCode, summary) => {
+  const expected = expectedWarningReport();
+  const contractFinding = (expected.findings as Record<string, unknown>[])[0]!;
+  const outcome = runFirstUseDemo({
+    cliPath: fakeCli({
+      verifyCode,
+      verify: JSON.stringify(expectedWarningReport({
+        verdict,
+        findings: [contractFinding, extraFinding],
+        summary,
+      })),
+    }),
+    outDir: fresh(`additional-${_name.replaceAll(" ", "-")}`),
+  });
+  if (outcome.status !== "BLOCKED") {
+    process.stderr.write("DEMO_EXACT_FROZEN_WARN_MISMATCH\n");
+  }
+  expect(outcome.status).toBe("BLOCKED");
+  expect(outcome.reason).toBe("UNEXPECTED_ANALYSIS");
+  expect(outcome.detail).toContain("exported-contract-risk");
+  if (verdict === "BLOCK") expect(outcome.detail).toContain("expected global WARN");
+});
+
+test("child and manifest records preserve measured duration and termination signal", () => {
+  const child = runChild(
+    [process.execPath, "--eval", "Bun.sleepSync(40)"],
+    { cwd: repoRoot },
+  );
+  const terminated = runChild(
+    [process.execPath, "--eval", "Bun.sleepSync(1000)"],
+    { cwd: repoRoot, timeoutMs: 20 },
+  );
+  if (child.durationMs < 20 || terminated.durationMs < 10) {
+    process.stderr.write("DEMO_PROCESS_DURATION_CAPTURE_MISMATCH\n");
+  }
+  if (child.signal !== null || terminated.signal !== "SIGTERM") {
+    process.stderr.write("DEMO_PROCESS_SIGNAL_CAPTURE_MISMATCH\n");
+  }
+  expect(child.code).toBe(0);
+  expect(child.signal).toBeNull();
+  expect(child.durationMs).toBeGreaterThanOrEqual(20);
+  expect(terminated.code).toBeNull();
+  expect(terminated.signal).toBe("SIGTERM");
+  expect(terminated.durationMs).toBeGreaterThanOrEqual(10);
+
+  const outDir = fresh("process-status");
+  const outcome = runFirstUseDemo({
+    cliPath: fakeCli({ verify: JSON.stringify(expectedWarningReport()) }),
+    outDir,
+  });
+  expect(outcome.status, outcome.detail ?? "").toBe("COMPLETED");
+  const manifest = JSON.parse(readFileSync(join(outDir, MANIFEST_FILENAME), "utf8")) as {
+    commands: Array<{ durationMs?: unknown; signal?: unknown }>;
+  };
+  expect(manifest.commands).toHaveLength(4);
+  for (const command of manifest.commands) {
+    if (typeof command.durationMs !== "number") throw new Error("manifest command durationMs must be numeric");
+    expect(Number.isFinite(command.durationMs)).toBe(true);
+    expect(command.durationMs).toBeGreaterThanOrEqual(0);
+    expect(command.signal).toBeNull();
+  }
+  const markdown = readFileSync(join(outDir, "report.md"), "utf8");
+  expect(markdown).toContain("signal `none`");
+  expect(markdown).toContain("Artifact download: not performed or measured");
 });
 
 test("recorded command digests bind the exact saved stdout and stderr bytes", () => {
