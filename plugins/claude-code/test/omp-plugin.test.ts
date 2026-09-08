@@ -186,7 +186,8 @@ describe("guard evaluation parity — Claude hook vs OMP bash tool_call (ADR 002
       const ompShaped = evaluateGuard({ command: "git commit -m x", cwd: repo, env: { ...process.env } });
       expect(claudeShaped.block).toBe(true);
       expect(ompShaped.block).toBe(true);
-      expect(claudeShaped.reason).toBe(ompShaped.reason);
+      expect("reason" in claudeShaped ? claudeShaped.reason : undefined)
+        .toBe("reason" in ompShaped ? ompShaped.reason : undefined);
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }
@@ -197,7 +198,7 @@ describe("guard evaluation parity — Claude hook vs OMP bash tool_call (ADR 002
     try {
       const decision = evaluateGuard({ command: "git commit -m x", cwd: repo, env: process.env });
       expect(decision.block).toBe(true);
-      expect(decision.reason).toContain("no verification on record");
+      expect("reason" in decision ? decision.reason : undefined).toContain("no verification on record");
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }
@@ -337,6 +338,50 @@ describe("OMP extension adapter wiring (omp/semctx-guard.ts)", () => {
         block: true,
         reason: expect.stringContaining("not an accessible filesystem directory"),
       });
+    } finally {
+      rmSync(sessionRepo, { recursive: true, force: true });
+    }
+  });
+
+  test("blocks opaque scopes when the real guard config cannot establish advisory mode", () => {
+    const sessionRepo = mkdtempSync(join(tmpdir(), "semctx-omp-guard-config-unknown-"));
+    execFileSync("git", ["init"], { cwd: sessionRepo, stdio: "ignore" });
+    const guardDir = join(sessionRepo, ".semctx");
+    const guardPath = join(guardDir, "guard.json");
+    mkdirSync(guardDir);
+    const event = {
+      type: "tool_call" as const,
+      toolCallId: "opaque-config-unknown",
+      toolName: "bash",
+      input: { command: "git commit -m x", cwd: "skill://semctx-control" },
+    };
+    try {
+      writeFileSync(guardPath, "{not-json");
+      expect(evaluateOmpToolCall(event, { cwd: sessionRepo })).toEqual({
+        block: true,
+        reason: expect.stringContaining("guard enablement evaluation returned an unknown result"),
+      });
+
+      writeFileSync(guardPath, JSON.stringify({ enabled: "sometimes" }));
+      expect(evaluateOmpToolCall(event, { cwd: sessionRepo })).toEqual({
+        block: true,
+        reason: expect.stringContaining("guard enablement evaluation returned an unknown result"),
+      });
+
+      rmSync(guardPath);
+      mkdirSync(guardPath);
+      expect(evaluateOmpToolCall(event, { cwd: sessionRepo })).toEqual({
+        block: true,
+        reason: expect.stringContaining("guard enablement evaluation returned an unknown result"),
+      });
+
+      expect(evaluateOmpToolCall({
+        ...event,
+        input: { ...event.input, env: { SEMCTX_GUARD: "off" } },
+      }, { cwd: sessionRepo })).toBeUndefined();
+
+      rmSync(guardPath, { recursive: true });
+      expect(evaluateOmpToolCall(event, { cwd: sessionRepo })).toBeUndefined();
     } finally {
       rmSync(sessionRepo, { recursive: true, force: true });
     }

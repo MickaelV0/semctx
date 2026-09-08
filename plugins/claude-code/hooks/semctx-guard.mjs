@@ -1211,22 +1211,32 @@ function guardInvocationContext({ command, cwd, sessionCwd }) {
 
 /** Enablement: SEMCTX_GUARD=off strictly disables (wins); =on forces; else .semctx/guard.json {enabled}. */
 export function guardEnabled(env, guardJson) {
-  const e = String(environmentValue(env, "SEMCTX_GUARD") ?? "").toLowerCase();
-  if (e === "off" || e === "0" || e === "false") return false;
-  if (e === "on" || e === "1" || e === "true") return true;
+  const override = guardEnvironmentOverride(env);
+  if (override !== undefined) return override;
   return guardJson?.enabled === true;
 }
 
-/** Effective opt-in across the target repository and a separately preserved host session root. */
+/**
+ * Effective opt-in across the target repository and a separately preserved host session root.
+ * Returns undefined when a guard config exists but cannot be read or parsed, so callers that must
+ * distinguish known advisory mode from unknown enablement can fail closed without changing the
+ * ordinary filesystem-target behavior.
+ */
 /** @param {{command?: unknown, cwd?: string, sessionCwd?: string, env?: Record<string, string | undefined>}} input */
 export function guardEnabledForInvocation({ command, cwd, sessionCwd, env }) {
+  const override = guardEnvironmentOverride(env);
+  if (override !== undefined) return override;
   const context = guardInvocationContext({ command, cwd, sessionCwd });
-  const targetGuard = readJson(join(context.targetRoot, ".semctx", "guard.json"));
+  const targetGuard = readGuardJson(join(context.targetRoot, ".semctx", "guard.json"));
   const sessionGuard = context.scopeRequiresSessionGuard
-    ? readJson(join(context.sessionRoot, ".semctx", "guard.json"))
+    ? readGuardJson(join(context.sessionRoot, ".semctx", "guard.json"))
     : null;
-  return guardEnabled(env, targetGuard)
-    || (context.scopeRequiresSessionGuard && guardEnabled(env, sessionGuard));
+  if (
+    (targetGuard.status === "read" && guardEnabled(env, targetGuard.value))
+    || (sessionGuard?.status === "read" && guardEnabled(env, sessionGuard.value))
+  ) return true;
+  if (targetGuard.status === "unknown" || sessionGuard?.status === "unknown") return undefined;
+  return false;
 }
 
 /** Environment lookup follows Windows' case-insensitive variable semantics after object spreads. */
@@ -1236,6 +1246,13 @@ function environmentValue(env, name) {
   if (direct !== undefined || process.platform !== "win32") return direct;
   const key = Object.keys(env).find((candidate) => candidate.toLowerCase() === name.toLowerCase());
   return key === undefined ? undefined : env[key];
+}
+
+function guardEnvironmentOverride(env) {
+  const value = String(environmentValue(env, "SEMCTX_GUARD") ?? "").toLowerCase();
+  if (value === "off" || value === "0" || value === "false") return false;
+  if (value === "on" || value === "1" || value === "true") return true;
+  return undefined;
 }
 
 /** Verify command for a shell that has no plugin bundle in reach. */
@@ -1388,6 +1405,24 @@ function readJson(path) {
     return JSON.parse(readFileSync(path, "utf8"));
   } catch {
     return null;
+  }
+}
+
+function readGuardJson(path) {
+  try {
+    const value = JSON.parse(readFileSync(path, "utf8"));
+    if (
+      value === null
+      || typeof value !== "object"
+      || Array.isArray(value)
+      || typeof value.enabled !== "boolean"
+    ) return { status: "unknown", value: null };
+    return { status: "read", value };
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      return { status: "absent", value: null };
+    }
+    return { status: "unknown", value: null };
   }
 }
 
@@ -1660,13 +1695,8 @@ export function evaluateGuard({ command, cwd, sessionCwd, env, overriddenEnvKeys
   const commandIsolated = isIsolatedTerminalGitCommand(command)
     && !overriddenEnvKeys.some((name) => isRetargetingEnvironmentName(name));
   const context = guardInvocationContext({ command, cwd, sessionCwd });
-  const { sessionRoot, targetRoot: targetCwd, scopeRequiresSessionGuard } = context;
-  const targetGuard = readJson(join(targetCwd, ".semctx", "guard.json"));
-  const sessionGuard = scopeRequiresSessionGuard
-    ? readJson(join(sessionRoot, ".semctx", "guard.json"))
-    : null;
-  const enabled = guardEnabled(effectiveEnv, targetGuard)
-    || (scopeRequiresSessionGuard && guardEnabled(effectiveEnv, sessionGuard));
+  const { targetRoot: targetCwd } = context;
+  const enabled = guardEnabledForInvocation({ command, cwd, sessionCwd, env: effectiveEnv });
   if (!enabled) return { block: false }; // advisory (default)
 
   const state = commandIsolated
