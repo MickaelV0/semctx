@@ -1254,6 +1254,8 @@ describe("verification-state capture parity", () => {
     }
   }, 20_000);
 
+  // Two real repositories, submodule setup and both capture implementations exceed
+  // 15 seconds on Windows; keep the assertions within the canonical test budget.
   it("preserves a clean gitlink and fails closed when its indexed commit changes", () => {
     const repo = mkdtempSync(join(tmpdir(), "semctx-guard-gitlink-"));
     const child = mkdtempSync(join(tmpdir(), "semctx-guard-gitlink-child-"));
@@ -1311,7 +1313,7 @@ describe("verification-state capture parity", () => {
       rmSync(repo, { recursive: true, force: true });
       rmSync(child, { recursive: true, force: true });
     }
-  }, 15_000);
+  }, 60_000);
 
   it.skipIf(process.platform === "win32")("changes on executable-mode and symlink-target drift", () => {
     const repo = mkdtempSync(join(tmpdir(), "semctx-guard-metadata-"));
