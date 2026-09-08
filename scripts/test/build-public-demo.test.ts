@@ -3,11 +3,12 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildPublicEvidence, runBuildPublicDemo } from "../build-public-demo";
-import { FIXTURE_CASES } from "../first-use-demo/fixture";
-import { sha256Hex } from "../first-use-demo/identity";
+import { FIXTURE_CASES, baseFixtureFiles, changedFixtureFiles } from "../first-use-demo/fixture";
+import { identifyFixture, sha256Hex } from "../first-use-demo/identity";
 
 const SHA = "a".repeat(64);
 const COMMIT = "b".repeat(40);
+const EXPECTED_FIXTURE = identifyFixture(baseFixtureFiles(), changedFixtureFiles());
 const roots: string[] = [];
 const observationIds = [
   "phase-label", "phase-value", "demo-state", "pilot-state", "global-verdict", "cases-matched",
@@ -92,7 +93,7 @@ function demoManifest(): Record<string, unknown> {
       authenticatedSource: "UNKNOWN",
       runtimeFiles,
     },
-    fixture: { baseDigest: SHA, changedDigest: "c".repeat(64) },
+    fixture: { ...EXPECTED_FIXTURE },
     fixtureHeadCommit: COMMIT,
     commands: [
       command("version", [bun, cliPath, "--version"]),
@@ -286,6 +287,13 @@ describe("public evidence projection", () => {
     entry["sizeBytes"] = 123;
     entry["sha256"] = null;
     expect(() => buildPublicEvidence({ phase: "candidate", demo: contradictoryMissingFile })).toThrow("presence metadata is inconsistent");
+
+    const wrongBaseFixture = demoManifest();
+    (wrongBaseFixture["fixture"] as Record<string, unknown>)["baseDigest"] = SHA;
+    expect(() => buildPublicEvidence({ phase: "candidate", demo: wrongBaseFixture })).toThrow("contradicts the frozen fixture inputs");
+    const wrongChangedFixture = demoManifest();
+    (wrongChangedFixture["fixture"] as Record<string, unknown>)["changedDigest"] = "c".repeat(64);
+    expect(() => buildPublicEvidence({ phase: "candidate", demo: wrongChangedFixture })).toThrow("contradicts the frozen fixture inputs");
   });
 
   test("completed demo accepts a conforming single-file CLI with unknown source provenance", () => {
@@ -296,6 +304,23 @@ describe("public evidence projection", () => {
     cli["runtimeFiles"] = (cli["runtimeFiles"] as Record<string, unknown>[]).slice(0, 1);
     cli["runtimeDigest"] = sha256Hex(JSON.stringify(cli["runtimeFiles"]));
     expect(buildPublicEvidence({ phase: "candidate", demo: singleFile }).demo?.status).toBe("COMPLETED");
+  });
+
+  test("blocked demo accepts the producer's honest absent worker identity", () => {
+    const blocked = demoManifest();
+    blocked["status"] = "BLOCKED";
+    blocked["reason"] = "INDEX_CHILD_FAILED";
+    blocked["detail"] = "worker path is not a file";
+    blocked["commands"] = (blocked["commands"] as unknown[]).slice(0, 3);
+    blocked["cases"] = [];
+    blocked["verdict"] = null;
+    blocked["workingDiffDigest"] = null;
+    blocked["packageVersion"] = null;
+    const cli = blocked["cli"] as Record<string, unknown>;
+    cli["indexWorker"] = { path: "C:\\private\\semctx-index-worker.js", present: false, sizeBytes: null, sha256: null };
+    cli["runtimeFiles"] = (cli["runtimeFiles"] as Record<string, unknown>[]).slice(0, 1);
+    cli["runtimeDigest"] = sha256Hex(JSON.stringify(cli["runtimeFiles"]));
+    expect(buildPublicEvidence({ phase: "candidate", demo: blocked }).demo?.status).toBe("BLOCKED");
   });
 
   test("blocked demo accepts a command prefix and preserves complete parsed observations", () => {
