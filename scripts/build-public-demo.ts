@@ -17,15 +17,16 @@ const CASES = {
   "unsupported-limit": { fixturePath: "src/pricing.ts", expectedFinding: "none" },
 } as const;
 const CASE_IDS = Object.keys(CASES) as DemoCaseId[];
-const KNOWN_RULES = new Set([
-  "invariant_touched_without_test",
-  "critical_contract_changed_without_test",
-  "contract_changed_without_test",
-  "contradiction_unresolved",
-  "security_surface_without_verification",
-  "analysis_scope_incomplete",
-  "index_binding_stale",
-]);
+const RULE_SEVERITIES = {
+  invariant_touched_without_test: "block",
+  critical_contract_changed_without_test: "block",
+  contract_changed_without_test: "warn",
+  contradiction_unresolved: "warn",
+  security_surface_without_verification: "block",
+  analysis_scope_incomplete: "block",
+  index_binding_stale: "block",
+} as const;
+const KNOWN_RULES = new Set(Object.keys(RULE_SEVERITIES));
 const PILOT_TOOLS = ["semctx", "changed-files", "one-hop-import-neighborhood"] as const;
 
 export type DemoCaseId = keyof typeof CASES;
@@ -217,6 +218,11 @@ function projectDemo(raw: unknown, assertedCommit?: string): PublicDemoEvidenceV
   if (status === "COMPLETED" && (packageVersion === null || runtimeDigest === null || verdict === null)) {
     throw new Error("completed demo requires version, runtime digest and verdict");
   }
+  if (status === "COMPLETED") {
+    const severities = cases.flatMap(item => item.observedRuleIds.map(rule => RULE_SEVERITIES[rule as keyof typeof RULE_SEVERITIES]));
+    const expectedVerdict: Verdict = severities.includes("block") ? "BLOCK" : severities.includes("warn") ? "WARN" : "PASS";
+    if (verdict !== expectedVerdict) throw new Error("demo global verdict contradicts its observed rule severities");
+  }
   return {
     status,
     observedAt: isoDate(manifest["createdAt"], "demo.createdAt"),
@@ -273,6 +279,9 @@ function projectPilot(raw: unknown): PublicPilotEvidenceV1 {
     repositoryTotals.reduce((total, item) => total + item[key], 0);
   if (sum("total") !== totalCases || sum("observed") !== observedCases || sum("failed") !== failedCases || sum("labelled") !== labelledCases || sum("untrusted") !== untrustedCases) {
     throw new Error("pilot repository aggregates do not match global totals");
+  }
+  if (evidenceKind === "research" && (totalCases < RESEARCH_MINIMUM_CASES || repositoryTotals.length < 3)) {
+    throw new Error(`research pilot evidence requires at least ${RESEARCH_MINIMUM_CASES} cases across at least 3 repositories`);
   }
 
   let scores: PublicPilotEvidenceV1["scores"] = null;
