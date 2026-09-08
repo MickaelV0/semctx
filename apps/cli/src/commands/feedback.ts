@@ -38,6 +38,9 @@ function readVerifyReportFile(file: string): VerifyReport {
       issues: parsed.error.issues,
     });
   }
+  if (Object.keys(raw as Record<string, unknown>).some((key) => !Object.hasOwn(parsed.data, key))) {
+    throw new SemctxError("INVALID_TASK_INPUT", "report contains a top-level field that cannot be preserved");
+  }
   return parsed.data as VerifyReport;
 }
 
