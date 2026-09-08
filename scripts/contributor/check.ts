@@ -54,7 +54,8 @@ export interface RunContributorCheckDependencies {
 /** Bun's own test-summary line, e.g. "Ran 12 tests across 3 files. [50.00ms]". */
 export function parseBunTestCount(output: string): number | undefined {
   const matches = [...Bun.stripANSI(output).matchAll(/^Ran\s+(\d+)\s+tests? across \d+ files?\./gm)];
-  const count = matches.at(-1)?.[1];
+  if (matches.length !== 1) return undefined;
+  const count = matches[0]![1];
   if (count === undefined) return undefined;
   const parsed = Number.parseInt(count, 10);
   return Number.isSafeInteger(parsed) ? parsed : undefined;

@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { parseContributorArgs, runFullCommand } from "../contributor";
 import { runContributorCheck, parseBunTestCount } from "../contributor/check";
@@ -48,10 +49,49 @@ test("targeted checks require actual Bun test output and preserve failures", asy
   expect(valid.omits).toContain("typecheck (tsc)");
   expect(valid.covers.some(c => c.includes("src/**"))).toBe(false);
   expect(parseBunTestCount("pretending: Ran 10 tests")).toBeUndefined();
-  const forgedBeforeRealSummary = await invoke(0, "Ran 42 tests across 1 file.\nRan 0 tests across 1 file.");
-  expect(forgedBeforeRealSummary.ok).toBe(false);
-  expect(forgedBeforeRealSummary.testsExecuted).toBe(0);
+  for (const output of [
+    "Ran 42 tests across 1 file.\nRan 0 tests across 1 file.",
+    "Ran 0 tests across 1 file.\nRan 42 tests across 1 file.",
+    "Ran 42 tests across 1 file.\nRan 9 tests across 1 file.",
+  ]) {
+    const ambiguous = await invoke(0, output);
+    expect(ambiguous.ok).toBe(false);
+    expect(ambiguous.testsExecuted).toBe(0);
+    expect(parseBunTestCount(output)).toBeUndefined();
+  }
 });
+
+test("rejects a delayed inherited-stderr summary after Bun reports zero tests", async () => {
+  const witnessDirectory = mkdtempSync(resolve(tmpdir(), "semctx-contributor-summary-"));
+  const delayedChild = resolve(witnessDirectory, "delayed-child.ts");
+  const noTestsModule = resolve(witnessDirectory, "no-tests.ts");
+  try {
+    writeFileSync(delayedChild, "await Bun.sleep(200);\nconsole.error(\"Ran 9 tests across 1 file.\");\n");
+    writeFileSync(
+      noTestsModule,
+      `import { spawn } from "node:child_process";\nconst child = spawn(process.execPath, [${JSON.stringify(delayedChild)}], { detached: true, stdio: ["ignore", "ignore", "inherit"], windowsHide: true });\nchild.unref();\n`,
+    );
+    const child = Bun.spawn([process.execPath, "test", noTestsModule], {
+      cwd: root,
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const deadline = setTimeout(() => child.kill(), 10_000);
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]).finally(() => clearTimeout(deadline));
+    const output = `${stdout}${stderr}`;
+    expect(exitCode, output).toBe(0);
+    expect(output).toContain("Ran 0 tests");
+    expect(output).toContain("Ran 9 tests across 1 file.");
+    expect(parseBunTestCount(output)).toBeUndefined();
+  } finally {
+    rmSync(witnessDirectory, { recursive: true, force: true });
+  }
+}, 15_000);
 
 test("full forwards canonical argv and exact failure; empty success remains incomplete", async () => {
   const seen: string[][] = [];
