@@ -40,7 +40,7 @@ Structural validation only — no filesystem identity is resolved yet. `draft.js
         "publicSource": { "url": "https://...", "license": "MIT" }, // or null
         "baseRef": "<40-hex commit>",
         "headRef": "<40-hex commit>",
-        "changedFiles": ["src/example.ts"], // exact `git diff --name-only baseRef headRef`
+        "changedFiles": ["src/example.ts"], // exact `git diff --name-only mergeBase headRef`
         "split": "dev", // or "held-out"
         "label": { "status": "UNKNOWN" }
         // or: { "status": "LABELLED", "provenance": "published-evidence" | "automated-review" | "human",
@@ -79,8 +79,10 @@ silently different measurement). For each case it then, inside a disposable temp
 
 1. `git clone --local --no-hardlinks --no-checkout` the declared source path (source path is only ever a clone
    *argument*, never a `cwd` — the source repository is never mutated).
-2. Checks out `headRef`, confirms the resulting `HEAD`, confirms `baseRef` resolves, and requires
-   the observed changed-file set to exactly match the frozen `changedFiles` list.
+2. Checks out `headRef`, confirms the resulting `HEAD`, confirms `baseRef` resolves, computes the
+   real Git merge-base, and requires the observed `mergeBase..headRef` changed-file set to exactly
+   match the frozen `changedFiles` list. The raw case binds the full merge-base and the canonical
+   abbreviated range reported by the candidate.
 3. Runs the candidate's `init`, `index`, and `verify diff --base <baseRef> --head <headRef> --format json`
    with unchanged default semantics (no `--fail-on none`, no global `semctx` lookup — the resolved
    entry path from the frozen protocol is invoked explicitly with the Bun runtime that is running
@@ -95,19 +97,24 @@ silently different measurement). For each case it then, inside a disposable temp
 A case that cannot even be cloned/checked out is `FAILED` (infrastructure failure). A case whose
 candidate run exits non-zero is still `OBSERVED` — the ADR requires observed tool failures to stay
 in the denominator, never to quietly become "missing evidence". No corpus package script is ever
-executed and no corpus dependency is ever installed. A malformed report, a base/head/diff mismatch,
-or a verdict/exit mismatch remains in raw evidence with a bounded `verificationStatus`; it carries
-no trusted verdict or suggestions. Candidate and runner digests are checked around candidate
-execution, so an artifact that changes during collection aborts the experiment.
+executed and no corpus dependency is ever installed. A malformed report, a
+base/head/merge-base/range/diff mismatch, or a verdict/exit mismatch remains in raw evidence with a
+bounded `verificationStatus`; it carries no trusted verdict or suggestions. Candidate and runner
+digests are checked around candidate execution, so an artifact that changes during collection
+aborts the experiment.
 
 ### 4. `report --protocol <frozen.json> --raw <raw.json> [--out <report.json>] [--export <public.json>] [--preview]`
 
 Re-validates the frozen protocol's own digest, checks the raw bundle's `protocolDigest`/`experimentId`
 match it, and checks the case set is exactly the registered one (no missing, no duplicate, no extra).
-It also checks the observed Bun version. Any infrastructure-failed case or any observed Semctx run
-whose `verificationStatus` is not `TRUSTED` makes evidence incomplete: the verdict is
-`EVIDENCE_MISSING` and no score is emitted. Totals expose `failedCases` and `untrustedCases`
-separately, while the local raw bundle retains the underlying outputs and reason code.
+It also checks the observed Bun version and revalidates each trusted report against the
+independently collected base, head, merge-base, canonical range and changed-file identity. Any
+infrastructure-failed case or any observed Semctx run whose `verificationStatus` is not `TRUSTED`
+makes evidence incomplete: the verdict is `EVIDENCE_MISSING` and no score is emitted. Totals expose
+`failedCases` and `untrustedCases` separately, while the local raw bundle retains the underlying
+outputs and reason code.
+This is a coherence check over runner-observed local evidence, not a signature or an attestation:
+the offline report step cannot authenticate an adversarial rewrite of the entire raw artifact.
 Scores `semctx`, `changed-files`, and `one-hop-import-neighborhood` against every `LABELLED` case only
 — `UNKNOWN` cases are excluded from scoring entirely, never treated as negatives. A `synthetic-smoke`
 protocol's `evidenceKind` is always `"smoke"` and its verdict is always `EVIDENCE_MISSING`, regardless

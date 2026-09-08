@@ -64,11 +64,14 @@ if (args[0] === "index") process.exit(0);
 if (args[0] === "verify" && args[1] === "diff") {
   const base = args[args.indexOf("--base") + 1];
   const head = args[args.indexOf("--head") + 1];
-  const diff = Bun.spawnSync(["git", "diff", "--name-only", base, head], { cwd: root, stdout: "pipe" });
+  const merge = Bun.spawnSync(["git", "merge-base", "--", base, head], { cwd: root, stdout: "pipe" });
+  const mergeBase = new TextDecoder().decode(merge.stdout).trim();
+  const diff = Bun.spawnSync(["git", "diff", "--name-only", mergeBase, head], { cwd: root, stdout: "pipe" });
   const changedFiles = new TextDecoder().decode(diff.stdout).trim().split("\\n").filter(Boolean).sort();
   const blocks = changedFiles.includes("src/critical.ts");
   const report = {
-    schemaVersion: 1, verdict: blocks ? "BLOCK" : "PASS", base, head, mergeBase: null, range: null,
+    schemaVersion: 1, verdict: blocks ? "BLOCK" : "PASS", base, head, mergeBase,
+    range: mergeBase.slice(0, 12) + ".." + head.slice(0, 12),
     changedFiles, changedSymbols: [], impactedContracts: [], impactedInvariants: [],
     recommendedTests: [], contradictions: [], unknowns: [],
     findings: blocks ? [{
@@ -131,6 +134,30 @@ function makeSourceRepo(): { cwd: string; base: string; head: string } {
   git(cwd, ["commit", "-q", "-m", "head"]);
   const head = git(cwd, ["rev-parse", "HEAD"]);
   return { cwd, base, head };
+}
+
+function makeDivergedSourceRepo(): { cwd: string; base: string; head: string; mergeBase: string } {
+  const cwd = tempDir("semctx-pilot-diverged-source-");
+  git(cwd, ["init", "-q"]);
+  git(cwd, ["config", "user.email", "pilot@example.invalid"]);
+  git(cwd, ["config", "user.name", "pilot test"]);
+  mkdirSync(join(cwd, "src"), { recursive: true });
+  writeFileSync(join(cwd, "src", "critical.ts"), "export const value = 1;\n");
+  writeFileSync(join(cwd, "src", "consumer.ts"), 'import { value } from "./critical";\nexport const doubled = value * 2;\n');
+  git(cwd, ["add", "-A"]);
+  git(cwd, ["commit", "-q", "-m", "common"]);
+  const mergeBase = git(cwd, ["rev-parse", "HEAD"]);
+  git(cwd, ["checkout", "-q", "-b", "base-side"]);
+  writeFileSync(join(cwd, "src", "base-only.ts"), "export const baseOnly = true;\n");
+  git(cwd, ["add", "-A"]);
+  git(cwd, ["commit", "-q", "-m", "base side"]);
+  const base = git(cwd, ["rev-parse", "HEAD"]);
+  git(cwd, ["checkout", "-q", "--detach", mergeBase]);
+  writeFileSync(join(cwd, "src", "critical.ts"), "export const value = 2;\n");
+  git(cwd, ["add", "-A"]);
+  git(cwd, ["commit", "-q", "-m", "head side"]);
+  const head = git(cwd, ["rev-parse", "HEAD"]);
+  return { cwd, base, head, mergeBase };
 }
 
 function baseDraft(overrides: Partial<DraftProtocolInput["config"]> = {}): DraftProtocolInput["config"] {
@@ -521,6 +548,36 @@ describe("collect: real process observation and confinement", () => {
     expect(bundle.cases[0]?.failureReason).toMatch(/does not match changedFiles/);
   }, 60_000);
 
+  test("observes a diverged base through the same merge-base range as verify diff", () => {
+    const repoRoot = makeFixtureRepoRoot();
+    const source = makeDivergedSourceRepo();
+    const protocol = freezeProtocol(validateDraftProtocol({
+      schemaVersion: 1,
+      candidate: { packaging: "source-dev" },
+      config: baseDraft(),
+      corpus: { kind: "synthetic-smoke", cases: [makeCase(
+        "case-1", "fixture-repo", { status: "UNKNOWN" },
+        { synthetic: true, baseRef: source.base, headRef: source.head, changedFiles: ["src/critical.ts"] },
+      )] },
+    }), repoRoot);
+    const bundle = collectCases(
+      protocol,
+      validateLocalSourcesFile({ schemaVersion: 1, paths: { "case-1": source.cwd } }),
+      repoRoot,
+    );
+    expect(bundle.cases[0]).toMatchObject({
+      status: "OBSERVED",
+      git: {
+        baseRef: source.base,
+        headRef: source.head,
+        mergeBase: source.mergeBase,
+        range: `${source.mergeBase.slice(0, 12)}..${source.head.slice(0, 12)}`,
+      },
+      changedFiles: ["src/critical.ts"],
+      semctx: { verificationStatus: "TRUSTED" },
+    });
+  }, 60_000);
+
   test("records a FAILED case (not a thrown error) when the source path does not exist", () => {
     const repoRoot = makeFixtureRepoRoot();
     const corpus: FrozenProtocolV1["corpus"] = {
@@ -561,12 +618,16 @@ function makeObservation(
   spec?: CorpusCaseSpec,
 ): RawCollectionBundleV1["cases"][number] {
   if (suggested === null) {
-    return { caseId, status: "FAILED", failureReason: "infra failure", changedFiles: [], semctx: null, baselineChangedFiles: null, baselineImportNeighborhood: null };
+    return { caseId, status: "FAILED", failureReason: "infra failure", git: null, changedFiles: [], semctx: null, baselineChangedFiles: null, baselineImportNeighborhood: null };
   }
+  const baseRef = spec?.baseRef ?? HEX_BASE;
+  const headRef = spec?.headRef ?? hexHead(1);
+  const gitIdentity = { baseRef, headRef, mergeBase: baseRef, range: `${baseRef.slice(0, 12)}..${headRef.slice(0, 12)}` };
   return {
     caseId,
     status: "OBSERVED",
     failureReason: null,
+    git: gitIdentity,
     changedFiles: [...(spec?.changedFiles ?? [])],
     semctx: {
       init: { argv: ["bun"], exitCode: 0, timedOut: false, durationMs: 1, stdout: "", stderr: "" },
@@ -579,10 +640,10 @@ function makeObservation(
         stdout: JSON.stringify({
           schemaVersion: 1,
           verdict: "PASS",
-          base: spec?.baseRef ?? HEX_BASE,
-          head: spec?.headRef ?? hexHead(1),
-          mergeBase: null,
-          range: null,
+          base: baseRef,
+          head: headRef,
+          mergeBase: gitIdentity.mergeBase,
+          range: gitIdentity.range,
           changedFiles: spec?.changedFiles ?? [],
           changedSymbols: [],
           impactedContracts: [],
@@ -763,6 +824,27 @@ describe("report identity and completeness gates", () => {
     expect(() => buildResultReport(protocol, { ...raw, observedBunVersion: "0.0.0" })).toThrow(/observedBunVersion/);
   });
 
+  test("rejects a raw Git identity that does not bind the frozen case", () => {
+    const { protocol, raw } = fixture();
+    const observation = raw.cases[0]!;
+    if (observation.git === null) throw new Error("fixture must be observed");
+    const changed = {
+      ...observation,
+      git: { ...observation.git, baseRef: "c".repeat(40) },
+    };
+    expect(() => buildResultReport(protocol, { ...raw, cases: [changed] })).toThrow(/does not bind the frozen base\/head/);
+  });
+
+  test("revalidates a trusted raw report against the independently observed merge-base", () => {
+    const { protocol, raw } = fixture();
+    const observation = structuredClone(raw.cases[0]!);
+    if (observation.semctx === null) throw new Error("fixture must contain a semctx run");
+    const report = JSON.parse(observation.semctx.verify.stdout) as Record<string, unknown>;
+    report.mergeBase = "c".repeat(40);
+    observation.semctx.verify.stdout = JSON.stringify(report);
+    expect(() => buildResultReport(protocol, { ...raw, cases: [observation] })).toThrow(/trusted projection disagrees/);
+  });
+
   test("an infrastructure failure produces no score and EVIDENCE_MISSING", () => {
     const labels: LabelStatus[] = Array.from({ length: 30 }, () => ({
       status: "LABELLED", provenance: "automated-review", expectedImpactedFiles: ["a.ts"], criticalFiles: [],
@@ -770,7 +852,7 @@ describe("report identity and completeness gates", () => {
     const corpus = researchCorpus(labels);
     const protocol = makeFrozenProtocolFixture(corpus);
     const cases = corpus.cases.map((c, index): RawCollectionBundleV1["cases"][number] => index === 0
-      ? { caseId: c.caseId, status: "FAILED", failureReason: "local clone failed", changedFiles: [], semctx: null,
+      ? { caseId: c.caseId, status: "FAILED", failureReason: "local clone failed", git: null, changedFiles: [], semctx: null,
         baselineChangedFiles: null, baselineImportNeighborhood: null }
       : makeObservation(c.caseId, ["a.ts"], c));
     const report = buildResultReport(protocol, {
@@ -842,6 +924,18 @@ describe("validateRawCollectionBundle: process truth", () => {
     expect(() => validateRawCollectionBundle({ ...base, cases: [observation] })).toThrow();
   });
 
+  test("rejects a pre-fix OBSERVED case without a bound Git identity", () => {
+    const { git: _git, ...oldObservation } = makeObservation("c-1", ["a.ts"]);
+    expect(() => validateRawCollectionBundle({ ...base, cases: [oldObservation] })).toThrow(/expected an object/);
+  });
+
+  test("rejects a non-canonical raw range", () => {
+    const observation = makeObservation("c-1", ["a.ts"]);
+    if (observation.git === null) throw new Error("fixture must be observed");
+    observation.git.range = "cccccccccccc..dddddddddddd";
+    expect(() => validateRawCollectionBundle({ ...base, cases: [observation] })).toThrow(/canonical merge-base/);
+  });
+
   test("rejects incoherent timeout and unknown raw fields", () => {
     const observation = makeObservation("c-1", ["a.ts"]);
     if (observation.semctx !== null) observation.semctx.verify.timedOut = true;
@@ -857,14 +951,20 @@ describe("validateRawCollectionBundle: process truth", () => {
 });
 
 describe("verify output trust", () => {
-  const expected = { baseRef: HEX_BASE, headRef: hexHead(1), changedFiles: ["a.ts"] };
+  const expected = {
+    baseRef: HEX_BASE,
+    headRef: hexHead(1),
+    mergeBase: HEX_BASE,
+    range: `${HEX_BASE.slice(0, 12)}..${hexHead(1).slice(0, 12)}`,
+    changedFiles: ["a.ts"],
+  };
   const report = (overrides: Record<string, unknown> = {}): string => JSON.stringify({
     schemaVersion: 1,
     verdict: "PASS",
     base: HEX_BASE,
     head: hexHead(1),
-    mergeBase: null,
-    range: `${HEX_BASE}..${hexHead(1)}`,
+    mergeBase: expected.mergeBase,
+    range: expected.range,
     changedFiles: ["a.ts"],
     changedSymbols: [],
     impactedContracts: [],
@@ -881,6 +981,14 @@ describe("verify output trust", () => {
     expect(parseVerifyReport(report(), 0, expected).verificationStatus).toBe("TRUSTED");
     expect(parseVerifyReport(report(), 3, expected)).toMatchObject({ verdict: null, verificationStatus: "EXIT_MISMATCH" });
     expect(parseVerifyReport(report({ changedFiles: ["other.ts"] }), 0, expected)).toMatchObject({
+      verdict: null,
+      verificationStatus: "DIFF_MISMATCH",
+    });
+    expect(parseVerifyReport(report({ mergeBase: "c".repeat(40) }), 0, expected)).toMatchObject({
+      verdict: null,
+      verificationStatus: "DIFF_MISMATCH",
+    });
+    expect(parseVerifyReport(report({ range: "cccccccccccc..dddddddddddd" }), 0, expected)).toMatchObject({
       verdict: null,
       verificationStatus: "DIFF_MISMATCH",
     });
@@ -942,7 +1050,7 @@ describe("buildPublicSummary: privacy allowlist", () => {
     const protocol = makeFrozenProtocolFixture(corpus);
     const failedCase: RawCollectionBundleV1["cases"][number] = {
       caseId: "s-1", status: "FAILED", failureReason: `git clone failed: ${secret} at ${leakyPath}`,
-      changedFiles: [], semctx: null, baselineChangedFiles: null, baselineImportNeighborhood: null,
+      git: null, changedFiles: [], semctx: null, baselineChangedFiles: null, baselineImportNeighborhood: null,
     };
     const raw: RawCollectionBundleV1 = {
       schemaVersion: 1, experimentId: protocol.experimentId, protocolDigest: protocol.digest,
