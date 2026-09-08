@@ -94,8 +94,10 @@ silently different measurement). For each case it then, inside a disposable temp
    is removed. Git system/global config, external diff drivers and hooks are disabled for collection.
    Exit 3 (BLOCK) is recorded, not hidden.
    Every captured stdout/stderr pair has a revalidated output digest. After each command, checks
-   the frozen HEAD, tree, tracked bytes and index. Only the exact normal `.gitignore` transformation
-   and confined `.semctx` metadata may be added; foreign source additions are refused.
+   the frozen HEAD, tree, tracked bytes, index entries (stage, mode, object ID and path), and
+   `assume-unchanged`/`skip-worktree` flags. The identity excludes the `fsmonitor-valid` cache bit
+   and byte-for-byte equality of the raw Git index file. Only the exact normal `.gitignore`
+   transformation and confined `.semctx` metadata may be added; foreign source additions are refused.
 5. Preserves any persistent drift as `SOURCE_DRIFT`, a null verdict and retained raw invocations,
    then cleans up the temp workspace, success or failure.
 
