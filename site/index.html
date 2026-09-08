@@ -16,7 +16,7 @@
       <a class="brand" href="https://github.com/hoklims/semctx" aria-label="Semctx repository">
         <span aria-hidden="true">S/</span> semctx
       </a>
-      <p class="phase-line"><span class="status-mark" aria-hidden="true"></span><span id="phase-label">Candidate evidence</span></p>
+      <p class="phase-line"><span class="status-mark" aria-hidden="true"></span><span id="phase-label">Evidence projection</span></p>
     </header>
 
     <div class="page-grid">
@@ -35,9 +35,9 @@
           <h1 id="page-title">Inspect the evidence before you install.</h1>
           <p class="lede">Three fixed TypeScript changes show what Semctx reports, what it warns about, and what it cannot prove. The evidence below stays separate from product claims.</p>
           <div class="state-strip" aria-label="Current evidence state">
-            <div><span>Phase</span><strong id="phase-value">candidate</strong></div>
-            <div><span>Demo</span><strong id="demo-state">not observed</strong></div>
-            <div><span>Pilot</span><strong id="pilot-state">not observed</strong></div>
+            <div><span>Phase</span><strong id="phase-value">not loaded</strong></div>
+            <div><span>Demo</span><strong id="demo-state">not loaded</strong></div>
+            <div><span>Pilot</span><strong id="pilot-state">not loaded</strong></div>
             <div><span>Human metrics</span><strong>not measured</strong></div>
           </div>
         </section>
@@ -127,10 +127,10 @@
             <p class="section-number">03</p>
             <div><h2 id="report-title">Captured report</h2><p>The browser reads the strict public projection, never local runner logs.</p></div>
           </div>
-          <div class="report-grid" id="evidence-report" aria-live="polite" aria-busy="true">
+          <div class="report-grid" id="evidence-report" aria-live="polite" aria-busy="false">
             <div class="report-primary">
-              <p class="report-status" id="report-status">Evidence has not been generated for this candidate.</p>
-              <p id="report-detail">Run the reproducible builder with an explicit packaged-demo manifest. Until then, no result is implied.</p>
+              <p class="report-status" id="report-status">Dynamic evidence is not loaded in this view.</p>
+              <p id="report-detail">Open evidence.json directly; this fallback does not infer whether evidence exists.</p>
             </div>
             <dl>
               <div><dt>Global verdict</dt><dd id="global-verdict">—</dd></div>
@@ -157,7 +157,7 @@
             <li><strong>Inspect a diff</strong><code>semctx verify diff --base &lt;ref&gt;</code></li>
             <li><strong>Act on the result</strong><span><b>PASS</b> no configured finding · <b>WARN</b> review requested · <b>BLOCK</b> configured gate failed</span></li>
           </ol>
-          <p class="release-note" id="release-note">This page currently describes candidate evidence. Confirm the phase above before treating it as released evidence.</p>
+          <p class="release-note" id="release-note">Open the public evidence JSON to confirm whether this is candidate or released evidence.</p>
         </section>
 
         <section class="limits" id="limits" aria-labelledby="limits-title">

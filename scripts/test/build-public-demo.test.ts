@@ -8,6 +8,43 @@ import { FIXTURE_CASES } from "../first-use-demo/fixture";
 const SHA = "a".repeat(64);
 const COMMIT = "b".repeat(40);
 const roots: string[] = [];
+const observationIds = [
+  "phase-label", "phase-value", "demo-state", "pilot-state", "global-verdict", "cases-matched",
+  "pilot-observations", "pilot-untrusted", "unknown-labels", "artifact-version", "release-commit-identity",
+  "fixture-commit-identity", "report-status", "report-detail", "release-note", "evidence-report",
+] as const;
+
+function renderEvidenceInBrowserShell(evidence: unknown, ids: readonly string[] = observationIds): Record<string, { textContent: string; attributes: Record<string, string> }> {
+  const appUrl = new URL("../../site/app.js", import.meta.url).href;
+  const harness = `
+const ids = new Set(${JSON.stringify(ids)});
+const elements = new Map();
+function element(id) {
+  if (!ids.has(id)) return null;
+  if (!elements.has(id)) elements.set(id, {
+    textContent: "UNCHANGED",
+    attributes: {},
+    setAttribute(name, value) { this.attributes[name] = value; },
+  });
+  return elements.get(id);
+}
+Object.assign(globalThis, {
+  document: { querySelectorAll: () => [], getElementById: element },
+  history: { replaceState() {} },
+  location: { hash: "" },
+  fetch: async () => ({ ok: true, json: async () => (${JSON.stringify(evidence)}) }),
+});
+for (const id of ids) element(id);
+await import(${JSON.stringify(appUrl)});
+await Bun.sleep(10);
+console.log(JSON.stringify(Object.fromEntries([...elements])));
+`;
+  const child = Bun.spawnSync([process.execPath, "--eval", harness], { stdout: "pipe", stderr: "pipe" });
+  const stderr = new TextDecoder().decode(child.stderr);
+  expect(child.exitCode, stderr).toBe(0);
+  return JSON.parse(new TextDecoder().decode(child.stdout)) as Record<string, { textContent: string; attributes: Record<string, string> }>;
+}
+
 function temporaryRoot(): string {
   const root = mkdtempSync(join(tmpdir(), "semctx-public-demo-"));
   roots.push(root);
@@ -234,6 +271,33 @@ describe("public evidence projection", () => {
 });
 
 describe("static page contract", () => {
+  test("browser reader rejects incompatible or malformed evidence before observation DOM updates", () => {
+    const valid = JSON.parse(readFileSync(join(import.meta.dir, "..", "..", "site", "evidence.json"), "utf8")) as Record<string, unknown>;
+    for (const hostile of [
+      { ...valid, schemaVersion: 2, kind: "foreign-evidence", phase: "release" },
+      { ...valid, demo: { ...(valid["demo"] as Record<string, unknown>), cases: "not-an-array", verdict: "BLOCK" } },
+      { ...valid, pilot: { ...(valid["pilot"] as Record<string, unknown>), observedCases: 29 } },
+    ]) {
+      const rendered = renderEvidenceInBrowserShell(hostile, [
+        "phase-value", "global-verdict", "artifact-version", "report-status", "report-detail", "evidence-report",
+      ]);
+      expect(rendered["phase-value"]?.textContent).toBe("UNCHANGED");
+      expect(rendered["global-verdict"]?.textContent).toBe("UNCHANGED");
+      expect(rendered["artifact-version"]?.textContent).toBe("UNCHANGED");
+      expect(rendered["report-status"]?.textContent).toBe("Public evidence could not be loaded.");
+      expect(rendered["evidence-report"]?.attributes["aria-busy"]).toBe("false");
+    }
+  });
+
+  test("browser reader accepts the committed strict evidence projection", () => {
+    const evidence = JSON.parse(readFileSync(join(import.meta.dir, "..", "..", "site", "evidence.json"), "utf8"));
+    const rendered = renderEvidenceInBrowserShell(evidence);
+    expect(rendered["phase-value"]?.textContent).toBe("candidate");
+    expect(rendered["global-verdict"]?.textContent).toBe("WARN");
+    expect(rendered["artifact-version"]?.textContent).toBe("0.2.0");
+    expect(rendered["report-status"]?.textContent).toBe("Packaged demo evidence is present.");
+  });
+
   test("published fixture sources match the executed demo and compile", () => {
     const repository = join(import.meta.dir, "..", "..");
     for (const item of FIXTURE_CASES) {
@@ -250,7 +314,10 @@ describe("static page contract", () => {
     const html = readFileSync(join(siteRoot, "index.html"), "utf8");
     const references = [...html.matchAll(/(?:href|src)="([^"]+)"/g)].map(match => match[1]!);
     expect(references.every(value => value.startsWith("./") || value.startsWith("#") || value === "https://github.com/hoklims/semctx" || value === "https://hoklims.github.io/semctx/demo/")).toBe(true);
-    expect(html).toContain("Evidence has not been generated for this candidate.");
+    expect(html).toContain("Dynamic evidence is not loaded in this view.");
+    expect(html).toContain("Open the public evidence JSON");
+    expect(html).not.toContain("Evidence has not been generated for this candidate.");
+    expect(html).toContain('id="evidence-report" aria-live="polite" aria-busy="false"');
     expect(html.match(/<h1\b/g)).toHaveLength(1);
     expect(html).not.toContain("analytics");
     expect(readFileSync(join(siteRoot, "styles.css"), "utf8")).not.toContain("transition: all");
