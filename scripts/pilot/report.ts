@@ -289,6 +289,7 @@ export interface RepositoryTotals {
   failedCases: number;
   untrustedCases: number;
   labelledCases: number;
+  scores: ToolScore[] | null;
 }
 
 export interface FailedCaseEntry {
@@ -359,6 +360,7 @@ export function buildResultReport(
   const evidenceKind: "research" | "smoke" = protocol.corpus.kind === "research" ? "research" : "smoke";
 
   const perRepositoryMap = new Map<string, RepositoryTotals>();
+  const observationsByRepository = new Map<string, CaseObservation[]>();
   let labelledCases = 0;
   let unknownCases = 0;
   let observedCases = 0;
@@ -377,6 +379,7 @@ export function buildResultReport(
       failedCases: 0,
       untrustedCases: 0,
       labelledCases: 0,
+      scores: null,
     };
     bucket.totalCases += 1;
     if (observation.status === "OBSERVED") {
@@ -399,6 +402,16 @@ export function buildResultReport(
       unknownCases += 1;
     }
     perRepositoryMap.set(spec.repositoryAlias, bucket);
+    const repositoryObservations = observationsByRepository.get(spec.repositoryAlias) ?? [];
+    repositoryObservations.push(observation);
+    observationsByRepository.set(spec.repositoryAlias, repositoryObservations);
+  }
+
+  for (const [repositoryAlias, bucket] of perRepositoryMap) {
+    if (bucket.failedCases === 0 && bucket.untrustedCases === 0 && bucket.labelledCases > 0) {
+      const repositoryCases = observationsByRepository.get(repositoryAlias) ?? [];
+      bucket.scores = PILOT_TOOLS.map((tool) => scoreTool(tool, repositoryCases, corpusById));
+    }
   }
 
   const scores = PILOT_TOOLS.map((tool) => scoreTool(tool, raw.cases, corpusById));
@@ -441,18 +454,34 @@ export interface PublicSummaryV1 {
   totals: ResultReportV1["totals"];
   perRepository: RepositoryTotals[];
   scores: ToolScore[] | null;
-  criticalMisses: CriticalMissEntry[];
+  criticalMisses: Array<{ caseId: string; repositoryAlias: string; missedFileCount: number }>;
   totalDurationMs: number;
   generatedAt: string;
 }
 
-function isPublicSourceDeclared(protocol: FrozenProtocolV1, caseId: string): boolean {
-  const spec = protocol.corpus.cases.find((c) => c.caseId === caseId);
-  return spec !== undefined
-    && spec.publicSource !== null
-    && protocol.corpus.cases
-      .filter((candidate) => candidate.repositoryAlias === spec.repositoryAlias)
-      .every((candidate) => candidate.publicSource !== null);
+function publicExperimentId(protocolDigest: string): string {
+  if (!/^sha256:[0-9a-f]{64}$/.test(protocolDigest)) {
+    throw new PilotValidationError("protocol.digest", "must be a SHA-256 digest before public export");
+  }
+  return `experiment-${protocolDigest.slice("sha256:".length, "sha256:".length + 12)}`;
+}
+
+function canonicalPublicTimestamp(value: string): string {
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed) || new Date(parsed).toISOString() !== value) {
+    throw new PilotValidationError("report.generatedAt", "must be a canonical ISO timestamp before public export");
+  }
+  return value;
+}
+
+function copyScores(scores: ToolScore[] | null): ToolScore[] | null {
+  return scores?.map((score) => ({
+    tool: score.tool,
+    labelledCasesScored: score.labelledCasesScored,
+    precision: score.precision,
+    recall: score.recall,
+    criticalRecall: score.criticalRecall,
+  })) ?? null;
 }
 
 /**
@@ -461,27 +490,56 @@ function isPublicSourceDeclared(protocol: FrozenProtocolV1, caseId: string): boo
  * failureReason, local paths) has no path into a public export by construction.
  */
 export function buildPublicSummary(protocol: FrozenProtocolV1, report: ResultReportV1): PublicSummaryV1 {
-  const aliases = [...new Set(protocol.corpus.cases.map((spec) => spec.repositoryAlias))];
-  const publicAliases = new Set(aliases.filter((alias) =>
-    protocol.corpus.cases
-      .filter((spec) => spec.repositoryAlias === alias)
-      .every((spec) => spec.publicSource !== null)));
-  const privateAliases = aliases.filter((alias) => !publicAliases.has(alias)).sort();
-  const privateAliasMap = new Map(privateAliases.map((alias, index) => [alias, `private-repository-${index + 1}`]));
-  const publicAlias = (alias: string): string => publicAliases.has(alias) ? alias : (privateAliasMap.get(alias) ?? "private-repository");
+  if (report.protocolDigest !== protocol.digest) {
+    throw new PilotValidationError("report.protocolDigest", "does not match the protocol used for public export");
+  }
+  const repositoryIds = new Map<string, string>();
+  const caseIds = new Map<string, string>();
+  for (const [index, spec] of protocol.corpus.cases.entries()) {
+    if (!repositoryIds.has(spec.repositoryAlias)) {
+      repositoryIds.set(spec.repositoryAlias, `repository-${repositoryIds.size + 1}`);
+    }
+    caseIds.set(spec.caseId, `case-${index + 1}`);
+  }
+  const repositoryId = (alias: string): string => {
+    const id = repositoryIds.get(alias);
+    if (id === undefined) throw new PilotValidationError("report.perRepository", "contains an unregistered repository");
+    return id;
+  };
   return {
     schemaVersion: 1,
-    experimentId: report.experimentId,
+    experimentId: publicExperimentId(protocol.digest),
     protocolDigest: report.protocolDigest,
     evidenceKind: report.evidenceKind,
     verdict: report.verdict,
-    totals: report.totals,
-    perRepository: report.perRepository.map((totals) => ({ ...totals, repositoryAlias: publicAlias(totals.repositoryAlias) })),
-    scores: report.scores,
-    criticalMisses: report.criticalMisses
-      .filter((miss) => isPublicSourceDeclared(protocol, miss.caseId))
-      .map((miss) => ({ caseId: miss.caseId, repositoryAlias: miss.repositoryAlias, files: miss.files })),
+    totals: {
+      totalCases: report.totals.totalCases,
+      observedCases: report.totals.observedCases,
+      failedCases: report.totals.failedCases,
+      untrustedCases: report.totals.untrustedCases,
+      labelledCases: report.totals.labelledCases,
+      unknownCases: report.totals.unknownCases,
+    },
+    perRepository: report.perRepository.map((totals) => ({
+      repositoryAlias: repositoryId(totals.repositoryAlias),
+      totalCases: totals.totalCases,
+      observedCases: totals.observedCases,
+      failedCases: totals.failedCases,
+      untrustedCases: totals.untrustedCases,
+      labelledCases: totals.labelledCases,
+      scores: copyScores(totals.scores),
+    })),
+    scores: copyScores(report.scores),
+    criticalMisses: report.criticalMisses.map((miss) => {
+      const caseId = caseIds.get(miss.caseId);
+      if (caseId === undefined) throw new PilotValidationError("report.criticalMisses", "contains an unregistered case");
+      return {
+        caseId,
+        repositoryAlias: repositoryId(miss.repositoryAlias),
+        missedFileCount: miss.files.length,
+      };
+    }),
     totalDurationMs: report.totalDurationMs,
-    generatedAt: report.generatedAt,
+    generatedAt: canonicalPublicTimestamp(report.generatedAt),
   };
 }
