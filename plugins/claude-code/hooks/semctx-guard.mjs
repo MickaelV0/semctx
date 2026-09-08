@@ -1227,6 +1227,11 @@ export function guardEnabledForInvocation({ command, cwd, sessionCwd, env }) {
   const override = guardEnvironmentOverride(env);
   if (override !== undefined) return override;
   const context = guardInvocationContext({ command, cwd, sessionCwd });
+  return guardEnablementForContext(context, env);
+}
+
+/** @param {{sessionRoot: string, targetRoot: string, scopeRequiresSessionGuard: boolean}} context */
+function guardEnablementForContext(context, env) {
   const targetGuard = readGuardJson(join(context.targetRoot, ".semctx", "guard.json"));
   const sessionGuard = context.scopeRequiresSessionGuard
     ? readGuardJson(join(context.sessionRoot, ".semctx", "guard.json"))
@@ -1721,7 +1726,8 @@ export function evaluateGuard({ command, cwd, sessionCwd, env, overriddenEnvKeys
     && !overriddenEnvKeys.some((name) => isRetargetingEnvironmentName(name));
   const context = guardInvocationContext({ command, cwd, sessionCwd });
   const { targetRoot: targetCwd } = context;
-  const enabled = guardEnabledForInvocation({ command, cwd, sessionCwd, env: effectiveEnv });
+  const override = guardEnvironmentOverride(effectiveEnv);
+  const enabled = override ?? guardEnablementForContext(context, effectiveEnv);
   if (!enabled) return { block: false }; // advisory (default)
 
   const state = commandIsolated
