@@ -116,7 +116,8 @@ function demoEvidence(value) {
   }
   if (status === "COMPLETED") {
     if (ids.size !== Object.keys(CASES).length || Object.keys(CASES).some(id => !ids.has(id))) invalid("completed demo cases");
-    if (demo.packageVersion === null || demo.runtimeDigest === null || verdict === null) invalid("completed demo identity");
+    if (demo.cases.some(item => !item.matchedExpectation)) invalid("completed demo expectations");
+    if (demo.packageVersion === null || demo.runtimeDigest === null || demo.fixtureCommit === null || verdict === null) invalid("completed demo identity");
     const expectedVerdict = severities.includes("block") ? "BLOCK" : severities.includes("warn") ? "WARN" : "PASS";
     if (verdict !== expectedVerdict) invalid("demo.verdict");
   } else if (demo.cases.length !== 0 || verdict !== null) {

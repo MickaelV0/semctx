@@ -1,7 +1,7 @@
 import { afterAll, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { FIXTURE_CASES } from "./first-use-demo/fixture";
 import { identifyPackagedCli } from "./first-use-demo/identity";
@@ -22,20 +22,56 @@ function report(overrides: Record<string, unknown> = {}): Record<string, unknown
   };
 }
 
-function fakeCli(options: { setup?: string; setupCode?: number; verify?: string; verifyCode?: number; drift?: boolean } = {}): string {
+function expectedWarningReport(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  const symbol = { id: "sym:interface:src/cart.ts:Cart:1", name: "Cart", kind: "interface", file: "src/cart.ts" };
+  return report({
+    verdict: "WARN",
+    changedSymbols: [symbol],
+    findings: [{
+      rule: "contract_changed_without_test", tier: "advisory", severity: "warn",
+      message: "exported contract changed without a covering test", nodeIds: [symbol.id], locations: [],
+    }],
+    summary: { blockCount: 0, warnCount: 1 },
+    ...overrides,
+  });
+}
+
+function fakeCli(options: {
+  setup?: string; setupCode?: number; verify?: string; verifyCode?: number;
+  drift?: boolean; headDrift?: boolean; rejectAmbientRepositoryEnv?: boolean;
+} = {}): string {
   const folder = fresh("fake-runtime"); mkdirSync(folder);
   const path = join(folder, "index.js");
   writeFileSync(path, `import { appendFileSync } from 'node:fs';
 const cmd = process.argv[2];
+const forbidden = Object.keys(process.env).filter(key => /^GIT_/i.test(key) || key.toUpperCase() === 'SEMCTX_ROOT');
+if (${options.rejectAmbientRepositoryEnv ?? false} && forbidden.length > 0) { console.error(forbidden.join(',')); process.exit(17); }
 if (cmd === '--version') { console.log('0.0.0'); }
 else if (cmd === 'setup') { console.log(${JSON.stringify(options.setup ?? '{"setupReady":true}')}); process.exit(${options.setupCode ?? 0}); }
 else if (cmd === 'index') { console.log('{}'); }
 else if (cmd === 'verify') {
   if (${options.drift ?? false}) appendFileSync(import.meta.path, '\\n// drift');
+  if (${options.headDrift ?? false}) Bun.spawnSync(['git', '-c', 'user.name=Semctx Test', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-q', '-m', 'unexpected head move'], { cwd: process.cwd() });
   console.log(${JSON.stringify(options.verify ?? JSON.stringify(report()))}); process.exit(${options.verifyCode ?? 0});
 } else process.exit(9);
 `);
   return path;
+}
+
+function gitRevParseWrapper(mode: "fail" | "malformed"): string {
+  const folder = fresh(`git-${mode}`); mkdirSync(folder);
+  const realGit = Bun.which("git");
+  if (realGit === null) throw new Error("git is required for first-use demo tests");
+  if (process.platform === "win32") {
+    const wrapper = join(folder, "git.cmd");
+    writeFileSync(wrapper, `@echo off\r\necho %* | %SystemRoot%\\System32\\findstr.exe /C:"rev-parse HEAD" >NUL\r\nif %ERRORLEVEL% EQU 0 (\r\n${mode === "fail" ? "  exit /b 1" : "  echo not-a-commit\r\n  exit /b 0"}\r\n)\r\n"${realGit}" %*\r\nexit /b %ERRORLEVEL%\r\n`, "utf8");
+    return folder;
+  }
+  const wrapper = join(folder, "git");
+  const quotedGit = realGit.replaceAll("'", "'\\''");
+  writeFileSync(wrapper, `#!/bin/sh\ncase " $* " in\n  *" rev-parse HEAD "*) ${mode === "fail" ? "exit 1" : "printf '%s\\n' not-a-commit; exit 0"} ;;\nesac\nexec '${quotedGit}' "$@"\n`, "utf8");
+  chmodSync(wrapper, 0o755);
+  return folder;
 }
 
 test("three controlled changes produce the actual packaged warning and no fabricated per-file verdict", async () => {
@@ -133,6 +169,61 @@ test.each([
   expect(JSON.parse(readFileSync(join(outDir, MANIFEST_FILENAME), "utf8")).reason).toBe(reason);
 }, 30_000);
 
+test("a no-op substitute cannot complete the frozen demonstration", () => {
+  const outDir = fresh("no-op");
+  const outcome = runFirstUseDemo({ cliPath: fakeCli(), outDir });
+  expect(outcome.status).toBe("BLOCKED");
+  expect(outcome.reason).toBe("UNEXPECTED_ANALYSIS");
+  expect(readFileSync(join(outDir, "raw", "verify-diff.stdout.txt"), "utf8")).toContain('"verdict":"PASS"');
+  expect(JSON.parse(readFileSync(join(outDir, MANIFEST_FILENAME), "utf8")).status).toBe("BLOCKED");
+});
+
+test.each(["fail", "malformed"] as const)("a %s result from fixture HEAD lookup cannot complete", (mode) => {
+  const previousPath = process.env.PATH;
+  process.env.PATH = `${gitRevParseWrapper(mode)}${delimiter}${previousPath ?? ""}`;
+  try {
+    const outcome = runFirstUseDemo({
+      cliPath: fakeCli({ verify: JSON.stringify(expectedWarningReport()) }),
+      outDir: fresh(`head-${mode}`),
+    });
+    expect(outcome.status).toBe("BLOCKED");
+    expect(outcome.reason).toBe("FIXTURE_GIT_IDENTITY_FAILED");
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+  }
+});
+
+test("ambient repository-routing variables are removed from Git and CLI children", () => {
+  const keys = ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_EXTERNAL_DIFF", "SEMCTX_ROOT"];
+  const previous = new Map(keys.map(key => [key, process.env[key]]));
+  for (const key of keys) process.env[key] = fresh(`hostile-${key}`);
+  try {
+    const outcome = runFirstUseDemo({
+      cliPath: fakeCli({
+        verify: JSON.stringify(expectedWarningReport()),
+        rejectAmbientRepositoryEnv: true,
+      }),
+      outDir: fresh("sanitized-environment"),
+    });
+    expect(outcome.status, outcome.detail ?? "").toBe("COMPLETED");
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test("a CLI that moves fixture HEAD cannot complete with an unchanged working diff", () => {
+  const outcome = runFirstUseDemo({
+    cliPath: fakeCli({ verify: JSON.stringify(expectedWarningReport()), headDrift: true }),
+    outDir: fresh("head-drift"),
+  });
+  expect(outcome.status).toBe("BLOCKED");
+  expect(outcome.reason).toBe("FIXTURE_DRIFT");
+});
+
 test("rejects inconsistent versions, verdicts, counts, findings and exit codes", () => {
   for (const invalid of [{ schemaVersion: 2 }, { verdict: "GREEN" }, { verdict: "BLOCK" }, { unknowns: [8] }, { summary: { warnCount: 1, blockCount: 0 } }, { findings: [{}] }, { changedSymbols: [{}] }]) expect(asVerifyReport(report(invalid), 0)).toBeNull();
   expect(asVerifyReport(report(), 3)).toBeNull();
@@ -140,7 +231,7 @@ test("rejects inconsistent versions, verdicts, counts, findings and exit codes",
 
 test("renders product uncertainty and rejects removed force flag", () => {
   const outDir = fresh("unknown");
-  const outcome = runFirstUseDemo({ cliPath: fakeCli({ verify: JSON.stringify(report({ unknowns: ["STALE: test uncertainty"] })) }), outDir });
+  const outcome = runFirstUseDemo({ cliPath: fakeCli({ verify: JSON.stringify(expectedWarningReport({ unknowns: ["STALE: test uncertainty"] })) }), outDir });
   expect(outcome.status).toBe("COMPLETED");
   expect(readFileSync(join(outDir, "report.md"), "utf8")).toContain("STALE: test uncertainty");
   const child = Bun.spawnSync([process.execPath, "scripts/first-use-demo.ts", "--force"], { cwd: repoRoot, stdout: "pipe", stderr: "pipe" });

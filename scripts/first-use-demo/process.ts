@@ -11,6 +11,16 @@ export interface ChildOutcome {
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 
+function sanitizedEnvironment(): Record<string, string> {
+  const sanitized: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined && !/^GIT_/i.test(key) && key.toUpperCase() !== "SEMCTX_ROOT") {
+      sanitized[key] = value;
+    }
+  }
+  return sanitized;
+}
+
 /** Spawn a real process and capture its exit code and raw output verbatim. */
 export function runChild(
   argv: readonly string[],
@@ -40,12 +50,16 @@ export function runPackagedCli(
   cwd: string,
   timeoutMs?: number,
 ): ChildOutcome {
-  return runChild([process.execPath, cliPath, ...args], { cwd, timeoutMs });
+  return runChild([process.execPath, cliPath, ...args], { cwd, env: sanitizedEnvironment(), timeoutMs });
 }
 
 export function runGit(args: readonly string[], cwd: string): ChildOutcome {
   return runChild(["git", "-c", "core.hooksPath=", "-c", "commit.gpgsign=false", "-c", "core.autocrlf=false", ...args], {
     cwd,
-    env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null" },
+    env: {
+      ...sanitizedEnvironment(),
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+    },
   });
 }
