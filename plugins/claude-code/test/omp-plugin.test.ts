@@ -276,45 +276,120 @@ describe("OMP extension adapter wiring (omp/semctx-guard.ts)", () => {
     }
   });
 
-  test("fails closed for unresolved internal Git scopes while explicit off remains authoritative", () => {
+  test("keeps unresolved internal cwd advisory unless guard enablement is known", () => {
+    const sessionRepo = mkdtempSync(join(tmpdir(), "semctx-omp-internal-cwd-"));
+    execFileSync("git", ["init"], { cwd: sessionRepo, stdio: "ignore" });
     const internalCwd = {
       type: "tool_call" as const,
       toolCallId: "internal-cwd",
       toolName: "bash",
       input: { command: "git commit -m x", cwd: "skill://semctx-control" },
     };
-    expect(evaluateOmpToolCall(internalCwd, { cwd: repoRoot })).toEqual({
-      block: true,
-      reason: expect.stringContaining("did not expand internal URL cwd"),
-    });
-    expect(evaluateOmpToolCall({
-      ...internalCwd,
-      toolCallId: "internal-command",
-      input: { command: "cd skill://semctx-control && git commit -m x" },
-    }, { cwd: repoRoot })).toEqual({
-      block: true,
-      reason: expect.stringContaining("did not expand internal URL Git scope"),
-    });
-    expect(evaluateOmpToolCall({
-      ...internalCwd,
-      toolCallId: "internal-git-c",
-      input: { command: "git -Cskill://semctx-control commit -m x" },
-    }, { cwd: repoRoot })).toEqual({
-      block: true,
-      reason: expect.stringContaining("did not expand internal URL Git scope"),
-    });
-    expect(evaluateOmpToolCall({
-      ...internalCwd,
-      toolCallId: "internal-leading-space",
-      input: { command: "  cd skill://semctx-control && git commit -m x" },
-    }, { cwd: repoRoot })).toEqual({
-      block: true,
-      reason: expect.stringContaining("did not expand internal URL Git scope"),
-    });
-    expect(evaluateOmpToolCall({
-      ...internalCwd,
-      input: { ...internalCwd.input, env: { SEMCTX_GUARD: "off" } },
-    }, { cwd: repoRoot })).toBeUndefined();
+    try {
+      expect(evaluateOmpToolCall(internalCwd, { cwd: sessionRepo })).toBeUndefined();
+      let observedEnv: Record<string, string | undefined> | undefined;
+      expect(evaluateOmpToolCall({
+        ...internalCwd,
+        input: { ...internalCwd.input, env: { OMP_TEST_OVERLAY: "call" } },
+      }, { cwd: sessionRepo }, evaluateGuard, (input) => {
+        observedEnv = input.env;
+        return false;
+      })).toBeUndefined();
+      expect(observedEnv?.OMP_TEST_OVERLAY).toBe("call");
+      expect(observedEnv?.PATH ?? observedEnv?.Path).toBe(process.env.PATH ?? process.env.Path);
+      expect(evaluateOmpToolCall({
+        ...internalCwd,
+        input: { ...internalCwd.input, env: { SEMCTX_GUARD: "off" } },
+      }, { cwd: sessionRepo }, () => { throw new Error("must not evaluate"); }, () => { throw new Error("must not evaluate"); }))
+        .toBeUndefined();
+
+      const explicitlyEnabled = evaluateOmpToolCall({
+        ...internalCwd,
+        input: { ...internalCwd.input, env: { SEMCTX_GUARD: "on" } },
+      }, { cwd: sessionRepo });
+      expect(explicitlyEnabled).toEqual({
+        block: true,
+        reason: expect.stringContaining("did not expand internal URL cwd"),
+      });
+
+      mkdirSync(join(sessionRepo, ".semctx"));
+      writeFileSync(join(sessionRepo, ".semctx", "guard.json"), JSON.stringify({ enabled: true }));
+      expect(evaluateOmpToolCall(internalCwd, { cwd: sessionRepo })).toEqual({
+        block: true,
+        reason: expect.stringContaining("did not expand internal URL cwd"),
+      });
+
+      expect(evaluateOmpToolCall(internalCwd, { cwd: sessionRepo }, evaluateGuard, () => {
+        throw new Error("probe failure");
+      })).toEqual({
+        block: true,
+        reason: expect.stringContaining("guard enablement evaluation failed"),
+      });
+      expect(evaluateOmpToolCall(internalCwd, { cwd: sessionRepo }, evaluateGuard, (() => undefined) as never)).toEqual({
+        block: true,
+        reason: expect.stringContaining("guard enablement evaluation returned an unknown result"),
+      });
+      expect(evaluateOmpToolCall(internalCwd, { cwd: "skill://session" })).toEqual({
+        block: true,
+        reason: expect.stringContaining("guard enablement cannot be established"),
+      });
+      expect(evaluateOmpToolCall(internalCwd, { cwd: join(sessionRepo, "missing") })).toEqual({
+        block: true,
+        reason: expect.stringContaining("not an accessible filesystem directory"),
+      });
+    } finally {
+      rmSync(sessionRepo, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps unresolved internal Git scope advisory unless guard enablement is known", () => {
+    const advisoryRepo = mkdtempSync(join(tmpdir(), "semctx-omp-internal-scope-advisory-"));
+    execFileSync("git", ["init"], { cwd: advisoryRepo, stdio: "ignore" });
+    const guardedRepo = createGuardedRepo("semctx-omp-internal-scope-guarded-");
+    const commands = [
+      "cd skill://semctx-control && git commit -m x",
+      "git -Cskill://semctx-control commit -m x",
+      "  cd skill://semctx-control && git commit -m x",
+    ];
+    try {
+      for (const command of commands) {
+        const event = {
+          type: "tool_call" as const,
+          toolCallId: "internal-scope",
+          toolName: "bash",
+          input: { command },
+        };
+        expect(evaluateOmpToolCall(event, { cwd: advisoryRepo })).toBeUndefined();
+        expect(evaluateOmpToolCall({
+          ...event,
+          input: { command, env: { SEMCTX_GUARD: "off" } },
+        }, { cwd: guardedRepo })).toBeUndefined();
+        expect(evaluateOmpToolCall({
+          ...event,
+          input: { command, env: { SEMCTX_GUARD: "on" } },
+        }, { cwd: advisoryRepo })).toEqual({
+          block: true,
+          reason: expect.stringContaining("did not expand internal URL Git scope"),
+        });
+        expect(evaluateOmpToolCall(event, { cwd: guardedRepo })).toEqual({
+          block: true,
+          reason: expect.stringContaining("did not expand internal URL Git scope"),
+        });
+      }
+      const throwing = () => { throw new Error("probe failure"); };
+      expect(evaluateOmpToolCall({
+        type: "tool_call",
+        toolCallId: "internal-scope-failure",
+        toolName: "bash",
+        input: { command: commands[0]! },
+      }, { cwd: advisoryRepo }, evaluateGuard, throwing)).toEqual({
+        block: true,
+        reason: expect.stringContaining("guard enablement evaluation failed"),
+      });
+    } finally {
+      rmSync(advisoryRepo, { recursive: true, force: true });
+      rmSync(guardedRepo, { recursive: true, force: true });
+    }
   });
 
   test("preserves the guarded session root when structured cwd targets another repository", () => {

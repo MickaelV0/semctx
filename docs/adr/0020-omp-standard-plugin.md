@@ -56,9 +56,15 @@ terminal Git operations retain stale/missing-proof and scope-escape rejection. D
 turn an enabled policy evaluation failure into authorization. Resolve structured filesystem cwd
 with OMP 18.1.11 path semantics (relative to the original session cwd, including its documented
 path aliases), never relative to the extension process. OMP normally expands internal URLs before
-Bash; the extension has no internal URL router, so any unresolved internal-URL cwd or Git scope is
-rejected for a terminal Git operation instead of being guessed. The explicit `SEMCTX_GUARD=off`
-switch remains authoritative. Other tools and non-terminal commands are unaffected.
+Bash execution, but OMP 18.1.11 emits the extension `tool_call` event before that expansion. The
+extension has no session-safe internal URL router, so it never guesses a filesystem target from an
+unresolved internal-URL cwd or Git scope. It first applies the merged call environment and the
+explicit `SEMCTX_GUARD=off` switch. It then evaluates guard enablement only from a valid filesystem
+session root: known advisory mode remains non-blocking, while known guarded mode or an unknown or
+failed enablement evaluation blocks the unresolved terminal Git operation. A guard enabled only in
+the opaque target repository cannot be discovered at this event boundary; callers needing that
+target-local opt-in must provide a resolved filesystem cwd/path or enable the session/environment
+guard. Other tools and non-terminal commands are unaffected.
 
 Retire obsolete OMP launch/manifest and mirror/snapshotter surfaces in the same coherent change so
 a mixed package cannot disable MCP silently. Preserve Claude hooks/hooks.json, shadow lifecycle,
