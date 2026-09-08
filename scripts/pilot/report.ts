@@ -16,6 +16,65 @@ export type PilotTool = "semctx" | "changed-files" | "one-hop-import-neighborhoo
 export const PILOT_TOOLS: readonly PilotTool[] = ["semctx", "changed-files", "one-hop-import-neighborhood"];
 export type PilotVerdict = "EVIDENCE_MISSING" | "INCONCLUSIVE" | "NEGATIVE" | "POSITIVE";
 
+function portablePathSegments(path: string): readonly string[] {
+  return path.replaceAll("\\", "/").split("/").filter((segment) => segment.length > 0);
+}
+
+function endsWithPath(actual: string, expectedRelative: string): boolean {
+  const actualSegments = portablePathSegments(actual);
+  const expectedSegments = portablePathSegments(expectedRelative);
+  return expectedSegments.length > 0
+    && actualSegments.length >= expectedSegments.length
+    && expectedSegments.every((segment, index) => segment === actualSegments[actualSegments.length - expectedSegments.length + index]);
+}
+
+function validateInvocationCommands(
+  protocol: FrozenProtocolV1,
+  observation: CaseObservation,
+  path: string,
+): void {
+  if (observation.git === null || observation.semctx === null) return;
+  const { init, index, verify } = observation.semctx;
+  const executable = init.argv[0];
+  const root = init.argv.at(-1);
+  if (executable === undefined || root === undefined || root.length === 0) {
+    throw new PilotValidationError(`${path}.init.argv`, "must name the Bun executable and disposable root");
+  }
+  for (const [stage, invocation] of ([
+    ["init", init],
+    ["index", index],
+    ["verify", verify],
+  ] as const)) {
+    if (invocation.argv[0] !== executable) {
+      throw new PilotValidationError(`${path}.${stage}.argv`, "must use the same Bun executable as init");
+    }
+    if (invocation.argv[1] !== "run" || !endsWithPath(invocation.argv[2] ?? "", protocol.candidate.entryPath)) {
+      throw new PilotValidationError(`${path}.${stage}.argv`, "must name the frozen candidate entry path");
+    }
+    if (invocation.argv.at(-2) !== "--root" || invocation.argv.at(-1) !== root) {
+      throw new PilotValidationError(`${path}.${stage}.argv`, "must use the same disposable root as init");
+    }
+  }
+  const expectedInit = [executable, "run", init.argv[2]!, "init", "--root", root];
+  const expectedIndex = [executable, "run", index.argv[2]!, "index", "--root", root];
+  const expectedVerify = [
+    executable, "run", verify.argv[2]!, "verify", "diff",
+    "--base", observation.git.baseRef,
+    "--head", observation.git.headRef,
+    "--format", "json",
+    "--root", root,
+  ];
+  for (const [stage, actual, expected] of ([
+    ["init", init.argv, expectedInit],
+    ["index", index.argv, expectedIndex],
+    ["verify", verify.argv, expectedVerify],
+  ] as const)) {
+    if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+      throw new PilotValidationError(`${path}.${stage}.argv`, "does not match the registered candidate stage and frozen Git range");
+    }
+  }
+}
+
 function validateBaselineIdentity(
   observation: CaseObservation,
   baseline: BaselineCaseRun,
@@ -99,6 +158,7 @@ export function validateBundleAgainstProtocol(protocol: FrozenProtocolV1, raw: R
     if (observation.semctx === null) {
       throw new PilotValidationError(`raw.cases.${observation.caseId}.semctx`, "observed cases require candidate invocations");
     }
+    validateInvocationCommands(protocol, observation, `raw.cases.${observation.caseId}.semctx`);
     for (const [stage, invocation] of Object.entries({
       init: observation.semctx.init,
       index: observation.semctx.index,
