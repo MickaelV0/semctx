@@ -88,10 +88,10 @@ export const FeedbackStoreFileSchema = z
   .superRefine((file, context) => {
     const seen = new Set<string>();
     file.records.forEach((record, index) => {
-      if (record.recordId !== computeFeedbackRecordId(record.report, record.finding)) {
+      if (record.recordId !== computeFeedbackRecordId(record.report, record.finding, record.source)) {
         context.addIssue({
           code: z.ZodIssueCode.custom,
-          message: "feedback recordId does not match report/finding identity",
+          message: "feedback recordId does not match report/finding/source identity",
           path: ["records", index, "recordId"],
         });
       }
@@ -100,6 +100,13 @@ export const FeedbackStoreFileSchema = z
           code: z.ZodIssueCode.custom,
           message: "duplicate feedback recordId",
           path: ["records", index, "recordId"],
+        });
+      }
+      if (Date.parse(record.updatedAt) < Date.parse(record.recordedAt)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "feedback updatedAt must not precede recordedAt",
+          path: ["records", index, "updatedAt"],
         });
       }
       seen.add(record.recordId);
@@ -130,15 +137,20 @@ export function computeFeedbackSourceIdentity(report: VerifyReport): FeedbackSou
 }
 
 /**
- * The record key. A pure function of report and finding identity only (not of the source scope,
- * which the report's content digest already reflects) so that repeating the exact same recording
- * against the exact same report/finding content is idempotent by construction.
+ * The record key. A pure function of the report, finding and observed source identities so that a
+ * loaded record cannot claim a different source scope while retaining a valid key. Repeating the
+ * exact same recording remains idempotent by construction.
  */
 export function computeFeedbackRecordId(
   reportIdentity: FeedbackReportIdentityV1,
   findingIdentity: FeedbackFindingIdentityV1,
+  sourceIdentity: FeedbackSourceIdentityV1,
 ): string {
-  return `fb:${digestCanonical({ report: reportIdentity, finding: findingIdentity }).slice("sha256:".length)}`;
+  return `fb:${digestCanonical({
+    report: reportIdentity,
+    finding: findingIdentity,
+    source: sourceIdentity,
+  }).slice("sha256:".length)}`;
 }
 
 export interface FeedbackAnswer {
@@ -171,12 +183,13 @@ export function buildFeedbackRecord(input: BuildFeedbackRecordInput): BuildFeedb
   const findingIdentity = computeFeedbackFindingIdentity(input.report, input.findingIndex);
   if (findingIdentity === undefined) return { status: "finding-not-found" };
   const reportIdentity = computeFeedbackReportIdentity(input.report);
+  const sourceIdentity = computeFeedbackSourceIdentity(input.report);
   const record: FeedbackRecordV1 = {
     schemaVersion: FEEDBACK_SCHEMA_VERSION,
-    recordId: computeFeedbackRecordId(reportIdentity, findingIdentity),
+    recordId: computeFeedbackRecordId(reportIdentity, findingIdentity, sourceIdentity),
     report: reportIdentity,
     finding: findingIdentity,
-    source: computeFeedbackSourceIdentity(input.report),
+    source: sourceIdentity,
     outcome: input.outcome,
     ...(input.reason === undefined ? {} : { reason: input.reason }),
     ...(input.note === undefined ? {} : { note: input.note }),

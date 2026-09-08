@@ -144,7 +144,7 @@ export function writeFeedbackStore(root: string, expectedDigest: string | undefi
     writeFileSync(lockFd, `${JSON.stringify({ schemaVersion: 1, pid: process.pid, startedAt: new Date().toISOString() })}\n`, "utf8");
     const currentDigest = existsSync(path) ? contentDigestOf(readFileSync(path, "utf8")) : undefined;
     if (currentDigest !== expectedDigest) {
-      throw new SemctxError("STORE_ERROR", "feedback store changed since it was last read; re-read and retry");
+      throw new SemctxError("FEEDBACK_CONFLICT", "feedback store changed since it was last read; re-read and retry");
     }
     writeFileSync(tmp, `${JSON.stringify(validated, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
     renameSync(tmp, path);
