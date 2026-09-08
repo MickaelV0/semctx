@@ -5,7 +5,8 @@
  */
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { sha256Hex } from "./first-use-demo/identity";
+import { baseFixtureFiles, changedFixtureFiles } from "./first-use-demo/fixture";
+import { identifyFixture, sha256Hex } from "./first-use-demo/identity";
 import { PRECISION_THRESHOLD } from "./pilot/report";
 import { RESEARCH_MINIMUM_CASES } from "./pilot/protocol";
 
@@ -41,6 +42,7 @@ const DEMO_BLOCK_REASONS = [
   "UNEXPECTED_ANALYSIS", "FIXTURE_DRIFT",
 ] as const;
 const DEMO_COMMAND_LABELS = ["version", "setup", "index", "verify-diff"] as const;
+const EXPECTED_FIXTURE = identifyFixture(baseFixtureFiles(), changedFixtureFiles());
 
 export type DemoCaseId = keyof typeof CASES;
 export type PublicPhase = "candidate" | "release";
@@ -214,7 +216,6 @@ function validateCliIdentity(value: unknown, status: DemoStatus): { runtimeDiges
   const entry = fileIdentity(cli["cli"], "demo.cli.cli");
   if (entry.path !== cliPath) throw new Error("demo CLI entry path contradicts cliPath");
   const worker = cli["indexWorker"] === null ? null : fileIdentity(cli["indexWorker"], "demo.cli.indexWorker");
-  if (worker !== null && !worker.present) throw new Error("demo.cli.indexWorker must be present or null");
   if (string(cli["sourceProvenance"], "demo.cli.sourceProvenance").length === 0) throw new Error("demo.cli.sourceProvenance must not be empty");
   if (cli["authenticatedSource"] !== "UNKNOWN") throw new Error("demo.cli.authenticatedSource is invalid");
   if (!Array.isArray(cli["runtimeFiles"])) throw new Error("demo.cli.runtimeFiles must be an array");
@@ -238,8 +239,8 @@ function validateCliIdentity(value: unknown, status: DemoStatus): { runtimeDiges
       }
     }
   }
-  if (status === "COMPLETED" && !entry.present) {
-    throw new Error("completed demo requires the packaged CLI identity");
+  if (status === "COMPLETED" && (!entry.present || (worker !== null && !worker.present))) {
+    throw new Error("completed demo requires present packaged runtime identities");
   }
   return { runtimeDigest: runtimeDigest === null ? null : `sha256:${runtimeDigest}`, cliPath };
 }
@@ -392,6 +393,10 @@ function projectDemo(raw: unknown, assertedCommit?: string): PublicDemoEvidenceV
 
   const fixtureBaseDigest = digest(fixture["baseDigest"], "demo.fixture.baseDigest");
   const fixtureChangedDigest = digest(fixture["changedDigest"], "demo.fixture.changedDigest");
+  if (fixtureBaseDigest !== digest(EXPECTED_FIXTURE.baseDigest, "expected fixture base digest")
+    || fixtureChangedDigest !== digest(EXPECTED_FIXTURE.changedDigest, "expected fixture changed digest")) {
+    throw new Error("demo fixture identity contradicts the frozen fixture inputs");
+  }
   if (status === "COMPLETED") {
     if (cases.length !== CASE_IDS.length || CASE_IDS.some(id => !cases.some(item => item.id === id))) {
       throw new Error("completed demo must contain all three frozen cases");
