@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "kind": "semctx-public-evidence-v1",
   "phase": "candidate",
-  "generatedAt": "2026-09-08T02:49:51.063Z",
+  "generatedAt": "2026-09-08T03:49:06.169Z",
   "evidenceState": "OBSERVED",
   "releaseCommit": null,
   "demo": {
@@ -47,7 +47,7 @@
   "pilot": {
     "evidenceKind": "research",
     "verdict": "EVIDENCE_MISSING",
-    "protocolDigest": "sha256:f63a109c372ac7a3937a5f2f70f9aedb89579ee200dd972ae47ff1a91ca48e22",
+    "protocolDigest": "sha256:d288f1c21521ac291d1ef68983027b40bcb5d0b11147b21d4b084dd03625e73b",
     "totalCases": 30,
     "observedCases": 30,
     "failedCases": 0,
@@ -55,9 +55,9 @@
     "labelledCases": 0,
     "unknownCases": 30,
     "repositoryCount": 3,
-    "totalDurationMs": 297077.92,
+    "totalDurationMs": 261003.74,
     "scores": null,
-    "generatedAt": "2026-09-08T02:49:41.409Z"
+    "generatedAt": "2026-09-08T03:34:29.990Z"
   },
   "humanMetrics": {
     "adoption": "NOT_MEASURED",
