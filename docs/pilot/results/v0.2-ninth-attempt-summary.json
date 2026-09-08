@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "experimentId": "experiment-7e041f4d43f2",
-  "protocolDigest": "sha256:7e041f4d43f24f1ebb8c967a0b4f80fa30f00402a2995afffb98ed5fc57afe38",
+  "experimentId": "experiment-1eaab6944d8d",
+  "protocolDigest": "sha256:1eaab6944d8d310ca0ed09a031bb1c4ac8a50eaf49714eb6e3598515895501df",
   "evidenceKind": "research",
   "verdict": "EVIDENCE_MISSING",
   "totals": {
@@ -15,10 +15,6 @@
   "perRepository": [
     {
       "repositoryAlias": "repository-3",
-      "publicSource": {
-        "url": "https://github.com/gvergnaud/ts-pattern",
-        "license": "MIT"
-      },
       "totalCases": 10,
       "observedCases": 10,
       "failedCases": 0,
@@ -28,10 +24,6 @@
     },
     {
       "repositoryAlias": "repository-2",
-      "publicSource": {
-        "url": "https://github.com/nanostores/nanostores",
-        "license": "MIT"
-      },
       "totalCases": 10,
       "observedCases": 10,
       "failedCases": 0,
@@ -41,10 +33,6 @@
     },
     {
       "repositoryAlias": "repository-1",
-      "publicSource": {
-        "url": "https://github.com/remeda/remeda",
-        "license": "MIT"
-      },
       "totalCases": 10,
       "observedCases": 10,
       "failedCases": 0,
@@ -55,6 +43,6 @@
   ],
   "scores": null,
   "criticalMisses": [],
-  "totalDurationMs": 200775.33999999997,
-  "generatedAt": "2026-09-08T17:40:44.303Z"
+  "totalDurationMs": 215050.42000000004,
+  "generatedAt": "2026-09-08T16:00:36.718Z"
 }
