@@ -129,6 +129,9 @@ Scores `semctx`, `changed-files`, and `one-hop-import-neighborhood` against ever
 — `UNKNOWN` cases are excluded from scoring entirely, never treated as negatives. A `synthetic-smoke`
 protocol's `evidenceKind` is always `"smoke"` and its verdict is always `EVIDENCE_MISSING`, regardless
 of scores, so a fixture run can never be read as research evidence.
+Each repository also carries the same three scores when that repository has at least one label and
+no failed or untrusted case. Its scores stay `null` otherwise, independently of other repositories;
+the global score and verdict keep their existing whole-corpus completeness rules.
 
 - No flags: prints the full local report (includes failure reasons; still local, not persisted).
 - `--out <path>`: writes the full local report; refuses an existing path.
@@ -137,8 +140,11 @@ of scores, so a fixture run can never be read as research evidence.
 
 The public summary is a strict allowlist (schema/version, counts, scores, bounded per-repository
 totals, finite durations) built only from already-aggregated report fields — raw stdout/stderr,
-failure-reason free text, and local filesystem paths have no code path into it. Critical-miss file
-paths are included only for cases whose corpus entry declares an explicit `publicSource`.
+failure-reason free text, and local filesystem paths have no code path into it. It derives the
+public experiment identifier from the protocol digest and replaces every repository and case
+identifier with a deterministic experiment-local ordinal. Every critical miss retains only those
+generated identifiers and the number of missed files, including private cases, so the counts stay
+complete while file paths remain in the private report.
 
 ## Retention
 

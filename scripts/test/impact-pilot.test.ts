@@ -1263,6 +1263,54 @@ describe("report identity and completeness gates", () => {
     expect(report.totals).toMatchObject({ observedCases: 30, failedCases: 0, untrustedCases: 1 });
     expect(buildPublicSummary(protocol, report).totals.untrustedCases).toBe(1);
   });
+
+  test("reports independent per-repository scores and preserves local missing-evidence boundaries", () => {
+    const labelled: LabelStatus = {
+      status: "LABELLED", provenance: "automated-review", expectedImpactedFiles: ["a.ts"], criticalFiles: ["a.ts"],
+    };
+    const corpus: FrozenProtocolV1["corpus"] = {
+      kind: "synthetic-smoke",
+      cases: [
+        makeCase("good", "repo-good", labelled, { synthetic: true }),
+        makeCase("bad", "repo-bad", labelled, { synthetic: true, headRef: hexHead(2) }),
+        makeCase("unknown", "repo-unknown", { status: "UNKNOWN" }, { synthetic: true, headRef: hexHead(3) }),
+        makeCase("failed", "repo-failed", labelled, { synthetic: true, headRef: hexHead(4) }),
+        makeCase("untrusted", "repo-untrusted", labelled, { synthetic: true, headRef: hexHead(5) }),
+      ],
+    };
+    const protocol = makeFrozenProtocolFixture(corpus);
+    const untrusted = makeObservation("untrusted", ["a.ts"], corpus.cases[4]);
+    if (untrusted.semctx === null) throw new Error("fixture must contain a semctx run");
+    untrusted.semctx.verificationStatus = "DIFF_MISMATCH";
+    untrusted.semctx.verdict = null;
+    untrusted.semctx.suggestedFiles = [];
+    const report = buildResultReport(protocol, {
+      schemaVersion: 1, experimentId: protocol.experimentId, protocolDigest: protocol.digest,
+      collectedAt: "2026-09-08T00:00:00.000Z", observedBunVersion: "1.4.0",
+      cases: [
+        makeObservation("good", ["a.ts"], corpus.cases[0]),
+        makeObservation("bad", [], corpus.cases[1]),
+        makeObservation("unknown", [], corpus.cases[2]),
+        makeObservation("failed", null, corpus.cases[3]),
+        untrusted,
+      ],
+    });
+    const repositories = new Map(report.perRepository.map((repository) => [repository.repositoryAlias, repository]));
+    const goodScore = repositories.get("repo-good")?.scores?.find((score) => score.tool === "semctx");
+    const badScore = repositories.get("repo-bad")?.scores?.find((score) => score.tool === "semctx");
+    if (goodScore?.recall !== 1 || badScore?.recall !== 0) {
+      process.stderr.write("PILOT_PER_REPOSITORY_SCORES_MISMATCH\n");
+    }
+    expect(report.scores).toBeNull();
+    expect(goodScore)
+      .toMatchObject({ labelledCasesScored: 1, precision: 1, recall: 1, criticalRecall: 1 });
+    expect(badScore)
+      .toMatchObject({ labelledCasesScored: 1, precision: 0, recall: 0, criticalRecall: 0 });
+    expect(repositories.get("repo-unknown")?.scores).toBeNull();
+    expect(repositories.get("repo-failed")?.scores).toBeNull();
+    expect(repositories.get("repo-untrusted")?.scores).toBeNull();
+    expect(report.verdict).toBe("EVIDENCE_MISSING");
+  });
 });
 
 // ============================================================================================
@@ -1518,7 +1566,7 @@ describe("impact-pilot report CLI", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe("");
     expect(JSON.parse(readFileSync(reportPath, "utf8")).perRepository[0].repositoryAlias).toBe("repo-a");
-    expect(JSON.parse(readFileSync(exportPath, "utf8")).perRepository[0].repositoryAlias).toBe("private-repository-1");
+    expect(JSON.parse(readFileSync(exportPath, "utf8")).perRepository[0].repositoryAlias).toBe("repository-1");
   });
 });
 
@@ -1527,6 +1575,51 @@ describe("impact-pilot report CLI", () => {
 // ============================================================================================
 
 describe("buildPublicSummary: privacy allowlist", () => {
+  test("replaces all public identifiers and critical paths with deterministic local identifiers and counts", () => {
+    const secret = "SENSITIVE_PUBLIC_IDENTIFIER_DO_NOT_EXPORT";
+    const publicCase = makeCase(`${secret}-case`, `${secret}-repository`, {
+      status: "LABELLED", provenance: "automated-review",
+      expectedImpactedFiles: [`src/${secret}.ts`], criticalFiles: [`src/${secret}.ts`],
+    }, { synthetic: true, publicSource: { url: "https://example.invalid/public", license: "MIT" } });
+    const corpus: FrozenProtocolV1["corpus"] = { kind: "synthetic-smoke", cases: [publicCase] };
+    const original = makeFrozenProtocolFixture(corpus);
+    const { digest: _digest, ...withoutDigest } = original;
+    const rewrittenWithoutDigest = { ...withoutDigest, experimentId: `${secret}-experiment` };
+    const protocol = validateFrozenProtocol({
+      ...rewrittenWithoutDigest,
+      digest: digestCanonical(rewrittenWithoutDigest),
+    });
+    const report = buildResultReport(protocol, {
+      schemaVersion: 1, experimentId: protocol.experimentId, protocolDigest: protocol.digest,
+      collectedAt: "2026-09-08T00:00:00.000Z", observedBunVersion: "1.4.0",
+      cases: [makeObservation(publicCase.caseId, [], publicCase)],
+    }, () => "2026-09-08T00:00:00.000Z");
+
+    const publicSummary = buildPublicSummary(protocol, report);
+    const serialized = JSON.stringify(publicSummary);
+    if (serialized.includes(secret)) process.stderr.write("PILOT_PUBLIC_IDENTITY_ALLOWLIST_MISMATCH\n");
+    expect(serialized).not.toContain(secret);
+    expect(publicSummary.experimentId).toMatch(/^experiment-[0-9a-f]{12}$/);
+    expect(publicSummary.perRepository[0]?.repositoryAlias).toBe("repository-1");
+    expect(publicSummary.criticalMisses).toEqual([{
+      caseId: "case-1", repositoryAlias: "repository-1", missedFileCount: 1,
+    }]);
+  });
+
+  test("rejects a non-canonical generatedAt before public export", () => {
+    const corpus: FrozenProtocolV1["corpus"] = {
+      kind: "synthetic-smoke",
+      cases: [makeCase("s-1", "repo-a", { status: "UNKNOWN" }, { synthetic: true })],
+    };
+    const protocol = makeFrozenProtocolFixture(corpus);
+    const report = buildResultReport(protocol, {
+      schemaVersion: 1, experimentId: protocol.experimentId, protocolDigest: protocol.digest,
+      collectedAt: "2026-09-08T00:00:00.000Z", observedBunVersion: "1.4.0",
+      cases: [makeObservation("s-1", [], corpus.cases[0])],
+    }, () => "SENSITIVE_GENERATED_AT_SENTINEL");
+    expect(() => buildPublicSummary(protocol, report)).toThrow(/canonical ISO timestamp/);
+  });
+
   test("never leaks failure-reason free text, stdout/stderr, or local paths", () => {
     const secret = "sk-fake-secret-DO-NOT-LEAK";
     const leakyPath = "C:\\Users\\hoklims\\private-repo";
@@ -1552,10 +1645,10 @@ describe("buildPublicSummary: privacy allowlist", () => {
     expect(serialized).not.toContain(leakyPath);
     expect(serialized).not.toContain("failureReason");
     expect(serialized).not.toContain("repo-a");
-    expect(serialized).toContain("private-repository-1");
+    expect(serialized).toContain("repository-1");
   });
 
-  test("includes critical-miss file paths only for cases with a declared public source", () => {
+  test("includes anonymized critical-miss counts for public and private cases without their details", () => {
     const publicCase = makeCase("public-1", "repo-public", {
       status: "LABELLED", provenance: "automated-review", expectedImpactedFiles: ["public.ts"], criticalFiles: ["public.ts"],
     }, { synthetic: true, publicSource: { url: "https://example.invalid/public", license: "MIT" } });
@@ -1573,10 +1666,17 @@ describe("buildPublicSummary: privacy allowlist", () => {
     expect(report.criticalMisses.map((m) => m.caseId).sort()).toEqual(["private-1", "public-1"]);
 
     const publicSummary = buildPublicSummary(protocol, report);
-    expect(publicSummary.criticalMisses.map((m) => m.caseId)).toEqual(["public-1"]);
+    expect(publicSummary.criticalMisses).toEqual([
+      { caseId: "case-1", repositoryAlias: "repository-1", missedFileCount: 1 },
+      { caseId: "case-2", repositoryAlias: "repository-2", missedFileCount: 1 },
+    ]);
+    expect(JSON.stringify(publicSummary)).not.toContain("public.ts");
+    expect(JSON.stringify(publicSummary)).not.toContain("private.ts");
+    expect(JSON.stringify(publicSummary)).not.toContain("repo-public");
+    expect(JSON.stringify(publicSummary)).not.toContain("repo-private");
   });
 
-  test("masks an alias conservatively when any case using it is private", () => {
+  test("never exports a shared alias when public and private cases use it", () => {
     const alias = "secret-owner/secret-repo";
     const publicCase = makeCase("public-1", alias, {
       status: "LABELLED", provenance: "automated-review", expectedImpactedFiles: ["public.ts"], criticalFiles: ["public.ts"],
@@ -1591,8 +1691,10 @@ describe("buildPublicSummary: privacy allowlist", () => {
     });
     const serialized = JSON.stringify(buildPublicSummary(protocol, report));
     expect(serialized).not.toContain(alias);
-    expect(serialized).toContain("private-repository-1");
-    expect(JSON.parse(serialized).criticalMisses).toEqual([]);
+    expect(serialized).toContain("repository-1");
+    expect(JSON.parse(serialized).criticalMisses).toEqual([
+      { caseId: "case-1", repositoryAlias: "repository-1", missedFileCount: 1 },
+    ]);
   });
 });
 
