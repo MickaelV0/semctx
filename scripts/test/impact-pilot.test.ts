@@ -65,6 +65,7 @@ function mutateCheckout(stage) {
     Bun.spawnSync(["git", "add", "--", "src/critical.ts"], { cwd: root });
   }
   if (mode === "index-flags:" + stage) Bun.spawnSync(["git", "update-index", "--assume-unchanged", "src/critical.ts"], { cwd: root });
+  if (mode === "untracked:" + stage || mode === "ignored:" + stage) writeFileSync(root + "/src/injected.ts", "export const injected = true;\\n");
   if (mode === "head:" + stage) {
     Bun.spawnSync(["git", "-c", "user.name=pilot test", "-c", "user.email=pilot@example.invalid", "commit", "--allow-empty", "-m", "candidate moved head"], { cwd: root });
   }
@@ -74,6 +75,9 @@ if (args[0] === "init") {
   writeFileSync(root + "/.semctx/stub-marker", "initialized");
   if (process.env.SEMCTX_PILOT_TEST_GITIGNORE === "canonical") {
     writeFileSync(root + "/.gitignore", "node_modules\\n.semctx/*\\n!.semctx/semantic/\\n!.semctx/config.json\\n");
+  }
+  if (process.env.SEMCTX_PILOT_TEST_GITIGNORE === "canonical-missing") {
+    writeFileSync(root + "/.gitignore", ".semctx/*\\n!.semctx/semantic/\\n!.semctx/config.json\\n");
   }
   if (process.env.SEMCTX_PILOT_TEST_GITIGNORE === "poison") writeFileSync(root + "/.gitignore", "*\\n");
   mutateCheckout("init");
@@ -141,13 +145,13 @@ function makeFixtureRepoRoot(): string {
   return root;
 }
 
-function makeSourceRepo(trackedGitignore = false): { cwd: string; base: string; head: string } {
+function makeSourceRepo(trackedGitignore: boolean | string = false): { cwd: string; base: string; head: string } {
   const cwd = tempDir("semctx-pilot-source-");
   git(cwd, ["init", "-q"]);
   git(cwd, ["config", "user.email", "pilot@example.invalid"]);
   git(cwd, ["config", "user.name", "pilot test"]);
   mkdirSync(join(cwd, "src"), { recursive: true });
-  if (trackedGitignore) writeFileSync(join(cwd, ".gitignore"), "node_modules\n");
+  if (trackedGitignore) writeFileSync(join(cwd, ".gitignore"), typeof trackedGitignore === "string" ? trackedGitignore : "node_modules\n");
   writeFileSync(join(cwd, "src", "critical.ts"), "export const value = 1;\n");
   writeFileSync(join(cwd, "src", "consumer.ts"), 'import { value } from "./critical";\nexport const doubled = value * 2;\n');
   git(cwd, ["add", "-A"]);
@@ -680,11 +684,51 @@ if (Object.keys(process.env).some(key => forbiddenEnvironmentKeys.some(name => n
   }, 60_000);
 
   test.each([
-    ["canonical", "OBSERVED", "TRUSTED"],
-    ["poison", "OBSERVED", "SOURCE_DRIFT"],
-  ] as const)("classifies a %s tracked .gitignore update precisely", (mode, status, verificationStatus) => {
+    ["untracked:index", false],
+    ["ignored:index", "node_modules\nsrc/injected.ts\n"],
+  ] as const)("marks candidate %s source additions untrusted", (mode, trackedGitignore) => {
     const repoRoot = makeFixtureRepoRoot();
-    const source = makeSourceRepo(true);
+    const source = makeSourceRepo(trackedGitignore);
+    const protocol = freezeProtocol(validateDraftProtocol({
+      schemaVersion: 1,
+      candidate: { packaging: "source-dev" },
+      config: baseDraft(),
+      corpus: { kind: "synthetic-smoke", cases: [makeCase(
+        "case-1", "fixture-repo", { status: "UNKNOWN" },
+        { synthetic: true, baseRef: source.base, headRef: source.head, changedFiles: ["src/critical.ts"] },
+      )] },
+    }), repoRoot);
+    const previous = process.env.SEMCTX_PILOT_TEST_MUTATE_CHECKOUT;
+    try {
+      process.env.SEMCTX_PILOT_TEST_MUTATE_CHECKOUT = mode;
+      const bundle = collectCases(
+        protocol,
+        validateLocalSourcesFile({ schemaVersion: 1, paths: { "case-1": source.cwd } }),
+        repoRoot,
+      );
+      expect(bundle.cases[0]).toMatchObject({
+        status: "OBSERVED",
+        semctx: {
+          verificationStatus: "SOURCE_DRIFT",
+          sourceDriftReason: expect.stringMatching(/disposable checkout changed after candidate index/),
+          init: { exitCode: 0 },
+          index: { exitCode: 0 },
+          verify: { exitCode: 3 },
+        },
+      });
+    } finally {
+      if (previous === undefined) delete process.env.SEMCTX_PILOT_TEST_MUTATE_CHECKOUT;
+      else process.env.SEMCTX_PILOT_TEST_MUTATE_CHECKOUT = previous;
+    }
+  }, 60_000);
+
+  test.each([
+    ["canonical", "OBSERVED", "TRUSTED"],
+    ["canonical-missing", "OBSERVED", "TRUSTED"],
+    ["poison", "OBSERVED", "SOURCE_DRIFT"],
+  ] as const)("classifies a %s .gitignore update precisely", (mode, status, verificationStatus) => {
+    const repoRoot = makeFixtureRepoRoot();
+    const source = makeSourceRepo(mode === "canonical-missing" ? false : true);
     const protocol = freezeProtocol(validateDraftProtocol({
       schemaVersion: 1,
       candidate: { packaging: "source-dev" },
