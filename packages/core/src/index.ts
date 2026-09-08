@@ -4,6 +4,9 @@ export * from "./errors";
 export * from "./schemas";
 export * from "./config-defaults";
 export * from "./verify-report";
+export * from "./canonical";
+export * from "./feedback-report";
+export * from "./support-report";
 
 export type * from "./types/graph";
 export type * from "./types/task-frame";

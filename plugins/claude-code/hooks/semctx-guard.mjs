@@ -1189,12 +1189,53 @@ function resolveGitRoot(cwd) {
   }
 }
 
+function sameGitRoot(left, right) {
+  const normalizedLeft = normalizedPath(resolve(left));
+  const normalizedRight = normalizedPath(resolve(right));
+  return process.platform === "win32"
+    ? normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()
+    : normalizedLeft === normalizedRight;
+}
+
+/** @param {{command?: unknown, cwd?: string, sessionCwd?: string}} input */
+function guardInvocationContext({ command, cwd, sessionCwd }) {
+  const inputCwd = cwd ?? sessionCwd ?? process.cwd();
+  const sessionRoot = resolveGitRoot(sessionCwd ?? inputCwd);
+  const targetRoot = resolveGitRoot(resolveGitCwd(command, inputCwd));
+  return {
+    sessionRoot,
+    targetRoot,
+    scopeRequiresSessionGuard: gitScopeRequiresSessionGuard(command) || !sameGitRoot(sessionRoot, targetRoot),
+  };
+}
+
 /** Enablement: SEMCTX_GUARD=off strictly disables (wins); =on forces; else .semctx/guard.json {enabled}. */
 export function guardEnabled(env, guardJson) {
-  const e = String(env?.SEMCTX_GUARD ?? "").toLowerCase();
+  const e = String(environmentValue(env, "SEMCTX_GUARD") ?? "").toLowerCase();
   if (e === "off" || e === "0" || e === "false") return false;
   if (e === "on" || e === "1" || e === "true") return true;
   return guardJson?.enabled === true;
+}
+
+/** Effective opt-in across the target repository and a separately preserved host session root. */
+/** @param {{command?: unknown, cwd?: string, sessionCwd?: string, env?: Record<string, string | undefined>}} input */
+export function guardEnabledForInvocation({ command, cwd, sessionCwd, env }) {
+  const context = guardInvocationContext({ command, cwd, sessionCwd });
+  const targetGuard = readJson(join(context.targetRoot, ".semctx", "guard.json"));
+  const sessionGuard = context.scopeRequiresSessionGuard
+    ? readJson(join(context.sessionRoot, ".semctx", "guard.json"))
+    : null;
+  return guardEnabled(env, targetGuard)
+    || (context.scopeRequiresSessionGuard && guardEnabled(env, sessionGuard));
+}
+
+/** Environment lookup follows Windows' case-insensitive variable semantics after object spreads. */
+function environmentValue(env, name) {
+  if (env == null) return undefined;
+  const direct = env[name];
+  if (direct !== undefined || process.platform !== "win32") return direct;
+  const key = Object.keys(env).find((candidate) => candidate.toLowerCase() === name.toLowerCase());
+  return key === undefined ? undefined : env[key];
 }
 
 /** Verify command for a shell that has no plugin bundle in reach. */
@@ -1215,7 +1256,7 @@ export function shellQuote(value) {
  */
 export function pluginCliPath(env = process.env, exists = existsSync) {
   const candidates = [];
-  const declared = String(env?.CLAUDE_PLUGIN_ROOT ?? "").trim();
+  const declared = String(environmentValue(env, "CLAUDE_PLUGIN_ROOT") ?? "").trim();
   if (declared) candidates.push(join(declared, "dist", "semctx.js"));
   candidates.push(resolve(dirname(fileURLToPath(import.meta.url)), "..", "dist", "semctx.js"));
   for (const candidate of candidates) {
@@ -1233,7 +1274,7 @@ export function pluginCliPath(env = process.env, exists = existsSync) {
  * side-effect free, so it never spawns a process to answer this.
  */
 export function bunOnPath(env = process.env, exists = existsSync) {
-  const entries = String(env?.PATH ?? "").split(process.platform === "win32" ? ";" : ":");
+  const entries = String(environmentValue(env, "PATH") ?? "").split(process.platform === "win32" ? ";" : ":");
   const names = process.platform === "win32" ? ["bun.exe", "bun.cmd", "bun"] : ["bun"];
   for (const entry of entries) {
     if (!entry) continue;
@@ -1603,6 +1644,61 @@ export function captureVerificationGitState(cwd) {
   };
 }
 
+/**
+ * Evaluate the ADR 0007 guard for one Bash invocation, independent of the calling host's hook
+ * envelope. Claude Code's `main()` below and the OMP `omp/semctx-guard.ts` adapter both call this
+ * with their own `command`/`cwd`/`env` mapping, so terminal `git commit`/`git push` authorization
+ * is one shared policy rather than two forks. Returns `{ block: false }` or
+ * `{ block: true, reason }`; never throws, never touches stdin/stdout/exit.
+ */
+/** @param {{command?: unknown, cwd?: string, sessionCwd?: string, env?: Record<string, string | undefined>, overriddenEnvKeys?: string[]}} input */
+export function evaluateGuard({ command, cwd, sessionCwd, env, overriddenEnvKeys = [] }) {
+  const terminalVerb = isTerminalGitCommand(command);
+  if (!terminalVerb) return { block: false };
+
+  const effectiveEnv = env ?? process.env;
+  const commandIsolated = isIsolatedTerminalGitCommand(command)
+    && !overriddenEnvKeys.some((name) => isRetargetingEnvironmentName(name));
+  const context = guardInvocationContext({ command, cwd, sessionCwd });
+  const { sessionRoot, targetRoot: targetCwd, scopeRequiresSessionGuard } = context;
+  const targetGuard = readJson(join(targetCwd, ".semctx", "guard.json"));
+  const sessionGuard = scopeRequiresSessionGuard
+    ? readJson(join(sessionRoot, ".semctx", "guard.json"))
+    : null;
+  const enabled = guardEnabled(effectiveEnv, targetGuard)
+    || (scopeRequiresSessionGuard && guardEnabled(effectiveEnv, sessionGuard));
+  if (!enabled) return { block: false }; // advisory (default)
+
+  const state = commandIsolated
+    ? readJson(join(targetCwd, ".semctx", "verification-state.json"))
+    : null;
+  let currentState = null;
+  if (commandIsolated) {
+    try {
+      currentState = captureVerificationGitState(targetCwd);
+    } catch {
+      currentState = null;
+    }
+  }
+  const pushSourceAuthorized = terminalVerb !== "push"
+    || (currentState !== null && pushSourceMatchesHead(command, targetCwd, currentState.headCommit));
+  const commitContentAuthorized = terminalVerb !== "commit" || commitUsesWholeIndex(command);
+  const commitHooksAbsent = terminalVerb !== "commit" || (commandIsolated && commitHookSurfaceClear(targetCwd));
+  const pushHooksAbsent = terminalVerb !== "push" || (commandIsolated && pushHookSurfaceClear(targetCwd));
+  return guardDecision({
+    enabled,
+    terminalVerb,
+    commandIsolated,
+    pushSourceAuthorized,
+    commitContentAuthorized,
+    commitHooksAbsent,
+    pushHooksAbsent,
+    state,
+    currentState,
+    verifyCommand: verifyRecordCommand(effectiveEnv),
+  });
+}
+
 function main() {
   let input = {};
   try {
@@ -1613,50 +1709,8 @@ function main() {
   const toolName = input.tool_name ?? input.toolName;
   if (toolName !== "Bash") process.exit(0);
   const command = input.tool_input?.command ?? input.toolInput?.command ?? "";
-  const terminalVerb = isTerminalGitCommand(command);
-  if (!terminalVerb) process.exit(0);
 
-  const inputCwd = input.cwd ?? process.cwd();
-  const commandIsolated = isIsolatedTerminalGitCommand(command);
-  const scopeRequiresSessionGuard = gitScopeRequiresSessionGuard(command);
-  const sessionCwd = resolveGitRoot(inputCwd);
-  const cwd = resolveGitRoot(resolveGitCwd(command, inputCwd)); // the repo the git command targets, not the session cwd
-  const targetGuard = readJson(join(cwd, ".semctx", "guard.json"));
-  const sessionGuard = scopeRequiresSessionGuard
-    ? readJson(join(sessionCwd, ".semctx", "guard.json"))
-    : null;
-  const enabled = guardEnabled(process.env, targetGuard)
-    || (scopeRequiresSessionGuard && guardEnabled(process.env, sessionGuard));
-  if (!enabled) process.exit(0); // advisory (default)
-
-  const state = commandIsolated
-    ? readJson(join(cwd, ".semctx", "verification-state.json"))
-    : null;
-  let currentState = null;
-  if (commandIsolated) {
-    try {
-      currentState = captureVerificationGitState(cwd);
-    } catch {
-      currentState = null;
-    }
-  }
-  const pushSourceAuthorized = terminalVerb !== "push"
-    || (currentState !== null && pushSourceMatchesHead(command, cwd, currentState.headCommit));
-  const commitContentAuthorized = terminalVerb !== "commit" || commitUsesWholeIndex(command);
-  const commitHooksAbsent = terminalVerb !== "commit" || (commandIsolated && commitHookSurfaceClear(cwd));
-  const pushHooksAbsent = terminalVerb !== "push" || (commandIsolated && pushHookSurfaceClear(cwd));
-  const decision = guardDecision({
-    enabled,
-    terminalVerb,
-    commandIsolated,
-    pushSourceAuthorized,
-    commitContentAuthorized,
-    commitHooksAbsent,
-    pushHooksAbsent,
-    state,
-    currentState,
-    verifyCommand: verifyRecordCommand(process.env),
-  });
+  const decision = evaluateGuard({ command, cwd: input.cwd, env: process.env });
   if (decision.block) {
     process.stderr.write(decision.reason + "\n");
     process.exit(2); // PreToolUse: non-zero (2) blocks the tool and surfaces stderr to the agent

@@ -24,13 +24,18 @@ describe("parseUnifiedDiff", () => {
     expect(files.length).toBe(1);
     const file = must(files[0]);
     expect(file.filePath).toBe("src/x.ts");
+    expect(file.wholeFile).toBe(false);
     expect(must(file.hunks[0]).newStart).toBe(10);
     expect(must(file.hunks[0]).newLines).toBe(3);
   });
 
-  it("ignores deleted files (/dev/null)", () => {
+  it("retains deleted files by their old path and removed hunk", () => {
     const diff = ["--- a/gone.ts", "+++ /dev/null", "@@ -1,3 +0,0 @@"].join("\n");
-    expect(parseUnifiedDiff(diff).length).toBe(0);
+    expect(parseUnifiedDiff(diff)).toEqual([{
+      filePath: "gone.ts",
+      hunks: [{ oldStart: 1, oldLines: 3, newStart: 0, newLines: 0 }],
+      wholeFile: true,
+    }]);
   });
 
   it("retains the canonical old path for a timestamped deletion", () => {
@@ -40,7 +45,20 @@ describe("parseUnifiedDiff", () => {
       "@@ -1,3 +0,0 @@",
     ].join("\n");
     expect(parseUnifiedDiffScopePaths(diff)).toEqual(["src/gone.py"]);
-    expect(parseUnifiedDiff(diff)).toEqual([]);
+    expect(parseUnifiedDiff(diff)).toEqual([{
+      filePath: "src/gone.py",
+      hunks: [{ oldStart: 1, oldLines: 3, newStart: 0, newLines: 0 }],
+      wholeFile: true,
+    }]);
+  });
+
+  it("marks an added file as a whole-file change", () => {
+    const diff = ["--- /dev/null", "+++ b/added.ts", "@@ -0,0 +1,2 @@", "+one", "+two"].join("\n");
+    expect(parseUnifiedDiff(diff)).toEqual([{
+      filePath: "added.ts",
+      hunks: [{ oldStart: 0, oldLines: 0, newStart: 1, newLines: 2 }],
+      wholeFile: true,
+    }]);
   });
 
   it("does not treat adjacent hunk content as file headers", () => {
@@ -109,6 +127,38 @@ describe("analyzeDiff on the fixture", () => {
     const result = analyzeDiff({ index, claims, config, diffText: "" });
     expect(result.verdict).toBe("PASS");
     expect(result.changedFiles.length).toBe(0);
+  });
+});
+
+describe("analyzeDiff deletion truth", () => {
+  const graph: RepositoryGraph = {
+    nodes: [
+      {
+        id: "sym:function:gone.ts:removed:1",
+        kind: "function",
+        name: "removed",
+        filePath: "gone.ts",
+        exported: true,
+        evidence: [{ filePath: "gone.ts", startLine: 1, endLine: 3, sourceKind: "code" }],
+        tags: [],
+        metadata: {},
+      },
+    ],
+    edges: [],
+  };
+
+  it("retains the deleted path without projecting old symbols onto the range head", () => {
+    const diff = ["--- a/gone.ts", "+++ /dev/null", "@@ -1,3 +0,0 @@"].join("\n");
+    const result = analyzeDiff({
+      index: new GraphIndex(graph),
+      claims: [],
+      config: createDefaultConfig("/repo"),
+      diffText: diff,
+      nodeRangeSide: "new",
+    });
+
+    expect(result.changedFiles).toEqual(["gone.ts"]);
+    expect(result.impactedNodes).toEqual([]);
   });
 });
 

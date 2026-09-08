@@ -257,7 +257,7 @@ describe("Codex and Claude Code plugin parity", () => {
       "plugins/shared/hooks/semctx-lifecycle.mjs",
       "plugins/semctx-control/hooks/hooks.json",
       "plugins/claude-code/.mcp.json",
-      "plugins/claude-code/mcp-omp.json",
+      "plugins/claude-code/mcp.json",
       "plugins/claude-code/README.md",
       "plugins/claude-code/examples/guard.json",
       "README.md",
@@ -299,7 +299,7 @@ describe("Codex and Claude Code plugin parity", () => {
       "docs/examples/claude-code-integration.md",
       "plugins/claude-code/README.md",
       "plugins/claude-code/.mcp.json",
-      "plugins/claude-code/mcp-omp.json",
+      "plugins/claude-code/mcp.json",
       "plugins/semctx-control/.mcp.json",
     ];
     expect(shipped.length).toBeGreaterThan(0);
@@ -485,7 +485,10 @@ describe("Codex and Claude Code plugin parity", () => {
     expect(ompMarketplace.plugins.find((plugin) => plugin.name === "semctx")?.version).toBe(
       claudeManifest.version,
     );
-    expect(json<{ version: string }>("plugins/claude-code/.omp-plugin/plugin.json").version).toBe(
+    expect(json<{ version: string }>("plugins/claude-code/plugin.json").version).toBe(
+      claudeManifest.version,
+    );
+    expect(json<{ version: string }>("plugins/claude-code/package.json").version).toBe(
       claudeManifest.version,
     );
     const serverSource = read("packages/mcp-server/src/server.ts");

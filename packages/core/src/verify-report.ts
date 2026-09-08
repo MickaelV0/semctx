@@ -7,6 +7,7 @@
  * additive only (new optional fields); a breaking change bumps the version.
  */
 
+import { z } from "zod";
 import type { SeverityTier } from "./types/config";
 
 export const VERIFY_REPORT_SCHEMA_VERSION = 1 as const;
@@ -92,3 +93,71 @@ export interface VerifyReport {
   coChangedFiles?: VerifyReportCoChange[];
   summary: { blockCount: number; warnCount: number };
 }
+
+/**
+ * Structural validator for an externally-loaded `VerifyReport` (e.g. a file passed to
+ * `semctx feedback record`). Additive to the contract, not a change to it: the produced report
+ * shape is untouched, this only lets a consumer reject a malformed or foreign JSON file instead of
+ * trusting it blindly.
+ */
+const VerifyReportSymbolSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  kind: z.string(),
+  file: z.string().optional(),
+}).passthrough();
+
+const VerifyReportClaimSchema = z.object({
+  statement: z.string(),
+  kind: z.string(),
+  verificationStatus: z.string(),
+}).passthrough();
+
+const VerifyReportTestSchema = z.object({
+  name: z.string(),
+  file: z.string().optional(),
+}).passthrough();
+
+const VerifyReportLocationSchema = z.object({
+  file: z.string(),
+  line: z.number().optional(),
+}).passthrough();
+
+const VerifyReportFindingSchema = z.object({
+  rule: z.string(),
+  tier: z.enum(["strict", "advisory"]),
+  severity: z.enum(["warn", "block"]),
+  message: z.string(),
+  nodeIds: z.array(z.string()),
+  locations: z.array(VerifyReportLocationSchema),
+}).passthrough();
+
+const VerifyReportConsumerSchema = z.object({
+  symbol: VerifyReportSymbolSchema,
+  consumers: z.array(VerifyReportSymbolSchema),
+}).passthrough();
+
+const VerifyReportCoChangeSchema = z.object({
+  file: z.string(),
+  coChanged: z.array(z.object({ file: z.string(), commits: z.number() }).passthrough()),
+}).passthrough();
+
+export const VerifyReportSchema = z.object({
+  schemaVersion: z.literal(VERIFY_REPORT_SCHEMA_VERSION),
+  verdict: z.enum(["PASS", "WARN", "BLOCK"]),
+  base: z.string().nullable(),
+  head: z.string(),
+  mergeBase: z.string().nullable(),
+  range: z.string().nullable(),
+  changedFiles: z.array(z.string()),
+  changedSymbols: z.array(VerifyReportSymbolSchema),
+  impactedContracts: z.array(VerifyReportClaimSchema),
+  impactedInvariants: z.array(VerifyReportClaimSchema),
+  recommendedTests: z.array(VerifyReportTestSchema),
+  contradictions: z.array(VerifyReportClaimSchema),
+  unknowns: z.array(z.string()),
+  findings: z.array(VerifyReportFindingSchema),
+  impactedConsumers: z.array(VerifyReportConsumerSchema).optional(),
+  coChangedFiles: z.array(VerifyReportCoChangeSchema).optional(),
+  summary: z.object({ blockCount: z.number(), warnCount: z.number() }).passthrough(),
+}).passthrough();

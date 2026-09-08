@@ -1,0 +1,71 @@
+{
+  "schemaVersion": 1,
+  "kind": "semctx-public-evidence-v1",
+  "phase": "candidate",
+  "generatedAt": "2026-09-08T01:44:06.545Z",
+  "evidenceState": "OBSERVED",
+  "releaseCommit": null,
+  "demo": {
+    "status": "COMPLETED",
+    "observedAt": "2026-09-08T01:35:09.841Z",
+    "packageVersion": "0.2.0",
+    "runtimeDigest": "sha256:81f09468ea674002d2233cc69778671159e43040ed15245592ac09b007477361",
+    "fixtureBaseDigest": "sha256:0c127641db744e3655fb139ad4b1c29d337820f31bfa83ae16d5f21a166e8b82",
+    "fixtureChangedDigest": "sha256:8070230105396980b0ec842b455c498e6ba026770f230dc61963432c621c8334",
+    "fixtureCommit": {
+      "value": "7c80896c57ff617003618924aaae4af78b04360e",
+      "authority": "caller-asserted"
+    },
+    "verdict": "WARN",
+    "unknownCount": 0,
+    "cases": [
+      {
+        "id": "benign",
+        "fixturePath": "src/greeting.ts",
+        "expectedFinding": "none",
+        "observedRuleIds": [],
+        "matchedExpectation": true
+      },
+      {
+        "id": "exported-contract-risk",
+        "fixturePath": "src/cart.ts",
+        "expectedFinding": "warn",
+        "observedRuleIds": [
+          "contract_changed_without_test"
+        ],
+        "matchedExpectation": true
+      },
+      {
+        "id": "unsupported-limit",
+        "fixturePath": "src/pricing.ts",
+        "expectedFinding": "none",
+        "observedRuleIds": [],
+        "matchedExpectation": true
+      }
+    ]
+  },
+  "pilot": {
+    "evidenceKind": "research",
+    "verdict": "EVIDENCE_MISSING",
+    "protocolDigest": "sha256:eca8bfa7d0338a054a7e432db9b2fc92d61712fa8bf3fcabba4d03542a467df9",
+    "totalCases": 30,
+    "observedCases": 30,
+    "failedCases": 0,
+    "untrustedCases": 0,
+    "labelledCases": 0,
+    "unknownCases": 30,
+    "repositoryCount": 3,
+    "totalDurationMs": 376601.3500000001,
+    "scores": null,
+    "generatedAt": "2026-09-08T01:43:23.214Z"
+  },
+  "humanMetrics": {
+    "adoption": "NOT_MEASURED",
+    "retention": "NOT_MEASURED",
+    "contributionTime": "NOT_MEASURED"
+  },
+  "disclosures": {
+    "scope": "Semctx reports structural impact and declared contract risk. It does not prove runtime or business correctness.",
+    "measurement": "Automated evidence does not measure adoption, retention, or contribution time."
+  }
+}
