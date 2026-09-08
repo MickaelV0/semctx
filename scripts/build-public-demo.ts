@@ -12,21 +12,25 @@ export const PUBLIC_EVIDENCE_KIND = "semctx-public-evidence-v1" as const;
 export const PUBLIC_EVIDENCE_SCHEMA_VERSION = 1 as const;
 
 const CASES = {
-  benign: { fixturePath: "src/greeting.ts", expectedFinding: "none" },
-  "exported-contract-risk": { fixturePath: "src/cart.ts", expectedFinding: "warn" },
-  "unsupported-limit": { fixturePath: "src/pricing.ts", expectedFinding: "none" },
+  benign: { fixturePath: "src/greeting.ts", expectedFinding: "none", expectedRuleIds: [] },
+  "exported-contract-risk": {
+    fixturePath: "src/cart.ts",
+    expectedFinding: "warn",
+    expectedRuleIds: ["contract_changed_without_test"],
+  },
+  "unsupported-limit": { fixturePath: "src/pricing.ts", expectedFinding: "none", expectedRuleIds: [] },
 } as const;
 const CASE_IDS = Object.keys(CASES) as DemoCaseId[];
-const RULE_SEVERITIES = {
-  invariant_touched_without_test: "block",
-  critical_contract_changed_without_test: "block",
-  contract_changed_without_test: "warn",
-  contradiction_unresolved: "warn",
-  security_surface_without_verification: "block",
-  analysis_scope_incomplete: "block",
-  index_binding_stale: "block",
-} as const;
-const KNOWN_RULES = new Set(Object.keys(RULE_SEVERITIES));
+const KNOWN_RULES = new Set([
+  "invariant_touched_without_test",
+  "critical_contract_changed_without_test",
+  "contract_changed_without_test",
+  "contradiction_unresolved",
+  "security_surface_without_verification",
+  "analysis_scope_incomplete",
+  "index_binding_stale",
+]);
+const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 const PILOT_TOOLS = ["semctx", "changed-files", "one-hop-import-neighborhood"] as const;
 
 export type DemoCaseId = keyof typeof CASES;
@@ -148,7 +152,7 @@ function digest(value: unknown, name: string): string {
 
 function semver(value: unknown, name: string): string {
   const result = string(value, name);
-  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(result)) {
+  if (!SEMVER.test(result)) {
     throw new Error(`${name} must be a semantic version`);
   }
   return result;
@@ -185,9 +189,8 @@ function projectDemo(raw: unknown, assertedCommit?: string): PublicDemoEvidenceV
     }
     const observedRuleIds: string[] = [];
     for (const rule of observedRules as unknown[]) observedRuleIds.push(string(rule, `demo case ${id} rule`));
-    const matchedExpectation = expected.expectedFinding === "none"
-      ? observedRuleIds.length === 0
-      : observedRuleIds.includes("contract_changed_without_test");
+    const matchedExpectation = observedRuleIds.length === expected.expectedRuleIds.length
+      && observedRuleIds.every((rule, ruleIndex) => rule === expected.expectedRuleIds[ruleIndex]);
     if (item["matchedExpectation"] !== matchedExpectation) {
       throw new Error(`demo case ${id} match flag contradicts its observed rules`);
     }
@@ -226,9 +229,7 @@ function projectDemo(raw: unknown, assertedCommit?: string): PublicDemoEvidenceV
     throw new Error("completed demo requires version, runtime digest, observed fixture commit and verdict");
   }
   if (status === "COMPLETED") {
-    const severities = cases.flatMap(item => item.observedRuleIds.map(rule => RULE_SEVERITIES[rule as keyof typeof RULE_SEVERITIES]));
-    const expectedVerdict: Verdict = severities.includes("block") ? "BLOCK" : severities.includes("warn") ? "WARN" : "PASS";
-    if (verdict !== expectedVerdict) throw new Error("demo global verdict contradicts its observed rule severities");
+    if (verdict !== "WARN") throw new Error("demo global verdict contradicts the frozen WARN expectation");
   }
   return {
     status,
