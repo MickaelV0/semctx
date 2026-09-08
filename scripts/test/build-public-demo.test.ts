@@ -111,6 +111,39 @@ function pilotSummary(): Record<string, unknown> {
   };
 }
 
+function labelledPilot(verdict: "INCONCLUSIVE" | "NEGATIVE" | "POSITIVE", labelledCases: number, semctxPrecision: number): Record<string, unknown> {
+  const pilot = pilotSummary();
+  pilot["verdict"] = verdict;
+  pilot["totals"] = {
+    totalCases: 30,
+    observedCases: 30,
+    failedCases: 0,
+    untrustedCases: 0,
+    labelledCases,
+    unknownCases: 30 - labelledCases,
+  };
+  const labelledByRepository = labelledCases === 5 ? [2, 2, 1] : [10, 10, 10];
+  for (const [index, repository] of (pilot["perRepository"] as Record<string, unknown>[]).entries()) {
+    repository["labelledCases"] = labelledByRepository[index];
+  }
+  pilot["scores"] = [
+    { tool: "semctx", labelledCasesScored: labelledCases, precision: semctxPrecision, recall: 0.75, criticalRecall: 1 },
+    { tool: "changed-files", labelledCasesScored: labelledCases, precision: 0.6, recall: 0.5, criticalRecall: 0.8 },
+    { tool: "one-hop-import-neighborhood", labelledCasesScored: labelledCases, precision: 0.7, recall: 0.65, criticalRecall: 0.8 },
+  ];
+  return pilot;
+}
+
+function smokePilot(): Record<string, unknown> {
+  const pilot = pilotSummary();
+  pilot["evidenceKind"] = "smoke";
+  pilot["totals"] = { totalCases: 1, observedCases: 1, failedCases: 0, untrustedCases: 0, labelledCases: 0, unknownCases: 1 };
+  pilot["perRepository"] = [
+    { repositoryAlias: "fixture", totalCases: 1, observedCases: 1, failedCases: 0, untrustedCases: 0, labelledCases: 0 },
+  ];
+  return pilot;
+}
+
 describe("public evidence projection", () => {
   test("missing evidence remains explicit and all human metrics stay unmeasured", () => {
     const result = buildPublicEvidence({ phase: "candidate", now: () => "2026-09-08T00:00:00.000Z" });
@@ -274,9 +307,12 @@ describe("static page contract", () => {
   test("browser reader rejects incompatible or malformed evidence before observation DOM updates", () => {
     const valid = JSON.parse(readFileSync(join(import.meta.dir, "..", "..", "site", "evidence.json"), "utf8")) as Record<string, unknown>;
     for (const hostile of [
-      { ...valid, schemaVersion: 2, kind: "foreign-evidence", phase: "release" },
+      { ...valid, schemaVersion: 2 },
+      { ...valid, kind: "foreign-evidence" },
+      { ...valid, phase: "future" },
       { ...valid, demo: { ...(valid["demo"] as Record<string, unknown>), cases: "not-an-array", verdict: "BLOCK" } },
       { ...valid, pilot: { ...(valid["pilot"] as Record<string, unknown>), observedCases: 29 } },
+      { ...valid, disclosures: { ...(valid["disclosures"] as Record<string, unknown>), scope: "forged scope" } },
     ]) {
       const rendered = renderEvidenceInBrowserShell(hostile, [
         "phase-value", "global-verdict", "artifact-version", "report-status", "report-detail", "evidence-report",
@@ -296,6 +332,70 @@ describe("static page contract", () => {
     expect(rendered["global-verdict"]?.textContent).toBe("WARN");
     expect(rendered["artifact-version"]?.textContent).toBe("0.2.0");
     expect(rendered["report-status"]?.textContent).toBe("Packaged demo evidence is present.");
+  });
+
+  test("browser reader accepts every projection produced by the public builder", () => {
+    const blocked = demoManifest();
+    blocked["status"] = "BLOCKED";
+    blocked["reason"] = "fixture runner unavailable";
+    blocked["cases"] = [];
+    blocked["verdict"] = null;
+
+    const variants = [
+      {
+        name: "missing",
+        evidence: buildPublicEvidence({ phase: "candidate", now: () => "2026-09-08T03:00:00.000Z" }),
+        phase: "candidate",
+        demo: "not observed",
+        pilot: "not observed",
+        status: "Public evidence loaded; no demo or pilot observations are present.",
+      },
+      {
+        name: "blocked demo",
+        evidence: buildPublicEvidence({ phase: "candidate", demo: blocked, now: () => "2026-09-08T03:00:00.000Z" }),
+        phase: "candidate",
+        demo: "blocked",
+        pilot: "not observed",
+        status: "Evidence is present with an unresolved or blocked demo.",
+      },
+      {
+        name: "pilot only",
+        evidence: buildPublicEvidence({ phase: "candidate", pilot: pilotSummary(), now: () => "2026-09-08T03:00:00.000Z" }),
+        phase: "candidate",
+        demo: "not observed",
+        pilot: "evidence missing",
+        status: "Pilot evidence is present; packaged demo evidence is not observed.",
+      },
+      {
+        name: "release",
+        evidence: buildPublicEvidence({ phase: "release", demo: demoManifest(), releaseCommit: COMMIT, now: () => "2026-09-08T03:00:00.000Z" }),
+        phase: "release",
+        demo: "completed",
+        pilot: "not observed",
+        status: "Packaged demo evidence is present.",
+      },
+      ...([
+        ["positive", labelledPilot("POSITIVE", 30, 0.8), "positive"],
+        ["negative", labelledPilot("NEGATIVE", 30, 0.79), "negative"],
+        ["inconclusive", labelledPilot("INCONCLUSIVE", 5, 0.8), "inconclusive"],
+        ["smoke", smokePilot(), "evidence missing"],
+      ] as const).map(([name, pilotEvidence, pilot]) => ({
+        name,
+        evidence: buildPublicEvidence({ phase: "candidate", pilot: pilotEvidence, now: () => "2026-09-08T03:00:00.000Z" }),
+        phase: "candidate",
+        demo: "not observed",
+        pilot,
+        status: "Pilot evidence is present; packaged demo evidence is not observed.",
+      })),
+    ];
+
+    for (const variant of variants) {
+      const rendered = renderEvidenceInBrowserShell(variant.evidence);
+      expect(rendered["phase-value"]?.textContent, variant.name).toBe(variant.phase);
+      expect(rendered["demo-state"]?.textContent, variant.name).toBe(variant.demo);
+      expect(rendered["pilot-state"]?.textContent, variant.name).toBe(variant.pilot);
+      expect(rendered["report-status"]?.textContent, variant.name).toBe(variant.status);
+    }
   });
 
   test("published fixture sources match the executed demo and compile", () => {

@@ -216,8 +216,15 @@ async function loadEvidence() {
         ? `Observed result: ${observed.matchedExpectation ? "matched expectation" : "did not match expectation"}; rules: ${observed.observedRuleIds.join(", ") || "none"}.`
         : "Observed result: not available.";
     }
-    if (evidence.evidenceState === "OBSERVED") {
-      setText("report-status", evidence.demo?.status === "COMPLETED" ? "Packaged demo evidence is present." : "Evidence is present with an unresolved or blocked demo.");
+    if (evidence.evidenceState === "NOT_OBSERVED") {
+      setText("report-status", "Public evidence loaded; no demo or pilot observations are present.");
+      setText("report-detail", "The loaded projection contains neither packaged demo nor pilot evidence.");
+    } else {
+      setText("report-status", evidence.demo?.status === "COMPLETED"
+        ? "Packaged demo evidence is present."
+        : evidence.demo
+          ? "Evidence is present with an unresolved or blocked demo."
+          : "Pilot evidence is present; packaged demo evidence is not observed.");
       setText("report-detail", evidence.disclosures.scope);
     }
     setText("release-note", phase === "release"
