@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { extractRelativeImportSpecifiers, oneHopImportNeighborhoodBaseline, type ImportGraphFile } from "../pilot/baselines";
@@ -43,6 +43,19 @@ function git(cwd: string, args: string[]): string {
   const result = Bun.spawnSync(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
   if (result.exitCode !== 0) throw new Error(new TextDecoder().decode(result.stderr));
   return new TextDecoder().decode(result.stdout).trim();
+}
+
+function runImpactPilotCli(cwd: string, args: readonly string[]): { exitCode: number; stdout: string; stderr: string } {
+  const result = Bun.spawnSync([process.execPath, join(import.meta.dir, "..", "impact-pilot.ts"), ...args], {
+    cwd,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  return {
+    exitCode: result.exitCode,
+    stdout: new TextDecoder().decode(result.stdout),
+    stderr: new TextDecoder().decode(result.stderr),
+  };
 }
 
 const HEX_BASE = "a".repeat(40);
@@ -1352,6 +1365,89 @@ describe("local source and output path safety", () => {
     symlinkSync(outside, linked, process.platform === "win32" ? "junction" : "dir");
     expect(() => writeJsonExclusive(join(linked, "public.json"), { safe: true })).toThrow(/symbolic link|junction/);
     expect(existsSync(join(outside, "public.json"))).toBe(false);
+  });
+});
+
+describe("impact-pilot report CLI", () => {
+  test("rejects preview output flags before reading inputs or writing files", () => {
+    const cwd = tempDir("semctx-pilot-preview-conflict-");
+    for (const outputFlag of ["--out", "--export"] as const) {
+      const output = join(cwd, `${outputFlag.slice(2)}.json`);
+      const result = runImpactPilotCli(cwd, [
+        "report",
+        "--protocol", join(cwd, "missing-protocol.json"),
+        "--raw", join(cwd, "missing-raw.json"),
+        "--preview",
+        outputFlag, output,
+      ]);
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain(`[impact-pilot] ERROR --preview cannot be combined with ${outputFlag}`);
+      expect(result.stderr).not.toContain("ENOENT");
+      expect(existsSync(output)).toBe(false);
+    }
+  });
+
+  test("valid preview prints the public summary without creating an artifact", () => {
+    const cwd = tempDir("semctx-pilot-preview-readonly-");
+    const corpus: FrozenProtocolV1["corpus"] = {
+      kind: "synthetic-smoke",
+      cases: [makeCase("s-1", "repo-a", { status: "UNKNOWN" }, { synthetic: true })],
+    };
+    const protocol = makeFrozenProtocolFixture(corpus);
+    const raw: RawCollectionBundleV1 = {
+      schemaVersion: 1,
+      experimentId: protocol.experimentId,
+      protocolDigest: protocol.digest,
+      collectedAt: "2026-09-08T00:00:00.000Z",
+      observedBunVersion: "1.4.0",
+      cases: [makeObservation("s-1", [], corpus.cases[0])],
+    };
+    const protocolPath = join(cwd, "protocol.json");
+    const rawPath = join(cwd, "raw.json");
+    writeFileSync(protocolPath, JSON.stringify(protocol));
+    writeFileSync(rawPath, JSON.stringify(raw));
+    const filesBefore = readdirSync(cwd).sort();
+
+    const result = runImpactPilotCli(cwd, ["report", "--protocol", protocolPath, "--raw", rawPath, "--preview"]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain('"evidenceKind": "smoke"');
+    expect(result.stdout).toContain("[impact-pilot] verdict=EVIDENCE_MISSING evidenceKind=smoke");
+    expect(readdirSync(cwd).sort()).toEqual(filesBefore);
+  });
+
+  test("ordinary report output and public export remain available together", () => {
+    const cwd = tempDir("semctx-pilot-report-output-");
+    const corpus: FrozenProtocolV1["corpus"] = {
+      kind: "synthetic-smoke",
+      cases: [makeCase("s-1", "repo-a", { status: "UNKNOWN" }, { synthetic: true })],
+    };
+    const protocol = makeFrozenProtocolFixture(corpus);
+    const raw: RawCollectionBundleV1 = {
+      schemaVersion: 1,
+      experimentId: protocol.experimentId,
+      protocolDigest: protocol.digest,
+      collectedAt: "2026-09-08T00:00:00.000Z",
+      observedBunVersion: "1.4.0",
+      cases: [makeObservation("s-1", [], corpus.cases[0])],
+    };
+    const protocolPath = join(cwd, "protocol.json");
+    const rawPath = join(cwd, "raw.json");
+    const reportPath = join(cwd, "report.json");
+    const exportPath = join(cwd, "public.json");
+    writeFileSync(protocolPath, JSON.stringify(protocol));
+    writeFileSync(rawPath, JSON.stringify(raw));
+
+    const result = runImpactPilotCli(cwd, [
+      "report", "--protocol", protocolPath, "--raw", rawPath,
+      "--out", reportPath, "--export", exportPath,
+    ]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(JSON.parse(readFileSync(reportPath, "utf8")).perRepository[0].repositoryAlias).toBe("repo-a");
+    expect(JSON.parse(readFileSync(exportPath, "utf8")).perRepository[0].repositoryAlias).toBe("private-repository-1");
   });
 });
 

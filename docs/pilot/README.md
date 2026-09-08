@@ -130,7 +130,7 @@ of scores, so a fixture run can never be read as research evidence.
 
 - No flags: prints the full local report (includes failure reasons; still local, not persisted).
 - `--out <path>`: writes the full local report; refuses an existing path.
-- `--preview`: prints the public-safe summary only — read-only, writes nothing.
+- `--preview`: prints the public-safe summary only — read-only, writes nothing, and cannot be combined with `--out` or `--export`.
 - `--export <path>`: writes the public-safe summary; refuses an existing path.
 
 The public summary is a strict allowlist (schema/version, counts, scores, bounded per-repository
