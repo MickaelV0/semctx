@@ -254,7 +254,10 @@ const CLI_PACKAGE_JSON_PATH = "apps/cli/package.json";
 const RUNNER_DEPENDENCY_PATHS = [
   "node_modules/typescript/lib/typescript.js",
   "node_modules/typescript/package.json",
+  "packages/core/package.json",
+  "packages/core/src/verify-report.ts",
 ] as const;
+const ZOD_RUNTIME_ROOT_PATH = "packages/core/node_modules/zod";
 
 function listFilesRecursively(root: string): string[] {
   return readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
@@ -300,10 +303,13 @@ export function resolveCandidateIdentity(repoRoot: string, packaging: CandidateP
 
 export function resolveRunnerIdentity(repoRoot: string): RunnerIdentity {
   const absoluteEntry = join(repoRoot, RUNNER_ENTRY_PATH);
+  const zodRuntimeFiles = listFilesRecursively(join(repoRoot, ZOD_RUNTIME_ROOT_PATH))
+    .map((absolute) => relative(repoRoot, absolute).split("\\").join("/"));
   const supportFiles = readdirSync(join(repoRoot, "scripts", "pilot"), { withFileTypes: true })
     .filter((entry) => entry.isFile() && entry.name.endsWith(".ts"))
     .map((entry) => `scripts/pilot/${entry.name}`)
     .concat(RUNNER_DEPENDENCY_PATHS)
+    .concat(zodRuntimeFiles)
     .sort()
     .map((path) => ({ path, digest: digestFile(join(repoRoot, path)) }));
   return { entryPath: RUNNER_ENTRY_PATH, entryDigest: digestFile(absoluteEntry), toolSchemaVersion: 1, supportFiles };

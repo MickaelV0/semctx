@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
-import { VerifyReportSchema } from "@semantic-context/core";
+import { VerifyReportSchema } from "../../packages/core/src/verify-report";
 import { discoverTypeScriptFiles, changedFilesBaseline, oneHopImportNeighborhoodBaseline } from "./baselines";
 import { runBounded, TIMED_OUT_EXIT_CODE, type BoundedRunResult } from "./child";
 import { resolveCandidateIdentity, resolveRunnerIdentity, type FrozenProtocolV1 } from "./protocol";
