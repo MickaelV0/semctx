@@ -1,13 +1,13 @@
 import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
+import { VerifyReportSchema } from "@semantic-context/core";
 import { discoverTypeScriptFiles, changedFilesBaseline, oneHopImportNeighborhoodBaseline } from "./baselines";
 import { runBounded, TIMED_OUT_EXIT_CODE, type BoundedRunResult } from "./child";
 import { resolveCandidateIdentity, resolveRunnerIdentity, type FrozenProtocolV1 } from "./protocol";
 import { digestCanonical } from "./digest";
 import {
   PilotValidationError,
-  isRecord,
   requireArray,
   requireBoolean,
   requireEnum,
@@ -88,7 +88,7 @@ export function validateLocalSourcesFile(value: unknown, path = "sources"): Loca
   requireExactKeys(record, ["schemaVersion", "paths"], path);
   if (record.schemaVersion !== 1) throw new PilotValidationError(`${path}.schemaVersion`, "must be 1");
   const pathsRecord = requireRecord(record.paths, `${path}.paths`);
-  const paths: Record<string, string> = {};
+  const paths = Object.create(null) as Record<string, string>;
   for (const [caseId, sourcePath] of Object.entries(pathsRecord)) {
     paths[caseId] = requireString(sourcePath, `${path}.paths.${caseId}`);
   }
@@ -106,48 +106,54 @@ export function parseVerifyReport(
   } catch {
     return { verdict: null, verificationStatus: "MALFORMED_OUTPUT", suggestedFiles: [] };
   }
+  const validated = VerifyReportSchema.safeParse(parsed);
+  if (!validated.success) {
+    return { verdict: null, verificationStatus: "MALFORMED_OUTPUT", suggestedFiles: [] };
+  }
+  const report = validated.data;
+  const blockCount = report.findings.filter((finding) => finding.severity === "block").length;
+  const warnCount = report.findings.filter((finding) => finding.severity === "warn").length;
+  const derivedVerdict = blockCount > 0 ? "BLOCK" : warnCount > 0 ? "WARN" : "PASS";
   if (
-    !isRecord(parsed)
-    || parsed.schemaVersion !== 1
-    || (parsed.verdict !== "PASS" && parsed.verdict !== "WARN" && parsed.verdict !== "BLOCK")
-    || !Array.isArray(parsed.changedFiles)
-    || !parsed.changedFiles.every((file) => typeof file === "string")
+    report.summary.blockCount !== blockCount
+    || report.summary.warnCount !== warnCount
+    || report.verdict !== derivedVerdict
   ) {
     return { verdict: null, verificationStatus: "MALFORMED_OUTPUT", suggestedFiles: [] };
   }
-  const reportedChangedFiles = [...new Set(parsed.changedFiles)].sort();
+  const reportedChangedFiles = [...new Set(report.changedFiles)].sort();
   const expectedChangedFiles = [...expected.changedFiles].sort();
   if (
-    parsed.base !== expected.baseRef
-    || parsed.head !== expected.headRef
+    report.base !== expected.baseRef
+    || report.head !== expected.headRef
     || JSON.stringify(reportedChangedFiles) !== JSON.stringify(expectedChangedFiles)
   ) {
     return { verdict: null, verificationStatus: "DIFF_MISMATCH", suggestedFiles: [] };
   }
-  const expectedExitCode = parsed.verdict === "BLOCK" ? 3 : 0;
+  const expectedExitCode = report.verdict === "BLOCK" ? 3 : 0;
   if (exitCode !== expectedExitCode) {
     return { verdict: null, verificationStatus: "EXIT_MISMATCH", suggestedFiles: [] };
   }
   const consumerFiles: string[] = [];
-  if (parsed.impactedConsumers !== undefined) {
-    if (!Array.isArray(parsed.impactedConsumers)) {
+  const isConfinedRepositoryPath = (path: string): boolean => {
+    if (path.length === 0 || path.startsWith("/") || path.includes("\\") || path.includes(":")) return false;
+    return path.split("/").every((part) => part.length > 0 && part !== "." && part !== ".."
+      && [...part].every((character) => character.charCodeAt(0) >= 32 && character.charCodeAt(0) !== 127));
+  };
+  for (const entry of report.impactedConsumers ?? []) {
+    const files = [entry.symbol.file, ...entry.consumers.map((consumer) => consumer.file)]
+      .filter((file): file is string => file !== undefined);
+    if (!files.every(isConfinedRepositoryPath)) {
       return { verdict: null, verificationStatus: "MALFORMED_OUTPUT", suggestedFiles: [] };
     }
-    for (const entry of parsed.impactedConsumers) {
-      if (!isRecord(entry) || !Array.isArray(entry.consumers)) {
-        return { verdict: null, verificationStatus: "MALFORMED_OUTPUT", suggestedFiles: [] };
-      }
-      for (const consumer of entry.consumers) {
-        if (!isRecord(consumer)) return { verdict: null, verificationStatus: "MALFORMED_OUTPUT", suggestedFiles: [] };
-        if (consumer.file !== undefined && typeof consumer.file !== "string") {
-          return { verdict: null, verificationStatus: "MALFORMED_OUTPUT", suggestedFiles: [] };
-        }
-        if (typeof consumer.file === "string" && consumer.file.length > 0) consumerFiles.push(consumer.file);
+    for (const consumer of entry.consumers) {
+      if (consumer.file !== undefined) {
+        consumerFiles.push(consumer.file);
       }
     }
   }
   const suggestedFiles = [...new Set([...reportedChangedFiles, ...consumerFiles])].sort();
-  return { verdict: parsed.verdict, verificationStatus: "TRUSTED", suggestedFiles };
+  return { verdict: report.verdict, verificationStatus: "TRUSTED", suggestedFiles };
 }
 
 function sanitizedEnvironment(disabledHooksPath: string): Record<string, string> {

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { extractRelativeImportSpecifiers, oneHopImportNeighborhoodBaseline, type ImportGraphFile } from "../pilot/baselines";
@@ -23,6 +23,7 @@ import {
 } from "../pilot/protocol";
 import { buildPublicSummary, buildResultReport, scoreTool } from "../pilot/report";
 import { parseFlags } from "../pilot/cli-args";
+import { writeJsonExclusive } from "../impact-pilot";
 
 const temporaryDirectories: string[] = [];
 function tempDir(prefix: string): string {
@@ -68,7 +69,10 @@ if (args[0] === "verify" && args[1] === "diff") {
   const report = {
     schemaVersion: 1, verdict: blocks ? "BLOCK" : "PASS", base, head, mergeBase: null, range: null,
     changedFiles, changedSymbols: [], impactedContracts: [], impactedInvariants: [],
-    recommendedTests: [], contradictions: [], unknowns: [], findings: [],
+    recommendedTests: [], contradictions: [], unknowns: [],
+    findings: blocks ? [{
+      rule: "fixture-block", tier: "strict", severity: "block", message: "fixture block", nodeIds: [], locations: [],
+    }] : [],
     summary: { blockCount: blocks ? 1 : 0, warnCount: 0 },
   };
   console.log(JSON.stringify(report));
@@ -528,8 +532,21 @@ function makeObservation(
           verdict: "PASS",
           base: spec?.baseRef ?? HEX_BASE,
           head: spec?.headRef ?? hexHead(1),
+          mergeBase: null,
+          range: null,
           changedFiles: spec?.changedFiles ?? [],
-          impactedConsumers: [{ consumers: suggested.map((file) => ({ file })) }],
+          changedSymbols: [],
+          impactedContracts: [],
+          impactedInvariants: [],
+          recommendedTests: [],
+          contradictions: [],
+          unknowns: [],
+          findings: [],
+          impactedConsumers: [{
+            symbol: { id: "sym:source", name: "source", kind: "function" },
+            consumers: suggested.map((file, index) => ({ id: `sym:consumer:${index}`, name: `consumer${index}`, kind: "function", file })),
+          }],
+          summary: { blockCount: 0, warnCount: 0 },
         }),
         stderr: "",
       },
@@ -797,7 +814,17 @@ describe("verify output trust", () => {
     verdict: "PASS",
     base: HEX_BASE,
     head: hexHead(1),
+    mergeBase: null,
+    range: `${HEX_BASE}..${hexHead(1)}`,
     changedFiles: ["a.ts"],
+    changedSymbols: [],
+    impactedContracts: [],
+    impactedInvariants: [],
+    recommendedTests: [],
+    contradictions: [],
+    unknowns: [],
+    findings: [],
+    summary: { blockCount: 0, warnCount: 0 },
     ...overrides,
   });
 
@@ -809,6 +836,45 @@ describe("verify output trust", () => {
       verificationStatus: "DIFF_MISMATCH",
     });
     expect(parseVerifyReport("not-json", 0, expected)).toMatchObject({ verdict: null, verificationStatus: "MALFORMED_OUTPUT" });
+  });
+
+  test("rejects incomplete, contradictory, and unconfined verify reports", () => {
+    const incomplete = JSON.stringify({
+      schemaVersion: 1, verdict: "PASS", base: HEX_BASE, head: hexHead(1), changedFiles: ["a.ts"],
+    });
+    expect(parseVerifyReport(incomplete, 0, expected).verificationStatus).toBe("MALFORMED_OUTPUT");
+    expect(parseVerifyReport(report({
+      summary: { blockCount: 1, warnCount: 0 },
+      findings: [{
+        rule: "contradiction", tier: "strict", severity: "block", message: "blocked", nodeIds: [], locations: [],
+      }],
+    }), 0, expected).verificationStatus).toBe("MALFORMED_OUTPUT");
+    expect(parseVerifyReport(report({
+      impactedConsumers: [{
+        symbol: { id: "sym:source", name: "source", kind: "function", file: "a.ts" },
+        consumers: [{ id: "sym:consumer", name: "consumer", kind: "function", file: "../../private/secret.ts" }],
+      }],
+    }), 0, expected).verificationStatus).toBe("MALFORMED_OUTPUT");
+  });
+});
+
+describe("local source and output path safety", () => {
+  test("preserves __proto__ as an own local source key without prototype mutation", () => {
+    const value = validateLocalSourcesFile(JSON.parse(
+      '{"schemaVersion":1,"paths":{"__proto__":"C:/private/repo","normal":"C:/normal"}}',
+    ));
+    expect(Object.getPrototypeOf(value.paths)).toBeNull();
+    expect(Object.hasOwn(value.paths, "__proto__")).toBe(true);
+    expect(value.paths["__proto__"]).toBe("C:/private/repo");
+  });
+
+  test("refuses exclusive output through a symlink or junction ancestor", () => {
+    const parent = tempDir("semctx-pilot-output-parent-");
+    const outside = tempDir("semctx-pilot-output-outside-");
+    const linked = join(parent, "linked");
+    symlinkSync(outside, linked, process.platform === "win32" ? "junction" : "dir");
+    expect(() => writeJsonExclusive(join(linked, "public.json"), { safe: true })).toThrow(/symbolic link|junction/);
+    expect(existsSync(join(outside, "public.json"))).toBe(false);
   });
 });
 
