@@ -252,6 +252,7 @@ const CLI_ENTRY_BY_PACKAGING: Record<CandidatePackaging, string> = {
 };
 const CLI_PACKAGE_JSON_PATH = "apps/cli/package.json";
 const RUNNER_DEPENDENCY_PATHS = [
+  "packages/semantic-engine/src/gitignore.ts",
   "node_modules/typescript/lib/typescript.js",
   "node_modules/typescript/package.json",
   "packages/core/package.json",

@@ -5,8 +5,11 @@ import { join } from "node:path";
 import { extractRelativeImportSpecifiers, oneHopImportNeighborhoodBaseline, type ImportGraphFile } from "../pilot/baselines";
 import { runBounded, TIMED_OUT_EXIT_CODE } from "../pilot/child";
 import {
+  baselineInputDigest,
+  baselineOutputDigest,
   collectCases,
   parseVerifyReport,
+  toolOutputDigest,
   validateLocalSourcesFile,
   validateRawCollectionBundle,
   type RawCollectionBundleV1,
@@ -54,13 +57,30 @@ import { mkdirSync, writeFileSync, appendFileSync } from "node:fs";
 const args = process.argv.slice(2);
 const rootFlag = args.indexOf("--root");
 const root = rootFlag >= 0 ? args[rootFlag + 1] : process.env.SEMCTX_ROOT ?? process.cwd();
+function mutateCheckout(stage) {
+  const mode = process.env.SEMCTX_PILOT_TEST_MUTATE_CHECKOUT;
+  if (mode === "tracked:" + stage) writeFileSync(root + "/src/critical.ts", "export const value = 999;\\n");
+  if (mode === "staged:" + stage) {
+    writeFileSync(root + "/src/critical.ts", "export const value = 999;\\n");
+    Bun.spawnSync(["git", "add", "--", "src/critical.ts"], { cwd: root });
+  }
+  if (mode === "index-flags:" + stage) Bun.spawnSync(["git", "update-index", "--assume-unchanged", "src/critical.ts"], { cwd: root });
+  if (mode === "head:" + stage) {
+    Bun.spawnSync(["git", "-c", "user.name=pilot test", "-c", "user.email=pilot@example.invalid", "commit", "--allow-empty", "-m", "candidate moved head"], { cwd: root });
+  }
+}
 if (args[0] === "init") {
   mkdirSync(root + "/.semctx", { recursive: true });
   writeFileSync(root + "/.semctx/stub-marker", "initialized");
+  if (process.env.SEMCTX_PILOT_TEST_GITIGNORE === "canonical") {
+    writeFileSync(root + "/.gitignore", "node_modules\\n.semctx/*\\n!.semctx/semantic/\\n!.semctx/config.json\\n");
+  }
+  if (process.env.SEMCTX_PILOT_TEST_GITIGNORE === "poison") writeFileSync(root + "/.gitignore", "*\\n");
+  mutateCheckout("init");
   if (process.env.SEMCTX_PILOT_TEST_MUTATE_SELF === "1") appendFileSync(import.meta.path, "\\n// mutated during collection\\n");
   process.exit(0);
 }
-if (args[0] === "index") process.exit(0);
+if (args[0] === "index") { mutateCheckout("index"); process.exit(0); }
 if (args[0] === "verify" && args[1] === "diff") {
   const base = args[args.indexOf("--base") + 1];
   const head = args[args.indexOf("--head") + 1];
@@ -68,6 +88,7 @@ if (args[0] === "verify" && args[1] === "diff") {
   const mergeBase = new TextDecoder().decode(merge.stdout).trim();
   const diff = Bun.spawnSync(["git", "diff", "--name-only", mergeBase, head], { cwd: root, stdout: "pipe" });
   const changedFiles = new TextDecoder().decode(diff.stdout).trim().split("\\n").filter(Boolean).sort();
+  mutateCheckout("verify");
   const blocks = changedFiles.includes("src/critical.ts");
   const report = {
     schemaVersion: 1, verdict: blocks ? "BLOCK" : "PASS", base, head, mergeBase,
@@ -91,6 +112,7 @@ function makeFixtureRepoRoot(): string {
   mkdirSync(join(root, "scripts", "pilot"), { recursive: true });
   mkdirSync(join(root, "node_modules", "typescript", "lib"), { recursive: true });
   mkdirSync(join(root, "packages", "core", "src"), { recursive: true });
+  mkdirSync(join(root, "packages", "semantic-engine", "src"), { recursive: true });
   mkdirSync(join(root, "packages", "core", "node_modules", "zod", "v3"), { recursive: true });
   writeFileSync(join(root, "apps", "cli", "package.json"), JSON.stringify({ name: "semctx-fixture", version: "0.0.1" }));
   writeFileSync(join(root, "apps", "cli", "src", "index.ts"), STUB_CANDIDATE_SOURCE);
@@ -98,6 +120,7 @@ function makeFixtureRepoRoot(): string {
   writeFileSync(join(root, "node_modules", "typescript", "package.json"), JSON.stringify({ name: "typescript", version: "0.0.0" }));
   writeFileSync(join(root, "node_modules", "typescript", "lib", "typescript.js"), "// fixture typescript runtime\n");
   writeFileSync(join(root, "packages", "core", "src", "verify-report.ts"), 'import { z } from "zod";\nexport const VerifyReportSchema = z.object({});\n');
+  writeFileSync(join(root, "packages", "semantic-engine", "src", "gitignore.ts"), "export const computeGitignore = () => ({ content: '', changed: false });\n");
   writeFileSync(join(root, "packages", "core", "package.json"), JSON.stringify({
     name: "@semantic-context/core",
     type: "module",
@@ -118,12 +141,13 @@ function makeFixtureRepoRoot(): string {
   return root;
 }
 
-function makeSourceRepo(): { cwd: string; base: string; head: string } {
+function makeSourceRepo(trackedGitignore = false): { cwd: string; base: string; head: string } {
   const cwd = tempDir("semctx-pilot-source-");
   git(cwd, ["init", "-q"]);
   git(cwd, ["config", "user.email", "pilot@example.invalid"]);
   git(cwd, ["config", "user.name", "pilot test"]);
   mkdirSync(join(cwd, "src"), { recursive: true });
+  if (trackedGitignore) writeFileSync(join(cwd, ".gitignore"), "node_modules\n");
   writeFileSync(join(cwd, "src", "critical.ts"), "export const value = 1;\n");
   writeFileSync(join(cwd, "src", "consumer.ts"), 'import { value } from "./critical";\nexport const doubled = value * 2;\n');
   git(cwd, ["add", "-A"]);
@@ -417,17 +441,23 @@ describe("freeze: candidate/runner identity binding", () => {
       "packages/core/node_modules/zod/v3/external.js",
       "packages/core/package.json",
       "packages/core/src/verify-report.ts",
+      "packages/semantic-engine/src/gitignore.ts",
       "scripts/pilot/helper.ts",
     ]);
   });
 
-  test("changes runner identity when the verify schema or resolved Zod runtime drifts", () => {
+  test("changes runner identity when a bound source dependency or resolved runtime drifts", () => {
     const repoRoot = makeFixtureRepoRoot();
     const original = digestCanonical(resolveRunnerIdentity(repoRoot));
+    const gitignorePath = join(repoRoot, "packages", "semantic-engine", "src", "gitignore.ts");
+    writeFileSync(gitignorePath, `${readFileSync(gitignorePath, "utf8")}\n// gitignore policy drift\n`);
+    const gitignoreDrifted = digestCanonical(resolveRunnerIdentity(repoRoot));
+    expect(gitignoreDrifted).not.toBe(original);
+
     const schemaPath = join(repoRoot, "packages", "core", "src", "verify-report.ts");
     writeFileSync(schemaPath, `${readFileSync(schemaPath, "utf8")}\n// schema drift\n`);
     const schemaDrifted = digestCanonical(resolveRunnerIdentity(repoRoot));
-    expect(schemaDrifted).not.toBe(original);
+    expect(schemaDrifted).not.toBe(gitignoreDrifted);
 
     const zodRuntimePath = join(repoRoot, "packages", "core", "node_modules", "zod", "v3", "external.js");
     writeFileSync(zodRuntimePath, `${readFileSync(zodRuntimePath, "utf8")}\n// runtime drift\n`);
@@ -533,39 +563,47 @@ if (Object.keys(process.env).some(key => forbiddenEnvironmentKeys.some(name => n
     const protocol = freezeProtocol(draft, repoRoot);
     const sources = validateLocalSourcesFile({ schemaVersion: 1, paths: { "case-1": source.cwd } });
     const inheritedRoot = tempDir("semctx-pilot-inherited-root-");
-    process.env.SEMCTX_ROOT = inheritedRoot;
-    process.env.GIT_EXTERNAL_DIFF = "definitely-not-a-command";
+    const previousRoot = process.env.SEMCTX_ROOT;
+    const previousExternalDiff = process.env.GIT_EXTERNAL_DIFF;
+    try {
+      process.env.SEMCTX_ROOT = inheritedRoot;
+      process.env.GIT_EXTERNAL_DIFF = "definitely-not-a-command";
 
-    const createdDirs: string[] = [];
-    const bundle = collectCases(protocol, sources, repoRoot, {
-      mkTempDir: (prefix) => {
-        const dir = mkdtempSync(join(tmpdir(), prefix));
-        createdDirs.push(dir);
-        return dir;
-      },
-    });
+      const createdDirs: string[] = [];
+      const bundle = collectCases(protocol, sources, repoRoot, {
+        mkTempDir: (prefix) => {
+          const dir = mkdtempSync(join(tmpdir(), prefix));
+          createdDirs.push(dir);
+          return dir;
+        },
+      });
 
-    expect(bundle.cases).toHaveLength(1);
-    const observed = bundle.cases[0]!;
-    expect(observed.status).toBe("OBSERVED");
-    expect(observed.changedFiles).toEqual(["src/critical.ts"]);
-    expect(observed.semctx?.verify.exitCode).toBe(3); // BLOCK, recorded rather than hidden
-    expect(observed.semctx?.verificationStatus).toBe("TRUSTED");
-    expect(observed.semctx?.init.argv).toContain("--root");
-    expect(observed.semctx?.verdict).toBe("BLOCK");
-    expect(observed.semctx?.suggestedFiles).toEqual(["src/critical.ts"]);
-    expect(observed.baselineChangedFiles?.suggestedFiles).toEqual(["src/critical.ts"]);
-    expect(observed.baselineImportNeighborhood?.suggestedFiles).toContain("src/consumer.ts");
+      expect(bundle.cases).toHaveLength(1);
+      const observed = bundle.cases[0]!;
+      expect(observed.status).toBe("OBSERVED");
+      expect(observed.changedFiles).toEqual(["src/critical.ts"]);
+      expect(observed.semctx?.verify.exitCode).toBe(3); // BLOCK, recorded rather than hidden
+      expect(observed.semctx?.verificationStatus).toBe("TRUSTED");
+      expect(observed.semctx?.init.argv).toContain("--root");
+      expect(observed.semctx?.verdict).toBe("BLOCK");
+      expect(observed.semctx?.suggestedFiles).toEqual(["src/critical.ts"]);
+      expect(observed.baselineChangedFiles?.suggestedFiles).toEqual(["src/critical.ts"]);
+      expect(observed.baselineImportNeighborhood?.suggestedFiles).toContain("src/consumer.ts");
+      expect(validateRawCollectionBundle(JSON.parse(JSON.stringify(bundle)))).toEqual(bundle);
 
-    // confinement: the disposable workspace is gone, and the source repository is untouched.
-    expect(createdDirs.length).toBeGreaterThan(0);
-    for (const dir of createdDirs) expect(existsSync(dir)).toBe(false);
-    expect(git(source.cwd, ["status", "--porcelain"])).toBe("");
-    expect(git(source.cwd, ["rev-parse", "HEAD"])).toBe(source.head);
-    expect(existsSync(join(source.cwd, ".semctx"))).toBe(false);
-    expect(existsSync(join(inheritedRoot, ".semctx"))).toBe(false);
-    delete process.env.SEMCTX_ROOT;
-    delete process.env.GIT_EXTERNAL_DIFF;
+      // confinement: the disposable workspace is gone, and the source repository is untouched.
+      expect(createdDirs.length).toBeGreaterThan(0);
+      for (const dir of createdDirs) expect(existsSync(dir)).toBe(false);
+      expect(git(source.cwd, ["status", "--porcelain"])).toBe("");
+      expect(git(source.cwd, ["rev-parse", "HEAD"])).toBe(source.head);
+      expect(existsSync(join(source.cwd, ".semctx"))).toBe(false);
+      expect(existsSync(join(inheritedRoot, ".semctx"))).toBe(false);
+    } finally {
+      if (previousRoot === undefined) delete process.env.SEMCTX_ROOT;
+      else process.env.SEMCTX_ROOT = previousRoot;
+      if (previousExternalDiff === undefined) delete process.env.GIT_EXTERNAL_DIFF;
+      else process.env.GIT_EXTERNAL_DIFF = previousExternalDiff;
+    }
   }, 60_000);
 
   test("rejects a candidate artifact that changes during collection", () => {
@@ -581,6 +619,7 @@ if (Object.keys(process.env).some(key => forbiddenEnvironmentKeys.some(name => n
       )] },
     });
     const protocol = freezeProtocol(draft, repoRoot);
+    const previous = process.env.SEMCTX_PILOT_TEST_MUTATE_SELF;
     process.env.SEMCTX_PILOT_TEST_MUTATE_SELF = "1";
     try {
       expect(() => collectCases(
@@ -589,7 +628,84 @@ if (Object.keys(process.env).some(key => forbiddenEnvironmentKeys.some(name => n
         repoRoot,
       )).toThrow(/candidate CLI on disk no longer matches/);
     } finally {
-      delete process.env.SEMCTX_PILOT_TEST_MUTATE_SELF;
+      if (previous === undefined) delete process.env.SEMCTX_PILOT_TEST_MUTATE_SELF;
+      else process.env.SEMCTX_PILOT_TEST_MUTATE_SELF = previous;
+    }
+  }, 60_000);
+
+  test.each([
+    ["tracked:init", "init"],
+    ["tracked:index", "index"],
+    ["tracked:verify", "verify"],
+    ["staged:index", "index"],
+    ["index-flags:index", "index"],
+    ["head:init", "init"],
+  ] as const)("marks candidate %s drift in the disposable checkout untrusted", (mode, stage) => {
+    const repoRoot = makeFixtureRepoRoot();
+    const source = makeSourceRepo();
+    const protocol = freezeProtocol(validateDraftProtocol({
+      schemaVersion: 1,
+      candidate: { packaging: "source-dev" },
+      config: baseDraft(),
+      corpus: { kind: "synthetic-smoke", cases: [makeCase(
+        "case-1", "fixture-repo", { status: "UNKNOWN" },
+        { synthetic: true, baseRef: source.base, headRef: source.head, changedFiles: ["src/critical.ts"] },
+      )] },
+    }), repoRoot);
+    const previous = process.env.SEMCTX_PILOT_TEST_MUTATE_CHECKOUT;
+    try {
+      process.env.SEMCTX_PILOT_TEST_MUTATE_CHECKOUT = mode;
+      const bundle = collectCases(
+        protocol,
+        validateLocalSourcesFile({ schemaVersion: 1, paths: { "case-1": source.cwd } }),
+        repoRoot,
+      );
+      expect(bundle.cases[0]).toMatchObject({
+        status: "OBSERVED",
+        failureReason: null,
+        semctx: {
+          verificationStatus: "SOURCE_DRIFT",
+          sourceDriftReason: expect.stringMatching(new RegExp(`disposable checkout changed after candidate ${stage}`)),
+          verdict: null,
+          suggestedFiles: [],
+          init: { exitCode: 0 },
+          index: { exitCode: 0 },
+        },
+      });
+      expect(bundle.cases[0]?.baselineImportNeighborhood?.suggestedFiles).toContain("src/consumer.ts");
+    } finally {
+      if (previous === undefined) delete process.env.SEMCTX_PILOT_TEST_MUTATE_CHECKOUT;
+      else process.env.SEMCTX_PILOT_TEST_MUTATE_CHECKOUT = previous;
+    }
+  }, 60_000);
+
+  test.each([
+    ["canonical", "OBSERVED", "TRUSTED"],
+    ["poison", "OBSERVED", "SOURCE_DRIFT"],
+  ] as const)("classifies a %s tracked .gitignore update precisely", (mode, status, verificationStatus) => {
+    const repoRoot = makeFixtureRepoRoot();
+    const source = makeSourceRepo(true);
+    const protocol = freezeProtocol(validateDraftProtocol({
+      schemaVersion: 1,
+      candidate: { packaging: "source-dev" },
+      config: baseDraft(),
+      corpus: { kind: "synthetic-smoke", cases: [makeCase(
+        "case-1", "fixture-repo", { status: "UNKNOWN" },
+        { synthetic: true, baseRef: source.base, headRef: source.head, changedFiles: ["src/critical.ts"] },
+      )] },
+    }), repoRoot);
+    const previous = process.env.SEMCTX_PILOT_TEST_GITIGNORE;
+    try {
+      process.env.SEMCTX_PILOT_TEST_GITIGNORE = mode;
+      const bundle = collectCases(
+        protocol,
+        validateLocalSourcesFile({ schemaVersion: 1, paths: { "case-1": source.cwd } }),
+        repoRoot,
+      );
+      expect(bundle.cases[0]).toMatchObject({ status, semctx: { verificationStatus } });
+    } finally {
+      if (previous === undefined) delete process.env.SEMCTX_PILOT_TEST_GITIGNORE;
+      else process.env.SEMCTX_PILOT_TEST_GITIGNORE = previous;
     }
   }, 60_000);
 
@@ -684,7 +800,48 @@ function makeObservation(
   }
   const baseRef = spec?.baseRef ?? HEX_BASE;
   const headRef = spec?.headRef ?? hexHead(1);
-  const gitIdentity = { baseRef, headRef, mergeBase: baseRef, range: `${baseRef.slice(0, 12)}..${headRef.slice(0, 12)}` };
+  const gitIdentity = {
+    baseRef,
+    headRef,
+    mergeBase: baseRef,
+    range: `${baseRef.slice(0, 12)}..${headRef.slice(0, 12)}`,
+    headTree: "c".repeat(40),
+    trackedFilesDigest: `sha256:${"d".repeat(64)}`,
+    trackedIndexDigest: `sha256:${"e".repeat(64)}`,
+  };
+  const changedFiles = [...(spec?.changedFiles ?? [])];
+  const changedAlgorithm = "changed-files-v1" as const;
+  const importAlgorithm = "one-hop-import-neighborhood-v1" as const;
+  const invocation = (stdout = "") => ({
+    argv: ["bun"],
+    exitCode: 0,
+    timedOut: false,
+    durationMs: 1,
+    stdout,
+    stderr: "",
+    outputDigest: toolOutputDigest(stdout, ""),
+  });
+  const verifyStdout = JSON.stringify({
+    schemaVersion: 1,
+    verdict: "PASS",
+    base: baseRef,
+    head: headRef,
+    mergeBase: gitIdentity.mergeBase,
+    range: gitIdentity.range,
+    changedFiles: spec?.changedFiles ?? [],
+    changedSymbols: [],
+    impactedContracts: [],
+    impactedInvariants: [],
+    recommendedTests: [],
+    contradictions: [],
+    unknowns: [],
+    findings: [],
+    impactedConsumers: [{
+      symbol: { id: "sym:source", name: "source", kind: "function" },
+      consumers: suggested.map((file, index) => ({ id: `sym:consumer:${index}`, name: `consumer${index}`, kind: "function", file })),
+    }],
+    summary: { blockCount: 0, warnCount: 0 },
+  });
   return {
     caseId,
     status: "OBSERVED",
@@ -692,42 +849,28 @@ function makeObservation(
     git: gitIdentity,
     changedFiles: [...(spec?.changedFiles ?? [])],
     semctx: {
-      init: { argv: ["bun"], exitCode: 0, timedOut: false, durationMs: 1, stdout: "", stderr: "" },
-      index: { argv: ["bun"], exitCode: 0, timedOut: false, durationMs: 1, stdout: "", stderr: "" },
-      verify: {
-        argv: ["bun"],
-        exitCode: 0,
-        timedOut: false,
-        durationMs: 1,
-        stdout: JSON.stringify({
-          schemaVersion: 1,
-          verdict: "PASS",
-          base: baseRef,
-          head: headRef,
-          mergeBase: gitIdentity.mergeBase,
-          range: gitIdentity.range,
-          changedFiles: spec?.changedFiles ?? [],
-          changedSymbols: [],
-          impactedContracts: [],
-          impactedInvariants: [],
-          recommendedTests: [],
-          contradictions: [],
-          unknowns: [],
-          findings: [],
-          impactedConsumers: [{
-            symbol: { id: "sym:source", name: "source", kind: "function" },
-            consumers: suggested.map((file, index) => ({ id: `sym:consumer:${index}`, name: `consumer${index}`, kind: "function", file })),
-          }],
-          summary: { blockCount: 0, warnCount: 0 },
-        }),
-        stderr: "",
-      },
+      init: invocation(),
+      index: invocation(),
+      verify: invocation(verifyStdout),
       verdict: "PASS",
       verificationStatus: "TRUSTED",
+      sourceDriftReason: null,
       suggestedFiles: [...suggested],
     },
-    baselineChangedFiles: { suggestedFiles: [], durationMs: 1 },
-    baselineImportNeighborhood: { suggestedFiles: [], durationMs: 1 },
+    baselineChangedFiles: {
+      algorithm: changedAlgorithm,
+      suggestedFiles: changedFiles,
+      durationMs: 1,
+      inputDigest: baselineInputDigest(changedAlgorithm, gitIdentity, changedFiles),
+      outputDigest: baselineOutputDigest(changedAlgorithm, changedFiles),
+    },
+    baselineImportNeighborhood: {
+      algorithm: importAlgorithm,
+      suggestedFiles: [],
+      durationMs: 1,
+      inputDigest: baselineInputDigest(importAlgorithm, gitIdentity, changedFiles),
+      outputDigest: baselineOutputDigest(importAlgorithm, []),
+    },
   };
 }
 
@@ -857,6 +1000,69 @@ describe("report identity and completeness gates", () => {
     expect(() => buildResultReport(protocol, { ...raw, protocolDigest: `sha256:${"9".repeat(64)}` })).toThrow(/protocolDigest/);
   });
 
+  test("rejects a changed-files baseline that contradicts the captured changed files", () => {
+    const { protocol, raw } = fixture();
+    const observation = raw.cases[0]!;
+    if (observation.status !== "OBSERVED" || observation.baselineChangedFiles === null) throw new Error("invalid fixture");
+    const wrongSuggestions = ["wrong.ts"];
+    const tampered: RawCollectionBundleV1 = {
+      ...raw,
+      cases: [{
+        ...observation,
+        baselineChangedFiles: {
+          ...observation.baselineChangedFiles,
+          suggestedFiles: wrongSuggestions,
+          outputDigest: baselineOutputDigest("changed-files-v1", wrongSuggestions),
+        },
+      }],
+    };
+    expect(() => buildResultReport(protocol, tampered)).toThrow(/changed-files baseline/);
+  });
+
+  test("rejects duplicate baseline paths and stale baseline digests", () => {
+    const { protocol, raw } = fixture();
+    const observation = raw.cases[0]!;
+    if (observation.status !== "OBSERVED" || observation.baselineChangedFiles === null) throw new Error("invalid fixture");
+    const duplicate = JSON.parse(JSON.stringify(raw));
+    duplicate.cases[0].baselineChangedFiles.suggestedFiles = ["same.ts", "same.ts"];
+    duplicate.cases[0].baselineChangedFiles.outputDigest = baselineOutputDigest("changed-files-v1", ["same.ts", "same.ts"]);
+    expect(() => validateRawCollectionBundle(duplicate)).toThrow(/sorted and contain no duplicates/);
+    expect(() => buildResultReport(protocol, duplicate as RawCollectionBundleV1)).toThrow(/sorted and contain no duplicates/);
+
+    const staleOutput: RawCollectionBundleV1 = {
+      ...raw,
+      cases: [{
+        ...observation,
+        baselineChangedFiles: { ...observation.baselineChangedFiles, outputDigest: `sha256:${"9".repeat(64)}` },
+      }],
+    };
+    expect(() => buildResultReport(protocol, staleOutput)).toThrow(/outputDigest/);
+
+    const staleInput: RawCollectionBundleV1 = {
+      ...raw,
+      cases: [{
+        ...observation,
+        baselineChangedFiles: { ...observation.baselineChangedFiles, inputDigest: `sha256:${"8".repeat(64)}` },
+      }],
+    };
+    expect(() => buildResultReport(protocol, staleInput)).toThrow(/inputDigest/);
+
+    const wrongAlgorithm = JSON.parse(JSON.stringify(raw)) as RawCollectionBundleV1;
+    const changedBaseline = wrongAlgorithm.cases[0]!.baselineChangedFiles!;
+    (changedBaseline as { algorithm: string }).algorithm = "one-hop-import-neighborhood-v1";
+    changedBaseline.inputDigest = baselineInputDigest(changedBaseline.algorithm, observation.git!, observation.changedFiles);
+    changedBaseline.outputDigest = baselineOutputDigest(changedBaseline.algorithm, changedBaseline.suggestedFiles);
+    expect(() => buildResultReport(protocol, wrongAlgorithm)).toThrow(/algorithm/);
+
+  });
+
+  test("report rejects a stale candidate output digest", () => {
+    const { protocol, raw } = fixture();
+    const staleCandidateOutput = structuredClone(raw);
+    staleCandidateOutput.cases[0]!.semctx!.verify.outputDigest = `sha256:${"7".repeat(64)}`;
+    expect(() => buildResultReport(protocol, staleCandidateOutput)).toThrow(/outputDigest/);
+  });
+
   test("rejects a raw bundle missing a registered case", () => {
     const { protocol } = fixture();
     const raw: RawCollectionBundleV1 = {
@@ -904,6 +1110,7 @@ describe("report identity and completeness gates", () => {
     const report = JSON.parse(observation.semctx.verify.stdout) as Record<string, unknown>;
     report.mergeBase = "c".repeat(40);
     observation.semctx.verify.stdout = JSON.stringify(report);
+    observation.semctx.verify.outputDigest = toolOutputDigest(observation.semctx.verify.stdout, observation.semctx.verify.stderr);
     expect(() => buildResultReport(protocol, { ...raw, cases: [observation] })).toThrow(/trusted projection disagrees/);
   });
 
@@ -973,6 +1180,13 @@ describe("validateRawCollectionBundle: process truth", () => {
     const observation = makeObservation("c-1", ["a.ts"]);
     (observation.semctx as unknown as { verify: { durationMs: unknown } }).verify.durationMs = Number.POSITIVE_INFINITY;
     expect(() => validateRawCollectionBundle({ ...base, cases: [observation] })).toThrow(/finite/);
+  });
+
+  test("rejects a stale candidate output digest", () => {
+    const observation = makeObservation("c-1", ["a.ts"]);
+    if (observation.semctx === null) throw new Error("fixture must contain a semctx run");
+    observation.semctx.verify.outputDigest = `sha256:${"9".repeat(64)}`;
+    expect(() => validateRawCollectionBundle({ ...base, cases: [observation] })).toThrow(/outputDigest/);
   });
 
   test("rejects a malformed verdict value", () => {
