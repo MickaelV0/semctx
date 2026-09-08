@@ -5,6 +5,7 @@ import {
   FeedbackStoreFileSchema,
   buildFeedbackAggregateExport,
   buildFeedbackRecord,
+  canonicalJson,
   type VerifyReport,
 } from "../src";
 
@@ -36,6 +37,21 @@ function report(rule = "custom secret rule /private/repo"): VerifyReport {
 }
 
 describe("local report schemas and projections", () => {
+  test("prototype-named additive fields remain part of feedback identity", () => {
+    const firstExtension = JSON.parse('{"__proto__":{"value":1}}');
+    const secondExtension = JSON.parse('{"__proto__":{"value":2}}');
+    expect(canonicalJson(firstExtension)).toBe('{"__proto__":{"value":1}}');
+    const build = (extension: unknown) => buildFeedbackRecord({
+      report: VerifyReportSchema.parse({ ...report(), extension }),
+      findingIndex: 0, outcome: "useful", now: "2026-09-08T00:00:00.000Z",
+    });
+    const first = build(firstExtension);
+    const second = build(secondExtension);
+    if (first.status !== "ok" || second.status !== "ok") throw new Error("fixture finding missing");
+    expect(first.record.report.contentDigest).not.toBe(second.record.report.contentDigest);
+    expect(first.record.recordId).not.toBe(second.record.recordId);
+  });
+
   test("loaded feedback records must retain their derived content identity", () => {
     const built = buildFeedbackRecord({ report: report(), findingIndex: 0, outcome: "useful", now: "2026-09-08T00:00:00.000Z" });
     if (built.status !== "ok") throw new Error("fixture finding missing");
