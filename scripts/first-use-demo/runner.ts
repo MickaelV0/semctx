@@ -49,7 +49,11 @@ export interface RecordedCommand {
   argv: readonly string[];
   code: number;
   stdoutFile: string;
+  /** SHA-256 of the stdout file bytes immediately after capture; not a later mutation monitor. */
+  stdoutDigest: string;
   stderrFile: string;
+  /** SHA-256 of the stderr file bytes immediately after capture; not a signature. */
+  stderrDigest: string;
 }
 
 export interface CaseOutcome {
@@ -234,12 +238,12 @@ export function asVerifyReport(value: unknown, exitCode: number): VerifyReport |
   return report;
 }
 
-function writeRaw(outDir: string, name: string, content: string): string {
+function writeRaw(outDir: string, name: string, content: string): { file: string; digest: string } {
   const rawDir = join(outDir, "raw");
   mkdirSync(rawDir, { recursive: true });
   const path = join(rawDir, name);
   writeFileSync(path, content, "utf8");
-  return join("raw", name);
+  return { file: join("raw", name), digest: sha256Hex(readFileSync(path)) };
 }
 
 function recordCommand(
@@ -247,9 +251,17 @@ function recordCommand(
   label: RecordedCommand["label"],
   outcome: ChildOutcome,
 ): RecordedCommand {
-  const stdoutFile = writeRaw(outDir, `${label}.stdout.txt`, outcome.stdout);
-  const stderrFile = writeRaw(outDir, `${label}.stderr.txt`, outcome.stderr);
-  return { label, argv: outcome.argv, code: outcome.code, stdoutFile, stderrFile };
+  const stdout = writeRaw(outDir, `${label}.stdout.txt`, outcome.stdout);
+  const stderr = writeRaw(outDir, `${label}.stderr.txt`, outcome.stderr);
+  return {
+    label,
+    argv: outcome.argv,
+    code: outcome.code,
+    stdoutFile: stdout.file,
+    stdoutDigest: stdout.digest,
+    stderrFile: stderr.file,
+    stderrDigest: stderr.digest,
+  };
 }
 
 function blocked(
@@ -449,15 +461,20 @@ export function runFirstUseDemo(options: RunFirstUseDemoOptions): DemoOutcome {
       if (typeof id === "string" && typeof file === "string") fileById.set(id, file);
     }
 
-    const findings = (report.findings as unknown[]).filter(isPlainObject);
+    const findings = report.findings;
+    const findingFiles = findings.map((finding) => {
+      const files = new Set<string>();
+      for (const nodeId of finding.nodeIds) {
+        const file = fileById.get(nodeId);
+        if (file !== undefined) files.add(file);
+      }
+      for (const location of finding.locations) files.add(location.file);
+      return files;
+    });
     const cases: CaseOutcome[] = FIXTURE_CASES.map((fixtureCase) => {
       const observedRules = new Set<string>();
-      for (const finding of findings) {
-        const nodeIds = finding["nodeIds"];
-        const rule = finding["rule"];
-        if (!Array.isArray(nodeIds) || typeof rule !== "string") continue;
-        const touchesCase = nodeIds.some((id) => typeof id === "string" && fileById.get(id) === fixtureCase.file.relPath);
-        if (touchesCase) observedRules.add(rule);
+      for (const [index, finding] of findings.entries()) {
+        if (findingFiles[index]!.has(fixtureCase.file.relPath)) observedRules.add(finding.rule);
       }
       const observed = [...observedRules].sort();
       const matchedExpectation = fixtureCase.expectedFinding === "none"
@@ -477,6 +494,19 @@ export function runFirstUseDemo(options: RunFirstUseDemoOptions): DemoOutcome {
 
     if (identifyPackagedCli(cliPath).runtimeDigest !== cli.runtimeDigest) return finish(blocked({ ...emptyBase, commands }, "ARTIFACT_DRIFT", "Runtime bytes changed during execution.", fixtureHeadCommit));
     if (!fixtureMatchesSnapshot(fixtureDir, changedSnapshot)) return finish(blocked({ ...emptyBase, commands }, "FIXTURE_DRIFT", "Fixture files or Git state changed during execution.", fixtureHeadCommit));
+
+    const expectedPathSet = new Set(expectedPaths);
+    const unassignedFindings = findings
+      .map((finding, index) => ({ finding, index, files: findingFiles[index]! }))
+      .filter(({ files }) => ![...files].some(file => expectedPathSet.has(file)));
+    if (unassignedFindings.length > 0) {
+      return finish(blocked(
+        { ...emptyBase, commands },
+        "UNEXPECTED_ANALYSIS",
+        `The verify report contained finding(s) without a frozen-case anchor: ${unassignedFindings.map(({ finding, index }) => `${finding.rule}[${index}]`).join(", ")}.`,
+        fixtureHeadCommit,
+      ));
+    }
 
     const unexpectedCases = cases.filter(fixtureCase => !fixtureCase.matchedExpectation);
     if (unexpectedCases.length > 0) {
