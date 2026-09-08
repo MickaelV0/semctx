@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { FIXTURE_CASES } from "./first-use-demo/fixture";
-import { identifyPackagedCli } from "./first-use-demo/identity";
+import { identifyPackagedCli, sha256Hex } from "./first-use-demo/identity";
 import { asVerifyReport, runFirstUseDemo, MANIFEST_FILENAME } from "./first-use-demo/runner";
 
 const repoRoot = resolve(import.meta.dir, "..");
@@ -203,6 +203,100 @@ test("a no-op substitute cannot complete the frozen demonstration", () => {
   expect(outcome.reason).toBe("UNEXPECTED_ANALYSIS");
   expect(readFileSync(join(outDir, "raw", "verify-diff.stdout.txt"), "utf8")).toContain('"verdict":"PASS"');
   expect(JSON.parse(readFileSync(join(outDir, MANIFEST_FILENAME), "utf8")).status).toBe("BLOCKED");
+});
+
+test.each(["src/greeting.ts", "src/pricing.ts"])(
+  "a location-only warning on %s cannot hide behind the expected contract warning",
+  (relPath) => {
+    const expected = expectedWarningReport();
+    const contractFinding = (expected.findings as Record<string, unknown>[])[0]!;
+    const outcome = runFirstUseDemo({
+      cliPath: fakeCli({
+        verify: JSON.stringify(expectedWarningReport({
+          findings: [
+            contractFinding,
+            {
+              rule: "unexpected_location_only_warning", tier: "advisory", severity: "warn",
+              message: "unexpected warning anchored to a frozen case", nodeIds: [], locations: [{ file: relPath, line: 1 }],
+            },
+          ],
+          summary: { blockCount: 0, warnCount: 2 },
+        })),
+      }),
+      outDir: fresh(`location-only-${relPath.replaceAll("/", "-")}`),
+    });
+    expect(outcome.status).toBe("BLOCKED");
+    expect(outcome.reason).toBe("UNEXPECTED_ANALYSIS");
+  },
+);
+
+test("a location-only contract warning is attributed to its frozen case", () => {
+  const outcome = runFirstUseDemo({
+    cliPath: fakeCli({
+      verify: JSON.stringify(expectedWarningReport({
+        changedSymbols: [],
+        findings: [{
+          rule: "contract_changed_without_test", tier: "advisory", severity: "warn",
+          message: "exported contract changed without a covering test", nodeIds: [], locations: [{ file: "src/cart.ts", line: 1 }],
+        }],
+      })),
+    }),
+    outDir: fresh("location-only-contract"),
+  });
+  if (outcome.status !== "COMPLETED") process.stderr.write("DEMO_LOCATION_ATTRIBUTION_MISMATCH\n");
+  expect(outcome.status, outcome.detail ?? "").toBe("COMPLETED");
+  expect(outcome.cases.map(c => c.observedRules)).toEqual([[], ["contract_changed_without_test"], []]);
+});
+
+test("a finding without a case anchor cannot silently disappear", () => {
+  const expected = expectedWarningReport();
+  const contractFinding = (expected.findings as Record<string, unknown>[])[0]!;
+  const outcome = runFirstUseDemo({
+    cliPath: fakeCli({
+      verify: JSON.stringify(expectedWarningReport({
+        findings: [
+          contractFinding,
+          {
+            rule: "unassigned_warning", tier: "advisory", severity: "warn",
+            message: "warning without a frozen-case anchor", nodeIds: [], locations: [],
+          },
+        ],
+        summary: { blockCount: 0, warnCount: 2 },
+      })),
+    }),
+    outDir: fresh("unassigned-finding"),
+  });
+  expect(outcome.status).toBe("BLOCKED");
+  expect(outcome.reason).toBe("UNEXPECTED_ANALYSIS");
+  expect(outcome.detail).toContain("unassigned_warning");
+});
+
+test("recorded command digests bind the exact saved stdout and stderr bytes", () => {
+  const outDir = fresh("raw-digests");
+  const outcome = runFirstUseDemo({
+    cliPath: fakeCli({ verify: JSON.stringify(expectedWarningReport()) }),
+    outDir,
+  });
+  expect(outcome.status, outcome.detail ?? "").toBe("COMPLETED");
+  const manifest = JSON.parse(readFileSync(join(outDir, MANIFEST_FILENAME), "utf8")) as {
+    commands: Array<{ stdoutFile: string; stdoutDigest: string; stderrFile: string; stderrDigest: string }>;
+  };
+  expect(manifest.commands).toHaveLength(outcome.commands.length);
+  for (const command of manifest.commands) {
+    const stdoutBytes = readFileSync(join(outDir, command.stdoutFile));
+    const stderrBytes = readFileSync(join(outDir, command.stderrFile));
+    const stdoutDigest = sha256Hex(stdoutBytes);
+    const stderrDigest = sha256Hex(stderrBytes);
+    if (command.stdoutDigest !== stdoutDigest || command.stderrDigest !== stderrDigest) {
+      process.stderr.write("DEMO_RAW_CAPTURE_DIGEST_MISMATCH\n");
+    }
+    expect(command.stdoutDigest).toBe(stdoutDigest);
+    expect(command.stderrDigest).toBe(stderrDigest);
+  }
+  const first = manifest.commands[0]!;
+  const firstStdoutPath = join(outDir, first.stdoutFile);
+  writeFileSync(firstStdoutPath, Buffer.concat([readFileSync(firstStdoutPath), Buffer.from("altered")]));
+  expect(sha256Hex(readFileSync(firstStdoutPath))).not.toBe(first.stdoutDigest);
 });
 
 test.each(["fail", "malformed"] as const)("a %s result from fixture HEAD lookup cannot complete", (mode) => {
