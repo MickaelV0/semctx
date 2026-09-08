@@ -295,7 +295,7 @@ export function evaluateOmpToolCall(
     return decision.block ? { block: true, reason: decision.reason } : undefined;
   } catch {
     try {
-      if (!enablementEvaluator(input)) return undefined;
+      if (enablementEvaluator(input) === false) return undefined;
     } catch {
       // If enablement itself cannot be evaluated, only the explicit off switch can authorize.
       if (explicitGuardOff(env)) return undefined;
