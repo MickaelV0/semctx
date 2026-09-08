@@ -201,7 +201,9 @@ function fileIdentity(value: unknown, name: string): ValidatedFileIdentity {
   const present = boolean(item["present"], `${name}.present`);
   const sizeBytes = item["sizeBytes"] === null ? null : integer(item["sizeBytes"], `${name}.sizeBytes`);
   const sha256 = item["sha256"] === null ? null : rawDigest(item["sha256"], `${name}.sha256`);
-  if (present !== (sizeBytes !== null && sha256 !== null)) throw new Error(`${name} presence metadata is inconsistent`);
+  if ((present && (sizeBytes === null || sha256 === null)) || (!present && (sizeBytes !== null || sha256 !== null))) {
+    throw new Error(`${name} presence metadata is inconsistent`);
+  }
   return { path, present, sizeBytes, sha256 };
 }
 
@@ -236,13 +238,13 @@ function validateCliIdentity(value: unknown, status: DemoStatus): { runtimeDiges
       }
     }
   }
-  if (status === "COMPLETED" && (!entry.present || worker?.present !== true)) {
-    throw new Error("completed demo requires the packaged CLI and index worker identities");
+  if (status === "COMPLETED" && !entry.present) {
+    throw new Error("completed demo requires the packaged CLI identity");
   }
   return { runtimeDigest: runtimeDigest === null ? null : `sha256:${runtimeDigest}`, cliPath };
 }
 
-function validateDemoCommands(value: unknown, status: DemoStatus, cliPath: string): void {
+function validateDemoCommands(value: unknown, status: DemoStatus, cliPath: string): number {
   if (!Array.isArray(value)) throw new Error("demo.commands must be an array");
   if (status === "COMPLETED" && value.length !== DEMO_COMMAND_LABELS.length) {
     throw new Error("completed demo requires all four command observations");
@@ -285,6 +287,7 @@ function validateDemoCommands(value: unknown, status: DemoStatus, cliPath: strin
     rawDigest(item["stderrDigest"], `${name}.stderrDigest`);
     if (status === "COMPLETED" && (code !== 0 || signal !== null)) throw new Error("completed demo commands must exit successfully without a signal");
   });
+  return value.length;
 }
 
 interface ValidatedFinding {
@@ -338,7 +341,7 @@ function projectDemo(raw: unknown, assertedCommit?: string): PublicDemoEvidenceV
   if (string(manifest["outDir"], "demo.outDir").length === 0) throw new Error("demo.outDir must not be empty");
   const fixture = record(manifest["fixture"], "demo.fixture");
   const cliIdentity = validateCliIdentity(manifest["cli"], status);
-  validateDemoCommands(manifest["commands"], status, cliIdentity.cliPath);
+  const commandCount = validateDemoCommands(manifest["commands"], status, cliIdentity.cliPath);
   const unassignedFindings = validateFindings(manifest["unassignedFindings"] ?? [], "demo.unassignedFindings");
   const unknowns = manifest["unknowns"];
   if (!Array.isArray(unknowns)) throw new Error("demo.unknowns must be an array");
@@ -423,7 +426,8 @@ function projectDemo(raw: unknown, assertedCommit?: string): PublicDemoEvidenceV
     const hasObservations = cases.length > 0;
     if (hasObservations !== (verdict !== null) || hasObservations !== (packageVersion !== null)
       || hasObservations !== (manifest["workingDiffDigest"] !== null)
-      || (hasObservations && (observedFixtureCommit === null || runtimeDigest === null))) {
+      || (hasObservations && (observedFixtureCommit === null || runtimeDigest === null || commandCount !== DEMO_COMMAND_LABELS.length))
+      || (!hasObservations && unassignedFindings.length > 0)) {
       throw new Error("blocked demo observation fields are inconsistent");
     }
     if (manifest["workingDiffDigest"] !== null) digest(manifest["workingDiffDigest"], "demo.workingDiffDigest");
