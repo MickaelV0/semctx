@@ -6,6 +6,8 @@ import {
   isIsolatedTerminalGitCommand,
   isTerminalGitCommand,
   guardEnabled,
+  guardEnabledForInvocation,
+  evaluateGuard,
   guardDecision,
   isGuardVerificationState,
   commitUsesWholeIndex,
@@ -333,6 +335,37 @@ describe("guardEnabled — advisory by default, strict off wins", () => {
   });
   it("SEMCTX_GUARD=on forces guarded", () => {
     expect(guardEnabled({ SEMCTX_GUARD: "on" }, null)).toBe(true);
+  });
+
+  it("distinguishes absent guard config from unreadable or malformed config", () => {
+    const repo = mkdtempSync(join(tmpdir(), "semctx-guard-enablement-"));
+    execFileSync("git", ["init"], { cwd: repo, stdio: "ignore" });
+    const guardDir = join(repo, ".semctx");
+    const guardPath = join(guardDir, "guard.json");
+    mkdirSync(guardDir);
+    const input = { command: "git commit -m x", cwd: repo, sessionCwd: repo, env: {} };
+    try {
+      expect(guardEnabledForInvocation(input)).toBe(false);
+
+      writeFileSync(guardPath, "{not-json");
+      expect(guardEnabledForInvocation(input)).toBeUndefined();
+      expect(evaluateGuard(input)).toEqual({ block: false });
+      expect(guardEnabledForInvocation({ ...input, env: { SEMCTX_GUARD: "off" } })).toBe(false);
+      expect(guardEnabledForInvocation({ ...input, env: { SEMCTX_GUARD: "on" } })).toBe(true);
+
+      writeFileSync(guardPath, JSON.stringify({ enabled: "sometimes" }));
+      expect(guardEnabledForInvocation(input)).toBeUndefined();
+
+      rmSync(guardPath);
+      mkdirSync(guardPath);
+      expect(guardEnabledForInvocation(input)).toBeUndefined();
+
+      rmSync(guardPath, { recursive: true });
+      writeFileSync(guardPath, JSON.stringify({ enabled: false }));
+      expect(guardEnabledForInvocation(input)).toBe(false);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
   });
 });
 
