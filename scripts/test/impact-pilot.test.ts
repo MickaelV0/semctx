@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { extractRelativeImportSpecifiers, oneHopImportNeighborhoodBaseline, type ImportGraphFile } from "../pilot/baselines";
@@ -11,9 +11,10 @@ import {
   validateRawCollectionBundle,
   type RawCollectionBundleV1,
 } from "../pilot/collect";
-import { digestCanonical } from "../pilot/digest";
+import { canonicalJson, digestCanonical } from "../pilot/digest";
 import {
   freezeProtocol,
+  resolveRunnerIdentity,
   validateDraftProtocol,
   validateFrozenProtocol,
   type CorpusCaseSpec,
@@ -86,11 +87,31 @@ function makeFixtureRepoRoot(): string {
   mkdirSync(join(root, "apps", "cli", "src"), { recursive: true });
   mkdirSync(join(root, "scripts", "pilot"), { recursive: true });
   mkdirSync(join(root, "node_modules", "typescript", "lib"), { recursive: true });
+  mkdirSync(join(root, "packages", "core", "src"), { recursive: true });
+  mkdirSync(join(root, "packages", "core", "node_modules", "zod", "v3"), { recursive: true });
   writeFileSync(join(root, "apps", "cli", "package.json"), JSON.stringify({ name: "semctx-fixture", version: "0.0.1" }));
   writeFileSync(join(root, "apps", "cli", "src", "index.ts"), STUB_CANDIDATE_SOURCE);
   writeFileSync(join(root, "scripts", "impact-pilot.ts"), "// fixture placeholder\n");
   writeFileSync(join(root, "node_modules", "typescript", "package.json"), JSON.stringify({ name: "typescript", version: "0.0.0" }));
   writeFileSync(join(root, "node_modules", "typescript", "lib", "typescript.js"), "// fixture typescript runtime\n");
+  writeFileSync(join(root, "packages", "core", "src", "verify-report.ts"), 'import { z } from "zod";\nexport const VerifyReportSchema = z.object({});\n');
+  writeFileSync(join(root, "packages", "core", "package.json"), JSON.stringify({
+    name: "@semantic-context/core",
+    type: "module",
+    dependencies: { zod: "^3.23.8" },
+  }));
+  writeFileSync(join(root, "packages", "core", "node_modules", "zod", "package.json"), JSON.stringify({
+    name: "zod",
+    version: "3.25.76",
+    type: "module",
+    main: "./index.cjs",
+    module: "./index.js",
+    exports: { ".": { import: "./index.js", require: "./index.cjs" } },
+  }));
+  writeFileSync(join(root, "packages", "core", "node_modules", "zod", "index.js"), 'export * from "./v3/external.js";\n');
+  writeFileSync(join(root, "packages", "core", "node_modules", "zod", "index.cjs"), 'module.exports = require("./v3/external.cjs");\n');
+  writeFileSync(join(root, "packages", "core", "node_modules", "zod", "v3", "external.js"), "export const z = {};\n");
+  writeFileSync(join(root, "packages", "core", "node_modules", "zod", "v3", "external.cjs"), "exports.z = {};\n");
   return root;
 }
 
@@ -362,8 +383,36 @@ describe("freeze: candidate/runner identity binding", () => {
     expect(frozen.runner.supportFiles.map((file) => file.path)).toEqual([
       "node_modules/typescript/lib/typescript.js",
       "node_modules/typescript/package.json",
+      "packages/core/node_modules/zod/index.cjs",
+      "packages/core/node_modules/zod/index.js",
+      "packages/core/node_modules/zod/package.json",
+      "packages/core/node_modules/zod/v3/external.cjs",
+      "packages/core/node_modules/zod/v3/external.js",
+      "packages/core/package.json",
+      "packages/core/src/verify-report.ts",
       "scripts/pilot/helper.ts",
     ]);
+  });
+
+  test("changes runner identity when the verify schema or resolved Zod runtime drifts", () => {
+    const repoRoot = makeFixtureRepoRoot();
+    const original = digestCanonical(resolveRunnerIdentity(repoRoot));
+    const schemaPath = join(repoRoot, "packages", "core", "src", "verify-report.ts");
+    writeFileSync(schemaPath, `${readFileSync(schemaPath, "utf8")}\n// schema drift\n`);
+    const schemaDrifted = digestCanonical(resolveRunnerIdentity(repoRoot));
+    expect(schemaDrifted).not.toBe(original);
+
+    const zodRuntimePath = join(repoRoot, "packages", "core", "node_modules", "zod", "v3", "external.js");
+    writeFileSync(zodRuntimePath, `${readFileSync(zodRuntimePath, "utf8")}\n// runtime drift\n`);
+    expect(digestCanonical(resolveRunnerIdentity(repoRoot))).not.toBe(schemaDrifted);
+  });
+});
+
+describe("canonical digest", () => {
+  test("preserves an own __proto__ member", () => {
+    const value = JSON.parse('{"normal":1,"__proto__":{"polluted":true}}');
+    expect(canonicalJson(value)).toBe('{"__proto__":{"polluted":true},"normal":1}');
+    expect(digestCanonical(value)).not.toBe(digestCanonical({ normal: 1 }));
   });
 });
 
