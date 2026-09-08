@@ -10,7 +10,7 @@
  *    said, but a mismatch keeps the frozen demonstration incomplete.
  */
 
-import { lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { VerifyReportSchema, type VerdictLevel, type VerifyReport } from "@semantic-context/core";
@@ -123,6 +123,90 @@ function writeFixtureFiles(root: string, files: ReadonlyMap<string, string>): vo
     mkdirSync(dirname(abs), { recursive: true });
     writeFileSync(abs, content, "utf8");
   }
+}
+
+const GENERATED_GITIGNORE = ".semctx/*\n!.semctx/semantic/\n!.semctx/config.json\n";
+
+interface FixtureSnapshot {
+  headCommit: string;
+  files: ReadonlyMap<string, string>;
+  diffDigest: string;
+  diffPaths: readonly string[];
+  gitignore: string | null;
+  allowSemctxMetadata: boolean;
+}
+
+function changedRepositoryFiles(): ReadonlyMap<string, string> {
+  const files = new Map(baseFixtureFiles());
+  for (const [relPath, content] of changedFixtureFiles()) files.set(relPath, content);
+  return files;
+}
+
+function readOptionalUtf8(path: string): string | null {
+  const stat = lstatSync(path, { throwIfNoEntry: false });
+  if (stat === undefined) return null;
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("expected a regular file");
+  return readFileSync(path, "utf8");
+}
+
+function semctxTreeIsConfined(root: string): boolean {
+  try {
+    const semctx = join(root, ".semctx");
+    const initial = lstatSync(semctx, { throwIfNoEntry: false });
+    if (initial === undefined) return true;
+    const pending = [semctx];
+    while (pending.length > 0) {
+      const path = pending.pop()!;
+      const stat = lstatSync(path, { throwIfNoEntry: false });
+      if (stat === undefined || stat.isSymbolicLink()) return false;
+      if (!stat.isDirectory()) continue;
+      for (const entry of readdirSync(path)) pending.push(join(path, entry));
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function fixtureMatchesSnapshot(root: string, snapshot: FixtureSnapshot): boolean {
+  const head = runGit(["rev-parse", "HEAD"], root);
+  const diff = runGit(["diff", "HEAD", "--no-ext-diff", "--binary"], root);
+  const names = runGit(["diff", "HEAD", "--name-only", "-z"], root);
+  const untracked = runGit(["ls-files", "--others", "-z"], root);
+  if (head.code !== 0 || head.stdout.trim() !== snapshot.headCommit || diff.code !== 0 || names.code !== 0 || untracked.code !== 0) return false;
+  if (sha256Hex(diff.stdout) !== snapshot.diffDigest) return false;
+  const observedPaths = names.stdout.split("\0").filter(Boolean).sort();
+  if (JSON.stringify(observedPaths) !== JSON.stringify([...snapshot.diffPaths].sort())) return false;
+  for (const [relPath, expected] of snapshot.files) {
+    try {
+      if (readOptionalUtf8(join(root, relPath)) !== expected) return false;
+    } catch {
+      return false;
+    }
+  }
+  try {
+    if (readOptionalUtf8(join(root, ".gitignore")) !== snapshot.gitignore) return false;
+  } catch {
+    return false;
+  }
+  const untrackedPaths = untracked.stdout.split("\0").filter(Boolean);
+  if (untrackedPaths.some(path => path !== ".gitignore" && !(snapshot.allowSemctxMetadata && path.startsWith(".semctx/")))) return false;
+  if (!snapshot.allowSemctxMetadata && lstatSync(join(root, ".semctx"), { throwIfNoEntry: false }) !== undefined) return false;
+  return semctxTreeIsConfined(root);
+}
+
+function captureFixtureSnapshot(
+  root: string,
+  headCommit: string,
+  files: ReadonlyMap<string, string>,
+  diffPaths: readonly string[],
+  gitignore: string | null,
+  allowSemctxMetadata: boolean,
+): FixtureSnapshot | null {
+  const diff = runGit(["diff", "HEAD", "--no-ext-diff", "--binary"], root);
+  if (diff.code !== 0) return null;
+  const snapshot = { headCommit, files, diffDigest: sha256Hex(diff.stdout), diffPaths, gitignore, allowSemctxMetadata };
+  return fixtureMatchesSnapshot(root, snapshot) ? snapshot : null;
 }
 
 function parseJsonOrNull(text: string): unknown {
@@ -243,13 +327,33 @@ export function runFirstUseDemo(options: RunFirstUseDemoOptions): DemoOutcome {
         "Could not record the fixture repository's complete Git HEAD identity.",
       ));
     }
+    const baseSnapshot = captureFixtureSnapshot(fixtureDir, fixtureHeadCommit, baseFixtureFiles(), [], null, false);
+    if (baseSnapshot === null) {
+      return finish(blocked(
+        { ...emptyBase, commands },
+        "FIXTURE_DRIFT",
+        "The frozen base fixture did not match its expected files and Git state.",
+        fixtureHeadCommit,
+      ));
+    }
 
     const version = runPackagedCli(cliPath, ["--version"], fixtureDir);
     commands.push(recordCommand(outDir, "version", version));
+    if (!fixtureMatchesSnapshot(fixtureDir, baseSnapshot)) return finish(blocked({ ...emptyBase, commands }, "FIXTURE_DRIFT", "The selected CLI changed the frozen base fixture while reporting its version.", fixtureHeadCommit));
     if (version.code !== 0 || !/^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(version.stdout.trim())) return finish(blocked({ ...emptyBase, commands }, "SETUP_OUTPUT_MALFORMED", "The selected CLI did not return a package version.", fixtureHeadCommit));
 
     const setupOutcome = runPackagedCli(cliPath, ["setup", "--root", fixtureDir, "--json"], fixtureDir);
     commands.push(recordCommand(outDir, "setup", setupOutcome));
+    let setupGitignore: string | null;
+    try {
+      setupGitignore = readOptionalUtf8(join(fixtureDir, ".gitignore"));
+    } catch {
+      setupGitignore = null;
+    }
+    const setupSnapshot = setupGitignore === null || setupGitignore === GENERATED_GITIGNORE
+      ? captureFixtureSnapshot(fixtureDir, fixtureHeadCommit, baseFixtureFiles(), [], setupGitignore, true)
+      : null;
+    if (setupSnapshot === null) return finish(blocked({ ...emptyBase, commands }, "FIXTURE_DRIFT", "Setup changed files or Git state outside the expected Semctx metadata.", fixtureHeadCommit));
     if (setupOutcome.code !== 0) {
       return finish(blocked(
         { ...emptyBase, commands },
@@ -277,17 +381,26 @@ export function runFirstUseDemo(options: RunFirstUseDemoOptions): DemoOutcome {
     }
 
     writeFixtureFiles(fixtureDir, changedFixtureFiles());
+    const expectedPaths = FIXTURE_CASES.map((c) => c.file.relPath);
+    const changedSnapshot = captureFixtureSnapshot(
+      fixtureDir,
+      fixtureHeadCommit,
+      changedRepositoryFiles(),
+      expectedPaths,
+      setupSnapshot.gitignore,
+      true,
+    );
+    if (changedSnapshot === null) return finish(blocked({ ...emptyBase, commands }, "FIXTURE_DRIFT", "Could not freeze the expected changed fixture before indexing.", fixtureHeadCommit));
+    const workingDiffDigest = changedSnapshot.diffDigest;
 
     const index = runPackagedCli(cliPath, ["index", "--root", fixtureDir, "--json"], fixtureDir);
     commands.push(recordCommand(outDir, "index", index));
+    if (!fixtureMatchesSnapshot(fixtureDir, changedSnapshot)) return finish(blocked({ ...emptyBase, commands }, "FIXTURE_DRIFT", "Indexing changed the frozen fixture files or Git state.", fixtureHeadCommit));
     if (index.code !== 0 || !isPlainObject(parseJsonOrNull(index.stdout))) return finish(blocked({ ...emptyBase, commands }, "INDEX_CHILD_FAILED", "Indexing did not complete with a JSON result.", fixtureHeadCommit));
-    const diff = runGit(["diff", "HEAD", "--no-ext-diff", "--binary"], fixtureDir);
-    const names = runGit(["diff", "HEAD", "--name-only", "-z"], fixtureDir);
-    if (diff.code !== 0 || names.code !== 0) return finish(blocked({ ...emptyBase, commands }, "FIXTURE_DRIFT", "Could not identify the working diff.", fixtureHeadCommit));
-    const workingDiffDigest = sha256Hex(diff.stdout);
 
     const verifyOutcome = runPackagedCli(cliPath, ["verify", "diff", "--root", fixtureDir, "--json"], fixtureDir);
     commands.push(recordCommand(outDir, "verify-diff", verifyOutcome));
+    if (!fixtureMatchesSnapshot(fixtureDir, changedSnapshot)) return finish(blocked({ ...emptyBase, commands }, "FIXTURE_DRIFT", "Verification changed the frozen fixture files or Git state.", fixtureHeadCommit));
     // BLOCK (exit 3, default --fail-on block) is a legitimate product outcome here, not a runner
     // failure: only an exit code outside {0, 3} means the child did not complete a real analysis.
     if (verifyOutcome.code !== 0 && verifyOutcome.code !== 3) {
@@ -318,10 +431,8 @@ export function runFirstUseDemo(options: RunFirstUseDemoOptions): DemoOutcome {
     }
 
     const changedFiles = new Set((report.changedFiles as unknown[]).filter((v): v is string => typeof v === "string"));
-    const expectedPaths = FIXTURE_CASES.map((c) => c.file.relPath);
     const missing = expectedPaths.filter((p) => !changedFiles.has(p));
-    const actualPaths = names.stdout.split("\0").filter(Boolean).sort();
-    if (missing.length > 0 || JSON.stringify([...report.changedFiles].sort()) !== JSON.stringify([...expectedPaths].sort()) || JSON.stringify(actualPaths) !== JSON.stringify([...expectedPaths].sort()) || report.base !== null || report.head !== "HEAD" || report.range !== null || report.mergeBase !== null) {
+    if (missing.length > 0 || JSON.stringify([...report.changedFiles].sort()) !== JSON.stringify([...expectedPaths].sort()) || report.base !== null || report.head !== "HEAD" || report.range !== null || report.mergeBase !== null) {
       return finish(blocked(
         { ...emptyBase, commands },
         "FIXTURE_DRIFT",
@@ -365,9 +476,7 @@ export function runFirstUseDemo(options: RunFirstUseDemoOptions): DemoOutcome {
     });
 
     if (identifyPackagedCli(cliPath).runtimeDigest !== cli.runtimeDigest) return finish(blocked({ ...emptyBase, commands }, "ARTIFACT_DRIFT", "Runtime bytes changed during execution.", fixtureHeadCommit));
-    const finalHead = runGit(["rev-parse", "HEAD"], fixtureDir);
-    const finalDiff = runGit(["diff", "HEAD", "--no-ext-diff", "--binary"], fixtureDir);
-    if (finalHead.code !== 0 || finalHead.stdout.trim() !== fixtureHeadCommit || finalDiff.code !== 0 || sha256Hex(finalDiff.stdout) !== workingDiffDigest) return finish(blocked({ ...emptyBase, commands }, "FIXTURE_DRIFT", "Fixture Git HEAD or working diff changed during execution.", fixtureHeadCommit));
+    if (!fixtureMatchesSnapshot(fixtureDir, changedSnapshot)) return finish(blocked({ ...emptyBase, commands }, "FIXTURE_DRIFT", "Fixture files or Git state changed during execution.", fixtureHeadCommit));
 
     const unexpectedCases = cases.filter(fixtureCase => !fixtureCase.matchedExpectation);
     if (unexpectedCases.length > 0) {
