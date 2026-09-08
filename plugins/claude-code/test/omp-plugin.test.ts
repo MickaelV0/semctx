@@ -224,7 +224,10 @@ describe("OMP extension adapter wiring (omp/semctx-guard.ts)", () => {
     expect(resolved("child repo")).toEqual({ ok: true, cwd: "C:\\work\\session\\child repo" });
     expect(resolved("child\u202Frepo")).toEqual({ ok: true, cwd: "C:\\work\\session\\child repo" });
     expect(resolved("/")).toEqual({ ok: true, cwd: session });
-    expect(resolved("@/repo")).toEqual({ ok: true, cwd: "/repo" });
+    expect(resolved("@/repo")).toEqual({
+      ok: false,
+      reason: expect.stringContaining("not a fully qualified filesystem path"),
+    });
     expect(resolved(":.\\repo")).toEqual({ ok: true, cwd: "C:\\work\\session\\repo" });
     expect(resolved("~/repo")).toEqual({ ok: true, cwd: "C:\\Users\\OMP User/repo" });
     expect(resolved("file:///C:/work/repo")).toEqual({ ok: true, cwd: "C:\\work\\repo" });
@@ -234,8 +237,18 @@ describe("OMP extension adapter wiring (omp/semctx-guard.ts)", () => {
       home: "/home/omp",
     })).toEqual({ ok: true, cwd: "/home/omp/repo" });
     expect(resolved("\\\\?\\C:\\work\\repo")).toEqual({ ok: true, cwd: "C:\\work\\repo" });
+    expect(resolved("\\\\?\\UNC\\server\\share\\repo")).toEqual({
+      ok: true,
+      cwd: "\\\\server\\share\\repo",
+    });
     expect(resolved("/c/work/repo")).toEqual({ ok: true, cwd: "C:\\work\\repo" });
     expect(resolved("/mnt/c/work/repo")).toEqual({ ok: true, cwd: "C:\\work\\repo" });
+    expect(resolved("C:\\absolute\\repo")).toEqual({ ok: true, cwd: "C:\\absolute\\repo" });
+    expect(resolved("\\\\server\\share\\repo")).toEqual({ ok: true, cwd: "\\\\server\\share\\repo" });
+    expect(resolved("C:drive-relative")).toEqual({
+      ok: false,
+      reason: expect.stringContaining("drive-relative, not a fully qualified filesystem path"),
+    });
     expect(resolveOmpFilesystemCwd("C:\\work\\repo", "/home/omp", {
       platform: "linux",
       env: { WSL_DISTRO_NAME: "Ubuntu" },
@@ -245,6 +258,55 @@ describe("OMP extension adapter wiring (omp/semctx-guard.ts)", () => {
       ok: false,
       reason: expect.stringContaining("did not expand internal URL cwd"),
     });
+    expect(resolveOmpFilesystemCwd("child repo", "skill://session", {
+      platform: "linux",
+      env: {},
+      home: "/home/omp",
+    })).toEqual({
+      ok: false,
+      reason: expect.stringContaining("relative cwd cannot be resolved from internal URL session cwd"),
+    });
+    expect(resolveOmpFilesystemCwd("child repo", "relative/session", {
+      platform: "linux",
+      env: {},
+      home: "/home/omp",
+    })).toEqual({
+      ok: false,
+      reason: expect.stringContaining("relative cwd cannot be resolved from a non-fully-qualified session cwd"),
+    });
+    for (const rootRelativeSession of ["\\session", "/session"]) {
+      expect(resolveOmpFilesystemCwd("child repo", rootRelativeSession, options)).toEqual({
+        ok: false,
+        reason: expect.stringContaining("relative cwd cannot be resolved from a non-fully-qualified session cwd"),
+      });
+    }
+    expect(resolveOmpFilesystemCwd("child repo", "\\\\server\\share", options)).toEqual({
+      ok: true,
+      cwd: "\\\\server\\share\\child repo",
+    });
+    for (const deviceNamespace of [
+      "\\\\.\\pipe\\semctx",
+      "//./pipe/semctx",
+      "//.\\pipe\\semctx",
+      "\\\\./pipe/semctx",
+      "\\\\.\\C:\\repo",
+      "\\\\?\\GLOBALROOT\\Device\\HarddiskVolume1\\repo",
+      "//?/GLOBALROOT/Device/HarddiskVolume1/repo",
+      "//?\\GLOBALROOT\\Device\\HarddiskVolume1\\repo",
+      "\\\\?/GLOBALROOT/Device/HarddiskVolume1/repo",
+      "//?\\C:\\repo",
+    ]) {
+      expect(resolveOmpFilesystemCwd(deviceNamespace, session, options)).toEqual({
+        ok: false,
+        reason: expect.stringContaining("refuses Windows device namespace cwd"),
+        unsafe: true,
+      });
+      expect(resolveOmpFilesystemCwd("child repo", deviceNamespace, options)).toEqual({
+        ok: false,
+        reason: expect.stringContaining("refuses Windows device namespace session cwd"),
+        unsafe: true,
+      });
+    }
   });
 
   test("resolves a guarded relative target from the OMP session cwd", () => {
@@ -338,6 +400,159 @@ describe("OMP extension adapter wiring (omp/semctx-guard.ts)", () => {
         block: true,
         reason: expect.stringContaining("not an accessible filesystem directory"),
       });
+    } finally {
+      rmSync(sessionRepo, { recursive: true, force: true });
+    }
+  });
+
+  test("never turns a relative cwd plus opaque session cwd into a filesystem target", () => {
+    const event = {
+      type: "tool_call" as const,
+      toolCallId: "relative-opaque-session",
+      toolName: "bash",
+      input: { command: "git commit -m x", cwd: "child repo" },
+    };
+    let evaluated = false;
+    const evaluator = () => {
+      evaluated = true;
+      return { block: false } as const;
+    };
+
+    expect(evaluateOmpToolCall(event, { cwd: "skill://session" }, evaluator)).toEqual({
+      block: true,
+      reason: expect.stringContaining("guard enablement cannot be established"),
+    });
+    expect(evaluated).toBe(false);
+
+    expect(evaluateOmpToolCall({
+      ...event,
+      input: { ...event.input, env: { SEMCTX_GUARD: "on" } },
+    }, { cwd: "skill://session" }, evaluator)).toEqual({
+      block: true,
+      reason: expect.stringContaining("guard enablement cannot be established"),
+    });
+    expect(evaluated).toBe(false);
+
+    expect(evaluateOmpToolCall({
+      ...event,
+      input: { ...event.input, env: { SEMCTX_GUARD: "off" } },
+    }, { cwd: "skill://session" }, () => {
+      throw new Error("must not evaluate");
+    }, () => {
+      throw new Error("must not evaluate");
+    })).toBeUndefined();
+
+    expect(evaluateOmpToolCall(
+      event,
+      { cwd: "skill://session" },
+      evaluator,
+      (() => false) as never,
+    )).toEqual({
+      block: true,
+      reason: expect.stringContaining("guard enablement cannot be established"),
+    });
+    expect(evaluated).toBe(false);
+  });
+
+  test("blocks relative cwd resolution from Windows root-relative session forms before evaluation", () => {
+    if (process.platform !== "win32") return;
+    const event = {
+      type: "tool_call" as const,
+      toolCallId: "relative-root-session",
+      toolName: "bash",
+      input: { command: "git commit -m x", cwd: "child repo" },
+    };
+    let evaluated = false;
+    let enablementEvaluated = false;
+    const evaluator = () => {
+      evaluated = true;
+      return { block: false } as const;
+    };
+
+    for (const sessionCwd of ["\\session", "/session"]) {
+      expect(evaluateOmpToolCall(event, { cwd: sessionCwd }, evaluator, () => {
+        enablementEvaluated = true;
+        return false;
+      })).toEqual({
+        block: true,
+        reason: expect.stringContaining("guard enablement cannot be established"),
+      });
+      expect(evaluated).toBe(false);
+      expect(enablementEvaluated).toBe(false);
+    }
+  });
+
+  test("blocks a Windows drive-relative event cwd before guard evaluation", () => {
+    if (process.platform !== "win32") return;
+    const sessionRepo = createGuardedRepo("semctx-omp-drive-relative-");
+    let evaluated = false;
+    try {
+      expect(evaluateOmpToolCall({
+        type: "tool_call",
+        toolCallId: "drive-relative-event",
+        toolName: "bash",
+        input: { command: "git commit -m x", cwd: "C:child-repo" },
+      }, { cwd: sessionRepo }, () => {
+        evaluated = true;
+        return { block: false };
+      })).toEqual({
+        block: true,
+        reason: expect.stringContaining("drive-relative, not a fully qualified filesystem path"),
+      });
+      expect(evaluated).toBe(false);
+    } finally {
+      rmSync(sessionRepo, { recursive: true, force: true });
+    }
+  });
+
+  test("blocks Windows device namespace event and session cwd before either evaluator", () => {
+    if (process.platform !== "win32") return;
+    const sessionRepo = createGuardedRepo("semctx-omp-device-namespace-");
+    let primaryCalls = 0;
+    let enablementCalls = 0;
+    const primary = () => {
+      primaryCalls += 1;
+      return { block: false } as const;
+    };
+    const enablement = () => {
+      enablementCalls += 1;
+      return false;
+    };
+    const namespaces = [
+      "\\\\.\\pipe\\semctx",
+      "//./pipe/semctx",
+      "//.\\pipe\\semctx",
+      "\\\\./pipe/semctx",
+      "\\\\.\\C:\\repo",
+      "\\\\?\\GLOBALROOT\\Device\\HarddiskVolume1\\repo",
+      "//?/GLOBALROOT/Device/HarddiskVolume1/repo",
+      "//?\\GLOBALROOT\\Device\\HarddiskVolume1\\repo",
+      "\\\\?/GLOBALROOT/Device/HarddiskVolume1/repo",
+      "//?\\C:\\repo",
+    ];
+    try {
+      for (const cwd of namespaces) {
+        expect(evaluateOmpToolCall({
+          type: "tool_call",
+          toolCallId: "device-event",
+          toolName: "bash",
+          input: { command: "git commit -m x", cwd },
+        }, { cwd: sessionRepo }, primary, enablement)).toEqual({
+          block: true,
+          reason: expect.stringContaining("refuses Windows device namespace cwd"),
+        });
+        expect(evaluateOmpToolCall({
+          type: "tool_call",
+          toolCallId: "device-session",
+          toolName: "bash",
+          input: { command: "git commit -m x", cwd: "child repo" },
+        }, { cwd }, primary, enablement)).toEqual({
+          block: true,
+          reason: expect.stringContaining("refuses Windows device namespace session cwd"),
+        });
+      }
+      expect(primaryCalls).toBe(0);
+      expect(enablementCalls).toBe(0);
     } finally {
       rmSync(sessionRepo, { recursive: true, force: true });
     }
