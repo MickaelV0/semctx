@@ -1399,11 +1399,11 @@ describe("verify output trust", () => {
 describe("local source and output path safety", () => {
   test("preserves __proto__ as an own local source key without prototype mutation", () => {
     const value = validateLocalSourcesFile(JSON.parse(
-      '{"schemaVersion":1,"paths":{"__proto__":"C:/private/repo","normal":"C:/normal"}}',
+      '{"schemaVersion":1,"paths":{"__proto__":"/private/repo","normal":"/normal"}}',
     ));
     expect(Object.getPrototypeOf(value.paths)).toBeNull();
     expect(Object.hasOwn(value.paths, "__proto__")).toBe(true);
-    expect(value.paths["__proto__"]).toBe(resolve("C:/private/repo"));
+    expect(value.paths["__proto__"]).toBe(resolve("/private/repo"));
   });
 
   test("rejects relative local source paths before collection", () => {
