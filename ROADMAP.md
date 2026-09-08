@@ -1,6 +1,6 @@
 # Semctx roadmap
 
-> Revised 2026-09-05. Released baseline: **v0.1.19**.
+> Revised 2026-09-08. Released baseline: **v0.1.20**.
 > Future versions are outcome targets, not available features or promised dates.
 
 ## Understand the risk of a change before running the checks
@@ -19,7 +19,7 @@ repeated use cheaper than rediscovering the same context. We will measure that t
 
 ## Available today
 
-[v0.1.19](https://github.com/hoklims/semctx/releases/tag/v0.1.19) provides local change-impact
+[v0.1.20](https://github.com/hoklims/semctx/releases/tag/v0.1.20) provides local change-impact
 analysis, explainable PASS/WARN/BLOCK reports, source-bound index health, authored intent and
 contracts, read-only control/replay surfaces, and Codex/Claude integrations.
 
@@ -38,7 +38,7 @@ refutes the current impact analyzer nor demonstrates its practical benefit.
 | Target | User outcome | Evidence required |
 | --- | --- | --- |
 | **0.1.20 — Reliable first contact** | Install, diagnose and update without contradictory health messages or destructive recovery advice. | Tested compatibility; stale-index diagnosis; configuration preservation; registry availability and delivery proof. |
-| **0.2 — Useful in ten minutes** | Try an example, understand a risk and choose the next check, then repeat on your repository. | Reproducible demo, concise report, independent onboarding and impact pilots with raw results, misses, noise and costs. |
+| **0.2 — Useful in ten minutes** | Try an example, understand a risk and choose the next check, then repeat on your repository. | Reproducible demo and contributor journey, concise report, frozen replay of thirty public changes with raw results and limits; human studies waived and their outcomes unmeasured. |
 | **0.3 — Indexes you can live with** | Keep useful context across edits, branches and worktrees within a declared resource budget. | Cold/warm/update measurements; supported incremental paths match full rebuilds; drift/crash/recovery tests; matching source, artifact and consumer generations. |
 | **0.4 — Connected, evidence-aware context** | Reuse useful symbol, build, test and retrieval sources with provenance and limits. | Scoped provider conformance, failure cases, native-only comparison and independent replay evidence. Native retrieval remains a conditional research track. |
 | **1.0 — A dependable supported contract** | Adopt the proven workflow with predictable compatibility, upgrades and support boundaries. | Support policy, migration/rollback tests, repeated independent use and evidence for every advertised capability. |
