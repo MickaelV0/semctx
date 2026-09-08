@@ -279,6 +279,23 @@ describe("public evidence projection", () => {
     const malformedWorkingDiff = demoManifest();
     malformedWorkingDiff["workingDiffDigest"] = "not-a-digest";
     expect(() => buildPublicEvidence({ phase: "candidate", demo: malformedWorkingDiff })).toThrow("workingDiffDigest must be a SHA-256 digest");
+
+    const contradictoryMissingFile = demoManifest();
+    const entry = (contradictoryMissingFile["cli"] as Record<string, unknown>)["cli"] as Record<string, unknown>;
+    entry["present"] = false;
+    entry["sizeBytes"] = 123;
+    entry["sha256"] = null;
+    expect(() => buildPublicEvidence({ phase: "candidate", demo: contradictoryMissingFile })).toThrow("presence metadata is inconsistent");
+  });
+
+  test("completed demo accepts a conforming single-file CLI with unknown source provenance", () => {
+    const singleFile = demoManifest();
+    const cli = singleFile["cli"] as Record<string, unknown>;
+    cli["indexWorker"] = null;
+    cli["sourceProvenance"] = "UNKNOWN";
+    cli["runtimeFiles"] = (cli["runtimeFiles"] as Record<string, unknown>[]).slice(0, 1);
+    cli["runtimeDigest"] = sha256Hex(JSON.stringify(cli["runtimeFiles"]));
+    expect(buildPublicEvidence({ phase: "candidate", demo: singleFile }).demo?.status).toBe("COMPLETED");
   });
 
   test("blocked demo accepts a command prefix and preserves complete parsed observations", () => {
@@ -315,6 +332,14 @@ describe("public evidence projection", () => {
     const malformed = structuredClone(observed);
     ((malformed["unassignedFindings"] as Record<string, unknown>[])[0]!["locations"] as Record<string, unknown>[])[0]!["file"] = 42;
     expect(() => buildPublicEvidence({ phase: "candidate", demo: malformed })).toThrow("locations[0].file must be a string");
+
+    const partialObserved = structuredClone(observed);
+    partialObserved["commands"] = (partialObserved["commands"] as unknown[]).slice(0, 3);
+    expect(() => buildPublicEvidence({ phase: "candidate", demo: partialObserved })).toThrow("observation fields are inconsistent");
+
+    const earlyWithUnassigned = structuredClone(early);
+    earlyWithUnassigned["unassignedFindings"] = observed["unassignedFindings"];
+    expect(() => buildPublicEvidence({ phase: "candidate", demo: earlyWithUnassigned })).toThrow("observation fields are inconsistent");
   });
 
   test("public package versions follow strict SemVer", () => {
