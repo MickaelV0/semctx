@@ -2,18 +2,18 @@
   "schemaVersion": 1,
   "kind": "semctx-public-evidence-v1",
   "phase": "candidate",
-  "generatedAt": "2026-09-08T05:23:38.149Z",
+  "generatedAt": "2026-09-08T11:30:16.347Z",
   "evidenceState": "OBSERVED",
   "releaseCommit": null,
   "demo": {
     "status": "COMPLETED",
-    "observedAt": "2026-09-08T05:05:14.821Z",
+    "observedAt": "2026-09-08T11:29:25.173Z",
     "packageVersion": "0.2.0",
     "runtimeDigest": "sha256:fe22a710addd1bff5f0133f2183c0f7b130aaac457177f441f00ddae38f28ef9",
     "fixtureBaseDigest": "sha256:0c127641db744e3655fb139ad4b1c29d337820f31bfa83ae16d5f21a166e8b82",
     "fixtureChangedDigest": "sha256:8070230105396980b0ec842b455c498e6ba026770f230dc61963432c621c8334",
     "fixtureCommit": {
-      "value": "6f39743e1d3e48bd34ce948ec81c3f043b127c85",
+      "value": "86e179efe710fe67e7eafbca267a1d293ad88f55",
       "authority": "caller-asserted"
     },
     "verdict": "WARN",
@@ -47,7 +47,7 @@
   "pilot": {
     "evidenceKind": "research",
     "verdict": "EVIDENCE_MISSING",
-    "protocolDigest": "sha256:c400ec908317de8bdcce58004d21710c61d2259fa87f27dcf6caf7efad84c02d",
+    "protocolDigest": "sha256:582b22e2b2f5b88f5a376bbe59929f738cdb7c457c195ca22dcd48d306638b6c",
     "totalCases": 30,
     "observedCases": 30,
     "failedCases": 0,
@@ -55,9 +55,9 @@
     "labelledCases": 0,
     "unknownCases": 30,
     "repositoryCount": 3,
-    "totalDurationMs": 190477.2,
+    "totalDurationMs": 194854.27000000002,
     "scores": null,
-    "generatedAt": "2026-09-08T05:20:34.917Z"
+    "generatedAt": "2026-09-08T06:02:12.488Z"
   },
   "humanMetrics": {
     "adoption": "NOT_MEASURED",
