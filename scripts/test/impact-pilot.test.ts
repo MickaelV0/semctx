@@ -1575,7 +1575,7 @@ describe("impact-pilot report CLI", () => {
 // ============================================================================================
 
 describe("buildPublicSummary: privacy allowlist", () => {
-  test("replaces all public identifiers and critical paths with deterministic local identifiers and counts", () => {
+  test("preserves declared public source provenance while replacing private identifiers and critical paths", () => {
     const secret = "SENSITIVE_PUBLIC_IDENTIFIER_DO_NOT_EXPORT";
     const publicCase = makeCase(`${secret}-case`, `${secret}-repository`, {
       status: "LABELLED", provenance: "automated-review",
@@ -1601,6 +1601,9 @@ describe("buildPublicSummary: privacy allowlist", () => {
     expect(serialized).not.toContain(secret);
     expect(publicSummary.experimentId).toMatch(/^experiment-[0-9a-f]{12}$/);
     expect(publicSummary.perRepository[0]?.repositoryAlias).toBe("repository-1");
+    expect(publicSummary.perRepository[0]?.publicSource).toEqual({
+      url: "https://example.invalid/public", license: "MIT",
+    });
     expect(publicSummary.criticalMisses).toEqual([{
       caseId: "case-1", repositoryAlias: "repository-1", missedFileCount: 1,
     }]);
@@ -1666,6 +1669,18 @@ describe("buildPublicSummary: privacy allowlist", () => {
     expect(report.criticalMisses.map((m) => m.caseId).sort()).toEqual(["private-1", "public-1"]);
 
     const publicSummary = buildPublicSummary(protocol, report);
+    expect(publicSummary.perRepository.map(({ repositoryAlias, publicSource, scores }) => ({
+      repositoryAlias, publicSource, hasScores: scores !== null,
+    }))).toEqual([
+      {
+        repositoryAlias: "repository-2", publicSource: null, hasScores: true,
+      },
+      {
+        repositoryAlias: "repository-1",
+        publicSource: { url: "https://example.invalid/public", license: "MIT" },
+        hasScores: true,
+      },
+    ]);
     expect(publicSummary.criticalMisses).toEqual([
       { caseId: "case-1", repositoryAlias: "repository-1", missedFileCount: 1 },
       { caseId: "case-2", repositoryAlias: "repository-2", missedFileCount: 1 },
@@ -1676,7 +1691,7 @@ describe("buildPublicSummary: privacy allowlist", () => {
     expect(JSON.stringify(publicSummary)).not.toContain("repo-private");
   });
 
-  test("never exports a shared alias when public and private cases use it", () => {
+  test("fails closed when a repository alias mixes public and private source declarations", () => {
     const alias = "secret-owner/secret-repo";
     const publicCase = makeCase("public-1", alias, {
       status: "LABELLED", provenance: "automated-review", expectedImpactedFiles: ["public.ts"], criticalFiles: ["public.ts"],
@@ -1689,12 +1704,7 @@ describe("buildPublicSummary: privacy allowlist", () => {
       collectedAt: "2026-09-08T00:00:00.000Z", observedBunVersion: "1.4.0",
       cases: [makeObservation("public-1", [], publicCase), makeObservation("private-1", [], privateCase)],
     });
-    const serialized = JSON.stringify(buildPublicSummary(protocol, report));
-    expect(serialized).not.toContain(alias);
-    expect(serialized).toContain("repository-1");
-    expect(JSON.parse(serialized).criticalMisses).toEqual([
-      { caseId: "case-1", repositoryAlias: "repository-1", missedFileCount: 1 },
-    ]);
+    expect(() => buildPublicSummary(protocol, report)).toThrow(/inconsistent publicSource declarations/);
   });
 });
 

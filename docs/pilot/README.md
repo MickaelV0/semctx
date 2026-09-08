@@ -142,9 +142,11 @@ The public summary is a strict allowlist (schema/version, counts, scores, bounde
 totals, finite durations) built only from already-aggregated report fields — raw stdout/stderr,
 failure-reason free text, and local filesystem paths have no code path into it. It derives the
 public experiment identifier from the protocol digest and replaces every repository and case
-identifier with a deterministic experiment-local ordinal. Every critical miss retains only those
-generated identifiers and the number of missed files, including private cases, so the counts stay
-complete while file paths remain in the private report.
+identifier with a deterministic experiment-local ordinal. A repository entry preserves its exact
+`publicSource` URL and license only when the frozen protocol explicitly declared them; otherwise
+`publicSource` is `null`. Mixed public/private declarations for one repository alias fail closed.
+Every critical miss retains only the generated identifiers and the number of missed files,
+including private cases, so the counts stay complete while file paths remain in the private report.
 
 ## Retention
 

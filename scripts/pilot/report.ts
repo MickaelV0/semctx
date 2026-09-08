@@ -452,7 +452,9 @@ export interface PublicSummaryV1 {
   evidenceKind: "research" | "smoke";
   verdict: PilotVerdict;
   totals: ResultReportV1["totals"];
-  perRepository: RepositoryTotals[];
+  perRepository: Array<RepositoryTotals & {
+    publicSource: CorpusCaseSpec["publicSource"];
+  }>;
   scores: ToolScore[] | null;
   criticalMisses: Array<{ caseId: string; repositoryAlias: string; missedFileCount: number }>;
   totalDurationMs: number;
@@ -494,10 +496,23 @@ export function buildPublicSummary(protocol: FrozenProtocolV1, report: ResultRep
     throw new PilotValidationError("report.protocolDigest", "does not match the protocol used for public export");
   }
   const repositoryIds = new Map<string, string>();
+  const publicSources = new Map<string, CorpusCaseSpec["publicSource"]>();
   const caseIds = new Map<string, string>();
   for (const [index, spec] of protocol.corpus.cases.entries()) {
     if (!repositoryIds.has(spec.repositoryAlias)) {
       repositoryIds.set(spec.repositoryAlias, `repository-${repositoryIds.size + 1}`);
+      publicSources.set(spec.repositoryAlias, spec.publicSource);
+    } else {
+      const registeredSource = publicSources.get(spec.repositoryAlias);
+      const sameSource = registeredSource === null && spec.publicSource === null
+        || registeredSource !== null && registeredSource !== undefined && spec.publicSource !== null
+          && registeredSource.url === spec.publicSource.url && registeredSource.license === spec.publicSource.license;
+      if (!sameSource) {
+        throw new PilotValidationError(
+          "protocol.corpus.cases",
+          `repositoryAlias "${spec.repositoryAlias}" has inconsistent publicSource declarations`,
+        );
+      }
     }
     caseIds.set(spec.caseId, `case-${index + 1}`);
   }
@@ -505,6 +520,13 @@ export function buildPublicSummary(protocol: FrozenProtocolV1, report: ResultRep
     const id = repositoryIds.get(alias);
     if (id === undefined) throw new PilotValidationError("report.perRepository", "contains an unregistered repository");
     return id;
+  };
+  const publicSource = (alias: string): CorpusCaseSpec["publicSource"] => {
+    if (!publicSources.has(alias)) {
+      throw new PilotValidationError("report.perRepository", "contains an unregistered repository");
+    }
+    const source = publicSources.get(alias);
+    return source === null || source === undefined ? null : { url: source.url, license: source.license };
   };
   return {
     schemaVersion: 1,
@@ -522,6 +544,7 @@ export function buildPublicSummary(protocol: FrozenProtocolV1, report: ResultRep
     },
     perRepository: report.perRepository.map((totals) => ({
       repositoryAlias: repositoryId(totals.repositoryAlias),
+      publicSource: publicSource(totals.repositoryAlias),
       totalCases: totals.totalCases,
       observedCases: totals.observedCases,
       failedCases: totals.failedCases,

@@ -65,7 +65,7 @@ interface OmpPathResolutionOptions {
 
 export type OmpFilesystemCwdResolution =
   | { ok: true; cwd: string }
-  | { ok: false; reason: string };
+  | { ok: false; reason: string; unsafe?: true };
 
 function stripWindowsExtendedPrefix(value: string, platform: NodeJS.Platform): string {
   if (platform !== "win32") return value;
@@ -106,7 +106,11 @@ function windowsPathToWsl(value: string): string | undefined {
   return posix.join("/mnt", match[1]!.toLowerCase(), ...match[2]!.split("\\").filter(Boolean));
 }
 
-function expandOmpFilesystemPath(raw: string, options: Required<OmpPathResolutionOptions>): string {
+function expandOmpFilesystemPath(
+  raw: string,
+  options: Required<OmpPathResolutionOptions>,
+  allowWindowsDriveAlias = true,
+): string {
   const deColoned = /^:(?=[/\\~]|\.\.?[/\\]|[A-Za-z]:)/.test(raw) ? raw.slice(1) : raw;
   const atNormalized = normalizeAtPrefix(deColoned).replace(UNICODE_SPACES, " ");
   let value = atNormalized;
@@ -121,11 +125,22 @@ function expandOmpFilesystemPath(raw: string, options: Required<OmpPathResolutio
   else if (value.startsWith("~")) {
     value = (options.platform === "win32" ? win32 : posix).join(options.home, value.slice(1));
   }
-  if (options.platform === "win32") return windowsDriveAlias(value) ?? value;
+  if (options.platform === "win32") return allowWindowsDriveAlias ? windowsDriveAlias(value) ?? value : value;
   if (options.platform === "linux" && (options.env.WSL_DISTRO_NAME || options.env.WSL_INTEROP)) {
     return windowsPathToWsl(value) ?? value;
   }
   return value;
+}
+
+function isFullyQualifiedFilesystemPath(value: string, platform: NodeJS.Platform): boolean {
+  if (platform !== "win32") return posix.isAbsolute(value);
+  if (/^[A-Za-z]:[\\/]/.test(value)) return true;
+  const unc = /^(?:\\\\|\/\/)([^\\/]+)[\\/]([^\\/]+)(?:[\\/].*)?$/.exec(value);
+  return unc !== null && unc[1] !== "." && unc[1] !== "?";
+}
+
+function isWindowsDeviceNamespace(value: string, platform: NodeJS.Platform): boolean {
+  return platform === "win32" && /^[\\/]{2}[.?][\\/]/.test(value);
 }
 
 /** Filesystem-only subset of OMP 18.1.11 expandPath + resolveToCwd. */
@@ -143,9 +158,57 @@ export function resolveOmpFilesystemCwd(
   if (INTERNAL_URL.test(expanded.replace(/^(local:)\/(?!\/)/i, "$1//"))) {
     return { ok: false, reason: `OMP did not expand internal URL cwd ${JSON.stringify(rawCwd)} to a filesystem path` };
   }
-  if (/^\/+$/u.test(expanded)) return { ok: true, cwd: sessionCwd };
+  if (isWindowsDeviceNamespace(expanded, normalizedOptions.platform)) {
+    return {
+      ok: false,
+      reason: `OMP refuses Windows device namespace cwd ${JSON.stringify(rawCwd)}`,
+      unsafe: true,
+    };
+  }
+  if (normalizedOptions.platform === "win32" && /^[A-Za-z]:(?![\\/])/.test(expanded)) {
+    return {
+      ok: false,
+      reason: `OMP cwd ${JSON.stringify(rawCwd)} is drive-relative, not a fully qualified filesystem path`,
+    };
+  }
   const pathApi = normalizedOptions.platform === "win32" ? win32 : posix;
-  return { ok: true, cwd: pathApi.isAbsolute(expanded) ? expanded : pathApi.resolve(sessionCwd, expanded) };
+  const rootAlias = /^\/+$/u.test(expanded);
+  if (pathApi.isAbsolute(expanded) && !rootAlias) {
+    if (isFullyQualifiedFilesystemPath(expanded, normalizedOptions.platform)) return { ok: true, cwd: expanded };
+    return {
+      ok: false,
+      reason: `OMP cwd ${JSON.stringify(rawCwd)} is not a fully qualified filesystem path`,
+    };
+  }
+
+  const expandedSessionCwd = expandOmpFilesystemPath(
+    sessionCwd.replace(/^(local:)\/(?!\/)/i, "$1//"),
+    normalizedOptions,
+    false,
+  );
+  if (INTERNAL_URL.test(expandedSessionCwd.replace(/^(local:)\/(?!\/)/i, "$1//"))) {
+    return {
+      ok: false,
+      reason: `OMP relative cwd cannot be resolved from internal URL session cwd ${JSON.stringify(sessionCwd)}`,
+    };
+  }
+  if (isWindowsDeviceNamespace(expandedSessionCwd, normalizedOptions.platform)) {
+    return {
+      ok: false,
+      reason: `OMP refuses Windows device namespace session cwd ${JSON.stringify(sessionCwd)}`,
+      unsafe: true,
+    };
+  }
+  if (!isFullyQualifiedFilesystemPath(expandedSessionCwd, normalizedOptions.platform)) {
+    return {
+      ok: false,
+      reason: `OMP relative cwd cannot be resolved from a non-fully-qualified session cwd ${JSON.stringify(sessionCwd)}`,
+    };
+  }
+  return {
+    ok: true,
+    cwd: rootAlias ? expandedSessionCwd : pathApi.resolve(expandedSessionCwd, expanded),
+  };
 }
 
 export function explicitGuardOff(
@@ -180,13 +243,23 @@ function resolveOmpFilesystemSessionRoot(rawCwd: string): OmpFilesystemCwdResolu
     env: process.env,
     home: homedir(),
   };
-  const expanded = expandOmpFilesystemPath(rawCwd.replace(/^(local:)\/(?!\/)/i, "$1//"), options);
+  const expanded = expandOmpFilesystemPath(
+    rawCwd.replace(/^(local:)\/(?!\/)/i, "$1//"),
+    options,
+    false,
+  );
   if (INTERNAL_URL.test(expanded.replace(/^(local:)\/(?!\/)/i, "$1//"))) {
     return { ok: false, reason: `OMP session cwd ${JSON.stringify(rawCwd)} is still an internal URL` };
   }
-  const pathApi = options.platform === "win32" ? win32 : posix;
-  if (!pathApi.isAbsolute(expanded)) {
-    return { ok: false, reason: `OMP session cwd ${JSON.stringify(rawCwd)} is not an absolute filesystem path` };
+  if (isWindowsDeviceNamespace(expanded, options.platform)) {
+    return {
+      ok: false,
+      reason: `OMP refuses Windows device namespace session cwd ${JSON.stringify(rawCwd)}`,
+      unsafe: true,
+    };
+  }
+  if (!isFullyQualifiedFilesystemPath(expanded, options.platform)) {
+    return { ok: false, reason: `OMP session cwd ${JSON.stringify(rawCwd)} is not a fully qualified filesystem path` };
   }
   try {
     if (!statSync(expanded).isDirectory()) throw new Error("not a directory");
@@ -267,6 +340,9 @@ export function evaluateOmpToolCall(
   const rawCwd = typeof event.input.cwd === "string" ? event.input.cwd : ctx.cwd;
   const resolvedCwd = resolveOmpFilesystemCwd(rawCwd, ctx.cwd);
   if (!resolvedCwd.ok) {
+    if (resolvedCwd.unsafe) {
+      return { block: true, reason: `semctx guarded mode: ${resolvedCwd.reason}; terminal Git operation is not authorized.` };
+    }
     return evaluateUnresolvedScopeEnablement(
       ctx,
       env,
