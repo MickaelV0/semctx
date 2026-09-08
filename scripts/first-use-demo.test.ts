@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSy
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import type { VerifyReport } from "@semantic-context/core";
 import { FIXTURE_CASES } from "./first-use-demo/fixture";
 import { identifyPackagedCli, sha256Hex } from "./first-use-demo/identity";
 import { runChild } from "./first-use-demo/process";
@@ -35,6 +36,27 @@ function expectedWarningReport(overrides: Record<string, unknown> = {}): Record<
     summary: { blockCount: 0, warnCount: 1 },
     ...overrides,
   });
+}
+
+function expectBlockedObservations(
+  outcome: ReturnType<typeof runFirstUseDemo>,
+  verdict: "PASS" | "WARN" | "BLOCK",
+  unknown: string,
+): void {
+  if (
+    outcome.verdict !== verdict
+    || outcome.cases.length !== FIXTURE_CASES.length
+    || !outcome.unknowns.includes(unknown)
+    || outcome.workingDiffDigest === null
+    || outcome.packageVersion === null
+  ) {
+    process.stderr.write("DEMO_BLOCKED_OBSERVATION_PRESERVATION_MISMATCH\n");
+  }
+  expect(outcome.verdict).toBe(verdict);
+  expect(outcome.cases).toHaveLength(FIXTURE_CASES.length);
+  expect(outcome.unknowns).toContain(unknown);
+  expect(outcome.workingDiffDigest).toMatch(/^[a-f0-9]{64}$/);
+  expect(outcome.packageVersion).toBe("0.0.0");
 }
 
 function fakeCli(options: {
@@ -199,11 +221,18 @@ test.each([
 
 test("a no-op substitute cannot complete the frozen demonstration", () => {
   const outDir = fresh("no-op");
-  const outcome = runFirstUseDemo({ cliPath: fakeCli(), outDir });
+  const unknown = "PASS report still has an unsupported product observation";
+  const outcome = runFirstUseDemo({ cliPath: fakeCli({ verify: JSON.stringify(report({ unknowns: [unknown] })) }), outDir });
   expect(outcome.status).toBe("BLOCKED");
   expect(outcome.reason).toBe("UNEXPECTED_ANALYSIS");
+  expectBlockedObservations(outcome, "PASS", unknown);
+  expect(outcome.cases.map(item => item.matchedExpectation)).toEqual([true, false, true]);
   expect(readFileSync(join(outDir, "raw", "verify-diff.stdout.txt"), "utf8")).toContain('"verdict":"PASS"');
-  expect(JSON.parse(readFileSync(join(outDir, MANIFEST_FILENAME), "utf8")).status).toBe("BLOCKED");
+  const manifest = JSON.parse(readFileSync(join(outDir, MANIFEST_FILENAME), "utf8"));
+  expect(manifest.status).toBe("BLOCKED");
+  expect(manifest.verdict).toBe("PASS");
+  expect(manifest.unknowns).toContain(unknown);
+  expect(readFileSync(join(outDir, "report.md"), "utf8")).toContain(unknown);
 });
 
 test.each(["src/greeting.ts", "src/pricing.ts"])(
@@ -252,15 +281,18 @@ test("a location-only contract warning is attributed to its frozen case", () => 
 test("a finding without a case anchor cannot silently disappear", () => {
   const expected = expectedWarningReport();
   const contractFinding = (expected.findings as Record<string, unknown>[])[0]!;
+  const unknown = "WARN report retained despite an unassigned finding";
+  const unassignedFinding = {
+    rule: "unassigned_warning", tier: "advisory" as const, severity: "warn" as const,
+    message: "warning without a frozen-case anchor", nodeIds: [], locations: [],
+  };
   const outcome = runFirstUseDemo({
     cliPath: fakeCli({
       verify: JSON.stringify(expectedWarningReport({
+        unknowns: [unknown],
         findings: [
           contractFinding,
-          {
-            rule: "unassigned_warning", tier: "advisory", severity: "warn",
-            message: "warning without a frozen-case anchor", nodeIds: [], locations: [],
-          },
+          unassignedFinding,
         ],
         summary: { blockCount: 0, warnCount: 2 },
       })),
@@ -270,6 +302,48 @@ test("a finding without a case anchor cannot silently disappear", () => {
   expect(outcome.status).toBe("BLOCKED");
   expect(outcome.reason).toBe("UNEXPECTED_ANALYSIS");
   expect(outcome.detail).toContain("unassigned_warning");
+  expectBlockedObservations(outcome, "WARN", unknown);
+  expect(outcome.cases[1]?.observedRules).toEqual(["contract_changed_without_test"]);
+  if (JSON.stringify(outcome.unassignedFindings) !== JSON.stringify([unassignedFinding])) {
+    process.stderr.write("DEMO_BLOCKED_FINDING_PRESERVATION_MISMATCH\n");
+  }
+  expect(outcome.unassignedFindings).toEqual([unassignedFinding]);
+  const manifest = JSON.parse(readFileSync(join(outcome.outDir, MANIFEST_FILENAME), "utf8"));
+  expect(manifest.unassignedFindings).toEqual([unassignedFinding]);
+  const markdown = readFileSync(join(outcome.outDir, "report.md"), "utf8");
+  expect(markdown).toContain("Unassigned product findings");
+  expect(markdown).toContain("warning without a frozen-case anchor");
+  expect(markdown).toContain("Product anchor(s): none reported");
+});
+
+test("a range mismatch cannot erase an unassigned finding from a valid product report", () => {
+  const unassignedFinding = {
+    rule: "unassigned_range_warning", tier: "advisory" as const, severity: "warn" as const,
+    message: "unassigned warning retained across range rejection", nodeIds: [], locations: [],
+  };
+  const outcome = runFirstUseDemo({
+    cliPath: fakeCli({
+      verify: JSON.stringify(expectedWarningReport({
+        range: "HEAD~1..HEAD",
+        findings: [
+          ...(expectedWarningReport().findings as Record<string, unknown>[]),
+          unassignedFinding,
+        ],
+        summary: { blockCount: 0, warnCount: 2 },
+      })),
+    }),
+    outDir: fresh("range-with-unassigned-finding"),
+  });
+  expect(outcome.status).toBe("BLOCKED");
+  expect(outcome.reason).toBe("FIXTURE_DRIFT");
+  expect(outcome.detail).toContain("changed-file or range identity");
+  expect(outcome.detail).toContain("missing case files: none");
+  if (JSON.stringify(outcome.unassignedFindings) !== JSON.stringify([unassignedFinding])) {
+    process.stderr.write("DEMO_BLOCKED_FINDING_PRESERVATION_MISMATCH\n");
+  }
+  expect(outcome.unassignedFindings).toEqual([unassignedFinding]);
+  expect(JSON.parse(readFileSync(join(outcome.outDir, MANIFEST_FILENAME), "utf8")).unassignedFindings).toEqual([unassignedFinding]);
+  expect(readFileSync(join(outcome.outDir, "report.md"), "utf8")).toContain("unassigned warning retained across range rejection");
 });
 
 test.each([
@@ -296,11 +370,13 @@ test.each([
 ] as const)("an additional %s cannot satisfy the exact frozen WARN expectation", (_name, extraFinding, verdict, verifyCode, summary) => {
   const expected = expectedWarningReport();
   const contractFinding = (expected.findings as Record<string, unknown>[])[0]!;
+  const unknown = `${verdict} report retained after frozen expectation mismatch`;
   const outcome = runFirstUseDemo({
     cliPath: fakeCli({
       verifyCode,
       verify: JSON.stringify(expectedWarningReport({
         verdict,
+        unknowns: [unknown],
         findings: [contractFinding, extraFinding],
         summary,
       })),
@@ -314,6 +390,38 @@ test.each([
   expect(outcome.reason).toBe("UNEXPECTED_ANALYSIS");
   expect(outcome.detail).toContain("exported-contract-risk");
   if (verdict === "BLOCK") expect(outcome.detail).toContain("expected global WARN");
+  expectBlockedObservations(outcome, verdict, unknown);
+  expect(outcome.cases[1]?.observedRules).toContain(extraFinding.rule);
+});
+
+test.each([
+  ["tier", "strict", "warn", "WARN", 0, { blockCount: 0, warnCount: 1 }],
+  ["severity", "advisory", "block", "BLOCK", 3, { blockCount: 1, warnCount: 0 }],
+] as const)("a same-rule finding with the wrong %s remains visible without satisfying the frozen case", (_dimension, tier, severity, verdict, verifyCode, summary) => {
+  const expected = expectedWarningReport();
+  const baseFinding = (expected.findings as Record<string, unknown>[])[0]! as unknown as VerifyReport["findings"][number];
+  const finding: VerifyReport["findings"][number] = {
+    ...baseFinding,
+    tier,
+    severity,
+  };
+  const outcome = runFirstUseDemo({
+    cliPath: fakeCli({
+      verifyCode,
+      verify: JSON.stringify(expectedWarningReport({ verdict, findings: [finding], summary })),
+    }),
+    outDir: fresh(`wrong-${_dimension}`),
+  });
+  expect(outcome.status).toBe("BLOCKED");
+  expect(outcome.reason).toBe("UNEXPECTED_ANALYSIS");
+  expect(outcome.cases[1]?.matchedExpectation).toBe(false);
+  expect(outcome.cases[1]?.observedRules).toEqual(["contract_changed_without_test"]);
+  if (JSON.stringify(outcome.cases[1]?.observedFindings) !== JSON.stringify([finding])) {
+    process.stderr.write("DEMO_BLOCKED_FINDING_PRESERVATION_MISMATCH\n");
+  }
+  expect(outcome.cases[1]?.observedFindings).toEqual([finding]);
+  const markdown = readFileSync(join(outcome.outDir, "report.md"), "utf8");
+  expect(markdown).toContain(`contract_changed_without_test\` is ${tier}/${severity}`);
 });
 
 test("child and manifest records preserve measured duration and termination signal", () => {

@@ -64,6 +64,8 @@ export interface CaseOutcome {
   title: string;
   relPath: string;
   expectedFinding: "none" | "warn";
+  /** Complete product findings attributed to this case, retained without rewriting. */
+  observedFindings: VerifyReport["findings"];
   observedRules: string[];
   /** Whether the packaged CLI's real output matched this case's documented expectation. */
   matchedExpectation: boolean;
@@ -84,6 +86,8 @@ export interface DemoOutcome {
   /** The raw product verdict. Never rewritten to match a documented expectation. */
   verdict: VerdictLevel | null;
   cases: CaseOutcome[];
+  /** Valid product findings that could not be attributed to a frozen case. */
+  unassignedFindings: VerifyReport["findings"];
   unknowns: string[];
   workingDiffDigest: string | null;
   packageVersion: string | null;
@@ -270,22 +274,24 @@ function recordCommand(
 }
 
 function blocked(
-  base: Pick<DemoOutcome, "createdAt" | "outDir" | "cli" | "fixture" | "commands">,
+  base: Pick<DemoOutcome, "createdAt" | "outDir" | "cli" | "fixture" | "commands">
+    & Partial<Pick<DemoOutcome, "verdict" | "cases" | "unassignedFindings" | "unknowns" | "workingDiffDigest" | "packageVersion">>,
   reason: DemoBlockReason,
   detail: string,
   fixtureHeadCommit: string | null = null,
 ): DemoOutcome {
   return {
+    verdict: null,
+    cases: [],
+    unassignedFindings: [],
+    unknowns: [],
+    workingDiffDigest: null,
+    packageVersion: null,
     ...base,
     status: "BLOCKED",
     reason,
     detail,
     fixtureHeadCommit,
-    verdict: null,
-    cases: [],
-    unknowns: [],
-    workingDiffDigest: null,
-    packageVersion: null,
   };
 }
 
@@ -449,15 +455,6 @@ export function runFirstUseDemo(options: RunFirstUseDemoOptions): DemoOutcome {
 
     const changedFiles = new Set((report.changedFiles as unknown[]).filter((v): v is string => typeof v === "string"));
     const missing = expectedPaths.filter((p) => !changedFiles.has(p));
-    if (missing.length > 0 || JSON.stringify([...report.changedFiles].sort()) !== JSON.stringify([...expectedPaths].sort()) || report.base !== null || report.head !== "HEAD" || report.range !== null || report.mergeBase !== null) {
-      return finish(blocked(
-        { ...emptyBase, commands },
-        "FIXTURE_DRIFT",
-        `The verify report's changedFiles is missing case file(s): ${missing.join(", ")}.`,
-        fixtureHeadCommit,
-      ));
-    }
-
     const fileById = new Map<string, string>();
     for (const symbol of report.changedSymbols as unknown[]) {
       if (!isPlainObject(symbol)) continue;
@@ -490,6 +487,7 @@ export function runFirstUseDemo(options: RunFirstUseDemoOptions): DemoOutcome {
         title: fixtureCase.title,
         relPath: fixtureCase.file.relPath,
         expectedFinding: fixtureCase.expectedFinding,
+        observedFindings,
         observedRules: observed,
         matchedExpectation,
         explanation: fixtureCase.explanation,
@@ -497,18 +495,37 @@ export function runFirstUseDemo(options: RunFirstUseDemoOptions): DemoOutcome {
       };
     });
 
-    if (identifyPackagedCli(cliPath).runtimeDigest !== cli.runtimeDigest) return finish(blocked({ ...emptyBase, commands }, "ARTIFACT_DRIFT", "Runtime bytes changed during execution.", fixtureHeadCommit));
-    if (!fixtureMatchesSnapshot(fixtureDir, changedSnapshot)) return finish(blocked({ ...emptyBase, commands }, "FIXTURE_DRIFT", "Fixture files or Git state changed during execution.", fixtureHeadCommit));
-
     const expectedPathSet = new Set(expectedPaths);
     const unassignedFindings = findings
-      .map((finding, index) => ({ finding, index, files: findingFiles[index]! }))
-      .filter(({ files }) => ![...files].some(file => expectedPathSet.has(file)));
+      .filter((_finding, index) => ![...findingFiles[index]!].some(file => expectedPathSet.has(file)));
+
+    const observedBase = {
+      ...emptyBase,
+      commands,
+      verdict: report.verdict as VerdictLevel,
+      cases,
+      unassignedFindings,
+      unknowns: report.unknowns,
+      workingDiffDigest,
+      packageVersion: version.stdout.trim(),
+    };
+    if (missing.length > 0 || JSON.stringify([...report.changedFiles].sort()) !== JSON.stringify([...expectedPaths].sort()) || report.base !== null || report.head !== "HEAD" || report.range !== null || report.mergeBase !== null) {
+      return finish(blocked(
+        observedBase,
+        "FIXTURE_DRIFT",
+        `The verify report's changed-file or range identity did not match the frozen fixture (missing case files: ${missing.length === 0 ? "none" : missing.join(", ")}).`,
+        fixtureHeadCommit,
+      ));
+    }
+
+    if (identifyPackagedCli(cliPath).runtimeDigest !== cli.runtimeDigest) return finish(blocked(observedBase, "ARTIFACT_DRIFT", "Runtime bytes changed during execution.", fixtureHeadCommit));
+    if (!fixtureMatchesSnapshot(fixtureDir, changedSnapshot)) return finish(blocked(observedBase, "FIXTURE_DRIFT", "Fixture files or Git state changed during execution.", fixtureHeadCommit));
+
     if (unassignedFindings.length > 0) {
       return finish(blocked(
-        { ...emptyBase, commands },
+        observedBase,
         "UNEXPECTED_ANALYSIS",
-        `The verify report contained finding(s) without a frozen-case anchor: ${unassignedFindings.map(({ finding, index }) => `${finding.rule}[${index}]`).join(", ")}.`,
+        `The verify report contained finding(s) without a frozen-case anchor: ${unassignedFindings.map(finding => finding.rule).join(", ")}.`,
         fixtureHeadCommit,
       ));
     }
@@ -521,7 +538,7 @@ export function runFirstUseDemo(options: RunFirstUseDemoOptions): DemoOutcome {
         ...(!globalVerdictMatches ? [`expected global WARN, observed ${report.verdict}`] : []),
       ];
       return finish(blocked(
-        { ...emptyBase, commands },
+        observedBase,
         "UNEXPECTED_ANALYSIS",
         `The selected CLI did not reproduce the exact frozen observation (${mismatches.join("; ")}).`,
         fixtureHeadCommit,
@@ -540,6 +557,7 @@ export function runFirstUseDemo(options: RunFirstUseDemoOptions): DemoOutcome {
       commands,
       verdict: report.verdict as VerdictLevel,
       cases,
+      unassignedFindings: [],
       unknowns: report.unknowns,
       workingDiffDigest,
       packageVersion: version.stdout.trim(),
