@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import {
@@ -375,12 +375,23 @@ describe("OMP extension adapter wiring (omp/semctx-guard.ts)", () => {
         reason: expect.stringContaining("guard enablement evaluation returned an unknown result"),
       });
 
+      rmSync(guardPath, { recursive: true });
+      symlinkSync(
+        join(sessionRepo, "missing-guard-target"),
+        guardPath,
+        process.platform === "win32" ? "junction" : "file",
+      );
+      expect(evaluateOmpToolCall(event, { cwd: sessionRepo })).toEqual({
+        block: true,
+        reason: expect.stringContaining("guard enablement evaluation returned an unknown result"),
+      });
+
       expect(evaluateOmpToolCall({
         ...event,
         input: { ...event.input, env: { SEMCTX_GUARD: "off" } },
       }, { cwd: sessionRepo })).toBeUndefined();
 
-      rmSync(guardPath, { recursive: true });
+      rmSync(guardPath, { force: true });
       expect(evaluateOmpToolCall(event, { cwd: sessionRepo })).toBeUndefined();
     } finally {
       rmSync(sessionRepo, { recursive: true, force: true });
