@@ -5,6 +5,7 @@
  */
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { sha256Hex } from "./first-use-demo/identity";
 import { PRECISION_THRESHOLD } from "./pilot/report";
 import { RESEARCH_MINIMUM_CASES } from "./pilot/protocol";
 
@@ -32,6 +33,14 @@ const KNOWN_RULES = new Set([
 ]);
 const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 const PILOT_TOOLS = ["semctx", "changed-files", "one-hop-import-neighborhood"] as const;
+const DEMO_BLOCK_REASONS = [
+  "CLI_ARTIFACT_MISSING", "ARTIFACT_DRIFT", "INVALID_OUTPUT_PATH", "INDEX_CHILD_FAILED",
+  "OUTPUT_EXISTS_NOT_EMPTY", "FIXTURE_GIT_INIT_FAILED", "FIXTURE_GIT_IDENTITY_FAILED",
+  "SETUP_CHILD_FAILED", "SETUP_OUTPUT_MALFORMED", "SETUP_NOT_READY",
+  "VERIFY_CHILD_UNEXPECTED_EXIT", "VERIFY_OUTPUT_MALFORMED", "VERIFY_OUTPUT_INCOMPLETE",
+  "UNEXPECTED_ANALYSIS", "FIXTURE_DRIFT",
+] as const;
+const DEMO_COMMAND_LABELS = ["version", "setup", "index", "verify-diff"] as const;
 
 export type DemoCaseId = keyof typeof CASES;
 export type PublicPhase = "candidate" | "release";
@@ -158,6 +167,164 @@ function semver(value: unknown, name: string): string {
   return result;
 }
 
+function boolean(value: unknown, name: string): boolean {
+  if (typeof value !== "boolean") throw new Error(`${name} must be a boolean`);
+  return value;
+}
+
+function nullableString(value: unknown, name: string): string | null {
+  if (value === null) return null;
+  return string(value, name);
+}
+
+function rawDigest(value: unknown, name: string): string {
+  const result = string(value, name);
+  if (!/^[0-9a-f]{64}$/.test(result)) throw new Error(`${name} must be a raw SHA-256 digest`);
+  return result;
+}
+
+function pathTail(value: string): string {
+  return value.replaceAll("\\", "/").split("/").at(-1)!;
+}
+
+interface ValidatedFileIdentity {
+  path: string;
+  present: boolean;
+  sizeBytes: number | null;
+  sha256: string | null;
+}
+
+function fileIdentity(value: unknown, name: string): ValidatedFileIdentity {
+  const item = record(value, name);
+  const path = string(item["path"], `${name}.path`);
+  if (path.length === 0) throw new Error(`${name}.path must not be empty`);
+  const present = boolean(item["present"], `${name}.present`);
+  const sizeBytes = item["sizeBytes"] === null ? null : integer(item["sizeBytes"], `${name}.sizeBytes`);
+  const sha256 = item["sha256"] === null ? null : rawDigest(item["sha256"], `${name}.sha256`);
+  if (present !== (sizeBytes !== null && sha256 !== null)) throw new Error(`${name} presence metadata is inconsistent`);
+  return { path, present, sizeBytes, sha256 };
+}
+
+function validateCliIdentity(value: unknown, status: DemoStatus): { runtimeDigest: string | null; cliPath: string } {
+  const cli = record(value, "demo.cli");
+  const cliPath = string(cli["cliPath"], "demo.cli.cliPath");
+  if (cliPath.length === 0) throw new Error("demo.cli.cliPath must not be empty");
+  const entry = fileIdentity(cli["cli"], "demo.cli.cli");
+  if (entry.path !== cliPath) throw new Error("demo CLI entry path contradicts cliPath");
+  const worker = cli["indexWorker"] === null ? null : fileIdentity(cli["indexWorker"], "demo.cli.indexWorker");
+  if (worker !== null && !worker.present) throw new Error("demo.cli.indexWorker must be present or null");
+  if (string(cli["sourceProvenance"], "demo.cli.sourceProvenance").length === 0) throw new Error("demo.cli.sourceProvenance must not be empty");
+  if (cli["authenticatedSource"] !== "UNKNOWN") throw new Error("demo.cli.authenticatedSource is invalid");
+  if (!Array.isArray(cli["runtimeFiles"])) throw new Error("demo.cli.runtimeFiles must be an array");
+  const runtimeFiles = cli["runtimeFiles"].map((item, index) => fileIdentity(item, `demo.cli.runtimeFiles[${index}]`));
+  if (new Set(runtimeFiles.map(item => item.path)).size !== runtimeFiles.length) throw new Error("demo CLI runtime file paths must be unique");
+  if (runtimeFiles.some(item => !item.present)) throw new Error("demo CLI runtime files must be present");
+  const runtimeDigest = cli["runtimeDigest"] === null ? null : rawDigest(cli["runtimeDigest"], "demo.cli.runtimeDigest");
+  if (!entry.present) {
+    if (runtimeFiles.length !== 0 || runtimeDigest !== null) throw new Error("missing demo CLI cannot carry runtime files or a runtime digest");
+  } else {
+    if (runtimeFiles.length === 0 || runtimeDigest === null) throw new Error("present demo CLI requires runtime files and a runtime digest");
+    if (sha256Hex(JSON.stringify(runtimeFiles)) !== runtimeDigest) throw new Error("demo CLI runtime digest contradicts its runtime files");
+    const entryFile = runtimeFiles.find(item => item.path === pathTail(cliPath));
+    if (entryFile === undefined || entryFile.sizeBytes !== entry.sizeBytes || entryFile.sha256 !== entry.sha256) {
+      throw new Error("demo CLI entry is not bound to its runtime file set");
+    }
+    if (worker?.present) {
+      const workerFile = runtimeFiles.find(item => item.path === pathTail(worker.path));
+      if (workerFile === undefined || workerFile.sizeBytes !== worker.sizeBytes || workerFile.sha256 !== worker.sha256) {
+        throw new Error("demo index worker is not bound to its runtime file set");
+      }
+    }
+  }
+  if (status === "COMPLETED" && (!entry.present || worker?.present !== true)) {
+    throw new Error("completed demo requires the packaged CLI and index worker identities");
+  }
+  return { runtimeDigest: runtimeDigest === null ? null : `sha256:${runtimeDigest}`, cliPath };
+}
+
+function validateDemoCommands(value: unknown, status: DemoStatus, cliPath: string): void {
+  if (!Array.isArray(value)) throw new Error("demo.commands must be an array");
+  if (status === "COMPLETED" && value.length !== DEMO_COMMAND_LABELS.length) {
+    throw new Error("completed demo requires all four command observations");
+  }
+  if (value.length > DEMO_COMMAND_LABELS.length) throw new Error("demo.commands contains an unexpected command");
+  let bunExecutable: string | undefined;
+  let fixtureRoot: string | undefined;
+  value.forEach((raw, index) => {
+    const name = `demo.commands[${index}]`;
+    const item = record(raw, name);
+    const label = enumValue(item["label"], DEMO_COMMAND_LABELS, `${name}.label`);
+    if (label !== DEMO_COMMAND_LABELS[index]) throw new Error("demo commands must follow the runner stage order");
+    if (!Array.isArray(item["argv"]) || !item["argv"].every(arg => typeof arg === "string" && arg.length > 0)) {
+      throw new Error(`${name}.argv must contain non-empty strings`);
+    }
+    const argv = item["argv"] as string[];
+    bunExecutable ??= argv[0];
+    if (argv[0] !== bunExecutable || argv[1] !== cliPath) throw new Error("demo commands must use the same Bun executable and packaged CLI entry");
+    if (label === "version") {
+      if (JSON.stringify(argv.slice(2)) !== JSON.stringify(["--version"])) throw new Error("demo version argv is invalid");
+    } else {
+      const expected = label === "verify-diff" ? ["verify", "diff", "--root"] : [label, "--root"];
+      const rootIndex = 2 + expected.length;
+      fixtureRoot ??= argv[rootIndex];
+      if (JSON.stringify(argv.slice(2, rootIndex)) !== JSON.stringify(expected)
+        || argv[rootIndex] !== fixtureRoot || argv[rootIndex + 1] !== "--json" || argv.length !== rootIndex + 2) {
+        throw new Error(`demo ${label} argv is invalid`);
+      }
+    }
+    const code = item["code"];
+    if (code !== null && (!Number.isSafeInteger(code) || Number(code) < 0)) throw new Error(`${name}.code is invalid`);
+    const signal = nullableString(item["signal"], `${name}.signal`);
+    finiteNonNegative(item["durationMs"], `${name}.durationMs`);
+    const pathPrefix = `raw/${label}`;
+    if (string(item["stdoutFile"], `${name}.stdoutFile`).replaceAll("\\", "/") !== `${pathPrefix}.stdout.txt`
+      || string(item["stderrFile"], `${name}.stderrFile`).replaceAll("\\", "/") !== `${pathPrefix}.stderr.txt`) {
+      throw new Error(`${name} capture filenames are invalid`);
+    }
+    rawDigest(item["stdoutDigest"], `${name}.stdoutDigest`);
+    rawDigest(item["stderrDigest"], `${name}.stderrDigest`);
+    if (status === "COMPLETED" && (code !== 0 || signal !== null)) throw new Error("completed demo commands must exit successfully without a signal");
+  });
+}
+
+interface ValidatedFinding {
+  rule: string;
+  tier: "strict" | "advisory";
+  severity: "warn" | "block";
+}
+
+function validateFindings(value: unknown, name: string): ValidatedFinding[] {
+  if (!Array.isArray(value)) throw new Error(`${name} must be an array`);
+  value.forEach((raw, index) => {
+    const findingName = `${name}[${index}]`;
+    const finding = record(raw, findingName);
+    if (string(finding["rule"], `${findingName}.rule`).length === 0) throw new Error(`${findingName}.rule must not be empty`);
+    enumValue(finding["tier"], ["strict", "advisory"] as const, `${findingName}.tier`);
+    enumValue(finding["severity"], ["warn", "block"] as const, `${findingName}.severity`);
+    string(finding["message"], `${findingName}.message`);
+    if (!Array.isArray(finding["nodeIds"]) || !finding["nodeIds"].every(item => typeof item === "string")) {
+      throw new Error(`${findingName}.nodeIds must contain strings`);
+    }
+    if (!Array.isArray(finding["locations"])) throw new Error(`${findingName}.locations must be an array`);
+    finding["locations"].forEach((rawLocation, locationIndex) => {
+      const locationName = `${findingName}.locations[${locationIndex}]`;
+      const location = record(rawLocation, locationName);
+      string(location["file"], `${locationName}.file`);
+      if (location["line"] !== undefined && (typeof location["line"] !== "number" || !Number.isFinite(location["line"]))) {
+        throw new Error(`${locationName}.line must be a finite number`);
+      }
+    });
+  });
+  return value.map(raw => {
+    const finding = raw as Record<string, unknown>;
+    return {
+      rule: finding["rule"] as string,
+      tier: finding["tier"] as ValidatedFinding["tier"],
+      severity: finding["severity"] as ValidatedFinding["severity"],
+    };
+  });
+}
+
 function gitCommit(value: string | undefined, name: string): { value: string; authority: "caller-asserted" } | null {
   if (value === undefined) return null;
   if (!/^[0-9a-f]{40}$/.test(value)) throw new Error(`${name} must be a full lowercase Git commit`);
@@ -168,10 +335,14 @@ function projectDemo(raw: unknown, assertedCommit?: string): PublicDemoEvidenceV
   const manifest = record(raw, "demo manifest");
   if (manifest["kind"] !== "semctx-first-use-demo-manifest-v1") throw new Error("demo manifest kind is invalid");
   const status = enumValue(manifest["status"], ["COMPLETED", "BLOCKED"] as const, "demo.status");
+  if (string(manifest["outDir"], "demo.outDir").length === 0) throw new Error("demo.outDir must not be empty");
   const fixture = record(manifest["fixture"], "demo.fixture");
-  const cli = record(manifest["cli"], "demo.cli");
+  const cliIdentity = validateCliIdentity(manifest["cli"], status);
+  validateDemoCommands(manifest["commands"], status, cliIdentity.cliPath);
+  const unassignedFindings = validateFindings(manifest["unassignedFindings"] ?? [], "demo.unassignedFindings");
   const unknowns = manifest["unknowns"];
   if (!Array.isArray(unknowns)) throw new Error("demo.unknowns must be an array");
+  if (!unknowns.every(item => typeof item === "string")) throw new Error("demo.unknowns must contain strings");
   const inputCases = manifest["cases"];
   if (!Array.isArray(inputCases)) throw new Error("demo.cases must be an array");
 
@@ -179,6 +350,10 @@ function projectDemo(raw: unknown, assertedCommit?: string): PublicDemoEvidenceV
     const item = record(value, `demo.cases[${index}]`);
     const id = enumValue(item["id"], CASE_IDS, `demo.cases[${index}].id`);
     const expected = CASES[id];
+    string(item["title"], `demo.cases[${index}].title`);
+    string(item["explanation"], `demo.cases[${index}].explanation`);
+    string(item["nextCheck"], `demo.cases[${index}].nextCheck`);
+    const observedFindings = validateFindings(item["observedFindings"], `demo.cases[${index}].observedFindings`);
     if (item["relPath"] !== expected.fixturePath || item["expectedFinding"] !== expected.expectedFinding) {
       throw new Error(`demo case ${id} does not match the frozen fixture contract`);
     }
@@ -189,8 +364,16 @@ function projectDemo(raw: unknown, assertedCommit?: string): PublicDemoEvidenceV
     }
     const observedRuleIds: string[] = [];
     for (const rule of observedRules as unknown[]) observedRuleIds.push(string(rule, `demo case ${id} rule`));
-    const matchedExpectation = observedRuleIds.length === expected.expectedRuleIds.length
-      && observedRuleIds.every((rule, ruleIndex) => rule === expected.expectedRuleIds[ruleIndex]);
+    const findingRules = observedFindings.map(finding => finding.rule).sort();
+    if (JSON.stringify(observedRuleIds) !== JSON.stringify(findingRules)) {
+      throw new Error(`demo case ${id} observed rules contradict its findings`);
+    }
+    const matchedExpectation = expected.expectedFinding === "none"
+      ? observedFindings.length === 0
+      : observedFindings.length === 1
+        && observedFindings[0]!.rule === "contract_changed_without_test"
+        && observedFindings[0]!.tier === "advisory"
+        && observedFindings[0]!.severity === "warn";
     if (item["matchedExpectation"] !== matchedExpectation) {
       throw new Error(`demo case ${id} match flag contradicts its observed rules`);
     }
@@ -213,13 +396,18 @@ function projectDemo(raw: unknown, assertedCommit?: string): PublicDemoEvidenceV
     if (cases.some(item => !item.matchedExpectation)) {
       throw new Error("completed demo requires every frozen case expectation to match");
     }
-    if (manifest["reason"] !== null) throw new Error("completed demo cannot have a block reason");
-  } else if (cases.length !== 0 || manifest["verdict"] !== null) {
-    throw new Error("blocked demo cannot publish case outcomes or a verdict");
+    if (unassignedFindings.length !== 0) throw new Error("completed demo cannot contain unassigned findings");
+    if (manifest["reason"] !== null || manifest["detail"] !== null) throw new Error("completed demo cannot have block details");
+  } else {
+    enumValue(manifest["reason"], DEMO_BLOCK_REASONS, "demo.reason");
+    if (string(manifest["detail"], "demo.detail").length === 0) throw new Error("blocked demo detail must not be empty");
+    if (cases.length !== 0 && (cases.length !== CASE_IDS.length || CASE_IDS.some(id => !cases.some(item => item.id === id)))) {
+      throw new Error("blocked demo observations must contain all three frozen cases");
+    }
   }
 
   const packageVersion = manifest["packageVersion"] === null ? null : semver(manifest["packageVersion"], "demo.packageVersion");
-  const runtimeDigest = cli["runtimeDigest"] === null ? null : digest(cli["runtimeDigest"], "demo.cli.runtimeDigest");
+  const runtimeDigest = cliIdentity.runtimeDigest;
   const verdict = manifest["verdict"] === null ? null : enumValue(manifest["verdict"], ["PASS", "WARN", "BLOCK"] as const, "demo.verdict");
   const observedFixtureCommit = gitCommit(
     typeof manifest["fixtureHeadCommit"] === "string" ? manifest["fixtureHeadCommit"] : undefined,
@@ -230,6 +418,15 @@ function projectDemo(raw: unknown, assertedCommit?: string): PublicDemoEvidenceV
   }
   if (status === "COMPLETED") {
     if (verdict !== "WARN") throw new Error("demo global verdict contradicts the frozen WARN expectation");
+    digest(manifest["workingDiffDigest"], "demo.workingDiffDigest");
+  } else {
+    const hasObservations = cases.length > 0;
+    if (hasObservations !== (verdict !== null) || hasObservations !== (packageVersion !== null)
+      || hasObservations !== (manifest["workingDiffDigest"] !== null)
+      || (hasObservations && (observedFixtureCommit === null || runtimeDigest === null))) {
+      throw new Error("blocked demo observation fields are inconsistent");
+    }
+    if (manifest["workingDiffDigest"] !== null) digest(manifest["workingDiffDigest"], "demo.workingDiffDigest");
   }
   return {
     status,

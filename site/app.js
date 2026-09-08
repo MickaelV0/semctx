@@ -112,15 +112,18 @@ function demoEvidence(value) {
     if (typeof item.matchedExpectation !== "boolean") invalid("demo case match");
     const matched = item.observedRuleIds.length === expected.expectedRuleIds.length
       && item.observedRuleIds.every((rule, ruleIndex) => rule === expected.expectedRuleIds[ruleIndex]);
-    if (item.matchedExpectation !== matched) invalid("demo case match");
+    if ((status === "COMPLETED" || item.matchedExpectation) && item.matchedExpectation !== matched) invalid("demo case match");
   }
   if (status === "COMPLETED") {
     if (ids.size !== Object.keys(CASES).length || Object.keys(CASES).some(id => !ids.has(id))) invalid("completed demo cases");
     if (demo.cases.some(item => !item.matchedExpectation)) invalid("completed demo expectations");
     if (demo.packageVersion === null || demo.runtimeDigest === null || demo.fixtureCommit === null || verdict === null) invalid("completed demo identity");
     if (verdict !== "WARN") invalid("demo.verdict");
-  } else if (demo.cases.length !== 0 || verdict !== null) {
-    invalid("blocked demo outcomes");
+  } else if (demo.cases.length === 0) {
+    if (verdict !== null) invalid("blocked demo outcomes");
+  } else {
+    if (ids.size !== Object.keys(CASES).length || Object.keys(CASES).some(id => !ids.has(id))) invalid("blocked demo cases");
+    if (demo.packageVersion === null || demo.runtimeDigest === null || demo.fixtureCommit === null || verdict === null) invalid("blocked demo identity");
   }
   return demo;
 }

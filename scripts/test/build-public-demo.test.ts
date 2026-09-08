@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildPublicEvidence, runBuildPublicDemo } from "../build-public-demo";
 import { FIXTURE_CASES } from "../first-use-demo/fixture";
+import { sha256Hex } from "../first-use-demo/identity";
 
 const SHA = "a".repeat(64);
 const COMMIT = "b".repeat(40);
@@ -63,27 +64,52 @@ test("unknown, duplicate and incomplete CLI arguments fail before output", () =>
 });
 
 function demoManifest(): Record<string, unknown> {
+  const runtimeFiles = [
+    { path: "index.js", present: true, sizeBytes: 123, sha256: SHA },
+    { path: "semctx-index-worker.js", present: true, sizeBytes: 456, sha256: "d".repeat(64) },
+  ];
+  const cliPath = "C:\\private\\index.js";
+  const fixtureRoot = "C:\\private\\fixture";
+  const bun = "C:\\private\\bun.exe";
+  const command = (label: "version" | "setup" | "index" | "verify-diff", argv: string[]) => ({
+    label, argv, code: 0, signal: null, durationMs: 12.5,
+    stdoutFile: `raw/${label}.stdout.txt`, stdoutDigest: SHA,
+    stderrFile: `raw/${label}.stderr.txt`, stderrDigest: "e".repeat(64),
+  });
   return {
     kind: "semctx-first-use-demo-manifest-v1",
     status: "COMPLETED",
     reason: null,
-    detail: "C:\\private\\TOP_SECRET",
+    detail: null,
     createdAt: "2026-09-08T01:00:00.000Z",
     outDir: "C:\\private\\demo",
     cli: {
-      cliPath: "C:\\private\\semctx.js",
-      runtimeDigest: SHA,
+      cliPath,
+      cli: { path: cliPath, present: true, sizeBytes: 123, sha256: SHA },
+      indexWorker: { path: "C:\\private\\semctx-index-worker.js", present: true, sizeBytes: 456, sha256: "d".repeat(64) },
+      runtimeDigest: sha256Hex(JSON.stringify(runtimeFiles)),
       sourceProvenance: "secret local alias",
-      runtimeFiles: [{ path: "private.js", sha256: SHA }],
+      authenticatedSource: "UNKNOWN",
+      runtimeFiles,
     },
     fixture: { baseDigest: SHA, changedDigest: "c".repeat(64) },
     fixtureHeadCommit: COMMIT,
-    commands: [{ stdoutFile: "raw/TOP_SECRET.txt", stderrFile: "raw/private.txt" }],
+    commands: [
+      command("version", [bun, cliPath, "--version"]),
+      command("setup", [bun, cliPath, "setup", "--root", fixtureRoot, "--json"]),
+      command("index", [bun, cliPath, "index", "--root", fixtureRoot, "--json"]),
+      command("verify-diff", [bun, cliPath, "verify", "diff", "--root", fixtureRoot, "--json"]),
+    ],
     verdict: "WARN",
     cases: [
-      { id: "benign", relPath: "src/greeting.ts", expectedFinding: "none", observedRules: [], matchedExpectation: true, explanation: "secret", nextCheck: "secret" },
-      { id: "exported-contract-risk", relPath: "src/cart.ts", expectedFinding: "warn", observedRules: ["contract_changed_without_test"], matchedExpectation: true, explanation: "secret", nextCheck: "secret" },
-      { id: "unsupported-limit", relPath: "src/pricing.ts", expectedFinding: "none", observedRules: [], matchedExpectation: true, explanation: "secret", nextCheck: "secret" },
+      { id: "benign", title: "secret", relPath: "src/greeting.ts", expectedFinding: "none", observedRules: [], observedFindings: [], matchedExpectation: true, explanation: "secret", nextCheck: "secret" },
+      {
+        id: "exported-contract-risk", title: "secret", relPath: "src/cart.ts", expectedFinding: "warn",
+        observedRules: ["contract_changed_without_test"],
+        observedFindings: [{ rule: "contract_changed_without_test", tier: "advisory", severity: "warn", message: "secret", nodeIds: [], locations: [{ file: "src/cart.ts" }] }],
+        matchedExpectation: true, explanation: "secret", nextCheck: "secret",
+      },
+      { id: "unsupported-limit", title: "secret", relPath: "src/pricing.ts", expectedFinding: "none", observedRules: [], observedFindings: [], matchedExpectation: true, explanation: "secret", nextCheck: "secret" },
     ],
     unknowns: ["TOP_SECRET unknown text"],
     workingDiffDigest: SHA,
@@ -191,6 +217,7 @@ describe("public evidence projection", () => {
     const unmatchedExpectation = demoManifest();
     const expectedWarn = (unmatchedExpectation["cases"] as Record<string, unknown>[])[1]!;
     expectedWarn["observedRules"] = [];
+    expectedWarn["observedFindings"] = [];
     expectedWarn["matchedExpectation"] = false;
     unmatchedExpectation["verdict"] = "PASS";
     expect(() => buildPublicEvidence({ phase: "candidate", demo: unmatchedExpectation })).toThrow("every frozen case expectation");
@@ -206,6 +233,10 @@ describe("public evidence projection", () => {
     strictRule["verdict"] = "BLOCK";
     const strictCase = (strictRule["cases"] as Record<string, unknown>[])[1]!;
     strictCase["observedRules"] = ["contract_changed_without_test", "security_surface_without_verification"];
+    (strictCase["observedFindings"] as Record<string, unknown>[]).push({
+      rule: "security_surface_without_verification", tier: "strict", severity: "block",
+      message: "secret", nodeIds: [], locations: [{ file: "src/cart.ts" }],
+    });
     strictCase["matchedExpectation"] = true;
     expect(() => buildPublicEvidence({ phase: "candidate", demo: strictRule })).toThrow("match flag contradicts");
     strictCase["matchedExpectation"] = false;
@@ -214,8 +245,76 @@ describe("public evidence projection", () => {
     const duplicateAdvisory = demoManifest();
     const duplicateCase = (duplicateAdvisory["cases"] as Record<string, unknown>[])[1]!;
     duplicateCase["observedRules"] = ["contract_changed_without_test", "contract_changed_without_test"];
+    (duplicateCase["observedFindings"] as Record<string, unknown>[]).push(structuredClone(
+      (duplicateCase["observedFindings"] as Record<string, unknown>[])[0]!,
+    ));
     duplicateCase["matchedExpectation"] = true;
     expect(() => buildPublicEvidence({ phase: "candidate", demo: duplicateAdvisory })).toThrow("match flag contradicts");
+  });
+
+  test("completed demo requires coherent runtime, command, and working-diff observations", () => {
+    const missingCommands = demoManifest();
+    delete missingCommands["commands"];
+    expect(() => buildPublicEvidence({ phase: "candidate", demo: missingCommands })).toThrow("commands must be an array");
+
+    const malformedCommand = demoManifest();
+    ((malformedCommand["commands"] as Record<string, unknown>[])[2]!)["argv"] = ["other-bun", "other-cli", "index"];
+    expect(() => buildPublicEvidence({ phase: "candidate", demo: malformedCommand })).toThrow("same Bun executable and packaged CLI entry");
+
+    const failedCommand = demoManifest();
+    ((failedCommand["commands"] as Record<string, unknown>[])[3]!)["code"] = 3;
+    expect(() => buildPublicEvidence({ phase: "candidate", demo: failedCommand })).toThrow("exit successfully");
+
+    const missingCaptureDigest = demoManifest();
+    delete ((missingCaptureDigest["commands"] as Record<string, unknown>[])[0]!)["stdoutDigest"];
+    expect(() => buildPublicEvidence({ phase: "candidate", demo: missingCaptureDigest })).toThrow("stdoutDigest must be a string");
+
+    const runtimeDrift = demoManifest();
+    (runtimeDrift["cli"] as Record<string, unknown>)["runtimeDigest"] = "f".repeat(64);
+    expect(() => buildPublicEvidence({ phase: "candidate", demo: runtimeDrift })).toThrow("runtime digest contradicts");
+
+    const missingWorkingDiff = demoManifest();
+    delete missingWorkingDiff["workingDiffDigest"];
+    expect(() => buildPublicEvidence({ phase: "candidate", demo: missingWorkingDiff })).toThrow("workingDiffDigest must be a string");
+    const malformedWorkingDiff = demoManifest();
+    malformedWorkingDiff["workingDiffDigest"] = "not-a-digest";
+    expect(() => buildPublicEvidence({ phase: "candidate", demo: malformedWorkingDiff })).toThrow("workingDiffDigest must be a SHA-256 digest");
+  });
+
+  test("blocked demo accepts a command prefix and preserves complete parsed observations", () => {
+    const early = demoManifest();
+    early["status"] = "BLOCKED";
+    early["reason"] = "SETUP_CHILD_FAILED";
+    early["detail"] = "setup failed";
+    early["commands"] = (early["commands"] as unknown[]).slice(0, 2);
+    early["cases"] = [];
+    early["verdict"] = null;
+    early["workingDiffDigest"] = null;
+    early["packageVersion"] = null;
+    expect(buildPublicEvidence({ phase: "candidate", demo: early }).demo?.status).toBe("BLOCKED");
+
+    const observed = demoManifest();
+    observed["status"] = "BLOCKED";
+    observed["reason"] = "UNEXPECTED_ANALYSIS";
+    observed["detail"] = "frozen expectation mismatch";
+    const cart = (observed["cases"] as Record<string, unknown>[])[1]!;
+    ((cart["observedFindings"] as Record<string, unknown>[])[0]!)["tier"] = "strict";
+    cart["matchedExpectation"] = false;
+    observed["verdict"] = "WARN";
+    observed["unassignedFindings"] = [{
+      rule: "private-rule", tier: "advisory", severity: "warn", message: "TOP_SECRET finding",
+      nodeIds: ["private-node"], locations: [{ file: "C:\\private\\source.ts", line: 12 }],
+    }];
+    const projection = buildPublicEvidence({ phase: "candidate", demo: observed });
+    expect(projection.demo?.status).toBe("BLOCKED");
+    expect(projection.demo?.verdict).toBe("WARN");
+    expect(projection.demo?.cases[1]?.observedRuleIds).toEqual(["contract_changed_without_test"]);
+    expect(projection.demo?.cases[1]?.matchedExpectation).toBe(false);
+    expect(JSON.stringify(projection)).not.toContain("TOP_SECRET");
+
+    const malformed = structuredClone(observed);
+    ((malformed["unassignedFindings"] as Record<string, unknown>[])[0]!["locations"] as Record<string, unknown>[])[0]!["file"] = 42;
+    expect(() => buildPublicEvidence({ phase: "candidate", demo: malformed })).toThrow("locations[0].file must be a string");
   });
 
   test("public package versions follow strict SemVer", () => {
@@ -398,9 +497,21 @@ describe("static page contract", () => {
   test("browser reader accepts every projection produced by the public builder", () => {
     const blocked = demoManifest();
     blocked["status"] = "BLOCKED";
-    blocked["reason"] = "fixture runner unavailable";
+    blocked["reason"] = "VERIFY_OUTPUT_MALFORMED";
+    blocked["detail"] = "fixture runner output was malformed";
     blocked["cases"] = [];
     blocked["verdict"] = null;
+    blocked["workingDiffDigest"] = null;
+    blocked["packageVersion"] = null;
+
+    const observedBlocked = demoManifest();
+    observedBlocked["status"] = "BLOCKED";
+    observedBlocked["reason"] = "UNEXPECTED_ANALYSIS";
+    observedBlocked["detail"] = "frozen expectation mismatch";
+    const observedCart = (observedBlocked["cases"] as Record<string, unknown>[])[1]!;
+    ((observedCart["observedFindings"] as Record<string, unknown>[])[0]!)["tier"] = "strict";
+    observedCart["matchedExpectation"] = false;
+    observedBlocked["verdict"] = "WARN";
 
     const variants = [
       {
@@ -414,6 +525,14 @@ describe("static page contract", () => {
       {
         name: "blocked demo",
         evidence: buildPublicEvidence({ phase: "candidate", demo: blocked, now: () => "2026-09-08T03:00:00.000Z" }),
+        phase: "candidate",
+        demo: "blocked",
+        pilot: "not observed",
+        status: "Evidence is present with an unresolved or blocked demo.",
+      },
+      {
+        name: "blocked demo with parsed observations",
+        evidence: buildPublicEvidence({ phase: "candidate", demo: observedBlocked, now: () => "2026-09-08T03:00:00.000Z" }),
         phase: "candidate",
         demo: "blocked",
         pilot: "not observed",
