@@ -112,6 +112,10 @@ describe("OMP standard plugin manifests (ADR 0020)", () => {
       const plugins = copy.marketplace.plugins as Array<Record<string, unknown>>;
       (plugins[0]!.source as Record<string, unknown>).ref = "stable";
     })).toContain("OMP catalogue version or immutable git-subdir source mismatch");
+    expect(mutated((copy) => {
+      const plugins = copy.marketplace.plugins as Array<Record<string, unknown>>;
+      (plugins[0]!.source as Record<string, unknown>).sha = "0".repeat(40);
+    })).toContain("OMP catalogue git-subdir source fields are not closed");
   });
 });
 

@@ -174,6 +174,9 @@ export function ompStandardContractErrors(input: {
     entry !== null && typeof entry === "object" && !Array.isArray(entry) && (entry as JsonObject).name === "semctx"
   )) as JsonObject | undefined;
   const source = cataloguePlugin?.source as JsonObject | undefined;
+  if (!objectKeysEqual(source, ["source", "url", "path", "ref"])) {
+    errors.push("OMP catalogue git-subdir source fields are not closed");
+  }
   if (cataloguePlugin?.version !== releaseVersion || source?.source !== "git-subdir"
     || source.url !== "https://github.com/hoklims/semctx.git" || source.path !== "plugins/claude-code"
     || source.ref !== `v${releaseVersion}`) {
