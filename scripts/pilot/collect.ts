@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { lstatSync, mkdtempSync, readFileSync, readlinkSync, rmSync, statSync } from "node:fs";
+import { existsSync, lstatSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync } from "node:fs";
 import { devNull, tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, relative } from "node:path";
 import { VerifyReportSchema } from "../../packages/core/src/verify-report";
 import { computeGitignore } from "../../packages/semantic-engine/src/gitignore";
 import { discoverTypeScriptFiles, changedFilesBaseline, oneHopImportNeighborhoodBaseline } from "./baselines";
@@ -113,6 +113,21 @@ function trackedCheckoutDigest(
     // A gitlink can be present without an initialized submodule. Its index identity and kind are still bound.
     return { path, kind: "other" };
   }));
+}
+
+function splitNullTerminatedPaths(output: string): string[] {
+  return output.split("\0").filter((path) => path.length > 0);
+}
+
+function isConfinedMetadataPath(root: string, path: string): boolean {
+  if (!path.startsWith(".semctx/") || path.includes("\\") || path.includes(":")) return false;
+  if (!path.split("/").every((part) => part.length > 0 && part !== "." && part !== "..")) return false;
+  try {
+    const fromRoot = relative(realpathSync(root), realpathSync(join(root, path)));
+    return fromRoot.length > 0 && !isAbsolute(fromRoot) && fromRoot !== ".." && !fromRoot.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`);
+  } catch {
+    return false;
+  }
 }
 
 export interface CaseObservation {
@@ -320,12 +335,11 @@ function collectOneCase(
       trackedFilesDigest: trackedCheckoutDigest(workspace, trackedFiles),
       trackedIndexDigest: digestCanonical({ stage: trackedStageRun.stdout, flags: trackedFlagsRun.stdout }),
     };
-    const expectedGitignore = trackedFiles.includes(".gitignore")
-      ? computeGitignore(readFileSync(join(workspace, ".gitignore"), "utf8")).content
-      : null;
-    const expectedPostInitTrackedFilesDigest = expectedGitignore === null
-      ? gitIdentity.trackedFilesDigest
-      : trackedCheckoutDigest(workspace, trackedFiles, new Map([[".gitignore", expectedGitignore]]));
+    const gitignorePath = join(workspace, ".gitignore");
+    const expectedGitignore = computeGitignore(existsSync(gitignorePath) ? readFileSync(gitignorePath, "utf8") : undefined).content;
+    const expectedPostInitTrackedFilesDigest = trackedFiles.includes(".gitignore")
+      ? trackedCheckoutDigest(workspace, trackedFiles, new Map([[".gitignore", expectedGitignore]]))
+      : gitIdentity.trackedFilesDigest;
 
     const diff = git(
       ["-C", workspace, "diff", "--no-ext-diff", "--no-textconv", "--name-only", mergeBase, caseSpec.headRef, "--"],
@@ -369,7 +383,10 @@ function collectOneCase(
       const observedStage = git(["-C", workspace, "ls-files", "--stage"], workspace, timeoutMs, environment);
       const observedFlags = git(["-C", workspace, "ls-files", "-v"], workspace, timeoutMs, environment);
       const observedStatus = git(["-C", workspace, "status", "--porcelain=v1", "--untracked-files=no"], workspace, timeoutMs, environment);
-      if ([observedHead, observedTree, observedFiles, observedStage, observedFlags, observedStatus].some((run) => run.exitCode !== 0 || run.timedOut)) {
+      const observedUntracked = git(["-C", workspace, "ls-files", "--others", "--exclude-standard", "-z"], workspace, timeoutMs, environment);
+      const observedIgnored = git(["-C", workspace, "ls-files", "--others", "--ignored", "--exclude-standard", "-z"], workspace, timeoutMs, environment);
+      if ([observedHead, observedTree, observedFiles, observedStage, observedFlags, observedStatus, observedUntracked, observedIgnored]
+        .some((run) => run.exitCode !== 0 || run.timedOut)) {
         return `disposable checkout could not be verified after candidate ${stage}`;
       }
       const observedTrackedFiles = observedFiles.stdout.split("\n").map((line) => line.trim()).filter((line) => line.length > 0).sort();
@@ -379,12 +396,27 @@ function collectOneCase(
       } catch {
         return `disposable checkout changed after candidate ${stage}`;
       }
+      const otherPaths = [...new Set([
+        ...splitNullTerminatedPaths(observedUntracked.stdout),
+        ...splitNullTerminatedPaths(observedIgnored.stdout),
+      ])];
+      const unexpectedPath = otherPaths.find((path) => {
+        if (path === ".gitignore") {
+          try {
+            return readFileSync(gitignorePath, "utf8") !== expectedGitignore;
+          } catch {
+            return true;
+          }
+        }
+        return !isConfinedMetadataPath(workspace, path);
+      });
       if (
         observedHead.stdout.trim() !== gitIdentity.headRef
         || observedTree.stdout.trim() !== gitIdentity.headTree
         || (observedTrackedFilesDigest !== gitIdentity.trackedFilesDigest
           && observedTrackedFilesDigest !== expectedPostInitTrackedFilesDigest)
         || digestCanonical({ stage: observedStage.stdout, flags: observedFlags.stdout }) !== gitIdentity.trackedIndexDigest
+        || unexpectedPath !== undefined
       ) {
         return `disposable checkout changed after candidate ${stage}`;
       }
