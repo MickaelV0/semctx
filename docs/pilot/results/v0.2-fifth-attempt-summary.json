@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "experimentId": "impact-pilot-research-20260908051428-99b0bb09",
-  "protocolDigest": "sha256:c400ec908317de8bdcce58004d21710c61d2259fa87f27dcf6caf7efad84c02d",
+  "experimentId": "impact-pilot-research-20260908041950-65b70b2c",
+  "protocolDigest": "sha256:b4dcedd24392f476fb38685f34ac9308d023fade328a151227d4fb71e4a182e9",
   "evidenceKind": "research",
   "verdict": "EVIDENCE_MISSING",
   "totals": {
@@ -40,6 +40,6 @@
   ],
   "scores": null,
   "criticalMisses": [],
-  "totalDurationMs": 190477.2,
-  "generatedAt": "2026-09-08T05:20:34.917Z"
+  "totalDurationMs": 263979.64,
+  "generatedAt": "2026-09-08T04:25:17.024Z"
 }
