@@ -869,8 +869,9 @@ function makeObservation(
   const changedFiles = [...(spec?.changedFiles ?? [])];
   const changedAlgorithm = "changed-files-v1" as const;
   const importAlgorithm = "one-hop-import-neighborhood-v1" as const;
-  const invocation = (stdout = "") => ({
-    argv: ["bun"],
+  const candidatePrefix = ["C:\\pilot\\bun.exe", "run", "C:\\pilot\\runner\\apps\\cli\\dist\\index.js"];
+  const invocation = (argv: readonly string[], stdout = "") => ({
+    argv,
     exitCode: 0,
     timedOut: false,
     durationMs: 1,
@@ -906,9 +907,12 @@ function makeObservation(
     git: gitIdentity,
     changedFiles: [...(spec?.changedFiles ?? [])],
     semctx: {
-      init: invocation(),
-      index: invocation(),
-      verify: invocation(verifyStdout),
+      init: invocation([...candidatePrefix, "init", "--root", "C:\\pilot\\case"]),
+      index: invocation([...candidatePrefix, "index", "--root", "C:\\pilot\\case"]),
+      verify: invocation([
+        ...candidatePrefix, "verify", "diff", "--base", baseRef, "--head", headRef,
+        "--format", "json", "--root", "C:\\pilot\\case",
+      ], verifyStdout),
       verdict: "PASS",
       verificationStatus: "TRUSTED",
       sourceDriftReason: null,
@@ -1149,6 +1153,42 @@ describe("report identity and completeness gates", () => {
     expect(() => buildResultReport(protocol, { ...raw, observedBunVersion: "0.0.0" })).toThrow(/observedBunVersion/);
   });
 
+  test("rejects candidate command metadata that contradicts the frozen stage, range, entry, runtime, or root", () => {
+    const mutateArgv = (change: (argv: string[], observation: RawCollectionBundleV1["cases"][number]) => void): RawCollectionBundleV1 => {
+      const { raw } = fixture();
+      const observation = structuredClone(raw.cases[0]!);
+      if (observation.semctx === null) throw new Error("fixture must contain a semctx run");
+      change(observation.semctx.verify.argv as string[], observation);
+      return { ...raw, cases: [observation] };
+    };
+    const { protocol } = fixture();
+    expect(() => buildResultReport(protocol, mutateArgv((argv) => { argv[3] = "index"; }))).toThrow(/registered candidate stage/);
+    expect(() => buildResultReport(protocol, mutateArgv((argv) => { argv[6] = "c".repeat(40); }))).toThrow(/frozen Git range/);
+    expect(() => buildResultReport(protocol, mutateArgv((argv) => { argv[2] = "C:\\pilot\\runner\\other.js"; }))).toThrow(/frozen candidate entry path/);
+    expect(() => buildResultReport(protocol, mutateArgv((argv) => { argv[0] = "C:\\other\\bun.exe"; }))).toThrow(/same Bun executable/);
+    expect(() => buildResultReport(protocol, mutateArgv((argv) => { argv[argv.length - 1] = "C:\\other\\case"; }))).toThrow(/same disposable root/);
+  });
+
+  test("accepts portable Windows and POSIX candidate entry paths, including empty failed-stage output", () => {
+    for (const entry of ["C:\\pilot\\runner\\apps\\cli\\dist\\index.js", "/pilot/runner/apps/cli/dist/index.js"]) {
+      const { protocol, raw } = fixture();
+      const observation = structuredClone(raw.cases[0]!);
+      if (observation.semctx === null) throw new Error("fixture must contain a semctx run");
+      for (const invocation of [observation.semctx.init, observation.semctx.index, observation.semctx.verify]) {
+        invocation.argv = [...invocation.argv];
+        (invocation.argv as string[])[2] = entry;
+      }
+      observation.semctx.init.exitCode = 2;
+      observation.semctx.init.stdout = "";
+      observation.semctx.init.stderr = "";
+      observation.semctx.init.outputDigest = toolOutputDigest("", "");
+      observation.semctx.verificationStatus = "PREREQUISITE_FAILED";
+      observation.semctx.verdict = null;
+      observation.semctx.suggestedFiles = [];
+      expect(() => buildResultReport(protocol, { ...raw, cases: [observation] })).not.toThrow();
+    }
+  });
+
   test("rejects a raw Git identity that does not bind the frozen case", () => {
     const { protocol, raw } = fixture();
     const observation = raw.cases[0]!;
@@ -1356,6 +1396,11 @@ describe("local source and output path safety", () => {
     expect(Object.getPrototypeOf(value.paths)).toBeNull();
     expect(Object.hasOwn(value.paths, "__proto__")).toBe(true);
     expect(value.paths["__proto__"]).toBe("C:/private/repo");
+  });
+
+  test("rejects relative local source paths before collection", () => {
+    expect(() => validateLocalSourcesFile({ schemaVersion: 1, paths: { "case-1": "relative/repo" } }))
+      .toThrow(/absolute local repository path/);
   });
 
   test("refuses exclusive output through a symlink or junction ancestor", () => {

@@ -166,7 +166,11 @@ export function validateLocalSourcesFile(value: unknown, path = "sources"): Loca
   const pathsRecord = requireRecord(record.paths, `${path}.paths`);
   const paths = Object.create(null) as Record<string, string>;
   for (const [caseId, sourcePath] of Object.entries(pathsRecord)) {
-    paths[caseId] = requireString(sourcePath, `${path}.paths.${caseId}`);
+    const validatedPath = requireString(sourcePath, `${path}.paths.${caseId}`);
+    if (!isAbsolute(validatedPath)) {
+      throw new PilotValidationError(`${path}.paths.${caseId}`, "must be an absolute local repository path");
+    }
+    paths[caseId] = validatedPath;
   }
   return { schemaVersion: 1, paths };
 }
