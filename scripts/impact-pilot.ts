@@ -5,7 +5,7 @@
  * Subcommands: draft, freeze, collect, report. See docs/pilot/README.md for the full walkthrough.
  * No recruitment, no human events: this tool only ever produces automated local observations.
  */
-import { closeSync, existsSync, fsyncSync, linkSync, openSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, linkSync, lstatSync, openSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { hasFlag, optionalFlag, parseFlags, requireFlag } from "./pilot/cli-args";
 import { collectCases, validateLocalSourcesFile, validateRawCollectionBundle } from "./pilot/collect";
@@ -19,9 +19,19 @@ function readJson(path: string): unknown {
 }
 
 /** Freeze/collect/report artifacts are immutable once written: never silently overwritten. */
-function writeJsonExclusive(path: string, value: unknown): void {
+export function writeJsonExclusive(path: string, value: unknown): void {
   const absolute = resolve(process.cwd(), path);
-  if (existsSync(absolute)) {
+  const assertSafeDestination = (): void => {
+    for (let cursor = absolute;; cursor = dirname(cursor)) {
+      const stat = lstatSync(cursor, { throwIfNoEntry: false });
+      if (stat?.isSymbolicLink()) {
+        throw new Error(`refusing output through a symbolic link or junction: ${cursor}`);
+      }
+      if (cursor === dirname(cursor)) break;
+    }
+  };
+  assertSafeDestination();
+  if (lstatSync(absolute, { throwIfNoEntry: false }) !== undefined) {
     throw new Error(`refusing to overwrite existing file: ${absolute} (this tool never rewrites an artifact)`);
   }
   const tmp = resolve(dirname(absolute), `.${crypto.randomUUID()}.impact-pilot.tmp`);
@@ -33,6 +43,7 @@ function writeJsonExclusive(path: string, value: unknown): void {
     closeSync(handle);
     handle = undefined;
     // Linking is atomic and refuses an existing destination on every supported host.
+    assertSafeDestination();
     linkSync(tmp, absolute);
   } finally {
     if (handle !== undefined) closeSync(handle);
