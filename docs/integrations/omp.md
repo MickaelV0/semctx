@@ -14,7 +14,12 @@ subdirectory root. MCP launches `bun` with `${PLUGIN_ROOT}/dist/semctx-mcp.js`, 
 Requirements: Oh My Pi `18.1.11` (the currently observed Agent-Plugins baseline) and Bun `>=1.4.0`
 on PATH. Other OMP versions remain unverified.
 
+Run these commands from the intended project directory. Create its `.omp` directory first:
+OMP 18.1.11 searches for an ancestor `.omp` before falling back to the Git root, so `--scope project`
+alone may select an ancestor profile when the project has no `.omp` directory.
+
 ```bash
+bun -e "require('node:fs').mkdirSync('.omp', { recursive: true })"
 omp plugin marketplace add hoklims/semctx
 omp plugin install semctx@semctx-stable --scope project
 ```
