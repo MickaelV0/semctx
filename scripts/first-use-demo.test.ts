@@ -2,10 +2,10 @@ import { afterAll, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { FIXTURE_CASES } from "./first-use-demo/fixture";
 import { identifyPackagedCli } from "./first-use-demo/identity";
 import { asVerifyReport, runFirstUseDemo, MANIFEST_FILENAME } from "./first-use-demo/runner";
-import { buildPortableBundle, CLI_BUNDLE_SPEC, INDEX_WORKER_BUNDLE_SPEC, writePortableTypeScriptLibs } from "./build-plugin-runtime";
 
 const repoRoot = resolve(import.meta.dir, "..");
 const scratch = realpathSync(mkdtempSync(join(tmpdir(), "semctx-first-use-demo-test-")));
@@ -41,9 +41,23 @@ else if (cmd === 'verify') {
 test("three controlled changes produce the actual packaged warning and no fabricated per-file verdict", async () => {
   const runtime = fresh("golden-runtime"); mkdirSync(runtime);
   const cliPath = join(runtime, "index.js");
-  await Bun.write(cliPath, await buildPortableBundle(CLI_BUNDLE_SPEC));
-  await Bun.write(join(runtime, INDEX_WORKER_BUNDLE_SPEC.name), await buildPortableBundle(INDEX_WORKER_BUNDLE_SPEC));
-  writePortableTypeScriptLibs(runtime);
+  // Bun.build can poison the test runner's workspace resolver on POSIX. Keep both
+  // the compiler process and its output isolated, as in plugins/plugin-build.test.ts.
+  const builder = `
+import { join } from "node:path";
+import { buildPortableBundle, CLI_BUNDLE_SPEC, INDEX_WORKER_BUNDLE_SPEC, writePortableTypeScriptLibs } from ${JSON.stringify(pathToFileURL(join(repoRoot, "scripts", "build-plugin-runtime.ts")).href)};
+const runtime = ${JSON.stringify(runtime)};
+await Bun.write(join(runtime, "index.js"), await buildPortableBundle(CLI_BUNDLE_SPEC));
+await Bun.write(join(runtime, INDEX_WORKER_BUNDLE_SPEC.name), await buildPortableBundle(INDEX_WORKER_BUNDLE_SPEC));
+writePortableTypeScriptLibs(runtime);
+`;
+  const child = Bun.spawn([process.execPath, "--eval", builder], {
+    cwd: repoRoot, stdin: "ignore", stdout: "pipe", stderr: "pipe",
+  });
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+  ]);
+  expect(exitCode, `isolated demo build failed\nstdout:\n${stdout}\nstderr:\n${stderr}`).toBe(0);
   const outDir = fresh("golden");
   const outcome = runFirstUseDemo({ cliPath, outDir });
   expect(outcome.status, outcome.detail ?? "").toBe("COMPLETED");
