@@ -36,9 +36,10 @@ function validateInvocationCommands(
   if (observation.git === null || observation.semctx === null) return;
   const { init, index, verify } = observation.semctx;
   const executable = init.argv[0];
+  const entry = init.argv[2];
   const root = init.argv.at(-1);
-  if (executable === undefined || root === undefined || root.length === 0) {
-    throw new PilotValidationError(`${path}.init.argv`, "must name the Bun executable and disposable root");
+  if (executable === undefined || entry === undefined || root === undefined || root.length === 0) {
+    throw new PilotValidationError(`${path}.init.argv`, "must name the Bun executable, candidate entry, and disposable root");
   }
   for (const [stage, invocation] of ([
     ["init", init],
@@ -48,17 +49,17 @@ function validateInvocationCommands(
     if (invocation.argv[0] !== executable) {
       throw new PilotValidationError(`${path}.${stage}.argv`, "must use the same Bun executable as init");
     }
-    if (invocation.argv[1] !== "run" || !endsWithPath(invocation.argv[2] ?? "", protocol.candidate.entryPath)) {
+    if (invocation.argv[1] !== "run" || invocation.argv[2] !== entry || !endsWithPath(entry, protocol.candidate.entryPath)) {
       throw new PilotValidationError(`${path}.${stage}.argv`, "must name the frozen candidate entry path");
     }
     if (invocation.argv.at(-2) !== "--root" || invocation.argv.at(-1) !== root) {
       throw new PilotValidationError(`${path}.${stage}.argv`, "must use the same disposable root as init");
     }
   }
-  const expectedInit = [executable, "run", init.argv[2]!, "init", "--root", root];
-  const expectedIndex = [executable, "run", index.argv[2]!, "index", "--root", root];
+  const expectedInit = [executable, "run", entry, "init", "--root", root];
+  const expectedIndex = [executable, "run", entry, "index", "--root", root];
   const expectedVerify = [
-    executable, "run", verify.argv[2]!, "verify", "diff",
+    executable, "run", entry, "verify", "diff",
     "--base", observation.git.baseRef,
     "--head", observation.git.headRef,
     "--format", "json",

@@ -1167,6 +1167,14 @@ describe("report identity and completeness gates", () => {
     expect(() => buildResultReport(protocol, mutateArgv((argv) => { argv[2] = "C:\\pilot\\runner\\other.js"; }))).toThrow(/frozen candidate entry path/);
     expect(() => buildResultReport(protocol, mutateArgv((argv) => { argv[0] = "C:\\other\\bun.exe"; }))).toThrow(/same Bun executable/);
     expect(() => buildResultReport(protocol, mutateArgv((argv) => { argv[argv.length - 1] = "C:\\other\\case"; }))).toThrow(/same disposable root/);
+
+    const differentEntry = fixture().raw;
+    const differentEntryObservation = structuredClone(differentEntry.cases[0]!);
+    if (differentEntryObservation.semctx === null) throw new Error("fixture must contain a semctx run");
+    (differentEntryObservation.semctx.index.argv as string[])[2] = "C:\\other\\apps\\cli\\dist\\index.js";
+    (differentEntryObservation.semctx.verify.argv as string[])[2] = "C:\\other\\apps\\cli\\dist\\index.js";
+    expect(() => buildResultReport(protocol, { ...differentEntry, cases: [differentEntryObservation] }))
+      .toThrow(/frozen candidate entry path/);
   });
 
   test("accepts portable Windows and POSIX candidate entry paths, including empty failed-stage output", () => {
