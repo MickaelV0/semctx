@@ -12,6 +12,7 @@ import {
   requireBoolean,
   requireEnum,
   requireExactKeys,
+  requireGitSha,
   requireInteger,
   requireRecord,
   requireSha256,
@@ -55,6 +56,13 @@ export interface BaselineCaseRun {
   durationMs: number;
 }
 
+export interface CaseGitIdentity {
+  baseRef: string;
+  headRef: string;
+  mergeBase: string;
+  range: string;
+}
+
 export interface CaseObservation {
   caseId: string;
   /** `FAILED` is an infrastructure failure (missing source, clone/checkout); a candidate exit
@@ -62,6 +70,7 @@ export interface CaseObservation {
    *  the denominator rather than collapse into "missing evidence". */
   status: "OBSERVED" | "FAILED";
   failureReason: string | null;
+  git: CaseGitIdentity | null;
   changedFiles: readonly string[];
   semctx: SemctxCaseRun | null;
   baselineChangedFiles: BaselineCaseRun | null;
@@ -98,7 +107,7 @@ export function validateLocalSourcesFile(value: unknown, path = "sources"): Loca
 export function parseVerifyReport(
   stdout: string,
   exitCode: number,
-  expected: { baseRef: string; headRef: string; changedFiles: readonly string[] },
+  expected: CaseGitIdentity & { changedFiles: readonly string[] },
 ): Pick<SemctxCaseRun, "verdict" | "verificationStatus" | "suggestedFiles"> {
   let parsed: unknown;
   try {
@@ -126,6 +135,8 @@ export function parseVerifyReport(
   if (
     report.base !== expected.baseRef
     || report.head !== expected.headRef
+    || report.mergeBase !== expected.mergeBase
+    || report.range !== expected.range
     || JSON.stringify(reportedChangedFiles) !== JSON.stringify(expectedChangedFiles)
   ) {
     return { verdict: null, verificationStatus: "DIFF_MISMATCH", suggestedFiles: [] };
@@ -197,6 +208,7 @@ function collectOneCase(
     caseId: caseSpec.caseId,
     status: "FAILED",
     failureReason: reason,
+    git: null,
     changedFiles: [],
     semctx: null,
     baselineChangedFiles: null,
@@ -226,8 +238,20 @@ function collectOneCase(
     const baseExists = git(["-C", workspace, "cat-file", "-e", `${caseSpec.baseRef}^{commit}`], workspace, timeoutMs, environment);
     if (baseExists.exitCode !== 0 || baseExists.timedOut) return failed(`baseRef not resolvable in clone: ${caseSpec.baseRef}`);
 
+    const merge = git(["-C", workspace, "merge-base", "--", caseSpec.baseRef, caseSpec.headRef], workspace, timeoutMs, environment);
+    const mergeBase = merge.stdout.trim();
+    if (merge.exitCode !== 0 || merge.timedOut || !/^[0-9a-f]{40}$/.test(mergeBase)) {
+      return failed(`could not resolve a merge-base for the frozen range: ${merge.stderr.slice(0, 500)}`);
+    }
+    const gitIdentity: CaseGitIdentity = {
+      baseRef: caseSpec.baseRef,
+      headRef: caseSpec.headRef,
+      mergeBase,
+      range: `${mergeBase.slice(0, 12)}..${caseSpec.headRef.slice(0, 12)}`,
+    };
+
     const diff = git(
-      ["-C", workspace, "diff", "--no-ext-diff", "--no-textconv", "--name-only", caseSpec.baseRef, caseSpec.headRef],
+      ["-C", workspace, "diff", "--no-ext-diff", "--no-textconv", "--name-only", mergeBase, caseSpec.headRef, "--"],
       workspace,
       timeoutMs,
       environment,
@@ -255,7 +279,7 @@ function collectOneCase(
       ? { verdict: null, verificationStatus: "PREREQUISITE_FAILED" as const, suggestedFiles: [] }
       : verify.timedOut
         ? { verdict: null, verificationStatus: "TIMED_OUT" as const, suggestedFiles: [] }
-        : parseVerifyReport(verify.stdout, verify.exitCode, caseSpec);
+        : parseVerifyReport(verify.stdout, verify.exitCode, { ...gitIdentity, changedFiles: caseSpec.changedFiles });
 
     const listFiles = git(["-C", workspace, "ls-files"], workspace, timeoutMs, environment);
     if (listFiles.exitCode !== 0 || listFiles.timedOut) return failed(`git ls-files failed: ${listFiles.stderr.slice(0, 500)}`);
@@ -282,6 +306,7 @@ function collectOneCase(
       caseId: caseSpec.caseId,
       status: "OBSERVED",
       failureReason: null,
+      git: gitIdentity,
       changedFiles,
       semctx: { init, index, verify, ...verification },
       baselineChangedFiles,
@@ -391,7 +416,7 @@ export function validateRawCollectionBundle(value: unknown, path = "raw"): RawCo
     const caseRecord = requireRecord(c, `${path}.cases[${i}]`);
     requireExactKeys(
       caseRecord,
-      ["caseId", "status", "failureReason", "changedFiles", "semctx", "baselineChangedFiles", "baselineImportNeighborhood"],
+      ["caseId", "status", "failureReason", "git", "changedFiles", "semctx", "baselineChangedFiles", "baselineImportNeighborhood"],
       `${path}.cases[${i}]`,
     );
     const status = caseRecord.status;
@@ -402,16 +427,28 @@ export function validateRawCollectionBundle(value: unknown, path = "raw"): RawCo
     const changedFiles = requireStringArray(caseRecord.changedFiles, `${path}.cases[${i}].changedFiles`);
     const failureReason = caseRecord.failureReason === null ? null : requireString(caseRecord.failureReason, `${path}.cases[${i}].failureReason`);
     if (status === "FAILED") {
-      if (caseRecord.semctx !== null || caseRecord.baselineChangedFiles !== null || caseRecord.baselineImportNeighborhood !== null) {
-        throw new PilotValidationError(`${path}.cases[${i}]`, "FAILED cases must not contain tool or baseline runs");
+      if (caseRecord.git !== null || caseRecord.semctx !== null || caseRecord.baselineChangedFiles !== null || caseRecord.baselineImportNeighborhood !== null) {
+        throw new PilotValidationError(`${path}.cases[${i}]`, "FAILED cases must not contain Git identity, tool, or baseline runs");
       }
       if (changedFiles.length !== 0) {
         throw new PilotValidationError(`${path}.cases[${i}].changedFiles`, "FAILED cases must not claim observed changed files");
       }
-      return { caseId, status, failureReason, changedFiles, semctx: null, baselineChangedFiles: null, baselineImportNeighborhood: null };
+      return { caseId, status, failureReason, git: null, changedFiles, semctx: null, baselineChangedFiles: null, baselineImportNeighborhood: null };
     }
     if (failureReason !== null) {
       throw new PilotValidationError(`${path}.cases[${i}].failureReason`, "OBSERVED cases must have a null failureReason");
+    }
+    const gitRecord = requireRecord(caseRecord.git, `${path}.cases[${i}].git`);
+    requireExactKeys(gitRecord, ["baseRef", "headRef", "mergeBase", "range"], `${path}.cases[${i}].git`);
+    const gitIdentity: CaseGitIdentity = {
+      baseRef: requireGitSha(gitRecord.baseRef, `${path}.cases[${i}].git.baseRef`),
+      headRef: requireGitSha(gitRecord.headRef, `${path}.cases[${i}].git.headRef`),
+      mergeBase: requireGitSha(gitRecord.mergeBase, `${path}.cases[${i}].git.mergeBase`),
+      range: requireString(gitRecord.range, `${path}.cases[${i}].git.range`),
+    };
+    const canonicalRange = `${gitIdentity.mergeBase.slice(0, 12)}..${gitIdentity.headRef.slice(0, 12)}`;
+    if (gitIdentity.range !== canonicalRange) {
+      throw new PilotValidationError(`${path}.cases[${i}].git.range`, "does not match the canonical merge-base..head range");
     }
     const semctxRecord = requireRecord(caseRecord.semctx, `${path}.cases[${i}].semctx`);
     requireExactKeys(
@@ -461,6 +498,7 @@ export function validateRawCollectionBundle(value: unknown, path = "raw"): RawCo
       caseId,
       status,
       failureReason,
+      git: gitIdentity,
       changedFiles,
       semctx,
       baselineChangedFiles: baselineOf("baselineChangedFiles"),

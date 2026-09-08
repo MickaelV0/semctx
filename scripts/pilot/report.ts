@@ -32,11 +32,23 @@ export function validateBundleAgainstProtocol(protocol: FrozenProtocolV1, raw: R
   for (const observation of raw.cases) {
     const spec = corpusById.get(observation.caseId)!;
     if (observation.status !== "OBSERVED") continue;
+    if (
+      observation.git === null
+      || observation.git.baseRef !== spec.baseRef
+      || observation.git.headRef !== spec.headRef
+      || observation.git.range !== `${observation.git.mergeBase.slice(0, 12)}..${observation.git.headRef.slice(0, 12)}`
+    ) {
+      throw new PilotValidationError(`raw.cases.${observation.caseId}.git`, "does not bind the frozen base/head and canonical merge-base range");
+    }
     if (JSON.stringify([...observation.changedFiles].sort()) !== JSON.stringify([...spec.changedFiles].sort())) {
       throw new PilotValidationError(`raw.cases.${observation.caseId}.changedFiles`, "does not match the frozen protocol");
     }
     if (observation.semctx?.verificationStatus === "TRUSTED") {
-      const interpreted = parseVerifyReport(observation.semctx.verify.stdout, observation.semctx.verify.exitCode, spec);
+      const interpreted = parseVerifyReport(
+        observation.semctx.verify.stdout,
+        observation.semctx.verify.exitCode,
+        { ...observation.git, changedFiles: spec.changedFiles },
+      );
       if (
         interpreted.verificationStatus !== "TRUSTED"
         || interpreted.verdict !== observation.semctx.verdict
