@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "experimentId": "impact-pilot-research-20260908131726-e3309a1a",
-  "protocolDigest": "sha256:b9ff752dbface5eb1052e38b39f9be366cf3ae6c9bfc47ba9a2deb14602b0108",
+  "experimentId": "experiment-1eaab6944d8d",
+  "protocolDigest": "sha256:1eaab6944d8d310ca0ed09a031bb1c4ac8a50eaf49714eb6e3598515895501df",
   "evidenceKind": "research",
   "verdict": "EVIDENCE_MISSING",
   "totals": {
@@ -14,32 +14,35 @@
   },
   "perRepository": [
     {
-      "repositoryAlias": "gvergnaud-ts-pattern",
+      "repositoryAlias": "repository-3",
       "totalCases": 10,
       "observedCases": 10,
       "failedCases": 0,
       "untrustedCases": 0,
-      "labelledCases": 0
+      "labelledCases": 0,
+      "scores": null
     },
     {
-      "repositoryAlias": "nanostores-nanostores",
+      "repositoryAlias": "repository-2",
       "totalCases": 10,
       "observedCases": 10,
       "failedCases": 0,
       "untrustedCases": 0,
-      "labelledCases": 0
+      "labelledCases": 0,
+      "scores": null
     },
     {
-      "repositoryAlias": "remeda-remeda",
+      "repositoryAlias": "repository-1",
       "totalCases": 10,
       "observedCases": 10,
       "failedCases": 0,
       "untrustedCases": 0,
-      "labelledCases": 0
+      "labelledCases": 0,
+      "scores": null
     }
   ],
   "scores": null,
   "criticalMisses": [],
-  "totalDurationMs": 218758.71,
-  "generatedAt": "2026-09-08T13:24:28.237Z"
+  "totalDurationMs": 215050.42000000004,
+  "generatedAt": "2026-09-08T16:00:36.718Z"
 }
