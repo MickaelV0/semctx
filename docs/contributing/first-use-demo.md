@@ -24,6 +24,8 @@ contain machine paths; publish only the dedicated public projection. The manifes
 CLI and support-file digests, the runtime digest, reported package version, fixed fixture identities,
 Git base and working-diff digest. The raw global verdict and real exit codes are never rewritten.
 A genuine BLOCK (exit 3) remains a product outcome; malformed output and unexpected exits fail the run.
+`COMPLETED` also requires every frozen case expectation to match and the fixture Git HEAD to remain
+complete and unchanged; mismatches retain their raw output in a blocked run.
 
 `--expect-digest SHA256` verifies a previously selected complete runtime digest before execution.
 The runner verifies the artifact again afterward. `--source LABEL` is only an unverified caller

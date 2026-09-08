@@ -207,6 +207,9 @@ function projectDemo(raw: unknown, assertedCommit?: string): PublicDemoEvidenceV
     if (cases.length !== CASE_IDS.length || CASE_IDS.some(id => !cases.some(item => item.id === id))) {
       throw new Error("completed demo must contain all three frozen cases");
     }
+    if (cases.some(item => !item.matchedExpectation)) {
+      throw new Error("completed demo requires every frozen case expectation to match");
+    }
     if (manifest["reason"] !== null) throw new Error("completed demo cannot have a block reason");
   } else if (cases.length !== 0 || manifest["verdict"] !== null) {
     throw new Error("blocked demo cannot publish case outcomes or a verdict");
@@ -215,8 +218,12 @@ function projectDemo(raw: unknown, assertedCommit?: string): PublicDemoEvidenceV
   const packageVersion = manifest["packageVersion"] === null ? null : semver(manifest["packageVersion"], "demo.packageVersion");
   const runtimeDigest = cli["runtimeDigest"] === null ? null : digest(cli["runtimeDigest"], "demo.cli.runtimeDigest");
   const verdict = manifest["verdict"] === null ? null : enumValue(manifest["verdict"], ["PASS", "WARN", "BLOCK"] as const, "demo.verdict");
-  if (status === "COMPLETED" && (packageVersion === null || runtimeDigest === null || verdict === null)) {
-    throw new Error("completed demo requires version, runtime digest and verdict");
+  const observedFixtureCommit = gitCommit(
+    typeof manifest["fixtureHeadCommit"] === "string" ? manifest["fixtureHeadCommit"] : undefined,
+    "demo observed fixture commit",
+  );
+  if (status === "COMPLETED" && (packageVersion === null || runtimeDigest === null || observedFixtureCommit === null || verdict === null)) {
+    throw new Error("completed demo requires version, runtime digest, observed fixture commit and verdict");
   }
   if (status === "COMPLETED") {
     const severities = cases.flatMap(item => item.observedRuleIds.map(rule => RULE_SEVERITIES[rule as keyof typeof RULE_SEVERITIES]));
@@ -230,7 +237,9 @@ function projectDemo(raw: unknown, assertedCommit?: string): PublicDemoEvidenceV
     runtimeDigest,
     fixtureBaseDigest,
     fixtureChangedDigest,
-    fixtureCommit: gitCommit(assertedCommit ?? (typeof manifest["fixtureHeadCommit"] === "string" ? manifest["fixtureHeadCommit"] : undefined), "demo fixture commit"),
+    fixtureCommit: assertedCommit === undefined
+      ? observedFixtureCommit
+      : gitCommit(assertedCommit, "demo fixture commit"),
     verdict,
     unknownCount: unknowns.length,
     cases,

@@ -185,11 +185,25 @@ describe("public evidence projection", () => {
     const falseGlobalPass = demoManifest();
     falseGlobalPass["verdict"] = "PASS";
     expect(() => buildPublicEvidence({ phase: "candidate", demo: falseGlobalPass })).toThrow("global verdict contradicts");
+    const unmatchedExpectation = demoManifest();
+    const expectedWarn = (unmatchedExpectation["cases"] as Record<string, unknown>[])[1]!;
+    expectedWarn["observedRules"] = [];
+    expectedWarn["matchedExpectation"] = false;
+    unmatchedExpectation["verdict"] = "PASS";
+    expect(() => buildPublicEvidence({ phase: "candidate", demo: unmatchedExpectation })).toThrow("every frozen case expectation");
+    const missingObservedCommit = demoManifest();
+    missingObservedCommit["fixtureHeadCommit"] = null;
+    expect(() => buildPublicEvidence({
+      phase: "candidate", demo: missingObservedCommit, demoFixtureCommit: COMMIT,
+    })).toThrow("observed fixture commit");
+    const malformedObservedCommit = demoManifest();
+    malformedObservedCommit["fixtureHeadCommit"] = "not-a-commit";
+    expect(() => buildPublicEvidence({ phase: "candidate", demo: malformedObservedCommit })).toThrow("full lowercase Git commit");
     const strictRule = demoManifest();
     strictRule["verdict"] = "WARN";
-    const strictCase = (strictRule["cases"] as Record<string, unknown>[])[0]!;
-    strictCase["observedRules"] = ["security_surface_without_verification"];
-    strictCase["matchedExpectation"] = false;
+    const strictCase = (strictRule["cases"] as Record<string, unknown>[])[1]!;
+    strictCase["observedRules"] = ["contract_changed_without_test", "security_surface_without_verification"];
+    strictCase["matchedExpectation"] = true;
     expect(() => buildPublicEvidence({ phase: "candidate", demo: strictRule })).toThrow("global verdict contradicts");
     strictRule["verdict"] = "BLOCK";
     expect(buildPublicEvidence({ phase: "candidate", demo: strictRule }).demo?.verdict).toBe("BLOCK");
@@ -306,11 +320,20 @@ describe("public evidence projection", () => {
 describe("static page contract", () => {
   test("browser reader rejects incompatible or malformed evidence before observation DOM updates", () => {
     const valid = JSON.parse(readFileSync(join(import.meta.dir, "..", "..", "site", "evidence.json"), "utf8")) as Record<string, unknown>;
+    const missingFixtureCommit = structuredClone(valid);
+    (missingFixtureCommit["demo"] as Record<string, unknown>)["fixtureCommit"] = null;
+    const unmatchedDemo = structuredClone(valid);
+    const unmatched = ((unmatchedDemo["demo"] as Record<string, unknown>)["cases"] as Record<string, unknown>[])[1]!;
+    unmatched["observedRuleIds"] = [];
+    unmatched["matchedExpectation"] = false;
+    (unmatchedDemo["demo"] as Record<string, unknown>)["verdict"] = "PASS";
     for (const hostile of [
       { ...valid, schemaVersion: 2 },
       { ...valid, kind: "foreign-evidence" },
       { ...valid, phase: "future" },
       { ...valid, demo: { ...(valid["demo"] as Record<string, unknown>), cases: "not-an-array", verdict: "BLOCK" } },
+      missingFixtureCommit,
+      unmatchedDemo,
       { ...valid, pilot: { ...(valid["pilot"] as Record<string, unknown>), observedCases: 29 } },
       { ...valid, disclosures: { ...(valid["disclosures"] as Record<string, unknown>), scope: "forged scope" } },
     ]) {

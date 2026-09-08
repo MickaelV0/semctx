@@ -6,8 +6,8 @@
  *  - Never replace existing output, even when it resembles this tool's own manifest.
  *  - Every command is a real child process; every captured code/stdout/stderr is verbatim.
  *  - A missing case, a malformed report, or an unexpected child exit is `BLOCKED`, never a
- *    fabricated `COMPLETED`. Documented per-case expectations are recorded as an informational
- *    match/mismatch, never used to rewrite what the packaged CLI actually said.
+ *    fabricated `COMPLETED`. Documented per-case expectations never rewrite what the packaged CLI
+ *    said, but a mismatch keeps the frozen demonstration incomplete.
  */
 
 import { lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -34,12 +34,14 @@ export type DemoBlockReason =
   | "INDEX_CHILD_FAILED"
   | "OUTPUT_EXISTS_NOT_EMPTY"
   | "FIXTURE_GIT_INIT_FAILED"
+  | "FIXTURE_GIT_IDENTITY_FAILED"
   | "SETUP_CHILD_FAILED"
   | "SETUP_OUTPUT_MALFORMED"
   | "SETUP_NOT_READY"
   | "VERIFY_CHILD_UNEXPECTED_EXIT"
   | "VERIFY_OUTPUT_MALFORMED"
   | "VERIFY_OUTPUT_INCOMPLETE"
+  | "UNEXPECTED_ANALYSIS"
   | "FIXTURE_DRIFT";
 
 export interface RecordedCommand {
@@ -233,7 +235,14 @@ export function runFirstUseDemo(options: RunFirstUseDemoOptions): DemoOutcome {
       ));
     }
     const headCommit = runGit(["rev-parse", "HEAD"], fixtureDir);
-    const fixtureHeadCommit = headCommit.code === 0 ? headCommit.stdout.trim() : null;
+    const fixtureHeadCommit = headCommit.stdout.trim();
+    if (headCommit.code !== 0 || !/^[0-9a-f]{40}$/.test(fixtureHeadCommit)) {
+      return finish(blocked(
+        { ...emptyBase, commands },
+        "FIXTURE_GIT_IDENTITY_FAILED",
+        "Could not record the fixture repository's complete Git HEAD identity.",
+      ));
+    }
 
     const version = runPackagedCli(cliPath, ["--version"], fixtureDir);
     commands.push(recordCommand(outDir, "version", version));
@@ -356,8 +365,19 @@ export function runFirstUseDemo(options: RunFirstUseDemoOptions): DemoOutcome {
     });
 
     if (identifyPackagedCli(cliPath).runtimeDigest !== cli.runtimeDigest) return finish(blocked({ ...emptyBase, commands }, "ARTIFACT_DRIFT", "Runtime bytes changed during execution.", fixtureHeadCommit));
+    const finalHead = runGit(["rev-parse", "HEAD"], fixtureDir);
     const finalDiff = runGit(["diff", "HEAD", "--no-ext-diff", "--binary"], fixtureDir);
-    if (finalDiff.code !== 0 || sha256Hex(finalDiff.stdout) !== workingDiffDigest) return finish(blocked({ ...emptyBase, commands }, "FIXTURE_DRIFT", "Working diff changed during execution.", fixtureHeadCommit));
+    if (finalHead.code !== 0 || finalHead.stdout.trim() !== fixtureHeadCommit || finalDiff.code !== 0 || sha256Hex(finalDiff.stdout) !== workingDiffDigest) return finish(blocked({ ...emptyBase, commands }, "FIXTURE_DRIFT", "Fixture Git HEAD or working diff changed during execution.", fixtureHeadCommit));
+
+    const unexpectedCases = cases.filter(fixtureCase => !fixtureCase.matchedExpectation);
+    if (unexpectedCases.length > 0) {
+      return finish(blocked(
+        { ...emptyBase, commands },
+        "UNEXPECTED_ANALYSIS",
+        `The selected CLI did not reproduce the frozen expectation for: ${unexpectedCases.map(item => item.id).join(", ")}.`,
+        fixtureHeadCommit,
+      ));
+    }
 
     return finish({
       status: "COMPLETED",
