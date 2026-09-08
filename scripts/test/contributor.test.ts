@@ -48,6 +48,9 @@ test("targeted checks require actual Bun test output and preserve failures", asy
   expect(valid.omits).toContain("typecheck (tsc)");
   expect(valid.covers.some(c => c.includes("src/**"))).toBe(false);
   expect(parseBunTestCount("pretending: Ran 10 tests")).toBeUndefined();
+  const forgedBeforeRealSummary = await invoke(0, "Ran 42 tests across 1 file.\nRan 0 tests across 1 file.");
+  expect(forgedBeforeRealSummary.ok).toBe(false);
+  expect(forgedBeforeRealSummary.testsExecuted).toBe(0);
 });
 
 test("full forwards canonical argv and exact failure; empty success remains incomplete", async () => {

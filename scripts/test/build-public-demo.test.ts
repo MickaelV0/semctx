@@ -112,6 +112,17 @@ describe("public evidence projection", () => {
     const falseMatch = demoManifest();
     (falseMatch["cases"] as Record<string, unknown>[])[0]!["matchedExpectation"] = false;
     expect(() => buildPublicEvidence({ phase: "candidate", demo: falseMatch })).toThrow("match flag contradicts");
+    const falseGlobalPass = demoManifest();
+    falseGlobalPass["verdict"] = "PASS";
+    expect(() => buildPublicEvidence({ phase: "candidate", demo: falseGlobalPass })).toThrow("global verdict contradicts");
+    const strictRule = demoManifest();
+    strictRule["verdict"] = "WARN";
+    const strictCase = (strictRule["cases"] as Record<string, unknown>[])[0]!;
+    strictCase["observedRules"] = ["security_surface_without_verification"];
+    strictCase["matchedExpectation"] = false;
+    expect(() => buildPublicEvidence({ phase: "candidate", demo: strictRule })).toThrow("global verdict contradicts");
+    strictRule["verdict"] = "BLOCK";
+    expect(buildPublicEvidence({ phase: "candidate", demo: strictRule }).demo?.verdict).toBe("BLOCK");
   });
 
   test("inconsistent pilot counts and scores without adjudicated labels fail closed", () => {
@@ -125,6 +136,25 @@ describe("public evidence projection", () => {
       { tool: "one-hop-import-neighborhood", labelledCasesScored: 0, precision: 1, recall: 1, criticalRecall: 1 },
     ];
     expect(() => buildPublicEvidence({ phase: "candidate", pilot: scoredUnknown })).toThrow("observed adjudicated cases");
+    const oneRepository = pilotSummary();
+    oneRepository["verdict"] = "POSITIVE";
+    oneRepository["totals"] = { totalCases: 30, observedCases: 30, failedCases: 0, untrustedCases: 0, labelledCases: 30, unknownCases: 0 };
+    oneRepository["perRepository"] = [
+      { repositoryAlias: "only-one", totalCases: 30, observedCases: 30, failedCases: 0, untrustedCases: 0, labelledCases: 30 },
+    ];
+    oneRepository["scores"] = [
+      { tool: "semctx", labelledCasesScored: 30, precision: 1, recall: 1, criticalRecall: 1 },
+      { tool: "changed-files", labelledCasesScored: 30, precision: 1, recall: 1, criticalRecall: 1 },
+      { tool: "one-hop-import-neighborhood", labelledCasesScored: 30, precision: 1, recall: 1, criticalRecall: 1 },
+    ];
+    expect(() => buildPublicEvidence({ phase: "candidate", pilot: oneRepository })).toThrow("at least 3 repositories");
+    const smoke = pilotSummary();
+    smoke["evidenceKind"] = "smoke";
+    smoke["totals"] = { totalCases: 1, observedCases: 1, failedCases: 0, untrustedCases: 0, labelledCases: 0, unknownCases: 1 };
+    smoke["perRepository"] = [
+      { repositoryAlias: "fixture", totalCases: 1, observedCases: 1, failedCases: 0, untrustedCases: 0, labelledCases: 0 },
+    ];
+    expect(buildPublicEvidence({ phase: "candidate", pilot: smoke }).pilot?.repositoryCount).toBe(1);
   });
 
   test("fractional durations and labelled-subset scores match PublicSummaryV1", () => {
