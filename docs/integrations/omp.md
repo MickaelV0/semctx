@@ -40,11 +40,15 @@ Claude surface, so the shadow lifecycle checkpoint remains fully manual on OMP.
 
 For terminal Git calls, the adapter supports the filesystem path forms normalized by OMP 18.1.11:
 session-relative paths, `/`, `~`, `file://`, Unicode spaces, `@`/leading-colon path aliases,
-extended Windows paths, and native Windows/WSL drive aliases. OMP must expand an internal URL used
-as `cwd`, `cd` target, or Git repository option before the extension receives the call. If an
-internal URL is still present, Semctx blocks the terminal Git call because the extension cannot
-resolve it safely; `SEMCTX_GUARD=off` remains the explicit opt-out. Ordinary advisory filesystem
-calls, non-terminal Bash commands, and non-Bash tools keep their existing behavior.
+extended Windows paths, and native Windows/WSL drive aliases. In OMP 18.1.11 the extension receives
+the raw `tool_call` before Bash expands an internal URL used as `cwd`, a `cd` target, or a Git
+repository option. The adapter has no session-safe router for that URL and does not guess a path.
+It applies the merged call environment first: `SEMCTX_GUARD=off` remains authoritative. Otherwise
+it checks enablement only in the valid filesystem session root. Advisory sessions remain
+non-blocking; an environment- or session-enabled guard blocks the unresolved terminal Git call, as
+does an unknown or failed enablement check. A guard configured only inside the opaque target cannot
+be discovered until the caller supplies a resolved filesystem cwd/path. Non-terminal Bash commands
+and non-Bash tools keep their existing behavior.
 
 Before reinstalling a release that used ADR 0015, remove the old OMP plugin installation through
 OMP's normal plugin command, then install this catalog entry again. Semctx never deletes a user

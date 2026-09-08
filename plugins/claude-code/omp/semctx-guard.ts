@@ -19,6 +19,7 @@ import {
   guardEnabledForInvocation,
   isTerminalGitCommand,
 } from "../hooks/semctx-guard.mjs";
+import { statSync } from "node:fs";
 import { homedir } from "node:os";
 import { posix, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -173,6 +174,64 @@ function unresolvedInternalGitScope(command: string): string | undefined {
   return undefined;
 }
 
+function resolveOmpFilesystemSessionRoot(rawCwd: string): OmpFilesystemCwdResolution {
+  const options = {
+    platform: process.platform,
+    env: process.env,
+    home: homedir(),
+  };
+  const expanded = expandOmpFilesystemPath(rawCwd.replace(/^(local:)\/(?!\/)/i, "$1//"), options);
+  if (INTERNAL_URL.test(expanded.replace(/^(local:)\/(?!\/)/i, "$1//"))) {
+    return { ok: false, reason: `OMP session cwd ${JSON.stringify(rawCwd)} is still an internal URL` };
+  }
+  const pathApi = options.platform === "win32" ? win32 : posix;
+  if (!pathApi.isAbsolute(expanded)) {
+    return { ok: false, reason: `OMP session cwd ${JSON.stringify(rawCwd)} is not an absolute filesystem path` };
+  }
+  try {
+    if (!statSync(expanded).isDirectory()) throw new Error("not a directory");
+  } catch {
+    return { ok: false, reason: `OMP session cwd ${JSON.stringify(rawCwd)} is not an accessible filesystem directory` };
+  }
+  return { ok: true, cwd: expanded };
+}
+
+function evaluateUnresolvedScopeEnablement(
+  ctx: ExtensionContextLike,
+  env: Record<string, string | undefined>,
+  enablementEvaluator: GuardEnablementEvaluator,
+  unresolvedReason: string,
+): ToolCallEventResultLike | undefined {
+  const sessionRoot = resolveOmpFilesystemSessionRoot(ctx.cwd);
+  if (!sessionRoot.ok) {
+    return {
+      block: true,
+      reason: `semctx guarded mode: ${sessionRoot.reason}; guard enablement cannot be established, so the terminal Git operation is not authorized.`,
+    };
+  }
+  try {
+    const enabled = enablementEvaluator({
+      command: "git commit",
+      cwd: sessionRoot.cwd,
+      sessionCwd: sessionRoot.cwd,
+      env,
+    });
+    if (enabled === false) return undefined;
+    if (enabled !== true) {
+      return {
+        block: true,
+        reason: "semctx guarded mode: guard enablement evaluation returned an unknown result; terminal Git operation is not authorized.",
+      };
+    }
+  } catch {
+    return {
+      block: true,
+      reason: "semctx guarded mode: guard enablement evaluation failed; terminal Git operation is not authorized.",
+    };
+  }
+  return { block: true, reason: `semctx guarded mode: ${unresolvedReason}; terminal Git operation is not authorized.` };
+}
+
 export function mergeOmpEnvironment(
   ambient: Record<string, string | undefined>,
   overlay: Record<string, string>,
@@ -208,14 +267,21 @@ export function evaluateOmpToolCall(
   const rawCwd = typeof event.input.cwd === "string" ? event.input.cwd : ctx.cwd;
   const resolvedCwd = resolveOmpFilesystemCwd(rawCwd, ctx.cwd);
   if (!resolvedCwd.ok) {
-    return { block: true, reason: `semctx guarded mode: ${resolvedCwd.reason}; terminal Git operation is not authorized.` };
+    return evaluateUnresolvedScopeEnablement(
+      ctx,
+      env,
+      enablementEvaluator,
+      resolvedCwd.reason,
+    );
   }
   const unresolvedScope = unresolvedInternalGitScope(command);
   if (unresolvedScope !== undefined) {
-    return {
-      block: true,
-      reason: `semctx guarded mode: OMP did not expand internal URL Git scope ${JSON.stringify(unresolvedScope)} to a filesystem path; terminal Git operation is not authorized.`,
-    };
+    return evaluateUnresolvedScopeEnablement(
+      ctx,
+      env,
+      enablementEvaluator,
+      `OMP did not expand internal URL Git scope ${JSON.stringify(unresolvedScope)} to a filesystem path`,
+    );
   }
   const input = {
     command,
