@@ -185,6 +185,9 @@ describe("public evidence projection", () => {
     const falseGlobalPass = demoManifest();
     falseGlobalPass["verdict"] = "PASS";
     expect(() => buildPublicEvidence({ phase: "candidate", demo: falseGlobalPass })).toThrow("global verdict contradicts");
+    const falseGlobalBlock = demoManifest();
+    falseGlobalBlock["verdict"] = "BLOCK";
+    expect(() => buildPublicEvidence({ phase: "candidate", demo: falseGlobalBlock })).toThrow("global verdict contradicts");
     const unmatchedExpectation = demoManifest();
     const expectedWarn = (unmatchedExpectation["cases"] as Record<string, unknown>[])[1]!;
     expectedWarn["observedRules"] = [];
@@ -200,13 +203,30 @@ describe("public evidence projection", () => {
     malformedObservedCommit["fixtureHeadCommit"] = "not-a-commit";
     expect(() => buildPublicEvidence({ phase: "candidate", demo: malformedObservedCommit })).toThrow("full lowercase Git commit");
     const strictRule = demoManifest();
-    strictRule["verdict"] = "WARN";
+    strictRule["verdict"] = "BLOCK";
     const strictCase = (strictRule["cases"] as Record<string, unknown>[])[1]!;
     strictCase["observedRules"] = ["contract_changed_without_test", "security_surface_without_verification"];
     strictCase["matchedExpectation"] = true;
-    expect(() => buildPublicEvidence({ phase: "candidate", demo: strictRule })).toThrow("global verdict contradicts");
-    strictRule["verdict"] = "BLOCK";
-    expect(buildPublicEvidence({ phase: "candidate", demo: strictRule }).demo?.verdict).toBe("BLOCK");
+    expect(() => buildPublicEvidence({ phase: "candidate", demo: strictRule })).toThrow("match flag contradicts");
+    strictCase["matchedExpectation"] = false;
+    expect(() => buildPublicEvidence({ phase: "candidate", demo: strictRule })).toThrow("every frozen case expectation");
+
+    const duplicateAdvisory = demoManifest();
+    const duplicateCase = (duplicateAdvisory["cases"] as Record<string, unknown>[])[1]!;
+    duplicateCase["observedRules"] = ["contract_changed_without_test", "contract_changed_without_test"];
+    duplicateCase["matchedExpectation"] = true;
+    expect(() => buildPublicEvidence({ phase: "candidate", demo: duplicateAdvisory })).toThrow("match flag contradicts");
+  });
+
+  test("public package versions follow strict SemVer", () => {
+    const valid = demoManifest();
+    valid["packageVersion"] = "1.2.3-alpha.1+build.5";
+    expect(buildPublicEvidence({ phase: "candidate", demo: valid }).demo?.packageVersion).toBe("1.2.3-alpha.1+build.5");
+    for (const version of ["01.2.3", "1.02.3", "1.2.03", "1.2.3-", "1.2.3-alpha..1", "1.2.3-01", "1.2.3+build..1"]) {
+      const demo = demoManifest();
+      demo["packageVersion"] = version;
+      expect(() => buildPublicEvidence({ phase: "candidate", demo }), version).toThrow("semantic version");
+    }
   });
 
   test("inconsistent pilot counts and scores without adjudicated labels fail closed", () => {
@@ -318,6 +338,16 @@ describe("public evidence projection", () => {
 });
 
 describe("static page contract", () => {
+  test("embedded greeting snippets are byte-faithful to their published fixtures", () => {
+    const html = readFileSync(join(import.meta.dir, "..", "..", "site", "index.html"), "utf8");
+    for (const variant of ["base", "changed"] as const) {
+      const pattern = new RegExp(`<a href="\\./fixtures/${variant}/src/greeting\\.ts">[\\s\\S]*?<pre><code>([\\s\\S]*?)</code>`);
+      const snippet = pattern.exec(html)?.[1];
+      const fixture = readFileSync(join(import.meta.dir, "..", "..", "site", "fixtures", variant, "src", "greeting.ts"), "utf8").trimEnd();
+      expect(snippet, `${variant} greeting snippet`).toBe(fixture);
+    }
+  });
+
   test("browser reader rejects incompatible or malformed evidence before observation DOM updates", () => {
     const valid = JSON.parse(readFileSync(join(import.meta.dir, "..", "..", "site", "evidence.json"), "utf8")) as Record<string, unknown>;
     const missingFixtureCommit = structuredClone(valid);
@@ -327,6 +357,11 @@ describe("static page contract", () => {
     unmatched["observedRuleIds"] = [];
     unmatched["matchedExpectation"] = false;
     (unmatchedDemo["demo"] as Record<string, unknown>)["verdict"] = "PASS";
+    const extraBlockingDemo = structuredClone(valid);
+    const extraBlockingCase = ((extraBlockingDemo["demo"] as Record<string, unknown>)["cases"] as Record<string, unknown>[])[1]!;
+    extraBlockingCase["observedRuleIds"] = ["contract_changed_without_test", "security_surface_without_verification"];
+    extraBlockingCase["matchedExpectation"] = true;
+    (extraBlockingDemo["demo"] as Record<string, unknown>)["verdict"] = "BLOCK";
     for (const hostile of [
       { ...valid, schemaVersion: 2 },
       { ...valid, kind: "foreign-evidence" },
@@ -334,6 +369,9 @@ describe("static page contract", () => {
       { ...valid, demo: { ...(valid["demo"] as Record<string, unknown>), cases: "not-an-array", verdict: "BLOCK" } },
       missingFixtureCommit,
       unmatchedDemo,
+      extraBlockingDemo,
+      { ...valid, demo: { ...(valid["demo"] as Record<string, unknown>), packageVersion: "01.2.3" } },
+      { ...valid, demo: { ...(valid["demo"] as Record<string, unknown>), packageVersion: "1.2.3-alpha..1" } },
       { ...valid, pilot: { ...(valid["pilot"] as Record<string, unknown>), observedCases: 29 } },
       { ...valid, disclosures: { ...(valid["disclosures"] as Record<string, unknown>), scope: "forged scope" } },
     ]) {

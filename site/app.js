@@ -21,9 +21,13 @@ function setText(id, value) {
 }
 
 const CASES = {
-  benign: { fixturePath: "src/greeting.ts", expectedFinding: "none" },
-  "exported-contract-risk": { fixturePath: "src/cart.ts", expectedFinding: "warn" },
-  "unsupported-limit": { fixturePath: "src/pricing.ts", expectedFinding: "none" },
+  benign: { fixturePath: "src/greeting.ts", expectedFinding: "none", expectedRuleIds: [] },
+  "exported-contract-risk": {
+    fixturePath: "src/cart.ts",
+    expectedFinding: "warn",
+    expectedRuleIds: ["contract_changed_without_test"],
+  },
+  "unsupported-limit": { fixturePath: "src/pricing.ts", expectedFinding: "none", expectedRuleIds: [] },
 };
 const KNOWN_RULES = new Set([
   "invariant_touched_without_test",
@@ -35,6 +39,7 @@ const KNOWN_RULES = new Set([
   "index_binding_stale",
 ]);
 const PILOT_TOOLS = ["semctx", "changed-files", "one-hop-import-neighborhood"];
+const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 const SCOPE_DISCLOSURE = "Semctx reports structural impact and declared contract risk. It does not prove runtime or business correctness.";
 const MEASUREMENT_DISCLOSURE = "Automated evidence does not measure adoption, retention, or contribution time.";
 
@@ -89,7 +94,7 @@ function demoEvidence(value) {
   const demo = record(value, "demo");
   const status = oneOf(demo.status, ["COMPLETED", "BLOCKED"], "demo.status");
   isoDate(demo.observedAt, "demo.observedAt");
-  if (demo.packageVersion !== null && (typeof demo.packageVersion !== "string" || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(demo.packageVersion))) invalid("demo.packageVersion");
+  if (demo.packageVersion !== null && (typeof demo.packageVersion !== "string" || !SEMVER.test(demo.packageVersion))) invalid("demo.packageVersion");
   if (demo.runtimeDigest !== null) digest(demo.runtimeDigest, "demo.runtimeDigest");
   digest(demo.fixtureBaseDigest, "demo.fixtureBaseDigest");
   digest(demo.fixtureChangedDigest, "demo.fixtureChangedDigest");
@@ -98,7 +103,6 @@ function demoEvidence(value) {
   integer(demo.unknownCount, "demo.unknownCount");
   if (!Array.isArray(demo.cases)) invalid("demo.cases");
   const ids = new Set();
-  const severities = [];
   for (const value of demo.cases) {
     const item = record(value, "demo case");
     const expected = typeof item.id === "string" && Object.hasOwn(CASES, item.id) ? CASES[item.id] : null;
@@ -106,20 +110,15 @@ function demoEvidence(value) {
     ids.add(item.id);
     if (!Array.isArray(item.observedRuleIds) || !item.observedRuleIds.every(rule => typeof rule === "string" && KNOWN_RULES.has(rule))) invalid("demo case rules");
     if (typeof item.matchedExpectation !== "boolean") invalid("demo case match");
-    const matched = expected.expectedFinding === "none"
-      ? item.observedRuleIds.length === 0
-      : item.observedRuleIds.includes("contract_changed_without_test");
+    const matched = item.observedRuleIds.length === expected.expectedRuleIds.length
+      && item.observedRuleIds.every((rule, ruleIndex) => rule === expected.expectedRuleIds[ruleIndex]);
     if (item.matchedExpectation !== matched) invalid("demo case match");
-    for (const rule of item.observedRuleIds) {
-      severities.push(["invariant_touched_without_test", "critical_contract_changed_without_test", "security_surface_without_verification", "analysis_scope_incomplete", "index_binding_stale"].includes(rule) ? "block" : "warn");
-    }
   }
   if (status === "COMPLETED") {
     if (ids.size !== Object.keys(CASES).length || Object.keys(CASES).some(id => !ids.has(id))) invalid("completed demo cases");
     if (demo.cases.some(item => !item.matchedExpectation)) invalid("completed demo expectations");
     if (demo.packageVersion === null || demo.runtimeDigest === null || demo.fixtureCommit === null || verdict === null) invalid("completed demo identity");
-    const expectedVerdict = severities.includes("block") ? "BLOCK" : severities.includes("warn") ? "WARN" : "PASS";
-    if (verdict !== expectedVerdict) invalid("demo.verdict");
+    if (verdict !== "WARN") invalid("demo.verdict");
   } else if (demo.cases.length !== 0 || verdict !== null) {
     invalid("blocked demo outcomes");
   }

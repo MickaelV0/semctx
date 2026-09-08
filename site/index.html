@@ -69,13 +69,11 @@
               </div>
               <div class="diff-grid" aria-label="Benign change before and after">
                 <figure><figcaption>Before · <a href="./fixtures/base/src/greeting.ts">src/greeting.ts</a></figcaption><pre><code>export function greetingFor(name: string): string {
-  // Trim so a trailing newline pasted from a form field
-  // does not leak into the greeting.
+  // Trim so a trailing newline pasted from a form field does not leak into the greeting.
   return `Hello, ${name.trim()}!`;
 }</code></pre></figure>
                 <figure><figcaption>After · <a href="./fixtures/changed/src/greeting.ts">src/greeting.ts</a></figcaption><pre><code>export function greetingFor(name: string): string {
-  // Trim first: a trailing newline pasted from a form field
-  // should not leak into the greeting.
+  // Trim first: a trailing newline pasted from a form field should not leak into the greeting.
   return `Hello, ${name.trim()}!`;
 }</code></pre></figure>
               </div>
