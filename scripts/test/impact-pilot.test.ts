@@ -1408,6 +1408,18 @@ describe("impact-pilot report CLI", () => {
     writeFileSync(rawPath, JSON.stringify(raw));
     const filesBefore = readdirSync(cwd).sort();
 
+    for (const outputFlag of ["--out", "--export"] as const) {
+      const forbiddenOutput = join(cwd, `forbidden-${outputFlag.slice(2)}.json`);
+      const conflict = runImpactPilotCli(cwd, [
+        "report", "--protocol", protocolPath, "--raw", rawPath, "--preview",
+        outputFlag, forbiddenOutput,
+      ]);
+      expect(existsSync(forbiddenOutput)).toBe(false);
+      expect(conflict.exitCode).toBe(2);
+      expect(conflict.stderr).toContain(`[impact-pilot] ERROR --preview cannot be combined with ${outputFlag}`);
+      expect(readdirSync(cwd).sort()).toEqual(filesBefore);
+    }
+
     const result = runImpactPilotCli(cwd, ["report", "--protocol", protocolPath, "--raw", rawPath, "--preview"]);
 
     expect(result.exitCode).toBe(0);
