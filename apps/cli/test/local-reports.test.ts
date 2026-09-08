@@ -36,6 +36,17 @@ function fixtureReport(): VerifyReport {
 }
 
 describe("local report CLI", () => {
+  test("feedback refuses a report whose top-level content would be discarded", () => {
+    const repository = root();
+    const reportPath = join(repository, "verify.json");
+    const report = { ...fixtureReport(), ...JSON.parse('{"__proto__":"unrepresentable"}') };
+    writeFileSync(reportPath, JSON.stringify(report));
+    const recorded = run(["feedback", "record", "--root", repository, "--report", reportPath, "--finding", "0", "--outcome", "useful", "--json"]);
+    expect(recorded.code).toBe(1);
+    expect(recorded.err).toContain("report contains a top-level field that cannot be preserved");
+    expect(existsSync(join(repository, ".semctx"))).toBe(false);
+  });
+
   test("relative report paths follow the caller directory independently of repository root", () => {
     const repository = root(); const caller = root();
     writeFileSync(join(caller, "verify.json"), JSON.stringify(fixtureReport()));
