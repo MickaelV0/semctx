@@ -20,8 +20,26 @@ function caseSection(outcome: DemoOutcome): string {
     lines.push(
       `- Observed rule(s) on this file: ${c.observedRules.length === 0 ? "none" : c.observedRules.map((r) => `\`${r}\``).join(", ")}`,
     );
+    for (const finding of c.observedFindings) {
+      lines.push(`  - \`${finding.rule}\` is ${finding.tier}/${finding.severity}: ${finding.message}`);
+    }
     lines.push(`- Matches documented expectation: ${c.matchedExpectation ? "yes" : "**no — see raw evidence below**"}`);
     lines.push(`- Next check: ${c.nextCheck}`);
+  }
+  return lines.join("\n");
+}
+
+function unassignedFindingSection(outcome: DemoOutcome): string {
+  if (outcome.unassignedFindings.length === 0) return "";
+  const lines = ["## Unassigned product findings"];
+  for (const finding of outcome.unassignedFindings) {
+    const anchors = [
+      ...finding.locations.map(location => `${location.file}${location.line === undefined ? "" : `:${location.line}`}`),
+      ...finding.nodeIds,
+    ];
+    lines.push("");
+    lines.push(`- \`${finding.rule}\` (${finding.tier}/${finding.severity}): ${finding.message}`);
+    lines.push(`  - Product anchor(s): ${anchors.length === 0 ? "none reported" : anchors.map(anchor => `\`${anchor}\``).join(", ")}`);
   }
   return lines.join("\n");
 }
@@ -101,6 +119,11 @@ export function renderReportMarkdown(outcome: DemoOutcome): string {
   lines.push("", "## Product uncertainty", "");
   lines.push(...(outcome.unknowns.length > 0 ? outcome.unknowns.map(u => `- ${u}`) : ["No unknowns reported by this execution. This is not proof of runtime correctness."]));
   lines.push("");
+  const unassignedFindings = unassignedFindingSection(outcome);
+  if (unassignedFindings.length > 0) {
+    lines.push(unassignedFindings);
+    lines.push("");
+  }
   const cases = caseSection(outcome);
   if (cases.length > 0) {
     lines.push(cases);
