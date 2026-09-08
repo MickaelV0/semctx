@@ -1403,7 +1403,7 @@ describe("local source and output path safety", () => {
     ));
     expect(Object.getPrototypeOf(value.paths)).toBeNull();
     expect(Object.hasOwn(value.paths, "__proto__")).toBe(true);
-    expect(value.paths["__proto__"]).toBe("C:/private/repo");
+    expect(value.paths["__proto__"]).toBe(resolve("C:/private/repo"));
   });
 
   test("rejects relative local source paths before collection", () => {
