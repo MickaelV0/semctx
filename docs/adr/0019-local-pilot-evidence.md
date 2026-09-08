@@ -37,11 +37,13 @@ adjudication is never presented as a human pilot. Raw evidence and disagreements
 
 Compute both baselines on the pristine disposable checkout before running the candidate. Bind
 their algorithm, captured Git/source input and suggestion output identities. At each candidate
-command boundary, require the frozen HEAD, tree, tracked bytes and index to remain intact, apart
-from the exact canonical `.gitignore` transformation. Permit confined Semctx metadata, but reject
-foreign source additions. A persistent mismatch stays observed as `SOURCE_DRIFT`, with no trusted
-verdict and with its raw invocations retained. These are process-boundary checks, not a sandbox
-against changes made and fully restored within one child.
+command boundary, require the frozen HEAD, tree, tracked bytes, index entries (stage, mode, object
+ID and path), and `assume-unchanged`/`skip-worktree` flags to remain intact, apart from the exact
+canonical `.gitignore` transformation. This identity deliberately excludes the `fsmonitor-valid`
+cache bit and byte-for-byte equality of the raw Git index file. Permit confined Semctx metadata,
+but reject foreign source additions. A persistent mismatch stays observed as `SOURCE_DRIFT`, with
+no trusted verdict and with its raw invocations retained. These are process-boundary checks, not a
+sandbox against changes made and fully restored within one child.
 
 Offline validation recomputes captured stdout/stderr and baseline output digests and requires the
 changed-files baseline to equal the canonical captured changed-file set. Digests establish content
