@@ -39,20 +39,42 @@ function expectedWarningReport(overrides: Record<string, unknown> = {}): Record<
 function fakeCli(options: {
   setup?: string; setupCode?: number; verify?: string; verifyCode?: number;
   drift?: boolean; headDrift?: boolean; rejectAmbientRepositoryEnv?: boolean;
+  fixtureMutation?: "version-edit" | "setup-edit" | "index-edit" | "index-staged" | "index-delete" | "index-rename" | "index-inject" | "verify-edit";
+  writeSemctxMetadata?: boolean;
+  semctxLinkTarget?: string;
 } = {}): string {
   const folder = fresh("fake-runtime"); mkdirSync(folder);
   const path = join(folder, "index.js");
-  writeFileSync(path, `import { appendFileSync } from 'node:fs';
+  writeFileSync(path, `import { appendFileSync, mkdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 const cmd = process.argv[2];
+const mutation = ${JSON.stringify(options.fixtureMutation ?? null)};
+const mutateFixture = (phase) => {
+  if (mutation === phase + '-edit') appendFileSync('src/greeting.ts', '\\n// changed by selected CLI');
+  if (mutation === phase + '-staged') { appendFileSync('src/cart.ts', '\\n// staged by selected CLI'); Bun.spawnSync(['git', 'add', 'src/cart.ts'], { cwd: process.cwd() }); }
+  if (mutation === phase + '-delete') rmSync('src/pricing.ts');
+  if (mutation === phase + '-rename') renameSync('src/pricing.ts', 'src/renamed.ts');
+  if (mutation === phase + '-inject') writeFileSync('src/injected.ts', 'export const injected = true;\\n');
+};
+const writeMetadata = (phase) => {
+  if (${options.writeSemctxMetadata ?? false}) { mkdirSync('.semctx', { recursive: true }); appendFileSync('.semctx/fake-runtime.log', phase + '\\n'); }
+};
+const linkMetadata = () => {
+  const target = ${JSON.stringify(options.semctxLinkTarget ?? null)};
+  if (target !== null) symlinkSync(target, '.semctx', process.platform === 'win32' ? 'junction' : 'dir');
+};
 const controlledGit = new Set(['GIT_CONFIG_NOSYSTEM', 'GIT_CONFIG_GLOBAL']);
 const forbidden = Object.keys(process.env).filter(key => (/^GIT_/i.test(key) && !controlledGit.has(key.toUpperCase())) || key.toUpperCase() === 'SEMCTX_ROOT');
 const expectedGlobalConfig = process.platform === 'win32' ? 'NUL' : '/dev/null';
 const controlledConfigMissing = process.env.GIT_CONFIG_NOSYSTEM !== '1' || process.env.GIT_CONFIG_GLOBAL !== expectedGlobalConfig;
 if (${options.rejectAmbientRepositoryEnv ?? false} && (forbidden.length > 0 || controlledConfigMissing)) { console.error([...forbidden, 'controlled=' + !controlledConfigMissing].join(',')); process.exit(17); }
-if (cmd === '--version') { console.log('0.0.0'); }
-else if (cmd === 'setup') { console.log(${JSON.stringify(options.setup ?? '{"setupReady":true}')}); process.exit(${options.setupCode ?? 0}); }
-else if (cmd === 'index') { console.log('{}'); }
+if (cmd === '--version') { mutateFixture('version'); console.log('0.0.0'); }
+else if (cmd === 'setup') { mutateFixture('setup'); linkMetadata(); writeMetadata('setup'); console.log(${JSON.stringify(options.setup ?? '{"setupReady":true}')}); process.exit(${options.setupCode ?? 0}); }
+else if (cmd === 'index') {
+  mutateFixture('index'); writeMetadata('index');
+  console.log('{}');
+}
 else if (cmd === 'verify') {
+  mutateFixture('verify'); writeMetadata('verify');
   if (${options.drift ?? false}) appendFileSync(import.meta.path, '\\n// drift');
   if (${options.headDrift ?? false}) Bun.spawnSync(['git', '-c', 'user.name=Semctx Test', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-q', '-m', 'unexpected head move'], { cwd: process.cwd() });
   console.log(${JSON.stringify(options.verify ?? JSON.stringify(report()))}); process.exit(${options.verifyCode ?? 0});
@@ -225,6 +247,44 @@ test("a CLI that moves fixture HEAD cannot complete with an unchanged working di
   const outcome = runFirstUseDemo({
     cliPath: fakeCli({ verify: JSON.stringify(expectedWarningReport()), headDrift: true }),
     outDir: fresh("head-drift"),
+  });
+  expect(outcome.status).toBe("BLOCKED");
+  expect(outcome.reason).toBe("FIXTURE_DRIFT");
+});
+
+test.each([
+  "version-edit",
+  "setup-edit",
+  "index-edit",
+  "index-staged",
+  "index-delete",
+  "index-rename",
+  "index-inject",
+  "verify-edit",
+] as const)("a CLI %s mutation cannot establish or change the accepted fixture snapshot", (fixtureMutation) => {
+  const outcome = runFirstUseDemo({
+    cliPath: fakeCli({ verify: JSON.stringify(expectedWarningReport()), fixtureMutation }),
+    outDir: fresh(`fixture-mutation-${fixtureMutation}`),
+  });
+  expect(outcome.status).toBe("BLOCKED");
+  expect(outcome.reason).toBe("FIXTURE_DRIFT");
+});
+
+test("Semctx metadata may change while frozen source and Git state remain exact", () => {
+  const outcome = runFirstUseDemo({
+    cliPath: fakeCli({ verify: JSON.stringify(expectedWarningReport()), writeSemctxMetadata: true }),
+    outDir: fresh("semctx-metadata"),
+  });
+  expect(outcome.status, outcome.detail ?? "").toBe("COMPLETED");
+  expect(outcome.workingDiffDigest).toMatch(/^[a-f0-9]{64}$/);
+});
+
+test("linked Semctx metadata cannot escape the disposable fixture", () => {
+  const outside = fresh("semctx-link-target");
+  mkdirSync(outside);
+  const outcome = runFirstUseDemo({
+    cliPath: fakeCli({ semctxLinkTarget: outside }),
+    outDir: fresh("semctx-link"),
   });
   expect(outcome.status).toBe("BLOCKED");
   expect(outcome.reason).toBe("FIXTURE_DRIFT");
