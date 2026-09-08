@@ -448,6 +448,68 @@ describe("canonical digest", () => {
 // ============================================================================================
 
 describe("collect: real process observation and confinement", () => {
+  test.each(["repository-routing", "external-index"] as const)("ignores ambient %s for Git and the real candidate child", (mode) => {
+    const repoRoot = makeFixtureRepoRoot();
+    const source = makeSourceRepo();
+    const sentinel = makeSourceRepo();
+    const externalIndex = join(sentinel.cwd, "outside-index");
+    const inheritedRoot = tempDir("semctx-pilot-routing-root-");
+    const poison: Record<string, string> = {
+      GIT_INDEX_FILE: externalIndex,
+      SEMCTX_ROOT: inheritedRoot,
+      gIt_UnReGiStErEd_RoUtInG: "must-not-reach-child",
+      GIT_CONFIG_COUNT: "2",
+      GIT_CONFIG_KEY_0: "core.worktree",
+      GIT_CONFIG_VALUE_0: sentinel.cwd,
+      GIT_CONFIG_KEY_1: "core.hooksPath",
+      GIT_CONFIG_VALUE_1: sentinel.cwd,
+    };
+    if (mode === "repository-routing") Object.assign(poison, {
+      GIT_DIR: join(sentinel.cwd, ".git"),
+      GIT_WORK_TREE: sentinel.cwd,
+      GIT_COMMON_DIR: join(sentinel.cwd, ".git"),
+      GIT_OBJECT_DIRECTORY: join(sentinel.cwd, ".git", "objects"),
+      GIT_ALTERNATE_OBJECT_DIRECTORIES: join(sentinel.cwd, ".git", "objects"),
+    });
+    const forbidden = Object.keys(poison).filter(key => !["GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0"].includes(key));
+    const probe = `
+const forbiddenEnvironmentKeys = ${JSON.stringify(forbidden)};
+if (Object.keys(process.env).some(key => forbiddenEnvironmentKeys.some(name => name.toUpperCase() === key.toUpperCase()))) {
+  console.error("ambient repository routing reached the candidate"); process.exit(72);
+}
+`;
+    writeFileSync(join(repoRoot, "apps", "cli", "src", "index.ts"), probe + STUB_CANDIDATE_SOURCE);
+    const protocol = freezeProtocol(validateDraftProtocol({
+      schemaVersion: 1, candidate: { packaging: "source-dev" }, config: baseDraft(),
+      corpus: { kind: "synthetic-smoke", cases: [makeCase(
+        "case-1", "fixture-repo", { status: "UNKNOWN" },
+        { synthetic: true, baseRef: source.base, headRef: source.head, changedFiles: ["src/critical.ts"] },
+      )] },
+    }), repoRoot);
+    const before = [source, sentinel].map(repo => readFileSync(join(repo.cwd, ".git", "index")));
+    const savedEnvironment = Object.entries(process.env).filter(([key]) => Object.keys(poison).some(name => name.toUpperCase() === key.toUpperCase()));
+    let bundle: RawCollectionBundleV1;
+    try {
+      for (const [key] of savedEnvironment) delete process.env[key];
+      Object.assign(process.env, poison);
+      bundle = collectCases(protocol, validateLocalSourcesFile({ schemaVersion: 1, paths: { "case-1": source.cwd } }), repoRoot);
+    } finally {
+      for (const key of Object.keys(process.env)) {
+        if (Object.keys(poison).some(name => name.toUpperCase() === key.toUpperCase())) delete process.env[key];
+      }
+      for (const [key, value] of savedEnvironment) process.env[key] = value;
+    }
+    expect(bundle.cases[0]).toMatchObject({ status: "OBSERVED", changedFiles: ["src/critical.ts"], semctx: { verificationStatus: "TRUSTED" } });
+    expect(existsSync(externalIndex)).toBe(false);
+    expect(existsSync(join(inheritedRoot, ".semctx"))).toBe(false);
+    for (const [index, repo] of [source, sentinel].entries()) {
+      expect(readFileSync(join(repo.cwd, ".git", "index"))).toEqual(before[index]!);
+      expect(git(repo.cwd, ["rev-parse", "HEAD"])).toBe(repo.head);
+      expect(git(repo.cwd, ["status", "--porcelain"])).toBe("");
+      expect(existsSync(join(repo.cwd, ".semctx"))).toBe(false);
+    }
+  }, 60_000);
+
   test("observes a real case end to end and never mutates the source repository", () => {
     const repoRoot = makeFixtureRepoRoot();
     const source = makeSourceRepo();
