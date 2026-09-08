@@ -1,12 +1,43 @@
 import type { CorpusCaseSpec, FrozenProtocolV1 } from "./protocol";
 import { RESEARCH_MINIMUM_CASES, verifyFrozenProtocolDigest } from "./protocol";
-import { parseVerifyReport, type CaseObservation, type RawCollectionBundleV1 } from "./collect";
+import {
+  baselineInputDigest,
+  baselineOutputDigest,
+  parseVerifyReport,
+  toolOutputDigest,
+  type BaselineCaseRun,
+  type CaseObservation,
+  type RawCollectionBundleV1,
+} from "./collect";
 import { PilotValidationError } from "./validate-helpers";
 
 export const PRECISION_THRESHOLD = 0.8;
 export type PilotTool = "semctx" | "changed-files" | "one-hop-import-neighborhood";
 export const PILOT_TOOLS: readonly PilotTool[] = ["semctx", "changed-files", "one-hop-import-neighborhood"];
 export type PilotVerdict = "EVIDENCE_MISSING" | "INCONCLUSIVE" | "NEGATIVE" | "POSITIVE";
+
+function validateBaselineIdentity(
+  observation: CaseObservation,
+  baseline: BaselineCaseRun,
+  expectedAlgorithm: BaselineCaseRun["algorithm"],
+  path: string,
+): void {
+  if (observation.git === null) throw new PilotValidationError(path, "requires a captured Git identity");
+  if (baseline.algorithm !== expectedAlgorithm) {
+    throw new PilotValidationError(`${path}.algorithm`, `must be ${expectedAlgorithm}`);
+  }
+  if (JSON.stringify(baseline.suggestedFiles) !== JSON.stringify([...new Set(baseline.suggestedFiles)].sort())) {
+    throw new PilotValidationError(`${path}.suggestedFiles`, "must be sorted and contain no duplicates");
+  }
+  const expectedInput = baselineInputDigest(baseline.algorithm, observation.git, observation.changedFiles);
+  if (baseline.inputDigest !== expectedInput) {
+    throw new PilotValidationError(`${path}.inputDigest`, "does not bind the captured Git identity and changed files");
+  }
+  const expectedOutput = baselineOutputDigest(baseline.algorithm, baseline.suggestedFiles);
+  if (baseline.outputDigest !== expectedOutput) {
+    throw new PilotValidationError(`${path}.outputDigest`, "does not match the baseline suggestions");
+  }
+}
 
 /** Every registered case must appear exactly once; this is the identity/completeness gate (ADR 0019 invariant 1). */
 export function validateBundleAgainstProtocol(protocol: FrozenProtocolV1, raw: RawCollectionBundleV1): void {
@@ -42,6 +73,49 @@ export function validateBundleAgainstProtocol(protocol: FrozenProtocolV1, raw: R
     }
     if (JSON.stringify([...observation.changedFiles].sort()) !== JSON.stringify([...spec.changedFiles].sort())) {
       throw new PilotValidationError(`raw.cases.${observation.caseId}.changedFiles`, "does not match the frozen protocol");
+    }
+    if (observation.baselineChangedFiles === null || observation.baselineImportNeighborhood === null) {
+      throw new PilotValidationError(`raw.cases.${observation.caseId}`, "observed cases require both baseline observations");
+    }
+    validateBaselineIdentity(
+      observation,
+      observation.baselineChangedFiles,
+      "changed-files-v1",
+      `raw.cases.${observation.caseId}.baselineChangedFiles`,
+    );
+    validateBaselineIdentity(
+      observation,
+      observation.baselineImportNeighborhood,
+      "one-hop-import-neighborhood-v1",
+      `raw.cases.${observation.caseId}.baselineImportNeighborhood`,
+    );
+    const canonicalChangedFiles = [...new Set(observation.changedFiles)].sort();
+    if (JSON.stringify(observation.baselineChangedFiles.suggestedFiles) !== JSON.stringify(canonicalChangedFiles)) {
+      throw new PilotValidationError(
+        `raw.cases.${observation.caseId}.baselineChangedFiles.suggestedFiles`,
+        "changed-files baseline must equal the canonical captured changed files",
+      );
+    }
+    if (observation.semctx === null) {
+      throw new PilotValidationError(`raw.cases.${observation.caseId}.semctx`, "observed cases require candidate invocations");
+    }
+    for (const [stage, invocation] of Object.entries({
+      init: observation.semctx.init,
+      index: observation.semctx.index,
+      verify: observation.semctx.verify,
+    })) {
+      if (invocation.outputDigest !== toolOutputDigest(invocation.stdout, invocation.stderr)) {
+        throw new PilotValidationError(
+          `raw.cases.${observation.caseId}.semctx.${stage}.outputDigest`,
+          "does not match captured stdout and stderr",
+        );
+      }
+    }
+    if ((observation.semctx.verificationStatus === "SOURCE_DRIFT") !== (observation.semctx.sourceDriftReason !== null)) {
+      throw new PilotValidationError(
+        `raw.cases.${observation.caseId}.semctx.sourceDriftReason`,
+        "must be present exactly for SOURCE_DRIFT",
+      );
     }
     if (observation.semctx?.verificationStatus === "TRUSTED") {
       const interpreted = parseVerifyReport(

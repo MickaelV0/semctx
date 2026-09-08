@@ -1,7 +1,9 @@
-import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { lstatSync, mkdtempSync, readFileSync, readlinkSync, rmSync, statSync } from "node:fs";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { VerifyReportSchema } from "../../packages/core/src/verify-report";
+import { computeGitignore } from "../../packages/semantic-engine/src/gitignore";
 import { discoverTypeScriptFiles, changedFilesBaseline, oneHopImportNeighborhoodBaseline } from "./baselines";
 import { runBounded, TIMED_OUT_EXIT_CODE, type BoundedRunResult } from "./child";
 import { resolveCandidateIdentity, resolveRunnerIdentity, type FrozenProtocolV1 } from "./protocol";
@@ -27,6 +29,11 @@ export interface ToolInvocation {
   durationMs: number;
   stdout: string;
   stderr: string;
+  outputDigest: string;
+}
+
+export function toolOutputDigest(stdout: string, stderr: string): string {
+  return digestCanonical({ stdout, stderr });
 }
 
 function toToolInvocation(result: BoundedRunResult): ToolInvocation {
@@ -37,6 +44,7 @@ function toToolInvocation(result: BoundedRunResult): ToolInvocation {
     durationMs: result.durationMs,
     stdout: result.stdout,
     stderr: result.stderr,
+    outputDigest: toolOutputDigest(result.stdout, result.stderr),
   };
 }
 
@@ -46,14 +54,19 @@ export interface SemctxCaseRun {
   verify: ToolInvocation;
   /** `null` when the verify step produced no parseable versioned JSON contract. */
   verdict: "PASS" | "WARN" | "BLOCK" | null;
-  verificationStatus: "TRUSTED" | "PREREQUISITE_FAILED" | "TIMED_OUT" | "MALFORMED_OUTPUT" | "EXIT_MISMATCH" | "DIFF_MISMATCH";
+  verificationStatus: "TRUSTED" | "PREREQUISITE_FAILED" | "TIMED_OUT" | "MALFORMED_OUTPUT" | "EXIT_MISMATCH" | "DIFF_MISMATCH" | "SOURCE_DRIFT";
+  /** First tracked checkout mismatch observed at a candidate process boundary. */
+  sourceDriftReason: string | null;
   /** The candidate's own view of impact: changed files union in-repo consumers, deduplicated. */
   suggestedFiles: readonly string[];
 }
 
 export interface BaselineCaseRun {
+  algorithm: "changed-files-v1" | "one-hop-import-neighborhood-v1";
   suggestedFiles: readonly string[];
   durationMs: number;
+  inputDigest: string;
+  outputDigest: string;
 }
 
 export interface CaseGitIdentity {
@@ -61,6 +74,45 @@ export interface CaseGitIdentity {
   headRef: string;
   mergeBase: string;
   range: string;
+  headTree: string;
+  trackedFilesDigest: string;
+  trackedIndexDigest: string;
+}
+
+export type BaselineAlgorithm = BaselineCaseRun["algorithm"];
+
+export function baselineInputDigest(
+  algorithm: BaselineAlgorithm,
+  gitIdentity: CaseGitIdentity,
+  changedFiles: readonly string[],
+): string {
+  return digestCanonical({
+    algorithm,
+    git: gitIdentity,
+    changedFiles: [...changedFiles],
+  });
+}
+
+export function baselineOutputDigest(algorithm: BaselineAlgorithm, suggestedFiles: readonly string[]): string {
+  return digestCanonical({ algorithm, suggestedFiles: [...suggestedFiles] });
+}
+
+function trackedCheckoutDigest(
+  root: string,
+  trackedFiles: readonly string[],
+  contentOverrides: ReadonlyMap<string, string> = new Map(),
+): string {
+  return digestCanonical(trackedFiles.map((path) => {
+    const absolutePath = join(root, path);
+    const stat = lstatSync(absolutePath);
+    if (stat.isSymbolicLink()) return { path, kind: "symlink", target: readlinkSync(absolutePath) };
+    if (stat.isFile()) {
+      const content = contentOverrides.has(path) ? contentOverrides.get(path)! : readFileSync(absolutePath);
+      return { path, kind: "file", digest: `sha256:${createHash("sha256").update(content).digest("hex")}` };
+    }
+    // A gitlink can be present without an initialized submodule. Its index identity and kind are still bound.
+    return { path, kind: "other" };
+  }));
 }
 
 export interface CaseObservation {
@@ -107,7 +159,7 @@ export function validateLocalSourcesFile(value: unknown, path = "sources"): Loca
 export function parseVerifyReport(
   stdout: string,
   exitCode: number,
-  expected: CaseGitIdentity & { changedFiles: readonly string[] },
+  expected: Pick<CaseGitIdentity, "baseRef" | "headRef" | "mergeBase" | "range"> & { changedFiles: readonly string[] },
 ): Pick<SemctxCaseRun, "verdict" | "verificationStatus" | "suggestedFiles"> {
   let parsed: unknown;
   try {
@@ -244,12 +296,36 @@ function collectOneCase(
     if (merge.exitCode !== 0 || merge.timedOut || !/^[0-9a-f]{40}$/.test(mergeBase)) {
       return failed(`could not resolve a merge-base for the frozen range: ${merge.stderr.slice(0, 500)}`);
     }
+    const headTreeRun = git(["-C", workspace, "rev-parse", "HEAD^{tree}"], workspace, timeoutMs, environment);
+    const trackedFilesRun = git(["-C", workspace, "ls-files"], workspace, timeoutMs, environment);
+    const trackedStageRun = git(["-C", workspace, "ls-files", "--stage"], workspace, timeoutMs, environment);
+    const trackedFlagsRun = git(["-C", workspace, "ls-files", "-v"], workspace, timeoutMs, environment);
+    const trackedStatusRun = git(["-C", workspace, "status", "--porcelain=v1", "--untracked-files=no"], workspace, timeoutMs, environment);
+    const trackedFiles = trackedFilesRun.stdout.split("\n").map((line) => line.trim()).filter((line) => line.length > 0).sort();
+    if (
+      headTreeRun.exitCode !== 0 || headTreeRun.timedOut || !/^[0-9a-f]{40}$/.test(headTreeRun.stdout.trim())
+      || trackedFilesRun.exitCode !== 0 || trackedFilesRun.timedOut
+      || trackedStageRun.exitCode !== 0 || trackedStageRun.timedOut
+      || trackedFlagsRun.exitCode !== 0 || trackedFlagsRun.timedOut
+      || trackedStatusRun.exitCode !== 0 || trackedStatusRun.timedOut || trackedStatusRun.stdout.length !== 0
+    ) {
+      return failed("could not establish a clean tracked checkout identity before candidate execution");
+    }
     const gitIdentity: CaseGitIdentity = {
       baseRef: caseSpec.baseRef,
       headRef: caseSpec.headRef,
       mergeBase,
       range: `${mergeBase.slice(0, 12)}..${caseSpec.headRef.slice(0, 12)}`,
+      headTree: headTreeRun.stdout.trim(),
+      trackedFilesDigest: trackedCheckoutDigest(workspace, trackedFiles),
+      trackedIndexDigest: digestCanonical({ stage: trackedStageRun.stdout, flags: trackedFlagsRun.stdout }),
     };
+    const expectedGitignore = trackedFiles.includes(".gitignore")
+      ? computeGitignore(readFileSync(join(workspace, ".gitignore"), "utf8")).content
+      : null;
+    const expectedPostInitTrackedFilesDigest = expectedGitignore === null
+      ? gitIdentity.trackedFilesDigest
+      : trackedCheckoutDigest(workspace, trackedFiles, new Map([[".gitignore", expectedGitignore]]));
 
     const diff = git(
       ["-C", workspace, "diff", "--no-ext-diff", "--no-textconv", "--name-only", mergeBase, caseSpec.headRef, "--"],
@@ -263,7 +339,60 @@ function collectOneCase(
       return failed("observed git diff does not match changedFiles bound by the frozen protocol");
     }
 
-    const runCandidate = (args: readonly string[]): ToolInvocation => {
+    const allFiles = discoverTypeScriptFiles(workspace, trackedFiles);
+    const baselineStarted = performance.now();
+    const changedFilesSuggested = changedFilesBaseline(changedFiles);
+    const changedFilesAlgorithm = "changed-files-v1" as const;
+    const baselineChangedFiles: BaselineCaseRun = {
+      algorithm: changedFilesAlgorithm,
+      suggestedFiles: changedFilesSuggested,
+      durationMs: Math.round((performance.now() - baselineStarted) * 100) / 100,
+      inputDigest: baselineInputDigest(changedFilesAlgorithm, gitIdentity, changedFiles),
+      outputDigest: baselineOutputDigest(changedFilesAlgorithm, changedFilesSuggested),
+    };
+
+    const neighborhoodStarted = performance.now();
+    const neighborhoodSuggested = oneHopImportNeighborhoodBaseline(workspace, changedFiles, allFiles);
+    const neighborhoodAlgorithm = "one-hop-import-neighborhood-v1" as const;
+    const baselineImportNeighborhood: BaselineCaseRun = {
+      algorithm: neighborhoodAlgorithm,
+      suggestedFiles: neighborhoodSuggested,
+      durationMs: Math.round((performance.now() - neighborhoodStarted) * 100) / 100,
+      inputDigest: baselineInputDigest(neighborhoodAlgorithm, gitIdentity, changedFiles),
+      outputDigest: baselineOutputDigest(neighborhoodAlgorithm, neighborhoodSuggested),
+    };
+
+    const checkTrackedCheckout = (stage: string): string | null => {
+      const observedHead = git(["-C", workspace, "rev-parse", "HEAD"], workspace, timeoutMs, environment);
+      const observedTree = git(["-C", workspace, "rev-parse", "HEAD^{tree}"], workspace, timeoutMs, environment);
+      const observedFiles = git(["-C", workspace, "ls-files"], workspace, timeoutMs, environment);
+      const observedStage = git(["-C", workspace, "ls-files", "--stage"], workspace, timeoutMs, environment);
+      const observedFlags = git(["-C", workspace, "ls-files", "-v"], workspace, timeoutMs, environment);
+      const observedStatus = git(["-C", workspace, "status", "--porcelain=v1", "--untracked-files=no"], workspace, timeoutMs, environment);
+      if ([observedHead, observedTree, observedFiles, observedStage, observedFlags, observedStatus].some((run) => run.exitCode !== 0 || run.timedOut)) {
+        return `disposable checkout could not be verified after candidate ${stage}`;
+      }
+      const observedTrackedFiles = observedFiles.stdout.split("\n").map((line) => line.trim()).filter((line) => line.length > 0).sort();
+      let observedTrackedFilesDigest: string;
+      try {
+        observedTrackedFilesDigest = trackedCheckoutDigest(workspace, observedTrackedFiles);
+      } catch {
+        return `disposable checkout changed after candidate ${stage}`;
+      }
+      if (
+        observedHead.stdout.trim() !== gitIdentity.headRef
+        || observedTree.stdout.trim() !== gitIdentity.headTree
+        || (observedTrackedFilesDigest !== gitIdentity.trackedFilesDigest
+          && observedTrackedFilesDigest !== expectedPostInitTrackedFilesDigest)
+        || digestCanonical({ stage: observedStage.stdout, flags: observedFlags.stdout }) !== gitIdentity.trackedIndexDigest
+      ) {
+        return `disposable checkout changed after candidate ${stage}`;
+      }
+      return null;
+    };
+
+    let sourceDriftReason: string | null = null;
+    const runCandidate = (stage: string, args: readonly string[]): ToolInvocation => {
       assertImplementationIdentity();
       const invocation = toToolInvocation(runBounded([...candidateArgvPrefix, ...args, "--root", workspace], {
         cwd: workspace,
@@ -271,37 +400,20 @@ function collectOneCase(
         env: environment,
       }));
       assertImplementationIdentity();
+      const observedDrift = checkTrackedCheckout(stage);
+      sourceDriftReason ??= observedDrift;
       return invocation;
     };
-    const init = runCandidate(["init"]);
-    const index = runCandidate(["index"]);
-    const verify = runCandidate(["verify", "diff", "--base", caseSpec.baseRef, "--head", caseSpec.headRef, "--format", "json"]);
-    const verification = init.exitCode !== 0 || index.exitCode !== 0 || init.timedOut || index.timedOut
+    const init = runCandidate("init", ["init"]);
+    const index = runCandidate("index", ["index"]);
+    const verify = runCandidate("verify", ["verify", "diff", "--base", caseSpec.baseRef, "--head", caseSpec.headRef, "--format", "json"]);
+    const verification = sourceDriftReason !== null
+      ? { verdict: null, verificationStatus: "SOURCE_DRIFT" as const, suggestedFiles: [] }
+      : init.exitCode !== 0 || index.exitCode !== 0 || init.timedOut || index.timedOut
       ? { verdict: null, verificationStatus: "PREREQUISITE_FAILED" as const, suggestedFiles: [] }
       : verify.timedOut
         ? { verdict: null, verificationStatus: "TIMED_OUT" as const, suggestedFiles: [] }
         : parseVerifyReport(verify.stdout, verify.exitCode, { ...gitIdentity, changedFiles: caseSpec.changedFiles });
-
-    const listFiles = git(["-C", workspace, "ls-files"], workspace, timeoutMs, environment);
-    if (listFiles.exitCode !== 0 || listFiles.timedOut) return failed(`git ls-files failed: ${listFiles.stderr.slice(0, 500)}`);
-    const allFiles = discoverTypeScriptFiles(
-      workspace,
-      listFiles.stdout.split("\n").map((l) => l.trim()).filter((l) => l.length > 0),
-    );
-
-    const baselineStarted = performance.now();
-    const changedFilesSuggested = changedFilesBaseline(changedFiles);
-    const baselineChangedFiles: BaselineCaseRun = {
-      suggestedFiles: changedFilesSuggested,
-      durationMs: Math.round((performance.now() - baselineStarted) * 100) / 100,
-    };
-
-    const neighborhoodStarted = performance.now();
-    const neighborhoodSuggested = oneHopImportNeighborhoodBaseline(workspace, changedFiles, allFiles);
-    const baselineImportNeighborhood: BaselineCaseRun = {
-      suggestedFiles: neighborhoodSuggested,
-      durationMs: Math.round((performance.now() - neighborhoodStarted) * 100) / 100,
-    };
 
     return {
       caseId: caseSpec.caseId,
@@ -309,7 +421,7 @@ function collectOneCase(
       failureReason: null,
       git: gitIdentity,
       changedFiles,
-      semctx: { init, index, verify, ...verification },
+      semctx: { init, index, verify, ...verification, sourceDriftReason },
       baselineChangedFiles,
       baselineImportNeighborhood,
     };
@@ -381,7 +493,7 @@ export function collectCases(
 
 function validateToolInvocation(value: unknown, path: string): ToolInvocation {
   const record = requireRecord(value, path);
-  requireExactKeys(record, ["argv", "exitCode", "timedOut", "durationMs", "stdout", "stderr"], path);
+  requireExactKeys(record, ["argv", "exitCode", "timedOut", "durationMs", "stdout", "stderr", "outputDigest"], path);
   const invocation = {
     argv: requireStringArray(record.argv, `${path}.argv`),
     exitCode: requireInteger(record.exitCode, `${path}.exitCode`),
@@ -389,9 +501,13 @@ function validateToolInvocation(value: unknown, path: string): ToolInvocation {
     durationMs: requireFiniteNonNegative(record.durationMs, `${path}.durationMs`),
     stdout: requireString0(record.stdout, `${path}.stdout`),
     stderr: requireString0(record.stderr, `${path}.stderr`),
+    outputDigest: requireSha256(record.outputDigest, `${path}.outputDigest`),
   };
   if (invocation.timedOut !== (invocation.exitCode === TIMED_OUT_EXIT_CODE)) {
     throw new PilotValidationError(path, `timedOut must be true exactly when exitCode is ${TIMED_OUT_EXIT_CODE}`);
+  }
+  if (invocation.outputDigest !== toolOutputDigest(invocation.stdout, invocation.stderr)) {
+    throw new PilotValidationError(`${path}.outputDigest`, "does not match captured stdout and stderr");
   }
   return invocation;
 }
@@ -440,12 +556,15 @@ export function validateRawCollectionBundle(value: unknown, path = "raw"): RawCo
       throw new PilotValidationError(`${path}.cases[${i}].failureReason`, "OBSERVED cases must have a null failureReason");
     }
     const gitRecord = requireRecord(caseRecord.git, `${path}.cases[${i}].git`);
-    requireExactKeys(gitRecord, ["baseRef", "headRef", "mergeBase", "range"], `${path}.cases[${i}].git`);
+    requireExactKeys(gitRecord, ["baseRef", "headRef", "mergeBase", "range", "headTree", "trackedFilesDigest", "trackedIndexDigest"], `${path}.cases[${i}].git`);
     const gitIdentity: CaseGitIdentity = {
       baseRef: requireGitSha(gitRecord.baseRef, `${path}.cases[${i}].git.baseRef`),
       headRef: requireGitSha(gitRecord.headRef, `${path}.cases[${i}].git.headRef`),
       mergeBase: requireGitSha(gitRecord.mergeBase, `${path}.cases[${i}].git.mergeBase`),
       range: requireString(gitRecord.range, `${path}.cases[${i}].git.range`),
+      headTree: requireGitSha(gitRecord.headTree, `${path}.cases[${i}].git.headTree`),
+      trackedFilesDigest: requireSha256(gitRecord.trackedFilesDigest, `${path}.cases[${i}].git.trackedFilesDigest`),
+      trackedIndexDigest: requireSha256(gitRecord.trackedIndexDigest, `${path}.cases[${i}].git.trackedIndexDigest`),
     };
     const canonicalRange = `${gitIdentity.mergeBase.slice(0, 12)}..${gitIdentity.headRef.slice(0, 12)}`;
     if (gitIdentity.range !== canonicalRange) {
@@ -454,7 +573,7 @@ export function validateRawCollectionBundle(value: unknown, path = "raw"): RawCo
     const semctxRecord = requireRecord(caseRecord.semctx, `${path}.cases[${i}].semctx`);
     requireExactKeys(
       semctxRecord,
-      ["init", "index", "verify", "verdict", "verificationStatus", "suggestedFiles"],
+      ["init", "index", "verify", "verdict", "verificationStatus", "sourceDriftReason", "suggestedFiles"],
       `${path}.cases[${i}].semctx`,
     );
     const verdict = semctxRecord.verdict;
@@ -468,11 +587,17 @@ export function validateRawCollectionBundle(value: unknown, path = "raw"): RawCo
       verdict,
       verificationStatus: requireEnum(
         semctxRecord.verificationStatus,
-        ["TRUSTED", "PREREQUISITE_FAILED", "TIMED_OUT", "MALFORMED_OUTPUT", "EXIT_MISMATCH", "DIFF_MISMATCH"] as const,
+        ["TRUSTED", "PREREQUISITE_FAILED", "TIMED_OUT", "MALFORMED_OUTPUT", "EXIT_MISMATCH", "DIFF_MISMATCH", "SOURCE_DRIFT"] as const,
         `${path}.cases[${i}].semctx.verificationStatus`,
       ),
+      sourceDriftReason: semctxRecord.sourceDriftReason === null
+        ? null
+        : requireString(semctxRecord.sourceDriftReason, `${path}.cases[${i}].semctx.sourceDriftReason`),
       suggestedFiles: requireStringArray(semctxRecord.suggestedFiles, `${path}.cases[${i}].semctx.suggestedFiles`),
     };
+    if ((semctx.verificationStatus === "SOURCE_DRIFT") !== (semctx.sourceDriftReason !== null)) {
+      throw new PilotValidationError(`${path}.cases[${i}].semctx.sourceDriftReason`, "must be present exactly for SOURCE_DRIFT");
+    }
     if (semctx.verificationStatus === "TRUSTED") {
       if (semctx.verdict === null || semctx.init.exitCode !== 0 || semctx.index.exitCode !== 0 || semctx.verify.timedOut) {
         throw new PilotValidationError(`${path}.cases[${i}].semctx`, "TRUSTED requires successful prerequisites and a non-null verdict");
@@ -489,10 +614,19 @@ export function validateRawCollectionBundle(value: unknown, path = "raw"): RawCo
     }
     const baselineOf = (key: "baselineChangedFiles" | "baselineImportNeighborhood"): BaselineCaseRun => {
       const baselineRecord = requireRecord(caseRecord[key], `${path}.cases[${i}].${key}`);
-      requireExactKeys(baselineRecord, ["suggestedFiles", "durationMs"], `${path}.cases[${i}].${key}`);
+      requireExactKeys(baselineRecord, ["algorithm", "suggestedFiles", "durationMs", "inputDigest", "outputDigest"], `${path}.cases[${i}].${key}`);
+      const expectedAlgorithm = key === "baselineChangedFiles" ? "changed-files-v1" : "one-hop-import-neighborhood-v1";
+      const algorithm = requireEnum(baselineRecord.algorithm, [expectedAlgorithm] as const, `${path}.cases[${i}].${key}.algorithm`);
+      const suggestedFiles = requireStringArray(baselineRecord.suggestedFiles, `${path}.cases[${i}].${key}.suggestedFiles`);
+      if (JSON.stringify(suggestedFiles) !== JSON.stringify([...new Set(suggestedFiles)].sort())) {
+        throw new PilotValidationError(`${path}.cases[${i}].${key}.suggestedFiles`, "must be sorted and contain no duplicates");
+      }
       return {
-        suggestedFiles: requireStringArray(baselineRecord.suggestedFiles, `${path}.cases[${i}].${key}.suggestedFiles`),
+        algorithm,
+        suggestedFiles,
         durationMs: requireFiniteNonNegative(baselineRecord.durationMs, `${path}.cases[${i}].${key}.durationMs`),
+        inputDigest: requireSha256(baselineRecord.inputDigest, `${path}.cases[${i}].${key}.inputDigest`),
+        outputDigest: requireSha256(baselineRecord.outputDigest, `${path}.cases[${i}].${key}.outputDigest`),
       };
     };
     return {
