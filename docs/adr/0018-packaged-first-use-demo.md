@@ -43,6 +43,13 @@ Digest the complete packaged runtime (including TypeScript support libraries) be
 execution. Source authenticity stays UNKNOWN unless separately proven; a structurally valid
 substitute is not authenticated by its self-reported version or a caller-supplied label.
 
+Freeze the actual base files before the first candidate command, and the complete changed files
+before indexing. At each command boundary, compare their bytes, Git HEAD and full working diff
+with the expected fixture. Only the known generated `.gitignore` content and link-free `.semctx`
+metadata may appear outside those fixed files. Persistent drift blocks completion and keeps the
+captured child output. These checkpoints do not detect a mutation made and fully restored inside
+one child process; they are not an operating-system sandbox.
+
 ## Compatibility, failure and authority
 
 Existing CLI/MCP JSON schemas, exit codes, policy defaults, host support and generated plugins do

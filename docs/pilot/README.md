@@ -60,7 +60,8 @@ must have `synthetic: true`, and its results can never be reported as research e
 Resolves and locks: the candidate CLI's exact entry file digest and package identity (from
 `apps/cli/dist/index.js` for `packaging: "dist"`, or `apps/cli/src/index.ts` for `"source-dev"`
 local iteration), the Bun runtime version and executable digest, this runner's entry plus every
-support module under `scripts/pilot/`, the exact TypeScript parser runtime files, and the full corpus.
+support module under `scripts/pilot/`, the exact TypeScript parser and report-schema runtime files,
+the canonical `.gitignore` helper, and the full corpus.
 Mints a fresh `experimentId` and computes a canonical digest over everything but that digest field.
 `--out` must not already exist.
 
@@ -83,16 +84,20 @@ silently different measurement). For each case it then, inside a disposable temp
    real Git merge-base, and requires the observed `mergeBase..headRef` changed-file set to exactly
    match the frozen `changedFiles` list. The raw case binds the full merge-base and the canonical
    abbreviated range reported by the candidate.
-3. Runs the candidate's `init`, `index`, and `verify diff --base <baseRef> --head <headRef> --format json`
+3. Computes both baselines on the pristine checkout: changed-files-only, and a declared one-hop
+   local import neighborhood (relative `import`/`export`/`import()` specifiers via the TypeScript
+   parser, a syntactic proxy). Each result binds its algorithm, Git/source input and output digest.
+4. Runs the candidate's `init`, `index`, and `verify diff --base <baseRef> --head <headRef> --format json`
    with unchanged default semantics (no `--fail-on none`, no global `semctx` lookup — the resolved
    entry path from the frozen protocol is invoked explicitly with the Bun runtime that is running
    the collector). Every invocation receives `--root <disposable-clone>`; inherited `SEMCTX_ROOT`
    is removed. Git system/global config, external diff drivers and hooks are disabled for collection.
    Exit 3 (BLOCK) is recorded, not hidden.
-4. Computes both baselines: changed-files-only, and a declared one-hop local import neighborhood
-   (relative `import`/`export`/`import()` specifiers only, via the TypeScript parser — a syntactic
-   proxy, not resolved runtime dependency truth).
-5. Cleans up the temp workspace, success or failure.
+   Every captured stdout/stderr pair has a revalidated output digest. After each command, checks
+   the frozen HEAD, tree, tracked bytes and index. Only the exact normal `.gitignore` transformation
+   and confined `.semctx` metadata may be added; foreign source additions are refused.
+5. Preserves any persistent drift as `SOURCE_DRIFT`, a null verdict and retained raw invocations,
+   then cleans up the temp workspace, success or failure.
 
 A case that cannot even be cloned/checked out is `FAILED` (infrastructure failure). A case whose
 candidate run exits non-zero is still `OBSERVED` — the ADR requires observed tool failures to stay
@@ -115,6 +120,9 @@ makes evidence incomplete: the verdict is `EVIDENCE_MISSING` and no score is emi
 outputs and reason code.
 This is a coherence check over runner-observed local evidence, not a signature or an attestation:
 the offline report step cannot authenticate an adversarial rewrite of the entire raw artifact.
+It also checks baseline algorithm/input/output identities and requires changed-files suggestions
+to equal the captured changed-file set. Earlier unpublished candidate captures lacking these
+identity fields are rejected; freeze and collect a new experiment instead of rewriting old evidence.
 Scores `semctx`, `changed-files`, and `one-hop-import-neighborhood` against every `LABELLED` case only
 — `UNKNOWN` cases are excluded from scoring entirely, never treated as negatives. A `synthetic-smoke`
 protocol's `evidenceKind` is always `"smoke"` and its verdict is always `EVIDENCE_MISSING`, regardless
@@ -139,6 +147,9 @@ each collection attempt. Review raw collection bundles (`collect --out`) and ful
 not enforced by the tool.
 
 ## Known limitation
+
+Source checks observe state at each child-process boundary. They do not detect a mutation made
+and fully restored inside one child and do not impose an operating-system sandbox.
 
 `packaging: "source-dev"` hashes only the entry file and `apps/cli/package.json`, not its transitive
 workspace dependencies. It is accepted only for `synthetic-smoke`; a `research` draft must use

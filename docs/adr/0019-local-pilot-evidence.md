@@ -35,6 +35,19 @@ identity is invalid evidence. Adjudication is independently identified and recor
 source is human, externally published evidence, independent automated review or unknown. Automated
 adjudication is never presented as a human pilot. Raw evidence and disagreements remain available.
 
+Compute both baselines on the pristine disposable checkout before running the candidate. Bind
+their algorithm, captured Git/source input and suggestion output identities. At each candidate
+command boundary, require the frozen HEAD, tree, tracked bytes and index to remain intact, apart
+from the exact canonical `.gitignore` transformation. Permit confined Semctx metadata, but reject
+foreign source additions. A persistent mismatch stays observed as `SOURCE_DRIFT`, with no trusted
+verdict and with its raw invocations retained. These are process-boundary checks, not a sandbox
+against changes made and fully restored within one child.
+
+Offline validation recomputes captured stdout/stderr and baseline output digests and requires the
+changed-files baseline to equal the canonical captured changed-file set. Digests establish content
+coherence; they do not authenticate a wholesale rewrite of the raw bundle or independently prove
+the import-neighborhood algorithm without its source inputs.
+
 Reports distinguish EVIDENCE_MISSING, INCONCLUSIVE, NEGATIVE and POSITIVE. No score is produced for
 incomplete or incoherent input. Score only applicable adjudicated cases, display all denominators,
 unknowns and exclusions, and report per-repository results and critical misses. The proposed 80%
