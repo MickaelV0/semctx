@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync } from "node:fs";
 import { devNull, tmpdir } from "node:os";
-import { isAbsolute, join, relative } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { VerifyReportSchema } from "../../packages/core/src/verify-report";
 import { computeGitignore } from "../../packages/semantic-engine/src/gitignore";
 import { discoverTypeScriptFiles, changedFilesBaseline, oneHopImportNeighborhoodBaseline } from "./baselines";
@@ -170,7 +170,7 @@ export function validateLocalSourcesFile(value: unknown, path = "sources"): Loca
     if (!isAbsolute(validatedPath)) {
       throw new PilotValidationError(`${path}.paths.${caseId}`, "must be an absolute local repository path");
     }
-    paths[caseId] = validatedPath;
+    paths[caseId] = resolve(validatedPath);
   }
   return { schemaVersion: 1, paths };
 }

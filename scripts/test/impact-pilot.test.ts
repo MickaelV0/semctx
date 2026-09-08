@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { extractRelativeImportSpecifiers, oneHopImportNeighborhoodBaseline, type ImportGraphFile } from "../pilot/baselines";
 import { runBounded, TIMED_OUT_EXIT_CODE } from "../pilot/child";
 import {
@@ -1409,6 +1409,12 @@ describe("local source and output path safety", () => {
   test("rejects relative local source paths before collection", () => {
     expect(() => validateLocalSourcesFile({ schemaVersion: 1, paths: { "case-1": "relative/repo" } }))
       .toThrow(/absolute local repository path/);
+  });
+
+  test("fully qualifies an accepted host-absolute local source path", () => {
+    const sourcePath = "/repo";
+    const sources = validateLocalSourcesFile({ schemaVersion: 1, paths: { "case-1": sourcePath } });
+    expect(sources.paths["case-1"]).toBe(resolve(sourcePath));
   });
 
   test("refuses exclusive output through a symlink or junction ancestor", () => {
