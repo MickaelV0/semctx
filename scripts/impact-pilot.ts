@@ -86,6 +86,12 @@ function runCollect(args: readonly string[]): number {
 
 function runReport(args: readonly string[]): number {
   const flags = parseFlags(args, ["protocol", "raw", "out", "export"], ["preview"]);
+  const preview = hasFlag(flags, "preview");
+  for (const outputFlag of ["out", "export"] as const) {
+    if (preview && flags.has(outputFlag)) {
+      throw new Error(`--preview cannot be combined with --${outputFlag}`);
+    }
+  }
   const protocol = validateFrozenProtocol(readJson(requireFlag(flags, "protocol")));
   const raw = validateRawCollectionBundle(readJson(requireFlag(flags, "raw")));
   const report = buildResultReport(protocol, raw);
@@ -96,7 +102,7 @@ function runReport(args: readonly string[]): number {
   const exportPath = optionalFlag(flags, "export");
   if (exportPath !== undefined) writeJsonExclusive(exportPath, buildPublicSummary(protocol, report));
 
-  if (hasFlag(flags, "preview")) {
+  if (preview) {
     console.log(JSON.stringify(buildPublicSummary(protocol, report), null, 2));
   } else if (outputPath === undefined && exportPath === undefined) {
     console.log(JSON.stringify(report, null, 2));
