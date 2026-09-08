@@ -116,6 +116,24 @@ export {
   trustedControlSealHash,
 } from "./control";
 export type { ControlPlanCommand, ControlTraceCommand, CurrentControlState } from "./control";
+export {
+  exportFeedbackAggregate,
+  listFeedback,
+  recordFeedback,
+  removeFeedback,
+  showFeedback,
+  updateFeedback,
+} from "./feedback";
+export type {
+  FeedbackAnswer,
+  FeedbackClock,
+  FeedbackOutcome,
+  FeedbackReasonCode,
+  RecordFeedbackInput,
+  RecordFeedbackResult,
+} from "./feedback";
+export { buildSupportReport } from "./support";
+export type { SupportReportDependencies } from "./support";
 export { reviewTargetProposal } from "./target-review";
 export type { ReviewTargetArchitectureCommandV1 } from "./target-review";
 export {

@@ -58,7 +58,7 @@ are not release-readiness scores.
 A supported host minimum is an explicit support decision, distinct from the oldest historically
 compatible binary. Untested versions stay unknown. No new control layer is needed for these fixes.
 
-## 0.2: show the benefit, then test whether people return
+## 0.2: make first use and evidence reproducible
 
 Provide a public example with a harmless change, a meaningful risk, and an unresolved case. Show
 source, explanation, suggested checks and limits together. Pilot a frozen packaged candidate first
@@ -75,15 +75,17 @@ for CLI/Codex/Claude, and release notes explaining a before/after outcome. Colle
 on confusing or ignored findings. Public case studies require consent and reproducible examples
 or an explicit explanation of unavailable private evidence.
 
-The initial pilot targets five independent maintainers: four should reach a correctly understood
-first report within ten minutes on the documented demo; three should use it on a second real change
-within fourteen days. These are **proposed thresholds, not observed adoption or statistical proof**.
-Separate download/setup time and retain unsuccessful sessions.
+On 2026-09-08 the maintainer explicitly waived external participant studies for this release.
+The proposed five-maintainer trial, two-contributor trial and fourteen-day follow-up are therefore
+not release gates. Adoption, retention, comprehension and human completion time remain
+**NOT_MEASURED**. Automated journeys and technical review do not substitute for human observations.
 
 Evaluate at least thirty real changes across three independent repositories against changed-files-only
-and simple dependency-neighborhood advice. Measure relevant findings, misses, false alerts, time
-to choose checks and total operator effort. Freeze protocol and independent adjudication before
-scoring. This early impact pilot does not replace P4 or unlock enforcement.
+and simple dependency-neighborhood advice. Freeze source pairs, protocol, runner and package before
+replay; retain infrastructure and product failures. Cases without independent ground truth remain
+UNKNOWN and cannot produce accuracy, recall or effort-saving claims. The runner supports later
+adjudicated evaluation, but this release does not claim independent value from unlabelled changes.
+This early impact pilot does not replace P4 or unlock enforcement.
 
 ## 0.3: make indexes an understandable capability
 

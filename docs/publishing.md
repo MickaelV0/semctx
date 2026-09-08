@@ -339,10 +339,11 @@ These surfaces must share the same `x.y.z` on every plugin/CLI release:
 | App services | `packages/app-services/package.json` |
 | npm CLI | `apps/cli/package.json` (`semctx --version` / `doctor`) |
 | OMP marketplace catalog | `.omp-plugin/marketplace.json` |
-| OMP plugin manifest | `plugins/claude-code/.omp-plugin/plugin.json` |
+| OMP Agent-Plugins manifest | `plugins/claude-code/plugin.json` |
+| OMP extension package | `plugins/claude-code/package.json` |
 
 `plugins/plugin-parity.test.ts` fails CI when plugins, marketplace, MCP, app-services, the npm CLI
-package, or the OMP catalog/manifest diverge. The plugin MCP/CLI entries and shared runtime chunk
+package, or the OMP catalog/manifests diverge. The plugin MCP/CLI entries and shared runtime chunk
 are rebuilt together via `plugin:build` (same entrypoint sources). The npm CLI uses a separate
 `apps/cli` prepack bundle for CI/global installs — same version number, two packagers by design.
 
@@ -351,10 +352,10 @@ rejects build-machine paths, and performs a real stdio handshake (MCP) plus a pa
 (`setup`, `doctor --json`, `verify diff --dry-run` on a foreign sample repo) from a copied plugin
 directory on Windows and Ubuntu before the plugin snapshot is publishable.
 
-**Oh My Pi is not part of that proof.** Its two surfaces above are held at the same `x.y.z` by the
+**Oh My Pi is not part of that proof.** Its three versioned surfaces above are held at the same `x.y.z` by the
 same test, so a stale OMP manifest cannot ship silently — but the `deliver` job's
 `stable_delivery_proof` only ever installs and attests Codex and Claude. OMP is an experimental,
-opt-in consumer of the Claude plugin tree (ADR 0015): no `plugin-status` support, no delivery
+opt-in consumer of the Claude plugin tree (ADR 0020): no `plugin-status` support, no delivery
 attestation, no live install/initialize evidence beyond what a contributor observes locally. That
 gap is tracked in HOK-456, not closed by this table.
 

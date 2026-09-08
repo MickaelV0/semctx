@@ -47,9 +47,11 @@ Build a static report page from an explicitly public bundle. Actions artifacts s
 evidence exchange but expire; retain release evidence as versioned public data/release assets with
 digests and a stated retention policy. Do not publish the old private corpus through this path.
 
-Collect pilot consent and local aggregate events: install outcome, first understood report, advice
-accepted/ignored with a reason, and second use. Export is explicit. Sanitize paths and free text;
-never enable hosted telemetry or upload prompts/source automatically.
+The maintainer waived participant studies on 2026-09-08. Keep adoption, retention, comprehension
+and contributor time NOT_MEASURED. Voluntary finding feedback remains local and optional; its
+aggregate export omits notes, source identities, arbitrary rule text and private paths. It is an
+opinion, not correction evidence or permission to alter enforcement. Never enable hosted telemetry
+or upload prompts/source automatically.
 
 ### 0.3: index lifecycle and resource matrix
 
