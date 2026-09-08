@@ -39,7 +39,7 @@ function expectedWarningReport(overrides: Record<string, unknown> = {}): Record<
 function fakeCli(options: {
   setup?: string; setupCode?: number; verify?: string; verifyCode?: number;
   drift?: boolean; headDrift?: boolean; rejectAmbientRepositoryEnv?: boolean;
-  fixtureMutation?: "version-edit" | "setup-edit" | "index-edit" | "index-staged" | "index-delete" | "index-rename" | "index-inject" | "verify-edit";
+  fixtureMutation?: "version-edit" | "setup-edit" | "index-edit" | "index-edit-verify-restore" | "index-staged" | "index-delete" | "index-rename" | "index-inject" | "verify-edit";
   writeSemctxMetadata?: boolean;
   semctxLinkTarget?: string;
 } = {}): string {
@@ -50,6 +50,8 @@ const cmd = process.argv[2];
 const mutation = ${JSON.stringify(options.fixtureMutation ?? null)};
 const mutateFixture = (phase) => {
   if (mutation === phase + '-edit') appendFileSync('src/greeting.ts', '\\n// changed by selected CLI');
+  if (mutation === 'index-edit-verify-restore' && phase === 'index') appendFileSync('src/greeting.ts', '\\n// changed by selected CLI');
+  if (mutation === 'index-edit-verify-restore' && phase === 'verify') writeFileSync('src/greeting.ts', ${JSON.stringify(FIXTURE_CASES[0]!.file.changed)});
   if (mutation === phase + '-staged') { appendFileSync('src/cart.ts', '\\n// staged by selected CLI'); Bun.spawnSync(['git', 'add', 'src/cart.ts'], { cwd: process.cwd() }); }
   if (mutation === phase + '-delete') rmSync('src/pricing.ts');
   if (mutation === phase + '-rename') renameSync('src/pricing.ts', 'src/renamed.ts');
@@ -256,6 +258,7 @@ test.each([
   "version-edit",
   "setup-edit",
   "index-edit",
+  "index-edit-verify-restore",
   "index-staged",
   "index-delete",
   "index-rename",
