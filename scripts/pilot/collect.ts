@@ -169,10 +169,11 @@ export function parseVerifyReport(
 
 function sanitizedEnvironment(disabledHooksPath: string): Record<string, string> {
   const environment: Record<string, string> = {};
+  // Git routing can override cwd and write outside the private clone, including through the CLI.
   for (const [key, value] of Object.entries(process.env)) {
-    if (value !== undefined) environment[key] = value;
+    const upper = key.toUpperCase();
+    if (value !== undefined && !upper.startsWith("GIT_") && upper !== "SEMCTX_ROOT") environment[key] = value;
   }
-  delete environment.SEMCTX_ROOT;
   environment.GIT_CONFIG_NOSYSTEM = "1";
   environment.GIT_CONFIG_GLOBAL = process.platform === "win32" ? "NUL" : devNull;
   environment.GIT_EXTERNAL_DIFF = "";
