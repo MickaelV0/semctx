@@ -20,7 +20,7 @@ import {
   GLOBAL_VERIFY_COMMAND,
 } from "../hooks/semctx-guard.mjs";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, renameSync, rmdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
@@ -361,6 +361,24 @@ describe("guardEnabled — advisory by default, strict off wins", () => {
       expect(guardEnabledForInvocation(input)).toBeUndefined();
 
       rmSync(guardPath, { recursive: true });
+      symlinkSync(
+        join(repo, "missing-guard-target"),
+        guardPath,
+        process.platform === "win32" ? "junction" : "file",
+      );
+      expect(guardEnabledForInvocation(input)).toBeUndefined();
+
+      rmSync(guardPath, { force: true });
+      rmdirSync(guardDir);
+      symlinkSync(
+        join(repo, "missing-semctx-target"),
+        guardDir,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+      expect(guardEnabledForInvocation(input)).toBeUndefined();
+
+      rmSync(guardDir, { force: true });
+      mkdirSync(guardDir);
       writeFileSync(guardPath, JSON.stringify({ enabled: false }));
       expect(guardEnabledForInvocation(input)).toBe(false);
     } finally {

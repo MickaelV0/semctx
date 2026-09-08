@@ -1419,10 +1419,35 @@ function readGuardJson(path) {
     ) return { status: "unknown", value: null };
     return { status: "read", value };
   } catch (error) {
-    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+    if (
+      error && typeof error === "object" && "code" in error && error.code === "ENOENT"
+      && guardPathIsKnownAbsent(path)
+    ) {
       return { status: "absent", value: null };
     }
     return { status: "unknown", value: null };
+  }
+}
+
+function guardPathIsKnownAbsent(path) {
+  try {
+    lstatSync(path);
+    return false;
+  } catch (error) {
+    if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) return false;
+  }
+  const parent = dirname(path);
+  try {
+    const parentState = lstatSync(parent);
+    if (!parentState.isSymbolicLink()) return true;
+    try {
+      realpathSync(parent);
+      return true;
+    } catch {
+      return false;
+    }
+  } catch (error) {
+    return Boolean(error && typeof error === "object" && "code" in error && error.code === "ENOENT");
   }
 }
 
