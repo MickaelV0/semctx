@@ -47,7 +47,10 @@ export type DemoBlockReason =
 export interface RecordedCommand {
   label: "version" | "setup" | "index" | "verify-diff";
   argv: readonly string[];
-  code: number;
+  code: number | null;
+  signal: string | null;
+  /** Monotonic elapsed time around the real child process. */
+  durationMs: number;
   stdoutFile: string;
   /** SHA-256 of the stdout file bytes immediately after capture; not a later mutation monitor. */
   stdoutDigest: string;
@@ -257,6 +260,8 @@ function recordCommand(
     label,
     argv: outcome.argv,
     code: outcome.code,
+    signal: outcome.signal,
+    durationMs: outcome.durationMs,
     stdoutFile: stdout.file,
     stdoutDigest: stdout.digest,
     stderrFile: stderr.file,
@@ -472,14 +477,14 @@ export function runFirstUseDemo(options: RunFirstUseDemoOptions): DemoOutcome {
       return files;
     });
     const cases: CaseOutcome[] = FIXTURE_CASES.map((fixtureCase) => {
-      const observedRules = new Set<string>();
-      for (const [index, finding] of findings.entries()) {
-        if (findingFiles[index]!.has(fixtureCase.file.relPath)) observedRules.add(finding.rule);
-      }
-      const observed = [...observedRules].sort();
+      const observedFindings = findings.filter((_finding, index) => findingFiles[index]!.has(fixtureCase.file.relPath));
+      const observed = observedFindings.map(finding => finding.rule).sort();
       const matchedExpectation = fixtureCase.expectedFinding === "none"
-        ? observed.length === 0
-        : observed.includes("contract_changed_without_test");
+        ? observedFindings.length === 0
+        : observedFindings.length === 1
+          && observedFindings[0]!.rule === "contract_changed_without_test"
+          && observedFindings[0]!.tier === "advisory"
+          && observedFindings[0]!.severity === "warn";
       return {
         id: fixtureCase.id,
         title: fixtureCase.title,
@@ -509,11 +514,16 @@ export function runFirstUseDemo(options: RunFirstUseDemoOptions): DemoOutcome {
     }
 
     const unexpectedCases = cases.filter(fixtureCase => !fixtureCase.matchedExpectation);
-    if (unexpectedCases.length > 0) {
+    const globalVerdictMatches = report.verdict === "WARN";
+    if (unexpectedCases.length > 0 || !globalVerdictMatches) {
+      const mismatches = [
+        ...(unexpectedCases.length > 0 ? [`case(s): ${unexpectedCases.map(item => item.id).join(", ")}`] : []),
+        ...(!globalVerdictMatches ? [`expected global WARN, observed ${report.verdict}`] : []),
+      ];
       return finish(blocked(
         { ...emptyBase, commands },
         "UNEXPECTED_ANALYSIS",
-        `The selected CLI did not reproduce the frozen expectation for: ${unexpectedCases.map(item => item.id).join(", ")}.`,
+        `The selected CLI did not reproduce the exact frozen observation (${mismatches.join("; ")}).`,
         fixtureHeadCommit,
       ));
     }

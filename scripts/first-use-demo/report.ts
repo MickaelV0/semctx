@@ -91,8 +91,9 @@ export function renderReportMarkdown(outcome: DemoOutcome): string {
   lines.push("");
   if (outcome.commands.length === 0) lines.push("_none — the run was blocked before any command._");
   for (const cmd of outcome.commands) {
-    lines.push(`- \`${cmd.argv.join(" ")}\` → exit \`${cmd.code}\` (raw: \`${cmd.stdoutFile}\`, \`${cmd.stderrFile}\`)`);
+    lines.push(`- \`${cmd.argv.join(" ")}\` → exit \`${cmd.code}\`, signal \`${cmd.signal ?? "none"}\`, ${cmd.durationMs.toFixed(3)} ms (raw: \`${cmd.stdoutFile}\`, \`${cmd.stderrFile}\`)`);
   }
+  lines.push("- Artifact download: not performed or measured; the caller supplied the prebuilt CLI.");
   lines.push("");
   lines.push(`## Global verdict for the combined diff`);
   lines.push("");

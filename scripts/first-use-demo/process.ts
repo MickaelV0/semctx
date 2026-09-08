@@ -3,8 +3,9 @@
 export interface ChildOutcome {
   argv: readonly string[];
   cwd: string;
-  code: number;
+  code: number | null;
   signal: string | null;
+  durationMs: number;
   stdout: string;
   stderr: string;
 }
@@ -30,6 +31,7 @@ export function runChild(
   argv: readonly string[],
   options: { cwd: string; env?: Record<string, string | undefined>; timeoutMs?: number },
 ): ChildOutcome {
+  const startedAt = performance.now();
   const proc = Bun.spawnSync([...argv], {
     cwd: options.cwd,
     env: options.env,
@@ -37,11 +39,13 @@ export function runChild(
     stderr: "pipe",
     timeout: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
   });
+  const durationMs = Math.max(0, performance.now() - startedAt);
   return {
     argv,
     cwd: options.cwd,
-    code: proc.exitCode,
+    code: proc.exitCode ?? null,
     signal: proc.signalCode ?? null,
+    durationMs,
     stdout: new TextDecoder().decode(proc.stdout),
     stderr: new TextDecoder().decode(proc.stderr),
   };
