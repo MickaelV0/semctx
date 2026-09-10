@@ -67,7 +67,7 @@ afterEach(() => {
 });
 
 describe("analysis-health changed-scope path coverage", () => {
-  it("blocks a deleted selected Python path even though legacy diff analysis omits deletions", () => {
+  it("blocks a deleted selected Python path while retaining changed-file truth", () => {
     const root = repository();
     const diffText = [
       "diff --git a/src/service.py b/src/service.py",
@@ -83,7 +83,7 @@ describe("analysis-health changed-scope path coverage", () => {
 
     const computation = runVerify(root, { kind: "provided", diffText, head: "HEAD" });
 
-    expect(computation.result.changedFiles).toEqual([]);
+    expect(computation.result.changedFiles).toEqual(["src/service.py"]);
     expect(computation.result.verdict).toBe("BLOCK");
     expect(computation.result.findings).toEqual(expect.arrayContaining([
       expect.objectContaining({
@@ -92,7 +92,39 @@ describe("analysis-health changed-scope path coverage", () => {
         message: expect.stringContaining("src/service.py"),
       }),
     ]));
-  });
+  }, 20_000);
+
+  it("reports a real Git range deletion without fabricating deleted symbols", () => {
+    const root = repository();
+    const base = git(root, "rev-parse", "HEAD");
+    git(root, "rm", "src/service.py");
+    git(
+      root,
+      "-c",
+      "user.name=Semctx Test",
+      "-c",
+      "user.email=semctx@example.test",
+      "commit",
+      "-q",
+      "-m",
+      "delete service",
+    );
+
+    const computation = runVerify(root, { kind: "range", base });
+
+    expect(computation.result.changedFiles).toEqual(["src/service.py"]);
+    expect(computation.report.changedFiles).toEqual(["src/service.py"]);
+    expect(computation.result.impactedNodes).toEqual([]);
+    expect(computation.report.changedSymbols).toEqual([]);
+    expect(computation.result.verdict).toBe("BLOCK");
+    expect(computation.result.findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        rule: "analysis_scope_incomplete",
+        severity: "block",
+        message: expect.stringContaining("src/service.py"),
+      }),
+    ]));
+  }, 20_000);
 
   it("blocks a range rename that moves a selected path outside current selection", () => {
     const root = repository();

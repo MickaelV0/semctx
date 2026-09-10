@@ -568,6 +568,58 @@ They validate the same schemas, call the same application services and serialize
 to the same canonical bytes. MCP capture is idempotent and non-destructive but writes ignored local
 state; MCP resume is read-only and idempotent.
 
+## Local feedback and support reports
+
+These commands are optional and local. They do not upload data, open an issue, enable telemetry,
+or change verification policy.
+
+Preview a privacy-safe support report:
+
+```text
+semctx support
+semctx support --output support-report.json
+```
+
+The command always prints the version-1 JSON payload. Without `--output`, it writes nothing. With
+`--output`, it creates a new file containing exactly the printed payload and refuses an existing
+file or symbolic link. The report contains only tool/runtime versions, platform/architecture, and
+bounded workspace/index statuses and reason codes. Missing diagnostics stay `unknown`; raw errors,
+paths, Git data, configuration, environment variables, and stack traces are excluded.
+
+Record voluntary feedback against one finding from an existing JSON `verify diff` report:
+
+```text
+semctx feedback record --report verify.json --finding 0 --outcome useful
+semctx feedback record --report verify.json --finding 0 --outcome suspected-error --reason false-positive --note "local context"
+semctx feedback list
+semctx feedback show <record-id>
+semctx feedback update <record-id> --outcome unclear
+semctx feedback remove <record-id>
+semctx feedback export
+semctx feedback export --output feedback-aggregate.json
+```
+
+`list` and `show` display private local records. Records live only in
+`.semctx/feedback/records.json`; an absent read creates no file, and removal targets one exact ID.
+Relative `--report` and `--output` file paths resolve from the calling directory, independently
+of the repository selected by `--root`.
+Recording the same answer twice is idempotent. A different answer is rejected until the explicit
+`update` command is used. A malformed store is preserved for manual inspection or removal.
+
+`feedback export` prints only aggregate counts, coded outcomes/reasons, and known standard rule
+names. It excludes notes, custom rule text, findings, report/source identities, and paths. Review
+private records after about 30 days and remove obsolete entries explicitly; Semctx runs no cleanup
+daemon.
+
+An interrupted writer can leave `.semctx/feedback/records.json.lock`. The lock normally records
+its local PID and start time. Wait for any active feedback write to finish. If the recorded process
+is gone, first ensure no other feedback write is running, then remove only this lock and retry.
+An empty or malformed lock needs the same manual inspection. Keep `records.json` intact; the store
+is atomically replaced, and any leftover `records.json.<pid>.<uuid>.tmp` is an uncommitted attempt.
+Semctx never guesses that a writer is dead or reclaims a lock automatically, since concurrent
+reclamation could admit two writers and lose an update. PID metadata is a diagnostic, not proof
+of ownership or liveness.
+
 ## Experimental
 
 `task create` and `context prepare` (the `task → ContextPack` retriever) and `bench` remain in the

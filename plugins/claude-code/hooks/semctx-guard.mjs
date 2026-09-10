@@ -9,7 +9,6 @@ import { existsSync, lstatSync, readFileSync, readlinkSync, realpathSync, readdi
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { dirname, join, resolve, isAbsolute } from "node:path";
-import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 function unwrapShellBody(text) {
@@ -1190,12 +1189,75 @@ function resolveGitRoot(cwd) {
   }
 }
 
+function sameGitRoot(left, right) {
+  const normalizedLeft = normalizedPath(resolve(left));
+  const normalizedRight = normalizedPath(resolve(right));
+  return process.platform === "win32"
+    ? normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()
+    : normalizedLeft === normalizedRight;
+}
+
+/** @param {{command?: unknown, cwd?: string, sessionCwd?: string}} input */
+function guardInvocationContext({ command, cwd, sessionCwd }) {
+  const inputCwd = cwd ?? sessionCwd ?? process.cwd();
+  const sessionRoot = resolveGitRoot(sessionCwd ?? inputCwd);
+  const targetRoot = resolveGitRoot(resolveGitCwd(command, inputCwd));
+  return {
+    sessionRoot,
+    targetRoot,
+    scopeRequiresSessionGuard: gitScopeRequiresSessionGuard(command) || !sameGitRoot(sessionRoot, targetRoot),
+  };
+}
+
 /** Enablement: SEMCTX_GUARD=off strictly disables (wins); =on forces; else .semctx/guard.json {enabled}. */
 export function guardEnabled(env, guardJson) {
-  const e = String(env?.SEMCTX_GUARD ?? "").toLowerCase();
-  if (e === "off" || e === "0" || e === "false") return false;
-  if (e === "on" || e === "1" || e === "true") return true;
+  const override = guardEnvironmentOverride(env);
+  if (override !== undefined) return override;
   return guardJson?.enabled === true;
+}
+
+/**
+ * Effective opt-in across the target repository and a separately preserved host session root.
+ * Returns undefined when a guard config exists but cannot be read or parsed, so callers that must
+ * distinguish known advisory mode from unknown enablement can fail closed without changing the
+ * ordinary filesystem-target behavior.
+ */
+/** @param {{command?: unknown, cwd?: string, sessionCwd?: string, env?: Record<string, string | undefined>}} input */
+export function guardEnabledForInvocation({ command, cwd, sessionCwd, env }) {
+  const override = guardEnvironmentOverride(env);
+  if (override !== undefined) return override;
+  const context = guardInvocationContext({ command, cwd, sessionCwd });
+  return guardEnablementForContext(context, env);
+}
+
+/** @param {{sessionRoot: string, targetRoot: string, scopeRequiresSessionGuard: boolean}} context */
+function guardEnablementForContext(context, env) {
+  const targetGuard = readGuardJson(join(context.targetRoot, ".semctx", "guard.json"));
+  const sessionGuard = context.scopeRequiresSessionGuard
+    ? readGuardJson(join(context.sessionRoot, ".semctx", "guard.json"))
+    : null;
+  if (
+    (targetGuard.status === "read" && guardEnabled(env, targetGuard.value))
+    || (sessionGuard?.status === "read" && guardEnabled(env, sessionGuard.value))
+  ) return true;
+  if (targetGuard.status === "unknown" || sessionGuard?.status === "unknown") return undefined;
+  return false;
+}
+
+/** Environment lookup follows Windows' case-insensitive variable semantics after object spreads. */
+function environmentValue(env, name) {
+  if (env == null) return undefined;
+  const direct = env[name];
+  if (direct !== undefined || process.platform !== "win32") return direct;
+  const key = Object.keys(env).find((candidate) => candidate.toLowerCase() === name.toLowerCase());
+  return key === undefined ? undefined : env[key];
+}
+
+function guardEnvironmentOverride(env) {
+  const value = String(environmentValue(env, "SEMCTX_GUARD") ?? "").toLowerCase();
+  if (value === "off" || value === "0" || value === "false") return false;
+  if (value === "on" || value === "1" || value === "true") return true;
+  return undefined;
 }
 
 /** Verify command for a shell that has no plugin bundle in reach. */
@@ -1211,16 +1273,13 @@ export function shellQuote(value) {
  *
  * Claude Code exports CLAUDE_PLUGIN_ROOT to *hook processes* (and to MCP/LSP subprocesses) — it is
  * NOT exported to the agent's shell, and `${CLAUDE_PLUGIN_ROOT}` is a load-time placeholder for
- * skill/hook/MCP fields only. Oh My Pi substitutes `${OMP_PLUGIN_ROOT}` the same way in MCP
- * config. A guard reason string is neither, so the path must be resolved here.
+ * skill/hook/MCP fields only. A guard reason string is neither, so the path must be resolved here.
  * Falls back to this hook's own location so a plugin copy without the env var still works.
  */
 export function pluginCliPath(env = process.env, exists = existsSync) {
   const candidates = [];
-  for (const key of ["CLAUDE_PLUGIN_ROOT", "OMP_PLUGIN_ROOT"]) {
-    const declared = String(env?.[key] ?? "").trim();
-    if (declared) candidates.push(join(declared, "dist", "semctx.js"));
-  }
+  const declared = String(environmentValue(env, "CLAUDE_PLUGIN_ROOT") ?? "").trim();
+  if (declared) candidates.push(join(declared, "dist", "semctx.js"));
   candidates.push(resolve(dirname(fileURLToPath(import.meta.url)), "..", "dist", "semctx.js"));
   for (const candidate of candidates) {
     try {
@@ -1237,7 +1296,7 @@ export function pluginCliPath(env = process.env, exists = existsSync) {
  * side-effect free, so it never spawns a process to answer this.
  */
 export function bunOnPath(env = process.env, exists = existsSync) {
-  const entries = String(env?.PATH ?? "").split(process.platform === "win32" ? ";" : ":");
+  const entries = String(environmentValue(env, "PATH") ?? "").split(process.platform === "win32" ? ";" : ":");
   const names = process.platform === "win32" ? ["bun.exe", "bun.cmd", "bun"] : ["bun"];
   for (const entry of entries) {
     if (!entry) continue;
@@ -1351,6 +1410,49 @@ function readJson(path) {
     return JSON.parse(readFileSync(path, "utf8"));
   } catch {
     return null;
+  }
+}
+
+function readGuardJson(path) {
+  try {
+    const value = JSON.parse(readFileSync(path, "utf8"));
+    if (
+      value === null
+      || typeof value !== "object"
+      || Array.isArray(value)
+      || typeof value.enabled !== "boolean"
+    ) return { status: "unknown", value: null };
+    return { status: "read", value };
+  } catch (error) {
+    if (
+      error && typeof error === "object" && "code" in error && error.code === "ENOENT"
+      && guardPathIsKnownAbsent(path)
+    ) {
+      return { status: "absent", value: null };
+    }
+    return { status: "unknown", value: null };
+  }
+}
+
+function guardPathIsKnownAbsent(path) {
+  try {
+    lstatSync(path);
+    return false;
+  } catch (error) {
+    if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) return false;
+  }
+  const parent = dirname(path);
+  try {
+    const parentState = lstatSync(parent);
+    if (!parentState.isSymbolicLink()) return true;
+    try {
+      realpathSync(parent);
+      return true;
+    } catch {
+      return false;
+    }
+  } catch (error) {
+    return Boolean(error && typeof error === "object" && "code" in error && error.code === "ENOENT");
   }
 }
 
@@ -1608,243 +1710,42 @@ export function captureVerificationGitState(cwd) {
 }
 
 /**
- * Read every broker-retained launch spec for a daemon `name`.
- * Scopes are enumerated rather than hashed: the guard is host-neutral and must run under Node,
- * where `Bun.hash` is absent. Names are unique per project directory, so several scopes may match.
- *
- * @param {unknown} name Daemon name from the tool call. Rejected unless it is a single path segment.
- * @param {NodeJS.ProcessEnv} [env] Injected by the caller — never read from `process.env` here.
- * @returns {Array<{ application: string, args: string[], cwd: string|null, env: Record<string, unknown>|null }>}
+ * Evaluate the ADR 0007 guard for one Bash invocation, independent of the calling host's hook
+ * envelope. Claude Code's `main()` below and the OMP `omp/semctx-guard.ts` adapter both call this
+ * with their own `command`/`cwd`/`env` mapping, so terminal `git commit`/`git push` authorization
+ * is one shared policy rather than two forks. Returns `{ block: false }` or
+ * `{ block: true, reason }`; never throws, never touches stdin/stdout/exit.
  */
-function resolveHubLaunchSpecs(name, env) {
-  if (!isHubDaemonName(name)) return [];
-  const root = daemonRuntimeRoot(env);
-  const specs = [];
-  for (const scope of listDaemonScopeNames(root)) {
-    const spec = parseHubLaunchSpec(readJson(join(root, scope, "daemons", name, "meta.json")));
-    if (spec !== null) specs.push(spec);
-  }
-  return specs;
-}
-
-function isHubDaemonName(name) {
-  return typeof name === "string"
-    && name.length > 0
-    && name !== "."
-    && name !== ".."
-    && !name.includes("/")
-    && !name.includes("\\");
-}
-
-function daemonRuntimeRoot(env) {
-  const explicit = env?.SEMCTX_DAEMON_RUNTIME_ROOT;
-  if (typeof explicit === "string" && explicit.length > 0) return explicit;
-  const xdg = env?.XDG_STATE_HOME;
-  if (typeof xdg === "string" && xdg.length > 0) return join(xdg, "omp", "run", "daemons");
-  return join(env?.HOME ?? homedir(), ".omp", "run", "daemons");
-}
-
-function listDaemonScopeNames(root) {
-  try {
-    return readdirSync(root, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name);
-  } catch {
-    return [];
-  }
-}
-
-function parseHubLaunchSpec(meta) {
-  if (meta === null || typeof meta !== "object" || Array.isArray(meta)) return null;
-  const spec = meta.spec;
-  if (spec === null || typeof spec !== "object" || Array.isArray(spec)) return null;
-  if (typeof spec.application !== "string" || spec.application.length === 0) return null;
-  const args = Array.isArray(spec.args) ? spec.args.map((value) => String(value)) : [];
-  const cwd = typeof spec.cwd === "string" && spec.cwd.length > 0 ? spec.cwd : null;
-  const env = spec.env !== null && typeof spec.env === "object" && !Array.isArray(spec.env) ? spec.env : null;
-  return { application: spec.application, args, cwd, env };
-}
-
-/**
- * Prefix a retained spec's `env` map as inline assignments, exactly as the OMP `tool_call`
- * adapter's `effectiveCommand` does for a `start`. A structured `GIT_DIR=…` is invisible in argv,
- * so without this a spec could name an unarmed `cwd` while retargeting the commit at an armed
- * repository — `resolveGitCwd` reads the assignment from the command string.
- */
-function prefixSpecEnv(command, env) {
-  if (env === null) return command;
-  const assignments = Object.entries(env)
-    .filter(([name]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name))
-    .map(([name, value]) => `${name}=${shellQuote(String(value))}`)
-    .join(" ");
-  if (!assignments) return command;
-  return command ? `${assignments} ${command}` : assignments;
-}
-
-/**
- * Synthesize the argv Oh My Pi's `hub` tool will exec for `op: "start"`.
- *
- * Measured (oh-my-pi `HubTool.name = "hub"`, schema `application` + `args` as sibling fields of
- * `op`, `commandSpec` in `tools/hub/launch.ts`): `start` launches the binary directly, no shell.
- * `restart` is `{ op: "restart", name }` only — it replays a broker-retained spec and carries no
- * application/args, so this function still returns null (the return type stays a command string).
- * Resolve restart with `synthesizeHubRestartInvocations`.
- *
- * Residue, deliberately not closed: broker auto-restart (`restart: "on-failure"|"always"`) replays
- * a retained spec with NO tool call, so no hook fires. When the spec was retained while the
- * repository was unarmed and the repository is armed afterwards, that replay reaches `git commit`
- * out of this hook's reach. Admitting the initial `start` is the only gate on that path, and it
- * did not exist at the time the spec was created. Other hub ops (send/wait/logs/...) spawn no argv.
- *
- * Arguments that are not plain tokens are POSIX-single-quoted so a space cannot reshape the parse
- * the existing git predicates run. `cwd` is NOT inlined as `cd` — hub's `cwd` is the process
- * working directory, equivalent to bash `input.cwd`, and is passed separately to `evaluateBashGuard`.
- */
-export function synthesizeHubCommand(input) {
-  if (input === null || typeof input !== "object" || Array.isArray(input)) return null;
-  if (String(input.op ?? "") !== "start") return null;
-  const application = input.application;
-  if (typeof application !== "string" || application.length === 0) return null;
-  const args = Array.isArray(input.args) ? input.args.map((value) => String(value)) : [];
-  return [application, ...args].map(quoteHubArg).join(" ");
-}
-
-function quoteHubArg(word) {
-  return /^[A-Za-z0-9_./:=+-]+$/.test(word) ? word : shellQuote(word);
-}
-
-/**
- * Resolve `op: "restart"` to the commands the broker will replay.
- * `synthesizeHubCommand` stays the argv synthesizer and keeps returning a string (or null);
- * this sister returns command+cwd per spec plus whether resolution failed.
- *
- * @param {unknown} input
- * @param {NodeJS.ProcessEnv} [env]
- * @returns {{ unresolved: boolean, invocations: Array<{ command: string, cwd: string|null }> }}
- */
-export function synthesizeHubRestartInvocations(input, env) {
-  if (input === null || typeof input !== "object" || Array.isArray(input)) {
-    return { unresolved: true, invocations: [] };
-  }
-  if (String(input.op ?? "") !== "restart") {
-    return { unresolved: true, invocations: [] };
-  }
-  const invocations = [];
-  for (const spec of resolveHubLaunchSpecs(input.name, env)) {
-    const command = synthesizeHubCommand({
-      op: "start",
-      application: spec.application,
-      args: spec.args,
-    });
-    if (typeof command === "string" && command.length > 0) {
-      invocations.push({ command: prefixSpecEnv(command, spec.env), cwd: spec.cwd });
-    }
-  }
-  return { unresolved: invocations.length === 0, invocations };
-}
-
-/**
- * Host-neutral evaluation of one shell tool call. Claude `main()` and the OMP `tool_call`
- * adapter both call this. `toolName` is compared case-insensitively to `bash` or `hub`.
- * A `hub` call with `op === "start"` synthesizes argv once and evaluates it with the same
- * predicates as `bash`. `op === "restart"` resolves the retained launch spec(s) and evaluates
- * each synthesized command the same way. Unresolved restart in an armed session is fail-closed.
- * No second decision path.
- * @param {{
- *   toolName?: string,
- *   command?: string,
- *   cwd?: string,
- *   env?: NodeJS.ProcessEnv,
- *   op?: string,
- *   application?: string,
- *   args?: string[],
- *   name?: string,
- * }} args
- * @returns {{ block: true, reason: string } | { block: false }}
- */
-export function evaluateBashGuard({
-  toolName,
-  command = "",
-  cwd: inputCwd,
-  sessionCwd: inputSessionCwd = undefined,
-  env = process.env,
-  op = undefined,
-  application = undefined,
-  args = undefined,
-  name = undefined,
-}) {
-  const tool = String(toolName ?? "").toLowerCase();
-  let resolvedCommand = typeof command === "string" ? command : "";
-  if (tool === "hub") {
-    const hubOp = String(op ?? "");
-    if (hubOp === "restart") {
-      const restart = synthesizeHubRestartInvocations({ op: "restart", name }, env);
-      if (restart.unresolved) {
-        const sessionCwd = resolveGitRoot(inputCwd ?? process.cwd());
-        const sessionGuard = readJson(join(sessionCwd, ".semctx", "guard.json"));
-        if (!guardEnabled(env, sessionGuard)) return { block: false };
-        return {
-          block: true,
-          reason: "semctx guarded mode: hub restart could not read the retained launch spec, so the guard cannot tell whether the process will commit. Stop the daemon with hub stop, then hub start with the intended argv — start carries application and args and is gated normally.",
-        };
-      }
-      for (const invocation of restart.invocations) {
-        // Two anchors genuinely differ here: the process runs in `spec.cwd`, but the restart is an
-        // action the agent takes from its own session, and the session repository is the one whose
-        // guard governs the agent. Collapsing them onto `spec.cwd` loses the fail-closed session
-        // fallback that `gitScopeRequiresSessionGuard` exists to reach.
-        const decision = evaluateBashGuard({
-          toolName: "hub",
-          op: "start",
-          command: invocation.command,
-          cwd: invocation.cwd ?? inputCwd,
-          sessionCwd: inputCwd,
-          env,
-        });
-        if (decision.block) return decision;
-      }
-      return { block: false };
-    }
-    if (hubOp !== "start") return { block: false };
-    if (resolvedCommand === "") {
-      resolvedCommand = synthesizeHubCommand({ op: "start", application, args }) ?? "";
-    }
-    if (resolvedCommand === "") return { block: false };
-  } else if (tool !== "bash") {
-    return { block: false };
-  }
-  const terminalVerb = isTerminalGitCommand(resolvedCommand);
+/** @param {{command?: unknown, cwd?: string, sessionCwd?: string, env?: Record<string, string | undefined>, overriddenEnvKeys?: string[]}} input */
+export function evaluateGuard({ command, cwd, sessionCwd, env, overriddenEnvKeys = [] }) {
+  const terminalVerb = isTerminalGitCommand(command);
   if (!terminalVerb) return { block: false };
 
-  const rawCwd = inputCwd ?? process.cwd();
-  const sessionCwd = resolveGitRoot(inputSessionCwd ?? rawCwd);
-  const commandIsolated = isIsolatedTerminalGitCommand(resolvedCommand);
-  const scopeRequiresSessionGuard = gitScopeRequiresSessionGuard(resolvedCommand);
-  const cwd = resolveGitRoot(resolveGitCwd(resolvedCommand, rawCwd)); // the repo the git command targets, not the session cwd
-  const targetGuard = readJson(join(cwd, ".semctx", "guard.json"));
-  const sessionGuard = scopeRequiresSessionGuard
-    ? readJson(join(sessionCwd, ".semctx", "guard.json"))
-    : null;
-  const enabled = guardEnabled(env, targetGuard)
-    || (scopeRequiresSessionGuard && guardEnabled(env, sessionGuard));
-  if (!enabled) return { block: false };
+  const effectiveEnv = env ?? process.env;
+  const commandIsolated = isIsolatedTerminalGitCommand(command)
+    && !overriddenEnvKeys.some((name) => isRetargetingEnvironmentName(name));
+  const context = guardInvocationContext({ command, cwd, sessionCwd });
+  const { targetRoot: targetCwd } = context;
+  const override = guardEnvironmentOverride(effectiveEnv);
+  const enabled = override ?? guardEnablementForContext(context, effectiveEnv);
+  if (!enabled) return { block: false }; // advisory (default)
 
   const state = commandIsolated
-    ? readJson(join(cwd, ".semctx", "verification-state.json"))
+    ? readJson(join(targetCwd, ".semctx", "verification-state.json"))
     : null;
   let currentState = null;
   if (commandIsolated) {
     try {
-      currentState = captureVerificationGitState(cwd);
+      currentState = captureVerificationGitState(targetCwd);
     } catch {
       currentState = null;
     }
   }
   const pushSourceAuthorized = terminalVerb !== "push"
-    || (currentState !== null && pushSourceMatchesHead(resolvedCommand, cwd, currentState.headCommit));
-  const commitContentAuthorized = terminalVerb !== "commit" || commitUsesWholeIndex(resolvedCommand);
-  const commitHooksAbsent = terminalVerb !== "commit" || (commandIsolated && commitHookSurfaceClear(cwd));
-  const pushHooksAbsent = terminalVerb !== "push" || (commandIsolated && pushHookSurfaceClear(cwd));
+    || (currentState !== null && pushSourceMatchesHead(command, targetCwd, currentState.headCommit));
+  const commitContentAuthorized = terminalVerb !== "commit" || commitUsesWholeIndex(command);
+  const commitHooksAbsent = terminalVerb !== "commit" || (commandIsolated && commitHookSurfaceClear(targetCwd));
+  const pushHooksAbsent = terminalVerb !== "push" || (commandIsolated && pushHookSurfaceClear(targetCwd));
   return guardDecision({
     enabled,
     terminalVerb,
@@ -1855,7 +1756,7 @@ export function evaluateBashGuard({
     pushHooksAbsent,
     state,
     currentState,
-    verifyCommand: verifyRecordCommand(env),
+    verifyCommand: verifyRecordCommand(effectiveEnv),
   });
 }
 
@@ -1866,20 +1767,11 @@ function main() {
   } catch {
     process.exit(0); // no/invalid input → do not block
   }
-  // Both adapters must forward the same fields, or `hub op:start` / `hub op:restart` is covered
-  // on one host and not the other. Claude ships no `hub` tool today, so these are inert there —
-  // but a divergent adapter is the defect class this guard exists to prevent, not one to reintroduce.
-  const toolInput = input.tool_input ?? input.toolInput;
-  const decision = evaluateBashGuard({
-    toolName: input.tool_name ?? input.toolName,
-    command: toolInput?.command ?? "",
-    op: toolInput?.op,
-    application: toolInput?.application,
-    args: toolInput?.args,
-    name: typeof toolInput?.name === "string" ? toolInput.name : undefined,
-    cwd: input.cwd ?? process.cwd(),
-    env: process.env,
-  });
+  const toolName = input.tool_name ?? input.toolName;
+  if (toolName !== "Bash") process.exit(0);
+  const command = input.tool_input?.command ?? input.toolInput?.command ?? "";
+
+  const decision = evaluateGuard({ command, cwd: input.cwd, env: process.env });
   if (decision.block) {
     process.stderr.write(decision.reason + "\n");
     process.exit(2); // PreToolUse: non-zero (2) blocks the tool and surfaces stderr to the agent

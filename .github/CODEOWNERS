@@ -20,6 +20,8 @@
 /.omp-plugin/marketplace.json @hoklims
 /plugins/claude-code/plugin.json @hoklims
 /plugins/claude-code/mcp.json @hoklims
+/plugins/claude-code/package.json @hoklims
+/plugins/claude-code/omp/ @hoklims
 
 # Architecture decisions and canonical architecture documentation.
 /docs/adr/ @hoklims

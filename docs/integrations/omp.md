@@ -1,29 +1,25 @@
 # Oh My Pi integration
 
-**Experimental, opt-in.** OMP is a consumer of the existing Claude plugin tree (ADR 0015), not a
+**Experimental, opt-in.** OMP is a consumer of the existing Claude plugin tree (ADR 0020), not a
 stable-proven delivery target: it has no `plugin-status` support and no `deliver` attestation.
 Tracked in HOK-456.
 
-`plugins/claude-code/` is an Agent-Plugins-standard plugin root: `plugin.json` (`$schema` exactly
-`https://agent-plugins.org/schemas/1.0.0/plugin.schema.json`) plus a schema-closed `mcp.json` at
-that same root. Oh My Pi installs it through `.omp-plugin/marketplace.json`. The catalog entry
-pins the plugin to `source: { source: "git-subdir", url: "https://github.com/hoklims/semctx.git", path: "plugins/claude-code", ref: "stable" }`
-— the marketplace name (`semctx-stable`) is a label, not a Git pin; only `source.ref` keeps the
-installed bytes off `main`. Claude `.mcp.json` placeholders are not used.
+Oh My Pi installs the Claude plugin directory (`plugins/claude-code`) through
+`.omp-plugin/marketplace.json`. The catalog entry uses the existing `git-subdir` source and pins
+`source.ref` to the exact release tag (`v<version>`). The marketplace name (`semctx-stable`) is a
+label, not the Git authority. OMP reads the Agent-Plugins 1.0.0 `plugin.json` and `mcp.json` at that
+subdirectory root. MCP launches `bun` with `${PLUGIN_ROOT}/dist/semctx-mcp.js`, without `cwd` or
+`SEMCTX_ROOT`; the first absolute `repositoryRoot` request binds the server as on Codex.
 
-Skills and MCP are served by OMP's `agent-plugins` provider (priority 75). The commit/push guard
-is served by `package.json#omp.extensions`. This works with `claude-plugins` **disabled** — the
-operator standing configuration. The resulting MCP server id is `semctx:semctx`; on-wire tool
-names stay `semctx_*`.
+Requirements: Oh My Pi `18.1.11` (the currently observed Agent-Plugins baseline) and Bun `>=1.4.0`
+on PATH. Other OMP versions remain unverified.
 
-Verified on Oh My Pi **18.1.11**. Bun `>=1.3.14` on PATH.
-
-Install is two commands, and the first is mandatory. OMP's `classifyInstallTarget` only treats
-`name@marketplace` as a marketplace spec when that marketplace name is already registered
-locally; otherwise it silently falls through to an npm spec and the install fails with a
-confusing name error.
+Run these commands from the intended project directory. Create its `.omp` directory first:
+OMP 18.1.11 searches for an ancestor `.omp` before falling back to the Git root, so `--scope project`
+alone may select an ancestor profile when the project has no `.omp` directory.
 
 ```bash
+bun -e "require('node:fs').mkdirSync('.omp', { recursive: true })"
 omp plugin marketplace add hoklims/semctx
 omp plugin install semctx@semctx-stable
 ```
@@ -31,99 +27,35 @@ omp plugin install semctx@semctx-stable
 Then **restart** the session. `/reload-plugins` refreshes skills, commands and MCP but does **not**
 re-import extension modules, so the guard factory will not load until a restart.
 
-Every MCP tool call must pass an absolute `repositoryRoot`, except `semctx_control_verify_authorization`,
-whose entire input is `{ request }` and which rejects `repositoryRoot`. Prefer MCP tools. For shell
-fallbacks use a global CLI on the same version as the plugin (`semctx --version` / `bunx semctx@latest`).
-Do not run `bun ./dist/semctx.js` from the user repository cwd.
+OMP resolves `${PLUGIN_ROOT}` in MCP fields and `skill://` links in Bash commands, but does not
+substitute `${CLAUDE_PLUGIN_ROOT}` inside skill markdown. The shared skill therefore gives OMP its
+own embedded CLI rung:
 
-OMP substitutes `${CLAUDE_PLUGIN_ROOT}` and its own `${OMP_PLUGIN_ROOT}` inside MCP server config
-fields, but never inside skill/agent markdown body text — the Claude skill still contains a
-literal, unsubstituted `${CLAUDE_PLUGIN_ROOT}` when read on OMP, so agents must prefer connected
-MCP tools over that text.
+```text
+bun skill://semctx-control/scripts/omp-cli.mjs status --json
+bun skill://semctx-control/scripts/omp-cli.mjs verify diff --base origin/main
+```
 
-## Migration from the retired B.3 mirror
+The shim imports the bundled CLI relative to its installed location, so no global Semctx CLI is
+required and arguments or exit status are not translated by another shell.
 
-The B.3 mirror `MickaelV0/semctx-plugin` (installed as package `semctx` via the git pipe) and the
-marketplace install occupy the same `~/.omp/plugins/node_modules/semctx` path. This is a clobber,
-not a coexistence.
+`package.json#omp.extensions` registers one OMP adapter for the opt-in ADR 0007 terminal Git guard.
+It reuses the Claude guard evaluator, including the effective call `cwd` and structured environment;
+non-Bash tools and non-terminal commands remain unaffected. Claude's `hooks/hooks.json` stays a
+Claude surface, so the shadow lifecycle checkpoint remains fully manual on OMP.
 
-1. `omp plugin uninstall semctx`
-2. Verify the `"semctx"` key is gone from `~/.omp/plugins/package.json` (not just from
-   `omp-plugins.lock.json`). A stale dependency key alongside a marketplace symlink is a
-   half-state that `omp plugin list` / `doctor` hide.
-3. `omp plugin marketplace add hoklims/semctx`
-4. `omp plugin install semctx@semctx-stable`
-5. Restart.
+For terminal Git calls, the adapter supports the filesystem path forms normalized by OMP 18.1.11:
+session-relative paths, `/`, `~`, `file://`, Unicode spaces, `@`/leading-colon path aliases,
+extended Windows paths, and native Windows/WSL drive aliases. In OMP 18.1.11 the extension receives
+the raw `tool_call` before Bash expands an internal URL used as `cwd`, a `cd` target, or a Git
+repository option. The adapter has no session-safe router for that URL and does not guess a path.
+It applies the merged call environment first: `SEMCTX_GUARD=off` remains authoritative. Otherwise
+it checks enablement only in the valid filesystem session root. Advisory sessions remain
+non-blocking; an environment- or session-enabled guard blocks the unresolved terminal Git call, as
+does an unknown or failed enablement check. A guard configured only inside the opaque target cannot
+be discovered until the caller supplies a resolved filesystem cwd/path. Non-terminal Bash commands
+and non-Bash tools keep their existing behavior.
 
-## Commit/push guard
-
-OMP loads `plugins/claude-code/hooks/pre/semctx-guard.ts` (default export factory registering
-`pi.on("tool_call")`). It calls the same ADR 0007 decision function as Claude's
-`hooks/semctx-guard.mjs` — `evaluateBashGuard` — with OMP's `bash` and `hub` tool names (Claude uses
-`Bash`). Advisory is the default: the hook is present but never blocks until the project opts in via
-`.semctx/guard.json` `{ "enabled": true }` or `SEMCTX_GUARD=on`, which then blocks non-isolated
-`git commit` / `git push` until the working state matches a recorded verification baseline.
-
-Claude's `hooks/hooks.json` `PreToolUse` registration remains Claude-only; OMP does not read it.
-`pluginCliPath` inside the shared guard resolves the bundled CLI from `OMP_PLUGIN_ROOT` (after
-`CLAUDE_PLUGIN_ROOT`), then falls back to file-relative `dist/semctx.js`.
-
-The shadow lifecycle observer in `hooks/hooks.json` stays a Claude/Codex surface (ADR 0015). OMP
-loads `hooks/pre/semctx-lifecycle.ts` instead: `pi.on("tool_result")` observes Semctx MCP tools
-under the minted prefix `mcp__semctx_semctx_`, and `pi.on("turn_end")` emits the same shadow
-`before_completion` advisory on stderr. It never blocks.
-
-### Coverage by execution surface
-
-`evaluateBashGuard` returns `{ block: false }` for every tool name other than `bash` and `hub`
-(`plugins/claude-code/hooks/semctx-guard.mjs`). A `hub` call is gated only when `op === "start"`;
-`application` + `args` are synthesized into the same command string the bash predicates already
-evaluate. Measured on a throwaway repository armed with `.semctx/guard.json`
-`{ "enabled": true }`:
-
-| Execution surface | Covered |
-| --- | --- |
-| `bash`, main agent, isolated `git commit` | yes — blocked with `no verification on record`, then allowed after `verify diff --record` (both directions observed) |
-| `bash` issued by a subagent | yes — same block, `git log` unchanged |
-| `cd <guarded repo> && git commit` from a session rooted elsewhere | yes — the `enabled` predicate also consults the session cwd, and a compound command fails isolation |
-| `hub` `op: "start"` (`application` + `args` launched directly) | yes — same block and same allow path as `bash`; `cwd` is the process working directory (equivalent to a bash `cd` prefix) |
-| `hub` `op: "restart"` | no — the tool_call payload is `{ op, name }` only; the retained spec lives in the broker and is not in the event. Auto-restart (`on-failure`/`always`) is broker-side of an already-admitted `start`. If `start` was blocked, nothing is retained to replay. |
-| `eval` (`py` / `js` / `rb` / `jl`, e.g. `subprocess.run`) | no — commit created, exit 0 |
-
-`eval` cannot be closed by widening a tool allowlist. Its per-call input schema is
-`{ language, code }` with no `command` field (OMP's `packages/coding-agent/src/tools/eval.ts:108-112`),
-so an allowlisted `eval` would reach the decision function with `command` empty and
-`isTerminalGitCommand("")` false — no block, only a slower `{ block: false }`. Closing it for real
-means analysing arbitrary source in four languages whose kernel state persists across calls
-(`eval.ts:102-103`), which is not a predicate over a command string.
-
-**Decision: do not add a textual heuristic.** A deny-if-the-source-contains-`git commit`
-scanner would catch the accidental case and nothing else — four languages, persistent
-kernel state, `eval` of `eval` of a string. That is not fail-closed; it is a pretence of
-it. The hole stays documented. An agent that wants to commit through `eval` still can;
-the operational rule is the same as for the wrapper: do not.
-
-Operationally: on OMP the guard covers the shell an agent uses to commit, including its subagents,
-and the `hub op:start` process launcher. It is still **not fail-closed** against `eval`. Read a
-block as a real block, and the absence of one as no statement at all.
-
-Claude carries the same bash predicate — `hooks/hooks.json` matches `"Bash"` — but exposes no code
-execution kernel, so the remaining `eval` hole is theoretical there and reachable here.
-
-### CLI ladder, third rung
-
-The skill's host ladder (`scripts/build-plugin-runtime.ts#hostCliLadder`) is, in order:
-plugin-bundled CLI → unsubstituted `skill://` root (Oh My Pi only, fail-closed if the
-URI does not expand) → global `semctx` on PATH → say so and continue MCP-only.
-
-**Decision: do not install a global `semctx`.** On Oh My Pi the second rung works
-(`skill://semctx-control` expands to an absolute plugin root — measured 2026-09-07:
-`$root` = `~/.omp/plugins/cache/plugins/semctx-stable___semctx___0.1.20`,
-`dist/semctx.js` present). The global
-rung is a last-resort that already fails closed ("If none are available, say so…
-do not invent results") and the skill forbids installing it automatically
-("Never install or upgrade the global CLI automatically from a compatibility
-advisory"). Installing one would add a version-skew surface (`semctx --version`
-must match the marketplace plugin version) for a path that is not needed.
-`semctx_cli_compatibility` returning `CLI_NOT_FOUND` is the expected advisory,
-not a defect.
+Before reinstalling a release that used ADR 0015, remove the old OMP plugin installation through
+OMP's normal plugin command, then install this catalog entry again. Semctx never deletes a user
+profile or an old install automatically.

@@ -23,7 +23,6 @@ import {
   MAX_LEDGER_BYTES,
   MAX_LEDGER_FILES,
 } from "./claude-code/hooks/semctx-lifecycle.mjs";
-import semctxLifecycle from "./claude-code/hooks/pre/semctx-lifecycle.ts";
 import {
   AGENT_LIFECYCLE_POLICY_V1,
   AGENT_LIFECYCLE_REPORT_DOMAIN_V1,
@@ -392,19 +391,6 @@ describe("pure surfaces", () => {
     expect(stageForToolName(contract, "mcp__plugin_semctx_semctx_extra__semctx_index_health")).toBeNull();
     expect(stageForToolName(contract, "mcp__pluginsemctx_semctx__semctx_index_health")).toBeNull();
     expect(stageForToolName(contract, "mcp__plugin_semctx__semctx_index_health")).toBeNull();
-
-    // Oh My Pi mints `mcp__<plugin>_<server>_<canonical>` — measured 38/38 as `mcp__semctx_semctx_`.
-    // The trailing separator is a single underscore, not the double-underscore Claude/Codex form.
-    expect(canonicalSemctxTool(contract, "mcp__semctx_semctx_semctx_index_health"))
-      .toBe("semctx_index_health");
-    expect(stageForToolName(contract, "mcp__semctx_semctx_semctx_index_health")).toBe("status");
-    expect(stageForToolName(contract, "mcp__semctx_semctx_semctx_control_reconcile_diff"))
-      .toBe("reconcile_diff");
-    expect(stageForToolName(contract, "mcp__semctx_semctx_semctx_verify_change")).toBe("verify_change");
-    // Near-miss prefixes must not be admitted: extra token, missing plugin/server pair, unknown server.
-    expect(stageForToolName(contract, "mcp__semctx_other_semctx_index_health")).toBeNull();
-    expect(stageForToolName(contract, "mcp__other_semctx_semctx_index_health")).toBeNull();
-    expect(stageForToolName(contract, "mcp__semctx_semctx_extra_semctx_index_health")).toBeNull();
   });
 
   test("envelopes from either host normalize to the same four fields and nothing else", () => {
@@ -866,32 +852,6 @@ describe("end to end on both hosts", () => {
     }
   });
 
-  test("Oh My Pi mcp__semctx_semctx_ prefix produces a ledger; an unknown prefix does not", () => {
-    const root = makeRepository("omp-namespace");
-    try {
-      observeSequence("claude-code", root, "session-omp-ns", [
-        "mcp__semctx_semctx_semctx_verify_change",
-      ]);
-      const stop = stopHook("claude-code", root, "session-omp-ns");
-      expect(stop.status).toBe(0);
-      expect(stop.stdout).toBe("");
-      expect(stop.stderr).toContain("before_completion: INCOMPLETE");
-      expect(stop.stderr).toContain("recorded stages: verify_change");
-      expect(stop.stderr).toContain("enforcement is shadow, blocking is disabled");
-
-      const hostileRoot = makeRepository("omp-namespace-hostile");
-      observeSequence("claude-code", hostileRoot, "session-omp-hostile", [
-        "mcp__other_semctx_semctx_verify_change",
-      ]);
-      const hostileStop = stopHook("claude-code", hostileRoot, "session-omp-hostile");
-      expect({ status: hostileStop.status, stderr: hostileStop.stderr }).toEqual({ status: 0, stderr: "" });
-      expect(readdirSync(join(hostileRoot, ".semctx"))).toEqual(["config.json"]);
-      rmSync(hostileRoot, { recursive: true, force: true });
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
   test("silence, not a false accusation, when nothing was observed", () => {
     const root = makeRepository("silent");
     try {
@@ -1195,50 +1155,6 @@ describe("end to end on both hosts", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
       rmSync(isolated, { recursive: true, force: true });
-    }
-  });
-});
-
-describe("semctxLifecycle — OMP in-process adapter", () => {
-  function installHandlers() {
-    type Ctx = { cwd?: string; sessionManager?: { getSessionId?: () => string } };
-    const handlers: Record<string, (event: { toolName?: string }, ctx: Ctx) => Promise<unknown>> = {};
-    semctxLifecycle({
-      on: (event, fn) => {
-        handlers[event] = fn;
-      },
-    });
-    return handlers;
-  }
-
-  test("observes an OMP-prefixed tool and never returns a block decision", async () => {
-    const root = makeRepository("omp-adapter");
-    try {
-      const handlers = installHandlers();
-      const ctx = { cwd: root, sessionManager: { getSessionId: () => "session-omp-adapter" } };
-      const observed = await handlers.tool_result!(
-        { toolName: "mcp__semctx_semctx_semctx_verify_change" },
-        ctx,
-      );
-      expect(observed).toBeUndefined();
-      expect(readdirSync(join(root, ".semctx", "working", "agent-lifecycle"))).toHaveLength(1);
-
-      const reported = await handlers.turn_end!({}, ctx);
-      expect(reported).toBeUndefined();
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("an unknown prefix writes no ledger", async () => {
-    const root = makeRepository("omp-adapter-unknown");
-    try {
-      const handlers = installHandlers();
-      const ctx = { cwd: root, sessionManager: { getSessionId: () => "session-omp-unknown" } };
-      await handlers.tool_result!({ toolName: "mcp__other_semctx_semctx_verify_change" }, ctx);
-      expect(readdirSync(join(root, ".semctx"))).toEqual(["config.json"]);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
     }
   });
 });

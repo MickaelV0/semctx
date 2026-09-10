@@ -232,8 +232,13 @@ Prefer MCP tools when they are connected. For shell fallbacks, resolve the CLI i
    MCP, never `./dist/semctx.js`.
 3. **Global `semctx` on PATH** (`bun install -g semctx@latest` / `bunx semctx@latest`) — keep it on the **same
    version** as the plugin (`semctx --version` should match the marketplace plugin version).
-4. If none are available, say so and continue with MCP-only or ask the user to update the plugin /
-   install the CLI — do not invent results.
+3. **Oh My Pi only**: OMP consumes this same plugin directory (ADR 0020) but never substitutes
+   `${CLAUDE_PLUGIN_ROOT}` inside skill body text, so rung 1 above resolves to a dead path there.
+   Use `bun skill://semctx-control/scripts/omp-cli.mjs` instead — OMP's bash tool expands and
+   shell-quotes that `skill://` URI to this skill's own absolute `scripts/omp-cli.mjs` before
+   running the command; the skill text is never substituted, only the command OMP actually runs.
+4. If none of the above is available, say so and continue with MCP-only or ask the user to update
+   the plugin / install the CLI — do not invent results.
 
 ```text
 # Plugin CLI (path substituted at skill load)
@@ -269,5 +274,9 @@ semctx --version
 semctx status --json
 semctx control handoff <input.json> --json
 semctx control resume-handoff <capsule-hash> --json
+
+# Oh My Pi only — skill:// URI, expanded by OMP's bash tool at run time (not skill-load time)
+bun skill://semctx-control/scripts/omp-cli.mjs status --json
+bun skill://semctx-control/scripts/omp-cli.mjs verify diff --base origin/main
 ```
 <!-- END host-cli-ladder -->

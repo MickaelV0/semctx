@@ -148,6 +148,7 @@ const PUBLIC_ERROR_MESSAGES: Record<PublicErrorCode, string> = {
   INVALID_TASK_INPUT: "Tool input is invalid",
   ANALYSIS_FAILED: "Semantic analysis failed",
   STORE_ERROR: "Repository state is unavailable",
+  FEEDBACK_CONFLICT: "Feedback changed concurrently",
   GIT_ERROR: "Repository Git state is unavailable",
   GIT_BASE_UNAVAILABLE: "Repository Git base is unavailable",
   CONTROL_INPUTS_UNSAFE: "Control inputs are unsafe",

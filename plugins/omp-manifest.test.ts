@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { assertCatalogRefPolicy } from "../scripts/build-plugin-runtime";
 
 const repoRoot = resolve(import.meta.dir, "..");
 function read(path: string): string {
@@ -11,16 +10,13 @@ function json<T>(path: string): T {
   return JSON.parse(read(path)) as T;
 }
 
-describe("Oh My Pi plugin manifests", () => {
-  // Host-neutral on purpose: upstream ships `hoklims/semctx.git` at the `stable` tag, a fork
-  // dogfooding the same tree ships its own URL pinned by `source.sha`. Both must satisfy the
-  // same invariants, so this test never encodes one host's URL or ref.
-  test("catalog delivers the Claude plugin tree by git-subdir, version-locked to the plugin", () => {
+describe("Oh My Pi Agent-Plugins package", () => {
+  test("catalog pins the Claude plugin tree to its immutable release tag with matching version", () => {
     const catalog = json<{
       name: string;
       plugins: Array<{
         name: string;
-        source: { source: string; url: string; path: string; ref?: string; sha?: string };
+        source: { source: string; url: string; path: string; ref: string };
         version: string;
       }>;
     }>(".omp-plugin/marketplace.json");
@@ -31,62 +27,44 @@ describe("Oh My Pi plugin manifests", () => {
     expect(catalog.plugins).toHaveLength(1);
     expect(catalog.plugins[0]).toMatchObject({
       name: "semctx",
-      source: { source: "git-subdir", path: "plugins/claude-code" },
+      source: {
+        source: "git-subdir",
+        url: "https://github.com/hoklims/semctx.git",
+        path: "plugins/claude-code",
+        ref: `v${claude.version}`,
+      },
       version: claude.version,
     });
-    // The subdir is the plugin root under `agent-plugins`, so it must be the tree that
-    // carries the standard manifests.
-    expect(existsSync(resolve(repoRoot, "plugins/claude-code/plugin.json"))).toBe(true);
-    expect(catalog.plugins[0]?.source.url).toMatch(/\/semctx\.git$/);
   });
 
-  // The marketplace name ("semctx-stable") is a catalog label, not a Git pin: `omp plugin
-  // marketplace add <owner>/semctx` fetches the catalog file itself from whatever ref the host
-  // resolves by default. Only `source.ref`/`source.sha` bind the installed code. They are NOT
-  // interchangeable: without `sha` the clone is shallow and `ref` is passed to
-  // `git clone --branch`, which cannot resolve a raw commit id.
-  test("the marketplace name alone is not a git pin — only source.ref/sha bind the install", () => {
+  // The marketplace name ("semctx-stable") is a catalog label, not a Git pin. Only the plugin
+  // source.ref field binds the installed bytes, and a release tag is immutable evidence while the
+  // distribution branch can move after a later release.
+  test("the marketplace name alone is not a git pin — only source.ref binds the install", () => {
     const catalog = json<{
-      plugins: Array<{ source: { ref?: string; sha?: string } }>;
+      plugins: Array<{ source: { ref: string } }>;
     }>(".omp-plugin/marketplace.json");
-    const source = catalog.plugins[0]?.source;
-    expect(source).toBeDefined();
-    // Same rule `plugin:check` enforces: an immutable tag, or a branch pinned by `sha`.
-    expect(() => assertCatalogRefPolicy(source ?? {}, "catalog")).not.toThrow();
+    const ref = catalog.plugins[0]?.source.ref;
+    expect(ref).toMatch(/^v\d+\.\d+\.\d+$/);
+    expect(ref).not.toBe("main");
+    expect(ref).not.toBe("stable");
   });
 
-  test("Agent-Plugins mcp.json is a closed stdio launch with no cwd and no Claude placeholders", () => {
-    const plugin = json<{
-      $schema: string;
-      name: string;
-      version: string;
-    }>("plugins/claude-code/plugin.json");
-    const claude = json<{ version: string }>(
-      "plugins/claude-code/.claude-plugin/plugin.json",
-    );
-    expect(plugin.$schema).toBe(
-      "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
-    );
-    expect(plugin.name).toBe("semctx");
-    expect(plugin.version).toBe(claude.version);
+  test("standard manifests launch the bundled MCP through PLUGIN_ROOT without project binding", () => {
+    const manifest = json<{ $schema: string; name: string }>("plugins/claude-code/plugin.json");
+    expect(manifest.$schema).toBe("https://agent-plugins.org/schemas/1.0.0/plugin.schema.json");
+    expect(manifest.name).toBe("semctx");
     const mcp = json<{
-      $schema: string;
-      mcpServers: {
-        semctx: { type: string; command: string; args: string[]; cwd?: string };
-      };
+      mcpServers: { semctx: { type: string; command: string; args: string[] } };
     }>("plugins/claude-code/mcp.json");
-    expect(mcp).toEqual({
-      $schema: "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
-      mcpServers: {
-        semctx: {
-          type: "stdio",
-          command: "bun",
-          args: ["${PLUGIN_ROOT}/dist/semctx-mcp.js"],
-        },
-      },
+    expect(mcp.mcpServers.semctx).toEqual({
+      type: "stdio",
+      command: "bun",
+      args: ["${PLUGIN_ROOT}/dist/semctx-mcp.js"],
     });
-    expect(mcp.mcpServers.semctx.cwd).toBeUndefined();
-    expect(read("plugins/claude-code/mcp.json")).not.toMatch(/CLAUDE_/);
+    expect(read("plugins/claude-code/mcp.json")).not.toMatch(/CLAUDE_|SEMCTX_ROOT|"cwd"/);
+    expect(existsSync(resolve(repoRoot, "plugins/claude-code/.omp-plugin/plugin.json"))).toBe(false);
+    expect(existsSync(resolve(repoRoot, "plugins/claude-code/mcp-omp.json"))).toBe(false);
     expect(existsSync(resolve(repoRoot, "plugins/claude-code/dist/semctx-mcp.js"))).toBe(true);
   });
 });

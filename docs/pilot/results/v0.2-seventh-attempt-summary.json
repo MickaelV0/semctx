@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "experimentId": "impact-pilot-research-20260908055609-3c144797",
+  "protocolDigest": "sha256:582b22e2b2f5b88f5a376bbe59929f738cdb7c457c195ca22dcd48d306638b6c",
+  "evidenceKind": "research",
+  "verdict": "EVIDENCE_MISSING",
+  "totals": {
+    "totalCases": 30,
+    "observedCases": 30,
+    "failedCases": 0,
+    "untrustedCases": 0,
+    "labelledCases": 0,
+    "unknownCases": 30
+  },
+  "perRepository": [
+    {
+      "repositoryAlias": "gvergnaud-ts-pattern",
+      "totalCases": 10,
+      "observedCases": 10,
+      "failedCases": 0,
+      "untrustedCases": 0,
+      "labelledCases": 0
+    },
+    {
+      "repositoryAlias": "nanostores-nanostores",
+      "totalCases": 10,
+      "observedCases": 10,
+      "failedCases": 0,
+      "untrustedCases": 0,
+      "labelledCases": 0
+    },
+    {
+      "repositoryAlias": "remeda-remeda",
+      "totalCases": 10,
+      "observedCases": 10,
+      "failedCases": 0,
+      "untrustedCases": 0,
+      "labelledCases": 0
+    }
+  ],
+  "scores": null,
+  "criticalMisses": [],
+  "totalDurationMs": 194854.27000000002,
+  "generatedAt": "2026-09-08T06:02:12.488Z"
+}
