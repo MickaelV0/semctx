@@ -1,6 +1,6 @@
 # Semctx roadmap
 
-> Revised 2026-09-05. Released baseline: **v0.1.19**.
+> Revised 2026-09-08. Released baseline: **v0.1.20**.
 > Future versions are outcome targets, not available features or promised dates.
 
 ## Understand the risk of a change before running the checks
@@ -19,7 +19,7 @@ repeated use cheaper than rediscovering the same context. We will measure that t
 
 ## Available today
 
-[v0.1.19](https://github.com/hoklims/semctx/releases/tag/v0.1.19) provides local change-impact
+[v0.1.20](https://github.com/hoklims/semctx/releases/tag/v0.1.20) provides local change-impact
 analysis, explainable PASS/WARN/BLOCK reports, source-bound index health, authored intent and
 contracts, read-only control/replay surfaces, and Codex/Claude integrations.
 
@@ -38,7 +38,7 @@ refutes the current impact analyzer nor demonstrates its practical benefit.
 | Target | User outcome | Evidence required |
 | --- | --- | --- |
 | **0.1.20 — Reliable first contact** | Install, diagnose and update without contradictory health messages or destructive recovery advice. | Tested compatibility; stale-index diagnosis; configuration preservation; registry availability and delivery proof. |
-| **0.2 — Useful in ten minutes** | Try an example, understand a risk and choose the next check, then repeat on your repository. | Reproducible demo, concise report, independent onboarding and impact pilots with raw results, misses, noise and costs. |
+| **0.2 — Useful in ten minutes** | Try an example, understand a risk and choose the next check, then repeat on your repository. | Reproducible demo and contributor journey, concise report, frozen replay of thirty public changes with raw results and limits; human studies waived and their outcomes unmeasured. |
 | **0.3 — Indexes you can live with** | Keep useful context across edits, branches and worktrees within a declared resource budget. | Cold/warm/update measurements; supported incremental paths match full rebuilds; drift/crash/recovery tests; matching source, artifact and consumer generations. |
 | **0.4 — Connected, evidence-aware context** | Reuse useful symbol, build, test and retrieval sources with provenance and limits. | Scoped provider conformance, failure cases, native-only comparison and independent replay evidence. Native retrieval remains a conditional research track. |
 | **1.0 — A dependable supported contract** | Adopt the proven workflow with predictable compatibility, upgrades and support boundaries. | Support policy, migration/rollback tests, repeated independent use and evidence for every advertised capability. |
@@ -58,7 +58,7 @@ are not release-readiness scores.
 A supported host minimum is an explicit support decision, distinct from the oldest historically
 compatible binary. Untested versions stay unknown. No new control layer is needed for these fixes.
 
-## 0.2: show the benefit, then test whether people return
+## 0.2: make first use and evidence reproducible
 
 Provide a public example with a harmless change, a meaningful risk, and an unresolved case. Show
 source, explanation, suggested checks and limits together. Pilot a frozen packaged candidate first
@@ -75,15 +75,17 @@ for CLI/Codex/Claude, and release notes explaining a before/after outcome. Colle
 on confusing or ignored findings. Public case studies require consent and reproducible examples
 or an explicit explanation of unavailable private evidence.
 
-The initial pilot targets five independent maintainers: four should reach a correctly understood
-first report within ten minutes on the documented demo; three should use it on a second real change
-within fourteen days. These are **proposed thresholds, not observed adoption or statistical proof**.
-Separate download/setup time and retain unsuccessful sessions.
+On 2026-09-08 the maintainer explicitly waived external participant studies for this release.
+The proposed five-maintainer trial, two-contributor trial and fourteen-day follow-up are therefore
+not release gates. Adoption, retention, comprehension and human completion time remain
+**NOT_MEASURED**. Automated journeys and technical review do not substitute for human observations.
 
 Evaluate at least thirty real changes across three independent repositories against changed-files-only
-and simple dependency-neighborhood advice. Measure relevant findings, misses, false alerts, time
-to choose checks and total operator effort. Freeze protocol and independent adjudication before
-scoring. This early impact pilot does not replace P4 or unlock enforcement.
+and simple dependency-neighborhood advice. Freeze source pairs, protocol, runner and package before
+replay; retain infrastructure and product failures. Cases without independent ground truth remain
+UNKNOWN and cannot produce accuracy, recall or effort-saving claims. The runner supports later
+adjudicated evaluation, but this release does not claim independent value from unlabelled changes.
+This early impact pilot does not replace P4 or unlock enforcement.
 
 ## 0.3: make indexes an understandable capability
 

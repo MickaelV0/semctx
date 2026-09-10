@@ -6,6 +6,8 @@ import {
   isIsolatedTerminalGitCommand,
   isTerminalGitCommand,
   guardEnabled,
+  guardEnabledForInvocation,
+  evaluateGuard,
   guardDecision,
   isGuardVerificationState,
   commitUsesWholeIndex,
@@ -18,7 +20,7 @@ import {
   GLOBAL_VERIFY_COMMAND,
 } from "../hooks/semctx-guard.mjs";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, renameSync, rmdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
@@ -333,6 +335,55 @@ describe("guardEnabled — advisory by default, strict off wins", () => {
   });
   it("SEMCTX_GUARD=on forces guarded", () => {
     expect(guardEnabled({ SEMCTX_GUARD: "on" }, null)).toBe(true);
+  });
+
+  it("distinguishes absent guard config from unreadable or malformed config", () => {
+    const repo = mkdtempSync(join(tmpdir(), "semctx-guard-enablement-"));
+    execFileSync("git", ["init"], { cwd: repo, stdio: "ignore" });
+    const guardDir = join(repo, ".semctx");
+    const guardPath = join(guardDir, "guard.json");
+    mkdirSync(guardDir);
+    const input = { command: "git commit -m x", cwd: repo, sessionCwd: repo, env: {} };
+    try {
+      expect(guardEnabledForInvocation(input)).toBe(false);
+
+      writeFileSync(guardPath, "{not-json");
+      expect(guardEnabledForInvocation(input)).toBeUndefined();
+      expect(evaluateGuard(input)).toEqual({ block: false });
+      expect(guardEnabledForInvocation({ ...input, env: { SEMCTX_GUARD: "off" } })).toBe(false);
+      expect(guardEnabledForInvocation({ ...input, env: { SEMCTX_GUARD: "on" } })).toBe(true);
+
+      writeFileSync(guardPath, JSON.stringify({ enabled: "sometimes" }));
+      expect(guardEnabledForInvocation(input)).toBeUndefined();
+
+      rmSync(guardPath);
+      mkdirSync(guardPath);
+      expect(guardEnabledForInvocation(input)).toBeUndefined();
+
+      rmSync(guardPath, { recursive: true });
+      symlinkSync(
+        join(repo, "missing-guard-target"),
+        guardPath,
+        process.platform === "win32" ? "junction" : "file",
+      );
+      expect(guardEnabledForInvocation(input)).toBeUndefined();
+
+      rmSync(guardPath, { force: true });
+      rmdirSync(guardDir);
+      symlinkSync(
+        join(repo, "missing-semctx-target"),
+        guardDir,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+      expect(guardEnabledForInvocation(input)).toBeUndefined();
+
+      rmSync(guardDir, { force: true });
+      mkdirSync(guardDir);
+      writeFileSync(guardPath, JSON.stringify({ enabled: false }));
+      expect(guardEnabledForInvocation(input)).toBe(false);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
   });
 });
 
@@ -1254,6 +1305,8 @@ describe("verification-state capture parity", () => {
     }
   }, 20_000);
 
+  // Two real repositories, submodule setup and both capture implementations exceed
+  // 15 seconds on Windows; keep the assertions within the canonical test budget.
   it("preserves a clean gitlink and fails closed when its indexed commit changes", () => {
     const repo = mkdtempSync(join(tmpdir(), "semctx-guard-gitlink-"));
     const child = mkdtempSync(join(tmpdir(), "semctx-guard-gitlink-child-"));
@@ -1311,7 +1364,7 @@ describe("verification-state capture parity", () => {
       rmSync(repo, { recursive: true, force: true });
       rmSync(child, { recursive: true, force: true });
     }
-  }, 15_000);
+  }, 60_000);
 
   it.skipIf(process.platform === "win32")("changes on executable-mode and symlink-target drift", () => {
     const repo = mkdtempSync(join(tmpdir(), "semctx-guard-metadata-"));

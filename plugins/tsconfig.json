@@ -5,6 +5,6 @@
     "allowJs": true,
     "checkJs": false
   },
-  "include": ["**/*.test.ts", "**/test/**/*.ts", "**/hooks/**/*.mjs"],
+  "include": ["**/*.test.ts", "**/test/**/*.ts", "**/hooks/**/*.mjs", "**/omp/**/*.ts"],
   "exclude": ["**/dist"]
 }

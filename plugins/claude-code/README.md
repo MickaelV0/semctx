@@ -37,6 +37,11 @@ runtime behaviour. The analysis is local and deterministic; semctx itself needs 
   executable transport configuration, and URL rewrites fail closed. Block messages point at the plugin-bundled CLI by absolute path when
   the bundle is in reach, and at a global `semctx` otherwise. The semantic and control tools do not
   change this host-specific behaviour.
+- **OMP Agent-Plugins package** (`plugin.json`, `mcp.json`, `package.json`): OMP 18.1.11 consumes
+  this same directory through the tag-pinned `git-subdir` catalog. It discovers the three skills,
+  launches the bundled MCP server through `${PLUGIN_ROOT}`, resolves the embedded CLI through the
+  generated `skill://` shim, and registers one adapter for the same opt-in terminal Git guard.
+  This remains experimental and is outside `plugin-status --host all` and stable-delivery proof.
 
 ## Shared Codex/Claude contract
 
@@ -187,4 +192,5 @@ If an older direct MCP registration is still present, remove it after the plugin
   `SEMCTX_LIFECYCLE=off`.
 
 See `docs/integrations/claude-code.md`, `docs/integrations/claude-code-guarded-mode.md`, and
-`docs/integrations/grok.md`.
+`docs/integrations/grok.md`. OMP installation and migration are documented in
+`docs/integrations/omp.md`.

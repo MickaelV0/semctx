@@ -106,6 +106,114 @@ const lifecycleHookDirs: Record<SkillHost, string> = {
 };
 
 /**
+ * OMP-only embedded CLI shim (ADR 0020). Claude Code and Codex both already reach the bundled CLI
+ * their own way (a substituted `${CLAUDE_PLUGIN_ROOT}` path, and a global `semctx` respectively);
+ * OMP has neither, so its skill instruction resolves this file through `skill://` expansion
+ * instead. The bundle's own entrypoint (`apps/cli/src/index.ts`) reads `process.argv` and calls
+ * `process.exit` unconditionally on import, so a bare re-export preserves argv and exit code
+ * without any dirname resolution or subprocess spawning.
+ */
+export const OMP_CLI_SHIM_PATH = "plugins/claude-code/skills/semctx-control/scripts/omp-cli.mjs";
+const ompCliShimOutput = resolve(root, OMP_CLI_SHIM_PATH);
+const ompPluginRoot = resolve(root, "plugins/claude-code");
+
+type JsonObject = Record<string, unknown>;
+
+function jsonObject(path: string): JsonObject {
+  const value = JSON.parse(readFileSync(path, "utf8")) as unknown;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected JSON object: ${path}`);
+  }
+  return value as JsonObject;
+}
+
+function objectKeysEqual(value: unknown, expected: readonly string[]): boolean {
+  return value !== null
+    && typeof value === "object"
+    && !Array.isArray(value)
+    && Object.keys(value).sort().join("\n") === [...expected].sort().join("\n");
+}
+
+/** Closed local validation for the OMP Agent-Plugins package; no remote schema fetch is required. */
+export function ompStandardContractErrors(input: {
+  plugin: JsonObject;
+  mcp: JsonObject;
+  pkg: JsonObject;
+  marketplace: JsonObject;
+  releaseVersion: string;
+}): string[] {
+  const errors: string[] = [];
+  const { plugin, mcp, pkg, marketplace, releaseVersion } = input;
+  const pluginKeys = ["$schema", "name", "version", "description", "author", "homepage", "repository", "license", "keywords"];
+  if (!objectKeysEqual(plugin, pluginKeys)) errors.push("plugin.json fields are not closed");
+  if (plugin.$schema !== "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json") errors.push("plugin.json schema mismatch");
+  if (plugin.name !== "semctx" || plugin.version !== releaseVersion) errors.push("plugin.json identity/version mismatch");
+
+  if (!objectKeysEqual(mcp, ["$schema", "mcpServers"])) errors.push("mcp.json fields are not closed");
+  if (mcp.$schema !== "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json") errors.push("mcp.json schema mismatch");
+  const servers = mcp.mcpServers as JsonObject | undefined;
+  const server = servers?.semctx as JsonObject | undefined;
+  if (!objectKeysEqual(servers, ["semctx"]) || !objectKeysEqual(server, ["type", "command", "args"])) {
+    errors.push("mcp.json server fields are not closed");
+  }
+  if (server?.type !== "stdio" || server.command !== "bun"
+    || JSON.stringify(server.args) !== JSON.stringify(["${PLUGIN_ROOT}/dist/semctx-mcp.js"])) {
+    errors.push("mcp.json launch contract mismatch");
+  }
+
+  if (!objectKeysEqual(pkg, ["name", "version", "private", "omp"])) errors.push("package.json fields are not closed");
+  const omp = pkg.omp as JsonObject | undefined;
+  if (pkg.name !== "semctx" || pkg.version !== releaseVersion || pkg.private !== true
+    || !objectKeysEqual(omp, ["extensions"])
+    || JSON.stringify(omp?.extensions) !== JSON.stringify(["./omp/semctx-guard.ts"])) {
+    errors.push("package.json OMP extension contract mismatch");
+  }
+
+  const entries = Array.isArray(marketplace.plugins) ? marketplace.plugins : [];
+  const cataloguePlugin = entries.find((entry) => (
+    entry !== null && typeof entry === "object" && !Array.isArray(entry) && (entry as JsonObject).name === "semctx"
+  )) as JsonObject | undefined;
+  const source = cataloguePlugin?.source as JsonObject | undefined;
+  if (!objectKeysEqual(source, ["source", "url", "path", "ref"])) {
+    errors.push("OMP catalogue git-subdir source fields are not closed");
+  }
+  if (cataloguePlugin?.version !== releaseVersion || source?.source !== "git-subdir"
+    || source.url !== "https://github.com/hoklims/semctx.git" || source.path !== "plugins/claude-code"
+    || source.ref !== `v${releaseVersion}`) {
+    errors.push("OMP catalogue version or immutable git-subdir source mismatch");
+  }
+  return errors;
+}
+
+function assertOmpStandardContract(): void {
+  const releaseVersion = (jsonObject(resolve(ompPluginRoot, ".claude-plugin/plugin.json")).version as string);
+  const errors = ompStandardContractErrors({
+    plugin: jsonObject(resolve(ompPluginRoot, "plugin.json")),
+    mcp: jsonObject(resolve(ompPluginRoot, "mcp.json")),
+    pkg: jsonObject(resolve(ompPluginRoot, "package.json")),
+    marketplace: jsonObject(resolve(root, ".omp-plugin/marketplace.json")),
+    releaseVersion,
+  });
+  for (const legacy of [resolve(ompPluginRoot, ".omp-plugin/plugin.json"), resolve(ompPluginRoot, "mcp-omp.json")]) {
+    if (existsSync(legacy)) errors.push(`legacy OMP provider surface remains: ${legacy}`);
+  }
+  if (errors.length > 0) throw new Error(`invalid OMP standard package:\n- ${errors.join("\n- ")}`);
+}
+
+export function renderOmpCliShim(): string {
+  return `#!/usr/bin/env bun
+// GENERATED by 'bun run plugin:build' — do not hand-edit. Source: scripts/build-plugin-runtime.ts.
+//
+// OMP-only embedded CLI shim (ADR 0020). Invoked as \`bun skill://semctx-control/scripts/omp-cli.mjs
+// <args>\`; OMP's bash tool expands and shell-quotes that skill:// URI to this file's own absolute
+// path before running the command, so argv beyond this file's own path reaches the bundle
+// unchanged. The bundle's entrypoint reads process.argv and calls process.exit unconditionally on
+// import, so a bare re-export is enough to preserve both.
+import "../../../dist/semctx.js";
+`;
+}
+
+/**
  * Project the canonical workflow and lifecycle contracts into the flat table the out-of-process hook
  * evaluates. Nothing here is authored: the tool-to-stage table, the stage order, the required stages,
  * the accumulation semantics and the report domain all come from the two parsed contracts, so
@@ -190,8 +298,13 @@ export function hostCliLadder(host: SkillHost): string {
    plugin package root: it is the user's repository.
 2. **Global \`semctx\` on PATH** (\`bun install -g semctx@latest\` / \`bunx semctx@latest\`) — keep it on the **same
    version** as the plugin (\`semctx --version\` should match the marketplace plugin version).
-3. If neither is available, say so and continue with MCP-only or ask the user to update the plugin /
-   install the CLI — do not invent results.
+3. **Oh My Pi only**: OMP consumes this same plugin directory (ADR 0020) but never substitutes
+   \`\${CLAUDE_PLUGIN_ROOT}\` inside skill body text, so rung 1 above resolves to a dead path there.
+   Use \`bun skill://semctx-control/scripts/omp-cli.mjs\` instead — OMP's bash tool expands and
+   shell-quotes that \`skill://\` URI to this skill's own absolute \`scripts/omp-cli.mjs\` before
+   running the command; the skill text is never substituted, only the command OMP actually runs.
+4. If none of the above is available, say so and continue with MCP-only or ask the user to update
+   the plugin / install the CLI — do not invent results.
 
 \`\`\`text
 # Plugin CLI (path substituted at skill load)
@@ -216,6 +329,10 @@ semctx --version
 semctx status --json
 semctx control handoff <input.json> --json
 semctx control resume-handoff <capsule-hash> --json
+
+# Oh My Pi only — skill:// URI, expanded by OMP's bash tool at run time (not skill-load time)
+bun skill://semctx-control/scripts/omp-cli.mjs status --json
+bun skill://semctx-control/scripts/omp-cli.mjs verify diff --base origin/main
 \`\`\`
 `;
   }
@@ -635,6 +752,7 @@ function textEqual(current: string, expected: string): boolean {
 }
 
 async function main(): Promise<void> {
+  assertOmpStandardContract();
   const built = await buildPortablePluginArtifacts();
 
   const skillTemplate = readSkillTemplate();
@@ -714,9 +832,26 @@ async function main(): Promise<void> {
     }
   }
 
+  // OMP-only embedded CLI shim: one file, Claude plugin tree only (Codex has its own global-CLI
+  // fallback rung and no relative dist/ path; see hostCliLadder("semctx-control")).
+  {
+    const expected = renderOmpCliShim();
+    if (check) {
+      if (!existsSync(ompCliShimOutput)) {
+        throw new Error(`missing generated OMP CLI shim: ${ompCliShimOutput}; run 'bun run plugin:build'`);
+      }
+      if (!textEqual(readFileSync(ompCliShimOutput, "utf8"), expected)) {
+        throw new Error(`stale generated OMP CLI shim: ${ompCliShimOutput}; run 'bun run plugin:build'`);
+      }
+    } else {
+      mkdirSync(dirname(ompCliShimOutput), { recursive: true });
+      await Bun.write(ompCliShimOutput, expected);
+    }
+  }
+
   const sizes = [...built].map(([path, bytes]) => `${path}=${bytes.length}`).join(", ");
   process.stdout.write(
-    `${check ? "verified" : "built"} byte-identical plugin runtimes (${sizes}; ${typescriptLibs.length} TypeScript libraries) + host control skills + shadow lifecycle hooks\n`,
+    `${check ? "verified" : "built"} byte-identical plugin runtimes (${sizes}; ${typescriptLibs.length} TypeScript libraries) + host control skills + shadow lifecycle hooks + OMP CLI shim\n`,
   );
 }
 

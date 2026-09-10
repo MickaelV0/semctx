@@ -1,0 +1,550 @@
+{
+  "schemaVersion": 1,
+  "kind": "public_corpus_provenance",
+  "selectionSourceDigest": "sha256:1a6816fbdeac706754bc416ddf9ba69ef7e2aa6144e65f34f1287f1ed2e78d9e",
+  "selection": "30 fixed first-parent public changes, three independent MIT repositories; candidate strata describe diffs, not ground truth. Lexically first seven case IDs per repository are dev; remaining three held out.",
+  "humanMetrics": "NOT_MEASURED",
+  "cases": [
+    {
+      "caseId": "remeda-remeda-pr-1340",
+      "repository": "https://github.com/remeda/remeda",
+      "license": "MIT",
+      "upstreamPR": "https://github.com/remeda/remeda/pull/1340",
+      "upstreamCommit": "https://github.com/remeda/remeda/commit/246771b2a8ff83bbb3b6f98d85271e3050244486",
+      "baseRef": "5d7723acf8413acb95354043fb0bd351e9b4e4a1",
+      "headRef": "246771b2a8ff83bbb3b6f98d85271e3050244486",
+      "changedFiles": [
+        "packages/docs/src/components/header.astro",
+        "packages/docs/src/components/search.tsx"
+      ],
+      "candidateStratum": "benign_documentation_candidate",
+      "split": "dev",
+      "label": "UNKNOWN"
+    },
+    {
+      "caseId": "remeda-remeda-pr-1341",
+      "repository": "https://github.com/remeda/remeda",
+      "license": "MIT",
+      "upstreamPR": "https://github.com/remeda/remeda/pull/1341",
+      "upstreamCommit": "https://github.com/remeda/remeda/commit/4e32c7f5460f1518065ee48ab8f2cf4c86d50d4d",
+      "baseRef": "246771b2a8ff83bbb3b6f98d85271e3050244486",
+      "headRef": "4e32c7f5460f1518065ee48ab8f2cf4c86d50d4d",
+      "changedFiles": [
+        ".github/workflows/ci-library.yml",
+        ".nvmrc",
+        "package-lock.json",
+        "package.json",
+        "packages/docs/package.json",
+        "packages/remeda/package.json",
+        "packages/stackblitz-template/.nvmrc"
+      ],
+      "candidateStratum": "unsupported_tooling_candidate",
+      "split": "dev",
+      "label": "UNKNOWN"
+    },
+    {
+      "caseId": "remeda-remeda-pr-1344",
+      "repository": "https://github.com/remeda/remeda",
+      "license": "MIT",
+      "upstreamPR": "https://github.com/remeda/remeda/pull/1344",
+      "upstreamCommit": "https://github.com/remeda/remeda/commit/3c80f28bb394edbf89f1fc9978571dec8ed20edc",
+      "baseRef": "c9feae9f07bc7b925371eadcd5ffd321190ffdf1",
+      "headRef": "3c80f28bb394edbf89f1fc9978571dec8ed20edc",
+      "changedFiles": [
+        "packages/docs/src/content/mapping/just/__MISSING.md",
+        "packages/docs/src/content/mapping/just/has.md",
+        "packages/docs/src/content/mapping/lodash/__MISSING.md",
+        "packages/docs/src/content/mapping/lodash/has.md",
+        "packages/docs/src/content/mapping/lodash/hasIn.md",
+        "packages/docs/src/content/mapping/ramda/__MISSING.md",
+        "packages/docs/src/content/mapping/ramda/has.md",
+        "packages/docs/src/content/mapping/ramda/hasIn.md",
+        "packages/remeda/src/hasProp.test-d.ts",
+        "packages/remeda/src/hasProp.test.ts",
+        "packages/remeda/src/hasProp.ts",
+        "packages/remeda/src/index.ts",
+        "packages/remeda/src/prop.ts"
+      ],
+      "candidateStratum": "exported_contract_candidate",
+      "split": "dev",
+      "label": "UNKNOWN"
+    },
+    {
+      "caseId": "remeda-remeda-pr-1358",
+      "repository": "https://github.com/remeda/remeda",
+      "license": "MIT",
+      "upstreamPR": "https://github.com/remeda/remeda/pull/1358",
+      "upstreamCommit": "https://github.com/remeda/remeda/commit/16338d8d84d096769929d29f4955ed2c722fe384",
+      "baseRef": "cd38f0de32363278ee89cfb2a0aed4a19c2da835",
+      "headRef": "16338d8d84d096769929d29f4955ed2c722fe384",
+      "changedFiles": [
+        "packages/remeda/src/drop.ts",
+        "packages/remeda/src/dropLast.ts",
+        "packages/remeda/src/filter.ts",
+        "packages/remeda/src/internal/purryOn.ts",
+        "packages/remeda/src/splice.test-d.ts",
+        "packages/remeda/src/splice.test.ts",
+        "packages/remeda/src/splice.ts",
+        "packages/remeda/src/swapIndices.ts",
+        "packages/remeda/src/take.ts",
+        "packages/remeda/src/takeLast.ts"
+      ],
+      "candidateStratum": "exported_contract_candidate",
+      "split": "dev",
+      "label": "UNKNOWN"
+    },
+    {
+      "caseId": "remeda-remeda-pr-1368",
+      "repository": "https://github.com/remeda/remeda",
+      "license": "MIT",
+      "upstreamPR": "https://github.com/remeda/remeda/pull/1368",
+      "upstreamCommit": "https://github.com/remeda/remeda/commit/53d22a60dcd1f854a6d7d7498715ba6f4f56473f",
+      "baseRef": "c8a7c2b864b914bad90500933b279f19d6a9faae",
+      "headRef": "53d22a60dcd1f854a6d7d7498715ba6f4f56473f",
+      "changedFiles": [
+        "packages/remeda/src/internal/types/Mapped.ts",
+        "packages/remeda/src/map.test-d.ts"
+      ],
+      "candidateStratum": "exported_contract_candidate",
+      "split": "dev",
+      "label": "UNKNOWN"
+    },
+    {
+      "caseId": "remeda-remeda-pr-1389",
+      "repository": "https://github.com/remeda/remeda",
+      "license": "MIT",
+      "upstreamPR": "https://github.com/remeda/remeda/pull/1389",
+      "upstreamCommit": "https://github.com/remeda/remeda/commit/3b87a5f6ac6fc779b350ef720549ac7c6691ef36",
+      "baseRef": "3b72f9fb6e5174243954467186301d352b742699",
+      "headRef": "3b87a5f6ac6fc779b350ef720549ac7c6691ef36",
+      "changedFiles": [
+        "package-lock.json",
+        "package.json",
+        "packages/docs/AGENTS.md",
+        "packages/docs/astro.config.ts",
+        "packages/docs/eslint.config.ts",
+        "packages/docs/package.json",
+        "packages/docs/src/components/search.tsx",
+        "packages/docs/tsconfig.json",
+        "packages/remeda/eslint.config.ts",
+        "packages/remeda/package.json"
+      ],
+      "candidateStratum": "unsupported_tooling_candidate",
+      "split": "dev",
+      "label": "UNKNOWN"
+    },
+    {
+      "caseId": "remeda-remeda-pr-1418",
+      "repository": "https://github.com/remeda/remeda",
+      "license": "MIT",
+      "upstreamPR": "https://github.com/remeda/remeda/pull/1418",
+      "upstreamCommit": "https://github.com/remeda/remeda/commit/d68a1801dde3e4fd317d3c2137154df43e41fca6",
+      "baseRef": "6f608f0c11758d20dafcd119ff7358571c273407",
+      "headRef": "d68a1801dde3e4fd317d3c2137154df43e41fca6",
+      "changedFiles": [
+        ".agents/skills/remeda-utility/reference/testing-types.md",
+        "packages/remeda/src/internal/types/Resolved.ts",
+        "packages/remeda/src/prop.test-d.ts",
+        "packages/remeda/src/prop.ts",
+        "packages/remeda/src/tap.ts"
+      ],
+      "candidateStratum": "exported_contract_candidate",
+      "split": "dev",
+      "label": "UNKNOWN"
+    },
+    {
+      "caseId": "remeda-remeda-pr-1420",
+      "repository": "https://github.com/remeda/remeda",
+      "license": "MIT",
+      "upstreamPR": "https://github.com/remeda/remeda/pull/1420",
+      "upstreamCommit": "https://github.com/remeda/remeda/commit/870135729da0427895af8cba11efd5b4ea6bbeb5",
+      "baseRef": "6d956a9682a4a8ff0514a826fabfcec5b5259336",
+      "headRef": "870135729da0427895af8cba11efd5b4ea6bbeb5",
+      "changedFiles": [
+        "packages/remeda/src/zip.test.ts",
+        "packages/remeda/src/zip.ts",
+        "packages/remeda/src/zipWith.test.ts",
+        "packages/remeda/src/zipWith.ts"
+      ],
+      "candidateStratum": "runtime_change_candidate",
+      "split": "held-out",
+      "label": "UNKNOWN"
+    },
+    {
+      "caseId": "remeda-remeda-pr-1421",
+      "repository": "https://github.com/remeda/remeda",
+      "license": "MIT",
+      "upstreamPR": "https://github.com/remeda/remeda/pull/1421",
+      "upstreamCommit": "https://github.com/remeda/remeda/commit/80c2fcf7c3e75351d4aa9d2555d8b897ad632419",
+      "baseRef": "870135729da0427895af8cba11efd5b4ea6bbeb5",
+      "headRef": "80c2fcf7c3e75351d4aa9d2555d8b897ad632419",
+      "changedFiles": [
+        "packages/remeda/src/internal/types/LazyDefinition.ts",
+        "packages/remeda/src/internal/types/LazyResult.ts",
+        "packages/remeda/src/pipe.test.ts",
+        "packages/remeda/src/pipe.ts"
+      ],
+      "candidateStratum": "runtime_change_candidate",
+      "split": "held-out",
+      "label": "UNKNOWN"
+    },
+    {
+      "caseId": "remeda-remeda-pr-1423",
+      "repository": "https://github.com/remeda/remeda",
+      "license": "MIT",
+      "upstreamPR": "https://github.com/remeda/remeda/pull/1423",
+      "upstreamCommit": "https://github.com/remeda/remeda/commit/e11dcf2d63951e843961661d647f0701a3db0798",
+      "baseRef": "05d20f4ffecadff35872b95fbc7ad092368b3a17",
+      "headRef": "e11dcf2d63951e843961661d647f0701a3db0798",
+      "changedFiles": [
+        "packages/docs/src/content/mapping/lodash/negate.md",
+        "packages/docs/src/content/mapping/ramda/__MISSING.md",
+        "packages/docs/src/content/mapping/ramda/complement.md",
+        "packages/docs/src/content/mapping/ramda/not.md",
+        "packages/remeda/src/isNot.test-d.ts",
+        "packages/remeda/src/isNot.ts"
+      ],
+      "candidateStratum": "exported_contract_candidate",
+      "split": "held-out",
+      "label": "UNKNOWN"
+    },
+    {
+      "caseId": "nanostores-nanostores-pr-409",
+      "repository": "https://github.com/nanostores/nanostores",
+      "license": "MIT",
+      "upstreamPR": "https://github.com/nanostores/nanostores/pull/409",
+      "upstreamCommit": "https://github.com/nanostores/nanostores/commit/e0bb5c591ca49e9a82f07b5fbe35b684cb79c130",
+      "baseRef": "b84e734d6fd182b37e8e94c3c8b1456327ecf353",
+      "headRef": "e0bb5c591ca49e9a82f07b5fbe35b684cb79c130",
+      "changedFiles": [
+        "README.md"
+      ],
+      "candidateStratum": "benign_documentation_candidate",
+      "split": "dev",
+      "label": "UNKNOWN"
+    },
+    {
+      "caseId": "nanostores-nanostores-pr-412",
+      "repository": "https://github.com/nanostores/nanostores",
+      "license": "MIT",
+      "upstreamPR": "https://github.com/nanostores/nanostores/pull/412",
+      "upstreamCommit": "https://github.com/nanostores/nanostores/commit/ebddfb97f54d661ead021cd42fd79c8d19bc5697",
+      "baseRef": "36eeb8116e6e70fc69ccdbae6fe3b3c2f4623298",
+      "headRef": "ebddfb97f54d661ead021cd42fd79c8d19bc5697",
+      "changedFiles": [
+        "README.md"
+      ],
+      "candidateStratum": "benign_documentation_candidate",
+      "split": "dev",
+      "label": "UNKNOWN"
+    },
+    {
+      "caseId": "nanostores-nanostores-pr-421",
+      "repository": "https://github.com/nanostores/nanostores",
+      "license": "MIT",
+      "upstreamPR": "https://github.com/nanostores/nanostores/pull/421",
+      "upstreamCommit": "https://github.com/nanostores/nanostores/commit/9e781da896dd381254a737558e69f9e818fa3fd5",
+      "baseRef": "77ab1917ee5b247cb93a9db919728cb3092346cb",
+      "headRef": "9e781da896dd381254a737558e69f9e818fa3fd5",
+      "changedFiles": [
+        "map/errors.ts",
+        "map/index.d.ts"
+      ],
+      "candidateStratum": "exported_contract_candidate",
+      "split": "dev",
+      "label": "UNKNOWN"
+    },
+    {
+      "caseId": "nanostores-nanostores-pr-424",
+      "repository": "https://github.com/nanostores/nanostores",
+      "license": "MIT",
+      "upstreamPR": "https://github.com/nanostores/nanostores/pull/424",
+      "upstreamCommit": "https://github.com/nanostores/nanostores/commit/8f65da3cab6a74255d29d9907e07ccc1679ba265",
+      "baseRef": "25c28f0b21197df9308e82676620c9b66fef3be0",
+      "headRef": "8f65da3cab6a74255d29d9907e07ccc1679ba265",
+      "changedFiles": [
+        "map-creator/index.js",
+        "map-creator/index.test.ts"
+      ],
+      "candidateStratum": "runtime_change_candidate",
+      "split": "dev",
+      "label": "UNKNOWN"
+    },
+    {
+      "caseId": "nanostores-nanostores-pr-425",
+      "repository": "https://github.com/nanostores/nanostores",
+      "license": "MIT",
+      "upstreamPR": "https://github.com/nanostores/nanostores/pull/425",
+      "upstreamCommit": "https://github.com/nanostores/nanostores/commit/95cf91bf9e4533a8e14cbb6f06bfa245fd9dec78",
+      "baseRef": "8a89d7c977a72b03a7d159f4dcec23bfa1cabcf5",
+      "headRef": "95cf91bf9e4533a8e14cbb6f06bfa245fd9dec78",
+      "changedFiles": [
+        "atom/index.js",
+        "atom/index.test.ts"
+      ],
+      "candidateStratum": "runtime_change_candidate",
+      "split": "dev",
+      "label": "UNKNOWN"
+    },
+    {
+      "caseId": "nanostores-nanostores-pr-426",
+      "repository": "https://github.com/nanostores/nanostores",
+      "license": "MIT",
+      "upstreamPR": "https://github.com/nanostores/nanostores/pull/426",
+      "upstreamCommit": "https://github.com/nanostores/nanostores/commit/9ec8262d22df9f834e47023b71c0f2c7c847dd8b",
+      "baseRef": "8f65da3cab6a74255d29d9907e07ccc1679ba265",
+      "headRef": "9ec8262d22df9f834e47023b71c0f2c7c847dd8b",
+      "changedFiles": [
+        "lifecycle/index.js",
+        "lifecycle/index.test.ts"
+      ],
+      "candidateStratum": "runtime_change_candidate",
+      "split": "dev",
+      "label": "UNKNOWN"
+    },
+    {
+      "caseId": "nanostores-nanostores-pr-427",
+      "repository": "https://github.com/nanostores/nanostores",
+      "license": "MIT",
+      "upstreamPR": "https://github.com/nanostores/nanostores/pull/427",
+      "upstreamCommit": "https://github.com/nanostores/nanostores/commit/8a89d7c977a72b03a7d159f4dcec23bfa1cabcf5",
+      "baseRef": "9ec8262d22df9f834e47023b71c0f2c7c847dd8b",
+      "headRef": "8a89d7c977a72b03a7d159f4dcec23bfa1cabcf5",
+      "changedFiles": [
+        "task/index.js",
+        "task/index.test.ts"
+      ],
+      "candidateStratum": "runtime_change_candidate",
+      "split": "dev",
+      "label": "UNKNOWN"
+    },
+    {
+      "caseId": "nanostores-nanostores-pr-429",
+      "repository": "https://github.com/nanostores/nanostores",
+      "license": "MIT",
+      "upstreamPR": "https://github.com/nanostores/nanostores/pull/429",
+      "upstreamCommit": "https://github.com/nanostores/nanostores/commit/e8364ad76c6de14c3782d11966dcb5ac060eef83",
+      "baseRef": "688b9862ce5f03c4788fd362f1961b0967808f05",
+      "headRef": "e8364ad76c6de14c3782d11966dcb5ac060eef83",
+      "changedFiles": [
+        "listen-keys/index.js",
+        "listen-keys/index.test.ts"
+      ],
+      "candidateStratum": "runtime_change_candidate",
+      "split": "held-out",
+      "label": "UNKNOWN"
+    },
+    {
+      "caseId": "nanostores-nanostores-pr-430",
+      "repository": "https://github.com/nanostores/nanostores",
+      "license": "MIT",
+      "upstreamPR": "https://github.com/nanostores/nanostores/pull/430",
+      "upstreamCommit": "https://github.com/nanostores/nanostores/commit/b5e3d728cf404a7e0457281d5c64a21f88b2e041",
+      "baseRef": "e8364ad76c6de14c3782d11966dcb5ac060eef83",
+      "headRef": "b5e3d728cf404a7e0457281d5c64a21f88b2e041",
+      "changedFiles": [
+        "listen-keys/index.js",
+        "listen-keys/index.test.ts"
+      ],
+      "candidateStratum": "runtime_change_candidate",
+      "split": "held-out",
+      "label": "UNKNOWN"
+    },
+    {
+      "caseId": "nanostores-nanostores-pr-432",
+      "repository": "https://github.com/nanostores/nanostores",
+      "license": "MIT",
+      "upstreamPR": "https://github.com/nanostores/nanostores/pull/432",
+      "upstreamCommit": "https://github.com/nanostores/nanostores/commit/bb82cd5af01e49343d1941b1f680f8f1a0d8b122",
+      "baseRef": "b5e3d728cf404a7e0457281d5c64a21f88b2e041",
+      "headRef": "bb82cd5af01e49343d1941b1f680f8f1a0d8b122",
+      "changedFiles": [
+        "task/index.js",
+        "task/index.test.ts"
+      ],
+      "candidateStratum": "runtime_change_candidate",
+      "split": "held-out",
+      "label": "UNKNOWN"
+    },
+    {
+      "caseId": "gvergnaud-ts-pattern-pr-260",
+      "repository": "https://github.com/gvergnaud/ts-pattern",
+      "license": "MIT",
+      "upstreamPR": "https://github.com/gvergnaud/ts-pattern/pull/260",
+      "upstreamCommit": "https://github.com/gvergnaud/ts-pattern/commit/7d0813115a8e8eb7743c6b53c983beb2378e90a0",
+      "baseRef": "1071e07d7701ab354cfd3fd8aeafa9012e2bd11e",
+      "headRef": "7d0813115a8e8eb7743c6b53c983beb2378e90a0",
+      "changedFiles": [
+        "README.md"
+      ],
+      "candidateStratum": "benign_documentation_candidate",
+      "split": "dev",
+      "label": "UNKNOWN"
+    },
+    {
+      "caseId": "gvergnaud-ts-pattern-pr-292",
+      "repository": "https://github.com/gvergnaud/ts-pattern",
+      "license": "MIT",
+      "upstreamPR": "https://github.com/gvergnaud/ts-pattern/pull/292",
+      "upstreamCommit": "https://github.com/gvergnaud/ts-pattern/commit/e3785fe882095809db154c28220c033b79ef6e4b",
+      "baseRef": "7e35461bb229ce91c2260e96381690d5003aa5d9",
+      "headRef": "e3785fe882095809db154c28220c033b79ef6e4b",
+      "changedFiles": [
+        "package.json",
+        "src/types/index.ts"
+      ],
+      "candidateStratum": "exported_contract_candidate",
+      "split": "dev",
+      "label": "UNKNOWN"
+    },
+    {
+      "caseId": "gvergnaud-ts-pattern-pr-305",
+      "repository": "https://github.com/gvergnaud/ts-pattern",
+      "license": "MIT",
+      "upstreamPR": "https://github.com/gvergnaud/ts-pattern/pull/305",
+      "upstreamCommit": "https://github.com/gvergnaud/ts-pattern/commit/c415e0c0dd0037f24819af57db5a3d9a6ace6d1d",
+      "baseRef": "34f7a41d337e19f65ad5506ec50d135e7ca6c970",
+      "headRef": "c415e0c0dd0037f24819af57db5a3d9a6ace6d1d",
+      "changedFiles": [
+        "package-lock.json",
+        "package.json",
+        "src/is-matching.ts",
+        "src/types/Pattern.ts",
+        "tests/is-matching.test.ts"
+      ],
+      "candidateStratum": "exported_contract_candidate",
+      "split": "dev",
+      "label": "UNKNOWN"
+    },
+    {
+      "caseId": "gvergnaud-ts-pattern-pr-307",
+      "repository": "https://github.com/gvergnaud/ts-pattern",
+      "license": "MIT",
+      "upstreamPR": "https://github.com/gvergnaud/ts-pattern/pull/307",
+      "upstreamCommit": "https://github.com/gvergnaud/ts-pattern/commit/75e3967cb74ef59a64bf2c025b3ce6399d534892",
+      "baseRef": "1520b57b070235a5603eb53112c1452d970db307",
+      "headRef": "75e3967cb74ef59a64bf2c025b3ce6399d534892",
+      "changedFiles": [
+        "package-lock.json",
+        "package.json",
+        "src/is-matching.ts",
+        "tests/is-matching.test.ts"
+      ],
+      "candidateStratum": "runtime_change_candidate",
+      "split": "dev",
+      "label": "UNKNOWN"
+    },
+    {
+      "caseId": "gvergnaud-ts-pattern-pr-311",
+      "repository": "https://github.com/gvergnaud/ts-pattern",
+      "license": "MIT",
+      "upstreamPR": "https://github.com/gvergnaud/ts-pattern/pull/311",
+      "upstreamCommit": "https://github.com/gvergnaud/ts-pattern/commit/672b5efdb9d095b069055451a43c01e1f1082460",
+      "baseRef": "4651f69aa339fa657ab4c5f982965f1f52a99fa3",
+      "headRef": "672b5efdb9d095b069055451a43c01e1f1082460",
+      "changedFiles": [
+        "src/is-matching.ts",
+        "src/patterns.ts",
+        "tests/is-matching.test.ts",
+        "tests/objects.test.ts"
+      ],
+      "candidateStratum": "exported_contract_candidate",
+      "split": "dev",
+      "label": "UNKNOWN"
+    },
+    {
+      "caseId": "gvergnaud-ts-pattern-pr-317",
+      "repository": "https://github.com/gvergnaud/ts-pattern",
+      "license": "MIT",
+      "upstreamPR": "https://github.com/gvergnaud/ts-pattern/pull/317",
+      "upstreamCommit": "https://github.com/gvergnaud/ts-pattern/commit/29fbd3aae7313962867a5a5be46373976e9d95bc",
+      "baseRef": "2721652041058274280272b6c75e7c948ffc0baf",
+      "headRef": "29fbd3aae7313962867a5a5be46373976e9d95bc",
+      "changedFiles": [
+        "package.json"
+      ],
+      "candidateStratum": "unsupported_tooling_candidate",
+      "split": "dev",
+      "label": "UNKNOWN"
+    },
+    {
+      "caseId": "gvergnaud-ts-pattern-pr-319",
+      "repository": "https://github.com/gvergnaud/ts-pattern",
+      "license": "MIT",
+      "upstreamPR": "https://github.com/gvergnaud/ts-pattern/pull/319",
+      "upstreamCommit": "https://github.com/gvergnaud/ts-pattern/commit/8517f7f3ce8c08ac306931164dac232b10a47c58",
+      "baseRef": "03e8898b417a46b03d04bf77f40d66a1ec050894",
+      "headRef": "8517f7f3ce8c08ac306931164dac232b10a47c58",
+      "changedFiles": [
+        "jsr.json",
+        "package-lock.json",
+        "package.json",
+        "src/types/BuildMany.ts",
+        "src/types/InvertPattern.ts",
+        "src/types/helpers.ts",
+        "tests/deep-exclude.test.ts",
+        "tests/exhaustive-match.test.ts",
+        "tests/optional-props.test.ts"
+      ],
+      "candidateStratum": "exported_contract_candidate",
+      "split": "dev",
+      "label": "UNKNOWN"
+    },
+    {
+      "caseId": "gvergnaud-ts-pattern-pr-332",
+      "repository": "https://github.com/gvergnaud/ts-pattern",
+      "license": "MIT",
+      "upstreamPR": "https://github.com/gvergnaud/ts-pattern/pull/332",
+      "upstreamCommit": "https://github.com/gvergnaud/ts-pattern/commit/07fb919a70459af15588da1df87bda77da63e49c",
+      "baseRef": "29fbd3aae7313962867a5a5be46373976e9d95bc",
+      "headRef": "07fb919a70459af15588da1df87bda77da63e49c",
+      "changedFiles": [
+        "README.md",
+        "jsr.json",
+        "package-lock.json",
+        "package.json",
+        "src/patterns.ts",
+        "src/types/FindSelected.ts",
+        "src/types/InvertPattern.ts",
+        "src/types/Pattern.ts",
+        "src/types/helpers.ts",
+        "tests/objects.test.ts",
+        "tests/record.test.ts",
+        "tests/records.test.ts"
+      ],
+      "candidateStratum": "exported_contract_candidate",
+      "split": "held-out",
+      "label": "UNKNOWN"
+    },
+    {
+      "caseId": "gvergnaud-ts-pattern-pr-341",
+      "repository": "https://github.com/gvergnaud/ts-pattern",
+      "license": "MIT",
+      "upstreamPR": "https://github.com/gvergnaud/ts-pattern/pull/341",
+      "upstreamCommit": "https://github.com/gvergnaud/ts-pattern/commit/0dddab813ec33ebbe87697aca5575a36fad05f3d",
+      "baseRef": "0e15315eafbbb813a91bad34496418846981c1b1",
+      "headRef": "0dddab813ec33ebbe87697aca5575a36fad05f3d",
+      "changedFiles": [
+        "src/patterns.ts"
+      ],
+      "candidateStratum": "benign_documentation_candidate",
+      "split": "held-out",
+      "label": "UNKNOWN"
+    },
+    {
+      "caseId": "gvergnaud-ts-pattern-pr-343",
+      "repository": "https://github.com/gvergnaud/ts-pattern",
+      "license": "MIT",
+      "upstreamPR": "https://github.com/gvergnaud/ts-pattern/pull/343",
+      "upstreamCommit": "https://github.com/gvergnaud/ts-pattern/commit/efdc2cd5572d94dd45ff8f24a50efaab4da2ebd2",
+      "baseRef": "2ece6ba54edcbc0d4f4fce67becf89143f9d07bc",
+      "headRef": "efdc2cd5572d94dd45ff8f24a50efaab4da2ebd2",
+      "changedFiles": [
+        "package-lock.json"
+      ],
+      "candidateStratum": "unsupported_tooling_candidate",
+      "split": "held-out",
+      "label": "UNKNOWN"
+    }
+  ]
+}

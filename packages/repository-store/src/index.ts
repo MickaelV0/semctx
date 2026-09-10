@@ -15,3 +15,12 @@ export {
   loadConfig,
   openStore,
 } from "./workspace";
+export {
+  FEEDBACK_DIR_NAME,
+  FEEDBACK_FILE_NAME,
+  feedbackDir,
+  feedbackFilePath,
+  readFeedbackStore,
+  writeFeedbackStore,
+} from "./feedback-store";
+export type { FeedbackStoreReadResult, FeedbackStoreReadStatus } from "./feedback-store";

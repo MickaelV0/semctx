@@ -4,6 +4,13 @@
 > Baseline: v0.1.19 / `0349a9ca242d3be22305b6438676b711bcf074a9`.
 > Planning only: no new runtime, installation or enforcement capability is delivered here.
 
+> Release scope amendment, 2026-09-08: the maintainer waived human participants and follow-up for
+> v0.2 ("rien de prevu et on va s'en passer"). The historical human targets below remain proposed
+> future studies, not current release gates. Adoption, retention, comprehension and contributor
+> time are NOT_MEASURED. Current acceptance uses reproducible automated journeys, thirty frozen
+> public changes across three repositories, explicit UNKNOWN labels, independent technical review
+> and exact artifact delivery. No recruitment or scheduled follow-up is required or authorized.
+
 ## Pre-action governance record
 
 LATENT_COMPASS_ROUTING_NOTE_V1

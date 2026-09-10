@@ -10,8 +10,8 @@ function json<T>(path: string): T {
   return JSON.parse(read(path)) as T;
 }
 
-describe("Oh My Pi plugin manifests", () => {
-  test("catalog pins the Claude plugin tree to the stable git ref with matching version", () => {
+describe("Oh My Pi Agent-Plugins package", () => {
+  test("catalog pins the Claude plugin tree to its immutable release tag with matching version", () => {
     const catalog = json<{
       name: string;
       plugins: Array<{
@@ -31,39 +31,40 @@ describe("Oh My Pi plugin manifests", () => {
         source: "git-subdir",
         url: "https://github.com/hoklims/semctx.git",
         path: "plugins/claude-code",
-        ref: "stable",
+        ref: `v${claude.version}`,
       },
       version: claude.version,
     });
   });
 
-  // The marketplace name ("semctx-stable") is a catalog label, not a Git pin: `omp plugin
-  // marketplace add hoklims/semctx` can fetch the catalog file itself from whatever ref the
-  // host resolves by default. Only the plugin `source.ref` field below binds the installed code
-  // to `stable`; an install that trusted the name alone would silently track `main`.
+  // The marketplace name ("semctx-stable") is a catalog label, not a Git pin. Only the plugin
+  // source.ref field binds the installed bytes, and a release tag is immutable evidence while the
+  // distribution branch can move after a later release.
   test("the marketplace name alone is not a git pin — only source.ref binds the install", () => {
     const catalog = json<{
       plugins: Array<{ source: { ref: string } }>;
     }>(".omp-plugin/marketplace.json");
     const ref = catalog.plugins[0]?.source.ref;
-    expect(ref).toBe("stable");
+    expect(ref).toMatch(/^v\d+\.\d+\.\d+$/);
     expect(ref).not.toBe("main");
+    expect(ref).not.toBe("stable");
   });
 
-  test("OMP manifest replaces .mcp.json with a Codex-like launch and no Claude placeholders", () => {
-    const manifest = json<{ mcpServers: string }>(
-      "plugins/claude-code/.omp-plugin/plugin.json",
-    );
-    expect(manifest.mcpServers).toBe("./mcp-omp.json");
+  test("standard manifests launch the bundled MCP through PLUGIN_ROOT without project binding", () => {
+    const manifest = json<{ $schema: string; name: string }>("plugins/claude-code/plugin.json");
+    expect(manifest.$schema).toBe("https://agent-plugins.org/schemas/1.0.0/plugin.schema.json");
+    expect(manifest.name).toBe("semctx");
     const mcp = json<{
-      mcpServers: { semctx: { command: string; args: string[]; cwd: string } };
-    }>("plugins/claude-code/mcp-omp.json");
+      mcpServers: { semctx: { type: string; command: string; args: string[] } };
+    }>("plugins/claude-code/mcp.json");
     expect(mcp.mcpServers.semctx).toEqual({
+      type: "stdio",
       command: "bun",
-      args: ["./dist/semctx-mcp.js"],
-      cwd: ".",
+      args: ["${PLUGIN_ROOT}/dist/semctx-mcp.js"],
     });
-    expect(read("plugins/claude-code/mcp-omp.json")).not.toMatch(/CLAUDE_/);
+    expect(read("plugins/claude-code/mcp.json")).not.toMatch(/CLAUDE_|SEMCTX_ROOT|"cwd"/);
+    expect(existsSync(resolve(repoRoot, "plugins/claude-code/.omp-plugin/plugin.json"))).toBe(false);
+    expect(existsSync(resolve(repoRoot, "plugins/claude-code/mcp-omp.json"))).toBe(false);
     expect(existsSync(resolve(repoRoot, "plugins/claude-code/dist/semctx-mcp.js"))).toBe(true);
   });
 });
