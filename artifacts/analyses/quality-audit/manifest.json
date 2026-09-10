@@ -1,0 +1,40 @@
+{
+  "status": "completed",
+  "started": "2026-09-09T06:02:39Z",
+  "completed_at": "2026-09-09T08:00:00Z",
+  "repo": "semctx",
+  "playbook": "roxabi-plugins/playbooks/multi-agent-audit-playbook.md",
+  "files": { "source": 228, "test": 142 },
+  "ccc": { "files": 517, "chunks": 7056 },
+  "wave1_axial": "skipped",
+  "summary": "artifacts/analyses/quality-audit/AUDIT-SUMMARY.md",
+  "score": 0,
+  "p0": ["SEC-PB-01", "SEC-PPLUG-01", "SEC-PPLUG-02"],
+  "completed_agents": [
+    "arch-PA", "arch-PB", "arch-PC", "arch-PApp", "arch-PPlug",
+    "sec-PA", "sec-PB", "sec-PC", "sec-PApp", "sec-PPlug",
+    "smell-PA", "smell-PB", "smell-PC", "smell-PApp", "smell-PPlug",
+    "smell-TA", "smell-TB", "smell-TC", "smell-TApp", "smell-TPlug",
+    "type-PA", "type-PB", "type-PC", "type-PApp", "type-PPlug",
+    "async-PA", "async-PB", "async-PC", "async-PApp", "async-PPlug",
+    "err-PA", "err-PB", "err-PC", "err-PApp", "err-PPlug",
+    "testq-TA", "testq-TB", "testq-TC", "testq-TApp", "testq-TPlug",
+    "debt-PA", "debt-PB", "debt-PC", "debt-PApp", "debt-PPlug",
+    "ccc-validate", "synthesis"
+  ],
+  "pending_agents": [],
+  "current_wave": 11,
+  "waves": {
+    "1": { "status": "skipped", "reason": "no .importlinter; no axial: true ADR" },
+    "2": ["arch-PA", "arch-PB", "arch-PC", "arch-PApp", "arch-PPlug"],
+    "3": ["sec-PA", "sec-PB", "sec-PC", "sec-PApp", "sec-PPlug"],
+    "4": ["smell-PA", "smell-PB", "smell-PC", "smell-PApp", "smell-PPlug"],
+    "5": ["smell-TA", "smell-TB", "smell-TC", "smell-TApp", "smell-TPlug"],
+    "6": ["type-PA", "type-PB", "type-PC", "type-PApp", "type-PPlug"],
+    "7": ["async-PA", "async-PB", "async-PC", "async-PApp", "async-PPlug"],
+    "8": ["err-PA", "err-PB", "err-PC", "err-PApp", "err-PPlug"],
+    "9": ["testq-TA", "testq-TB", "testq-TC", "testq-TApp", "testq-TPlug"],
+    "10": ["debt-PA", "debt-PB", "debt-PC", "debt-PApp", "debt-PPlug"],
+    "11": ["ccc-validate", "synthesis"]
+  }
+}

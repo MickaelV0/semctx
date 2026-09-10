@@ -1,0 +1,27 @@
+# Security — PPlug
+
+## Summary
+Reviewed plugin hosts (`plugins/claude-code`, `plugins/semctx-control`, `plugins/shared` hooks + MCP manifests), `packages/github-action`, `scripts/` (verify-pr, compatibility, delivery proof, benchmark, stress shell), `packages/eval`, and `packages/test-fixtures` (source only; skipped tests, `dist/`, `typescript-lib`). SECURITY.md is right on argv git/spawn, no SQL in this plane, no `pull_request_target` in the composite action, and `${{ }}` never inlined into `run:` scripts — user inputs go through `env:`. Guard/lifecycle do not `eval`/`exec` agent text; `SEMCTX_GUARD=off` is the documented cooperative kill switch. Worst issue: every `bun` launch whose process cwd is the analyzed/PR repo loads `$cwd/bunfig.toml` `preload` before the trusted entrypoint (confirmed on Bun 1.4.0, the version `action.yml` pins). That is untrusted-repo RCE for plugin MCP and for the GitHub Action verify step.
+
+## Findings
+
+| ID | Sev | Location | Issue | Evidence | Fix | Confidence |
+|----|-----|----------|-------|----------|-----|------------|
+| SEC-PPLUG-01 | P0 | plugins/claude-code/mcp-omp.json:6 | MCP is started with `command: bun` and `cwd: "."` (project root). Bun loads `$cwd/bunfig.toml` and runs `preload` before `dist/semctx-mcp.js`. A cloned untrusted repo can RCE the user when the plugin auto-starts. Same launch in `plugins/semctx-control/.mcp.json:6` (`cwd: "."`) and `plugins/claude-code/.mcp.json:4` (no cwd; host default is the project). `.env` in cwd also injects unset vars (`GIT_DIR`, `NODE_OPTIONS`). | `"cwd": "."` | Point MCP `cwd` at the plugin install dir; pass the repo only as `SEMCTX_ROOT`. Launch `bun --config=/dev/null` (or a trusted empty bunfig shipped next to the bundle). | 95 |
+| SEC-PPLUG-02 | P0 | packages/github-action/action.yml:84 | Verify step sets `working-directory` to the consumer/PR checkout then runs `bun "$SEMCTX_CLI" …`. Same bunfig `preload` RCE as SEC-PPLUG-01; composite steps inherit the job env, so a same-repo PR (or any job that exports secrets into the action) can steal them. Contradicts SECURITY.md “does not execute arbitrary PR scripts.” `${{ }}` in `run:` is clean; this is cwd/runtime config, not template injection. | `bun "$SEMCTX_CLI" init --root .` | Run bun with cwd = `github.action_path` (or `--config=/dev/null`) and pass the consumer path only as `--root`. Repeat for `index` / `verify diff`. | 95 |
+| SEC-PPLUG-03 | P2 | plugins/claude-code/hooks/semctx-guard.mjs:1182 | When `git rev-parse --show-toplevel` fails, `resolveGitRoot` walks ancestors looking for `.git` **or** `.semctx/guard.json`. Lifecycle explicitly refuses that walk (`semctx-lifecycle.mjs:175`) because a scratch cwd binds to `~/.semctx`. Guard then runs `ls-files` / `hash-object` / 256MiB buffers against the parent. `input.cwd` from stdin is not required to be absolute (lifecycle is). Cooperative host, but unexpected path bind. | `existsSync(join(current, ".semctx", "guard.json"))` | Match lifecycle: require an absolute directory cwd; never walk to an ancestor `.semctx`. | 88 |
+| SEC-PPLUG-04 | P2 | packages/github-action/src/adapter.mjs:39 | Report JSON is `JSON.parse` with no schema. `loc.line` is interpolated into a workflow-command property without `escProp`; `setOutputs` writes `k=v` (adapter.mjs:88) so a newline in `verdict` / `report-path` becomes extra `GITHUB_OUTPUT` keys. Trusted CLI usually emits numbers/enums; still the adapter is the untrusted-text → Actions-command boundary. | `` `,line=${loc.line}` `` | Zod-parse the report; `escProp(String(loc.line))` only if numeric; write outputs with the `name<<EOF` delimiter. | 78 |
+| SEC-PPLUG-05 | P3 | plugins/claude-code/hooks/semctx-guard.mjs:1407 | `git hash-object --path=${path} --stdin` re-enables attribute clean filters (git implies `--no-filters` for stdin unless `--path` is set). Diffs already pass `--no-ext-diff --no-textconv`. Local `.git/config` filter commands are the same principal; still a hardening gap vs untrusted worktree attributes. | `` `--path=${path}`, "--stdin" `` | Add `--no-filters`. | 70 |
+
+## Metrics
+- Files read: 22
+- Findings: 5 (P0: 2 / P1: 0 / P2: 2 / P3: 1)
+- Injection sites reviewed: hook stdin JSON (guard + lifecycle), Bash command parser (`eval`/`xargs sh -c` treated as non-isolated → block in guarded mode, not executed), Action `run:` / `env:` / upload-artifact `path:`, `verify-pr` argv, MCP bun cwd, adapter workflow commands + `GITHUB_OUTPUT`, `hash-object --path`
+- Spawn/SQL/path: 25 argv spawn/`execFileSync` sites (18 guard git, 2 `verify-pr`, 2 benchmark, 3 delivery-proof); 0 `shell: true` / `sh -c` from this plane; 0 SQL; path writes = lifecycle ledger under `.semctx/working/agent-lifecycle` (realpath + no-symlink) and adapter append to `GITHUB_OUTPUT` / `GITHUB_STEP_SUMMARY`
+
+## Recommendations
+1. Treat “cwd of `bun` == analyzed repo” as an RCE class: plugin MCP + Action verify + any future `bun <bundle>` must use a trusted cwd/`--config=/dev/null`. Keep `SEMCTX_ROOT` / `--root` as the only repo pointer.
+2. Do not rest SECURITY.md on “no `${{ }}` in run scripts” alone; add a bunfig/preload note and a test that a consumer `bunfig.toml` preload does not run.
+3. Align guard repository binding with the lifecycle hook (absolute cwd, no ancestor `.semctx`).
+4. Schema-validate the Action report at the adapter boundary; escape every workflow-command property; heredoc outputs.
+5. `bun install --ignore-scripts` on the Action install step (defense in depth on the action checkout, not a PR-script hole today).

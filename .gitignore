@@ -24,3 +24,5 @@ __pycache__/
 !examples/**/.semctx-keep
 *.log
 .DS_Store
+# CocoIndex Code (ccc)
+/.cocoindex_code/

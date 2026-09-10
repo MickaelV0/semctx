@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1260">
+<title>semctx quality audit · executive recap</title>
+<style>
+  :root {
+    --bg: #0f1419;
+    --paper: #f4f1ea;
+    --ink: #1a1f24;
+    --muted: #5c6570;
+    --line: #d8d2c6;
+    --p0: #b42318;
+    --p0bg: #fde8e6;
+    --ok: #176b4a;
+    --okbg: #e3f4ec;
+    --warn: #8a5a00;
+    --warnbg: #fff3d6;
+    --card: #fff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #e8e4dc;
+    color: var(--ink);
+    font: 15px/1.4 "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  }
+  .canvas {
+    width: 1260px;
+    margin: 0 auto;
+    background: var(--paper);
+    color: var(--ink);
+  }
+  header {
+    background: var(--bg);
+    color: #eef2f6;
+    padding: 28px 40px 24px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    gap: 24px;
+  }
+  header .kicker {
+    font-size: 12px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: #9aa3ad;
+    margin-bottom: 8px;
+  }
+  header h1 {
+    font-size: 32px;
+    font-weight: 650;
+    letter-spacing: -0.03em;
+    line-height: 1.15;
+  }
+  header h1 em { font-style: normal; color: #f0b4ae; }
+  header .meta {
+    text-align: right;
+    font-size: 13px;
+    color: #b4bcc6;
+    line-height: 1.5;
+    white-space: nowrap;
+  }
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    border-bottom: 1px solid var(--line);
+  }
+  .stats div {
+    padding: 16px 18px 14px;
+    border-right: 1px solid var(--line);
+  }
+  .stats div:last-child { border-right: 0; }
+  .stats b {
+    display: block;
+    font-size: 26px;
+    font-weight: 650;
+    letter-spacing: -0.03em;
+    line-height: 1.1;
+  }
+  .stats span { font-size: 12px; color: var(--muted); }
+  .stats .p0 b { color: var(--p0); }
+  main { padding: 28px 40px 32px; }
+  h2 {
+    font-size: 12px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 12px;
+  }
+  .p0s {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 12px;
+    margin-bottom: 28px;
+  }
+  .p0s article {
+    background: var(--p0bg);
+    border: 1px solid #f0c4be;
+    padding: 16px 16px 14px;
+    min-height: 168px;
+  }
+  .p0s .id {
+    font-size: 12px;
+    font-weight: 650;
+    color: var(--p0);
+    letter-spacing: 0.04em;
+    margin-bottom: 6px;
+  }
+  .p0s h3 { font-size: 16px; font-weight: 650; line-height: 1.25; margin-bottom: 8px; }
+  .p0s p { font-size: 13px; color: #4a3030; }
+  .p0s code {
+    font: 11px/1.35 ui-monospace, "IBM Plex Mono", Menlo, monospace;
+    color: #6b2a24;
+  }
+  .split {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-bottom: 28px;
+  }
+  .split article {
+    background: var(--card);
+    border: 1px solid var(--line);
+    padding: 16px 18px;
+  }
+  .split .ok { background: var(--okbg); border-color: #b7ddc8; }
+  .split .risk { background: var(--warnbg); border-color: #ead7a0; }
+  .split h3 { font-size: 16px; margin-bottom: 8px; }
+  .split ul { padding-left: 18px; font-size: 13.5px; color: #333; }
+  .split li { margin: 4px 0; }
+  .moves { display: grid; grid-template-columns: 1fr; gap: 8px; margin-bottom: 24px; }
+  .moves li {
+    display: grid;
+    grid-template-columns: 36px 1fr auto;
+    gap: 12px;
+    align-items: center;
+    background: var(--card);
+    border: 1px solid var(--line);
+    padding: 10px 14px;
+    list-style: none;
+    font-size: 14px;
+  }
+  .moves .n {
+    width: 28px; height: 28px;
+    background: var(--bg); color: #fff;
+    display: grid; place-items: center;
+    font-size: 13px; font-weight: 650;
+  }
+  .moves code { font: 12px ui-monospace, Menlo, monospace; color: var(--muted); }
+  .moves .effort {
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  footer {
+    display: flex;
+    justify-content: space-between;
+    gap: 24px;
+    font-size: 12.5px;
+    color: var(--muted);
+    border-top: 1px solid var(--line);
+    padding-top: 14px;
+  }
+  footer strong { color: var(--ink); }
+</style>
+</head>
+<body>
+<div class="canvas">
+  <header>
+    <div>
+      <div class="kicker">Quality audit · executive recap</div>
+      <h1>Do not trust an untrusted checkout<br>until these <em>3 P0s</em> are gone</h1>
+    </div>
+    <div class="meta">
+      hoklims/semctx · 2026-09-09<br>
+      50 domain agents + synthesis<br>
+      Wave 1 axial skipped
+    </div>
+  </header>
+  <div class="stats">
+    <div><b>228</b><span>source files</span></div>
+    <div><b>142</b><span>test files</span></div>
+    <div class="p0"><b>3</b><span>P0 (source-checked)</span></div>
+    <div><b>59</b><span>P1 after dedup</span></div>
+    <div><b>171</b><span>P2 not re-read</span></div>
+    <div><b>0</b><span>score (formula floor)</span></div>
+  </div>
+  <main>
+    <h2>01 · Critical</h2>
+    <div class="p0s">
+      <article>
+        <div class="id">SEC-PB-01</div>
+        <h3>Semantic walk follows a directory symlink</h3>
+        <p><code>listSemFiles</code> does not lstat the start dir. A planted <code>.semctx/semantic</code> symlink reads and rewrites <code>*.sem</code> outside the repo. Child file symlinks already throw.</p>
+        <p><code>packages/semantic-engine/src/store.ts:24</code></p>
+      </article>
+      <article>
+        <div class="id">SEC-PPLUG-01</div>
+        <h3>MCP starts Bun in the project cwd</h3>
+        <p><code>command: bun</code> + <code>cwd: "."</code>. Bun loads <code>$cwd/bunfig.toml</code> <code>preload</code> before <code>dist/semctx-mcp.js</code>. Same on Codex; Claude MCP has no cwd (host default = project).</p>
+        <p><code>plugins/claude-code/mcp-omp.json:6</code></p>
+      </article>
+      <article>
+        <div class="id">SEC-PPLUG-02</div>
+        <h3>GitHub Action runs bun in the PR tree</h3>
+        <p>Verify step <code>working-directory</code> is the consumer checkout, then <code>bun "$SEMCTX_CLI"</code>. Same preload RCE. <code>${{ }}</code> in <code>run:</code> is clean; cwd is not.</p>
+        <p><code>packages/github-action/action.yml:73–90</code></p>
+      </article>
+    </div>
+
+    <h2>02 · Plane C vs App / Plug</h2>
+    <div class="split">
+      <article class="ok">
+        <h3>Plane C parsers: fail-closed</h3>
+        <ul>
+          <li>Architecture and async reports: 0 findings</li>
+          <li>No spawn, Git, SQLite, or FS AST</li>
+          <li><code>executionAuthority: none</code></li>
+        </ul>
+      </article>
+      <article class="risk">
+        <h3>App / Plug: the untrusted-repo surface</h3>
+        <ul>
+          <li>CLI / MCP are not thin over <code>app-services</code></li>
+          <li>Adapter, guard, v1 discovery, altitude still fail-open on bad input</li>
+          <li><code>runVerify</code> line 488 is <code>withUnknown</code>, not a missing BLOCK. Do not invert the admissibility pin.</li>
+        </ul>
+      </article>
+    </div>
+
+    <h2>03 · Five moves (S, except adapter schema)</h2>
+    <ol class="moves">
+      <li><span class="n">1</span><span>Launch MCP with a trusted cwd or <code>bun --config=/dev/null</code>. Never consumer tree as Bun cwd.</span><span class="effort">P0</span></li>
+      <li><span class="n">2</span><span>Run Action <code>bun</code> from <code>github.action_path</code>, not consumer <code>working-directory</code>.</span><span class="effort">P0</span></li>
+      <li><span class="n">3</span><span><code>lstat</code> / <code>O_NOFOLLOW</code> the <code>listSemFiles</code> walk root (copy <code>reconciliation-read</code>).</span><span class="effort">P0</span></li>
+      <li><span class="n">4</span><span>Guard: <code>process.exit(2)</code> on stdin parse / envelope failure.</span><span class="effort">P1</span></li>
+      <li><span class="n">5</span><span>Action adapter: missing or unknown <code>verdict</code> / <code>fail-on</code> → exit 2. Do not flip <code>INDEX_BINDING_ADMISSIBILITY</code>.</span><span class="effort">P1</span></li>
+    </ol>
+
+    <footer>
+      <div><strong>Score 0</strong> is the formula floor (P0 −12, P1 −4, P2 −1, P3 −0.25). It saturates at ~20 P1s. It is not “repo is dead.” P1 volume zeros it, not the three P0s.</div>
+      <div style="text-align:right"><strong>Proof:</strong> every P0 and P1 primary path:line opened in source.<br>171 P2s were not re-read. TYPE-PA-01 is overstated.</div>
+    </footer>
+  </main>
+</div>
+</body>
+</html>
