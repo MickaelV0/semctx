@@ -20,6 +20,8 @@ import { runIndexHealth } from "./commands/index-health";
 import { runInstall } from "./commands/install";
 import { runPluginStatus } from "./commands/plugin-status";
 import { runMigrate } from "./commands/migrate";
+import { runFeedback } from "./commands/feedback";
+import { runSupport } from "./commands/support";
 
 const HELP = `semctx — repository change-impact analyzer (v${packageJson.version})
 
@@ -57,6 +59,9 @@ Core:
       --dry-run                      show the resolved range + config; no analysis, no writes
   inspect symbol|capability <q>    inspect the graph around a symbol or capability
   doctor                           workspace health check
+  support [--output <new-file>]    preview a privacy-safe diagnostic report as JSON
+  feedback <record|list|show|update|remove|export>
+                                   voluntary local finding feedback; export is sanitized JSON
   status [--json]                  control freshness preflight (FRESH/DIRTY_KNOWN/STALE/UNSEALED)
 
 Semantic layer (authored intent, invariants, decisions, evidence, change contracts):
@@ -167,6 +172,10 @@ async function dispatch(args: ParsedArgs): Promise<number> {
       return runStatus(root, args);
     case "doctor":
       return runDoctor(root, args);
+    case "support":
+      return runSupport(root, args);
+    case "feedback":
+      return runFeedback(root, args);
     case "migrate":
       return runMigrate(root, args);
     default:

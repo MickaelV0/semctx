@@ -1,7 +1,7 @@
 # semctx — repository change-impact analyzer
 
 <!-- semctx:compatibility:start -->
-Semctx **0.1.20** requires **Bun >=1.4.0**.
+Semctx **0.2.0** requires **Bun >=1.4.0**.
 The supported, tested host baseline is **Codex 0.147.0** and
 **Claude Code 2.1.229**. Other host versions are **unknown** until tested;
 these pins do not claim the earliest historically compatible versions.
@@ -30,7 +30,14 @@ The version in the compatibility block above is shared by the CLI and plugins. I
 version tag drives npm publication, the `stable` plugin channel and the GitHub Release from one
 immutable commit. Pin an exact release when reproducibility matters.
 
-See the [roadmap](ROADMAP.md) for the next outcomes: easier first use, measurable impact advice,
+Start with the [three-case demo](https://hoklims.github.io/semctx/demo/) or
+[run it locally](docs/contributing/first-use-demo.md) against an explicitly selected packaged CLI.
+It shows a benign edit, a structural contract warning and a runtime bug that static analysis cannot
+prove correct. Contributors can [check their setup and run a focused test](docs/contributing/first-check.md).
+Optional [feedback and support reports](docs/reference/cli.md#local-feedback-and-support-reports)
+stay local until you explicitly share an exported file.
+
+See the [roadmap](ROADMAP.md) for the next outcomes: measurable impact advice,
 affordable indexes, and connected context. Planned capabilities are separate from the delivered
 status below.
 
@@ -56,6 +63,10 @@ status below.
 | Plane B authored intent | implemented; Git-versioned declarations and proof-carrying change contracts |
 | Plane C reconstruction/control | implemented as read-only planning, authority reporting, and diff reconciliation, plus content-addressed local Control Handoff v2 capture/resume; no executor |
 | Codex/Claude MCP and workflow parity | implemented for shared tools, contracts, and generated workflow instructions |
+| First use and contributor checks | packaged three-case demo, setup inspection, targeted checks and disposable red/green regression recipe |
+| Voluntary feedback and diagnostics | local records with explicit updates/removal; allowlisted aggregate and support exports; no upload or telemetry |
+| Reproducible public-change replay | [thirty selected changes](docs/pilot/public-corpus-2026-09-08.json); all labels UNKNOWN, with no accuracy, adoption or human-time claim |
+| Oh My Pi | experimental Agent-Plugins package through the existing tag-pinned catalogue; [installation and limits](docs/integrations/omp.md); stable host attestation remains separate |
 | Agent lifecycle | explicit MCP checkpoint and machine-validated Control Handoff v2 are manual and shadow-only; a shipped shadow hook automates `before_completion` on both hosts without blocking, while the other three checkpoints, persisted/measured telemetry, and enforcement remain open in [#28](https://github.com/hoklims/semctx/issues/28) |
 | P4 competitive evidence/replay gate / P5 persisted executor | not shipped; the committed 16-change retrieval benchmark is historical negative evidence, not the P4 competitive gate |
 

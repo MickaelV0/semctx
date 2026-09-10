@@ -263,9 +263,14 @@ function parseUnifiedDiffStructure(diffText: string): ParsedUnifiedDiff {
       if (newHeader.matched) {
         addScopePath(pendingOldHeader.path);
         addScopePath(newHeader.path);
-        current = newHeader.path === undefined
+        const filePath = newHeader.path ?? pendingOldHeader.path;
+        current = filePath === undefined
           ? undefined
-          : { filePath: normalizePath(newHeader.path), hunks: [], wholeFile: false };
+          : {
+              filePath: normalizePath(filePath),
+              hunks: [],
+              wholeFile: pendingOldHeader.path === undefined || newHeader.path === undefined,
+            };
         if (current !== undefined) files.push(current);
         pendingOldHeader = undefined;
         sawFileOrHunkMarker = true;

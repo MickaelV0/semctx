@@ -9,6 +9,34 @@ GitHub Release advance together through the tag-driven lockstep workflow documen
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-08
+
+### Added
+
+- A packaged three-case walkthrough, frozen public-change replay and public evidence page.
+  The walkthrough shows structural impact, an exported-contract warning and an explicit runtime
+  correctness limit. Replay labels remain UNKNOWN; efficacy scores and human metrics are unmeasured.
+- Voluntary local feedback tied to exact report/finding/source identities, plus allowlisted support
+  reports. Exports require an explicit command and never upload data.
+- Contributor setup inspection, named test scopes and a temporary failing-then-passing regression.
+  Full verification continues to invoke the existing canonical repository gate.
+- Experimental Oh My Pi support through the existing tag-pinned catalogue, Agent-Plugins manifests,
+  an embedded CLI shim and the shared opt-in Git guard. No mirror or OMP/Bun fork is required.
+
+### Fixed
+
+- Deleted files remain in change reports, including whole-file changes without surviving symbols.
+- Report identities preserve prototype-named additive JSON fields. Pilot and public projections
+  reject incomplete or contradictory evidence rather than presenting a successful observation.
+
+### Compatibility
+
+- CLI and plugins require Bun >=1.4.0. Existing verification/MCP contracts and default advisory
+  guard behavior remain in force. Feedback/support use separate v1 formats; verify-report v1
+  accepts additive fields. OMP remains outside stable host-delivery attestation.
+- Participant studies and the fourteen-day follow-up were waived for this release. No adoption,
+  retention, comprehension, contribution-time or accuracy result is claimed.
+
 ## [0.1.20] - 2026-09-05
 
 ### Fixed
@@ -541,7 +569,9 @@ declared stable).
 - GitHub Action passes all user-controlled inputs through the step `env:` (no `${{ }}` template
   interpolation into run scripts) to prevent Actions injection.
 
-[Unreleased]: https://github.com/hoklims/semctx/compare/v0.1.19...HEAD
+[Unreleased]: https://github.com/hoklims/semctx/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/hoklims/semctx/compare/v0.1.20...v0.2.0
+[0.1.20]: https://github.com/hoklims/semctx/compare/v0.1.19...v0.1.20
 [0.1.19]: https://github.com/hoklims/semctx/compare/v0.1.18...v0.1.19
 [0.1.18]: https://github.com/hoklims/semctx/compare/v0.1.17...v0.1.18
 [0.1.17]: https://github.com/hoklims/semctx/compare/v0.1.16...v0.1.17
