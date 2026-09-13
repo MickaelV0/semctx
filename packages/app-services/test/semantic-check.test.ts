@@ -164,7 +164,7 @@ describe("semantic lifecycle hygiene", () => {
       "EVIDENCE_BASELINE_STALE",
     ]);
     expect(report.lifecycleFindings.find((finding) => finding.code === "EVIDENCE_BASELINE_STALE")?.message)
-      .toBe("The recorded verification baseline does not match the current analyzed content state.");
+      .toBe("The recorded verification baseline does not match the current analyzed content state. Run semctx index --record to rebuild, verify and record current evidence.");
   });
 
   it("rejects malformed recognized legacy baselines before indexing", () => {

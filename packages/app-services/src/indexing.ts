@@ -56,6 +56,8 @@ export interface RepositoryIndex extends RepositoryAnalysis {
   freshnessSeal: ControlFreshnessSeal;
   /** Operational telemetry only; deliberately excluded from graph facts and freshness seals. */
   parallelism?: TypeScriptParallelism;
+  /** Diagnostic only: rebuilding does not replace an already stale evidence baseline. */
+  staleEvidenceBaseline?: true;
 }
 
 interface InternalRepositoryAnalysis extends RepositoryAnalysis {
@@ -198,11 +200,16 @@ function prepareRepositoryIndex(root: string, indexedAt: string): PreparedReposi
   const semanticModelHash = fingerprintSemanticModel(semanticBefore.model);
   const errors = semanticBefore.diagnostics.filter((diagnostic) => diagnostic.severity === "error");
   const lifecycleErrors = lifecycleBefore.filter((finding) => finding.severity === "error");
-  if (errors.length > 0 || semanticBefore.duplicateIds.length > 0 || lifecycleErrors.length > 0) {
+  // EVIDENCE_BASELINE_STALE keeps its error severity for semantic-check/status/evidence consumers
+  // (ADR 0025); only ordinary indexing treats it as repairable rather than blocking, so a stale
+  // baseline can be rebuilt without deadlocking on the very operation that repairs it. Every other
+  // lifecycle error (including a malformed baseline or active-change pointer) still blocks.
+  const blockingLifecycleErrors = lifecycleErrors.filter((finding) => finding.code !== "EVIDENCE_BASELINE_STALE");
+  if (errors.length > 0 || semanticBefore.duplicateIds.length > 0 || blockingLifecycleErrors.length > 0) {
     throw new SemctxError("CONFIG_INVALID", "semantic model cannot be sealed during indexing", {
       diagnostics: errors,
       duplicateIds: semanticBefore.duplicateIds,
-      lifecycleFindings: lifecycleErrors,
+      lifecycleFindings: blockingLifecycleErrors,
     });
   }
   return {
@@ -352,6 +359,8 @@ function completeRepositoryIndex(
       },
     });
     const result = {
+      ...(lifecycleAfter.some((finding) => finding.code === "EVIDENCE_BASELINE_STALE")
+        ? { staleEvidenceBaseline: true as const } : {}),
       ...indexed,
       freshnessSeal: buildControlFreshnessSeal({
         repositoryRoot,
