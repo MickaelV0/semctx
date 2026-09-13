@@ -23,6 +23,15 @@ export {
   compareControlContinuationDependencyV1,
 } from "./control-continuation";
 export type { ControlContinuationDependencyFixtureV1 } from "./control-continuation";
+export {
+  CONFIG_MIGRATION_MIGRATABLE_FIELDS,
+  computeConfigMigrationPlanDigest,
+  decideConfigMigrationRestoreOutcome,
+  diffConfigMigrationSelection,
+  driftedConfigPolicyFields,
+  isConfigMigrationPlanStale,
+} from "./config-migration";
+export type { ConfigMigrationRestoreOutcome } from "./config-migration";
 export type {
   ChangeAuthorizationAssertionInputV1,
   ChangeAuthorizationClaimInputV1,

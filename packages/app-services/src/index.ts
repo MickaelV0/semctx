@@ -120,6 +120,11 @@ export {
 } from "./control";
 export type { ControlPlanCommand, ControlTraceCommand, CurrentControlState } from "./control";
 export {
+  applyConfigMigration,
+  planConfigMigration,
+  restoreConfigMigration,
+} from "./config-migration";
+export {
   exportFeedbackAggregate,
   listFeedback,
   recordFeedback,

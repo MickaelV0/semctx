@@ -139,6 +139,37 @@ Version 2 selection has these rules:
 substring matcher. Changing them intentionally changes the selected path set and its bound
 analysis-input identity.
 
+## Config migration (v1 to v2)
+
+`semctx migrate config` (ADR 0028) is the deliberate path from an existing v1 file to an explicit
+v2 proposal — not `semctx init --polyglot`, which only writes a fresh v2 file where none exists.
+See the [CLI reference](cli.md#migrate-config) for the command itself. In outline:
+
+```powershell
+semctx migrate config --proposal .semctx/v2-proposal.json
+semctx migrate config --proposal .semctx/v2-proposal.json --apply --plan <sha256>
+semctx migrate config --restore <run-id>
+```
+
+- The proposal must be a complete, schema-valid v2 file under the repository, outside
+  `config.json` and `.semctx/config-migrations/`. Only `version`, `include`, `exclude`,
+  `selectionMode` and `languages` may differ from the current v1 file; any other change —
+  including to a field this version of `semctx` does not recognize — is refused.
+- Planning is read-only: it shows the discovery-selection diff (added/removed/unchanged paths),
+  the authored `.sem` inventory, and the verification-state presence/digest, plus a plan digest
+  that binds all of it.
+- `--apply` recomputes that plan under a cooperative lock and refuses if the supplied digest no
+  longer matches (`STALE_PLAN`), or if an earlier run has not been restored yet
+  (`RECOVERY_REQUIRED`). It keeps an exact backup of the prior `config.json` bytes.
+- `--restore <run-id>` undoes one run, including one interrupted by a crash: it is driven by
+  comparing current `config.json` bytes to the run's recorded before/after values, never by
+  guessing from partial state. A run already restored never overwrites a later value.
+- Apply and restore re-inventory authored `.sem` files and `verification-state.json` around the
+  `config.json` replacement and refuse on observed drift, naming the run to restore if one was
+  published. They never roll those files back.
+- This command never re-indexes, never re-stamps verification, and never touches authored `.sem`
+  files: after applying or restoring, rebuild the index and re-run verification explicitly.
+
 ### Language modes
 
 Each v2 `languages` entry is either `on` or `off`.

@@ -9,6 +9,34 @@ GitHub Release advance together through the tag-driven lockstep workflow documen
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-13
+
+### Added
+
+- Explicit `semctx index --record` recovery rebuilds the current index and records a new
+  verification without treating an obsolete baseline as authority or erasing failed-rebuild evidence.
+- `semctx control handoff explain` and its MCP counterpart produce source-backed continuation
+  reports from immutable Handoff v2 capsules, with applicability, remaining work and limitations.
+  A packaged continuity walkthrough exercises capture, drift and refused resumption.
+- Opt-in `semctx migrate config` compares legacy v1 discovery with an explicit v2 proposal.
+  Applying binds to the reviewed plan, preserves exact backups and supports explicit restoration;
+  authored declarations, index data and verification baselines remain untouched.
+- Index lifecycle tests cover edits, branches, concurrent linked worktrees, a persistent MCP
+  consumer and abrupt process termination before and after SQLite commit.
+- Repeated indexing benchmarks capture native CPU and peak RSS with full semantic fingerprints
+  on synthetic Windows, Linux and macOS corpora.
+
+### Changed
+
+- Repository-state hashing avoids per-file Git subprocesses when no Git content conversion applies,
+  preserving the Git fallback, before/after observations and exact source-binding semantics.
+
+### Limits
+
+- Mac/lobby performance, full indexing budgets and human outcomes remain NOT_MEASURED.
+  No incremental indexing, provider replacement, daemon or new execution authority is claimed.
+  Configuration migration is explicit; installation alone does not migrate a repository.
+
 ## [0.2.1] - 2026-09-12
 
 ### Security
@@ -610,7 +638,8 @@ declared stable).
 - GitHub Action passes all user-controlled inputs through the step `env:` (no `${{ }}` template
   interpolation into run scripts) to prevent Actions injection.
 
-[Unreleased]: https://github.com/hoklims/semctx/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/hoklims/semctx/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/hoklims/semctx/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/hoklims/semctx/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/hoklims/semctx/compare/v0.1.20...v0.2.0
 [0.1.20]: https://github.com/hoklims/semctx/compare/v0.1.19...v0.1.20
