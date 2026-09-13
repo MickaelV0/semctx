@@ -563,6 +563,10 @@ export function restoreConfigMigration(root: string, runId: string): ConfigMigra
       const run = admitRun(root, repositoryRoot, runId);
       if (run === undefined) return refused("restore", repositoryRoot, ["INVALID_ARTIFACT"], abandoned);
       const { manifest, beforeBytes, afterBytes } = run;
+      const terminal = manifest.state === "RESTORED";
+      // Admission establishes the recovery identity before any current-config read can fail.
+      // A completed run owns nothing and must never become an active recovery again.
+      if (!terminal) recovery.runId = runId;
       const restored = (): ConfigMigrationReportV1 => ({
         schemaVersion: 1,
         kind: "config_migration_report",
@@ -582,11 +586,12 @@ export function restoreConfigMigration(root: string, runId: string): ConfigMigra
         currentBytes = readCurrentConfigBytes(root);
       } catch (error) {
         if (isSemctxError(error) && (error.code === "CONFIG_NOT_FOUND" || error.code === "CONFIG_INVALID")) {
-          return refused("restore", repositoryRoot, ["INVALID_ARTIFACT"], abandoned);
+          return terminal
+            ? refused("restore", repositoryRoot, ["INVALID_ARTIFACT"], abandoned)
+            : refused("restore", repositoryRoot, ["RECOVERY_REQUIRED", "INVALID_ARTIFACT"], abandoned, runId);
         }
         throw error;
       }
-      const terminal = manifest.state === "RESTORED";
       const outcome = decideConfigMigrationRestoreOutcome(
         digestOf(currentBytes),
         manifest.beforeDigest,
@@ -597,8 +602,6 @@ export function restoreConfigMigration(root: string, runId: string): ConfigMigra
       // later value — even one equal to its old candidate — is refused without naming it for recovery.
       if (terminal) return outcome === "finalize" ? restored() : refused("restore", repositoryRoot, ["DIVERGENT_CONFIG"], abandoned);
 
-      // From here on this admitted, unfinished run is the recovery identity of any refusal or failure.
-      recovery.runId = runId;
       if (outcome === "refuse") return refused("restore", repositoryRoot, ["DIVERGENT_CONFIG"], abandoned, runId);
 
       // Compared with what this restore observes at its own start, never with the historic plan:

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { configMigrationsDir, configPath, initWorkspace, runDir, semctxDir } from "@semantic-context/repository-store";
@@ -262,6 +262,37 @@ describe("run admission, terminal runs and policy preservation", () => {
     expect(readFileSync(manifestPath)).toEqual(manifestBytes);
     expect(readFileSync(authoredPath)).toEqual(authoredBytes);
   });
+
+  for (const terminal of [false, true]) {
+    for (const shape of ["missing", "directory", "linked"] as const) {
+      (shape === "linked" ? linked : test)(`restore ${terminal ? "terminal" : "unfinished"} run refuses ${shape} current config with the correct recovery identity`, () => {
+        const root = setUpRepository();
+        const { runId } = appliedRun(root);
+        if (terminal) expect(restoreConfigMigration(root, runId).status).toBe("RESTORED");
+        const manifestPath = join(runDir(root, runId), "manifest.json");
+        const manifestBytes = readFileSync(manifestPath);
+        const outside = tempRoot();
+        const outsidePath = join(outside, "keep.json");
+        writeFileSync(outsidePath, "third-party bytes remain untouched\n", "utf8");
+        const outsideBytes = readFileSync(outsidePath);
+        rmSync(configPath(root));
+        if (shape === "directory") mkdirSync(configPath(root));
+        if (shape === "linked") link(outside, configPath(root));
+
+        const report = restoreConfigMigration(root, runId);
+
+        expect(report.status).toBe("REFUSED");
+        expect(report.reasons).toEqual(terminal ? ["INVALID_ARTIFACT"] : ["RECOVERY_REQUIRED", "INVALID_ARTIFACT"]);
+        expect(report.runId).toBe(terminal ? null : runId);
+        expect(report.requiredActions).toEqual(terminal ? [] : ["RESTORE_RUN"]);
+        expect(readFileSync(manifestPath)).toEqual(manifestBytes);
+        expect(readFileSync(outsidePath)).toEqual(outsideBytes);
+        if (shape === "missing") expect(existsSync(configPath(root))).toBe(false);
+        if (shape === "directory") expect(lstatSync(configPath(root)).isDirectory()).toBe(true);
+        if (shape === "linked") expect(lstatSync(configPath(root)).isSymbolicLink()).toBe(true);
+      });
+    }
+  }
 
   test("restore preserves the admitted recovery identity when the baseline is unreadable", () => {
     const root = setUpRepository();
