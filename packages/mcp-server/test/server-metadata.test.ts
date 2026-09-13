@@ -54,6 +54,7 @@ describe("semctx MCP tool metadata", () => {
       "semctx_control_plan_change",
       "semctx_control_reconcile_diff",
       "semctx_control_resume",
+      "semctx_control_handoff_explain",
       "semctx_control_verify_authorization",
     ]) {
       expect(byName.get(name)?.annotations).toEqual({

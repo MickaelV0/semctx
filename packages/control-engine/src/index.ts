@@ -18,6 +18,11 @@ export {
   projectChangeAuthorizationSubjectV1,
   replayChangeAuthorizationV1,
 } from "./change-authorization-policy";
+export {
+  compareControlContinuationDependenciesV1,
+  compareControlContinuationDependencyV1,
+} from "./control-continuation";
+export type { ControlContinuationDependencyFixtureV1 } from "./control-continuation";
 export type {
   ChangeAuthorizationAssertionInputV1,
   ChangeAuthorizationClaimInputV1,

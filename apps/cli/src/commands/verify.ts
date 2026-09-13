@@ -1,20 +1,23 @@
 import { resolve } from "node:path";
 import { SemctxError } from "@semantic-context/core";
-import { verificationStatePath, writeFileNoFollow } from "@semantic-context/repository-store";
 import { replaceLocalReportFile } from "../report-output";
 import type { VerifyReport } from "@semantic-context/core";
 import type { VerifyResult, VerifyReportGitMeta, CoChange } from "@semantic-context/context-engine";
 import {
   captureRecordableVerificationGitState,
   planVerify,
+  recordVerificationState,
+  requireStableVerificationGitState,
   runVerify,
   type VerifyComputation,
   type VerifySource,
-  type VerificationGitState,
 } from "@semantic-context/app-services";
 import type { ParsedArgs } from "../args";
 import { flagBool, flagString } from "../args";
 import { info, heading, json, c, success, warn, fail, nowIso } from "../output";
+
+// Re-exported for existing test-facing behavior: this module used to own the implementation.
+export { requireStableVerificationGitState } from "@semantic-context/app-services";
 
 type Format = "text" | "json" | "github";
 type FailOn = "block" | "warn" | "none";
@@ -158,38 +161,6 @@ function writeReportAtomic(root: string, path: string, report: VerifyReport): vo
   replaceLocalReportFile(path, `${JSON.stringify(report, null, 2)}\n`, root);
 }
 
-/** Record the exact analyzed content and its canonical Git representation for guarded-mode replay. */
-function recordVerification(
-  root: string,
-  verdict: VerifyReport["verdict"],
-  verifiedState: VerificationGitState,
-): string {
-  const path = verificationStatePath(root);
-  const state = { version: 3, ...verifiedState, verdict, recordedAt: nowIso() };
-  writeFileNoFollow(root, path, `${JSON.stringify(state, null, 2)}\n`);
-  return path;
-}
-
-export function requireStableVerificationGitState(
-  before: VerificationGitState,
-  after: VerificationGitState,
-  analyzedSourceHash: string = before.analyzedSourceHash,
-): VerificationGitState {
-  if (
-    before.headCommit !== after.headCommit
-    || before.analyzedSourceHash !== after.analyzedSourceHash
-    || before.analyzedSourceHash !== analyzedSourceHash
-    || before.workingStateHash !== after.workingStateHash
-    || before.contentStateHash !== after.contentStateHash
-    || before.repositoryStateHash !== after.repositoryStateHash
-    || before.indexStateHash !== after.indexStateHash
-    || before.headTreeHash !== after.headTreeHash
-  ) {
-    throw new SemctxError("GIT_ERROR", "repository state changed while verification was running", { before, after });
-  }
-  return before;
-}
-
 /**
  * Compute the impact analysis + versioned report for a range. The single reusable entry point so
  * that `change verify` (semantic layer) composes this verbatim instead of re-deriving it.
@@ -244,7 +215,9 @@ export function runVerifyDiff(root: string, args: ParsedArgs): number {
       );
 
   if (outputPath !== undefined) writeReportAtomic(root, resolve(process.cwd(), outputPath), report);
-  const recordedPath = verifiedState === undefined ? undefined : recordVerification(root, report.verdict, verifiedState);
+  const recordedPath = verifiedState === undefined
+    ? undefined
+    : recordVerificationState(root, report.verdict, verifiedState, nowIso());
 
   if (format === "json") json(report);
   else if (format === "github") renderGithub(report, source, g);
