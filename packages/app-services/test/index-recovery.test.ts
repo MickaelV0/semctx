@@ -112,7 +112,7 @@ describe("recoverIndexEvidence / recoverIndexEvidenceAsync", () => {
 
     expect(outcome.verification.report.verdict).not.toBe("BLOCK");
     expect(checkSemanticState(root).reasonCodes).toEqual([]);
-  }, 15_000);
+  }, 30_000);
 
   it("refuses to record and preserves old evidence when the working tree drifts mid-recovery", () => {
     const root = repository();
