@@ -43,8 +43,10 @@ import {
   computeRefinementRelationDigest,
   computeReconciliationAnalysisV1Hash,
   computeReconciliationArchitectureDeltaV1Hash,
+  computeReconciliationObservedDiffV1Hash,
   computeSemanticChangeSetV1Hash,
   compareCodeUnits,
+  normalizeCanonicalRepoRelativePath,
   normalizeReconciliationAnalysisV1,
   normalizePlanningBundleV1,
   normalizeSemanticChangeSetV1,
@@ -53,6 +55,7 @@ import {
   type CandidateAnchorV1,
   type CoordinateGraphReportV2,
   type EvidenceEvaluationV1,
+  type ObservationChangeV1,
   type ObservedDiffHunkV1,
   type PlanningBundleV1,
   type ReconciliationAnalysisV1,
@@ -896,6 +899,48 @@ function observeWorkingHunks(root: string): ObservedDiffHunkV1[] {
     }));
   }
   return hunks.sort((left, right) => left.identity.localeCompare(right.identity));
+}
+
+/**
+ * The same pure observed-diff hash domain used to seal a candidate observation
+ * (`candidateDiffHash`), computed straight from a fresh Git read with no index,
+ * capsule capture or full candidate analysis.
+ */
+export function captureObservedWorkingDiffHashV1(root: string): Sha256Hash {
+  const changes = discoverSourceChanges(root).map(normalizeCandidateSourceChangeV1);
+  return computeReconciliationObservedDiffV1Hash(changes, observeWorkingHunks(root));
+}
+
+function normalizeCandidateSourceChangeV1(change: CandidateSourceChangeV1): ObservationChangeV1 {
+  if (change.kind === "add") {
+    return {
+      kind: "add",
+      newPath: normalizeCanonicalRepoRelativePath(change.newPath),
+      newSourceDigest: change.newSourceDigest,
+    };
+  }
+  if (change.kind === "modify") {
+    return {
+      kind: "modify",
+      path: normalizeCanonicalRepoRelativePath(change.path),
+      oldSourceDigest: change.oldSourceDigest,
+      newSourceDigest: change.newSourceDigest,
+    };
+  }
+  if (change.kind === "delete") {
+    return {
+      kind: "delete",
+      oldPath: normalizeCanonicalRepoRelativePath(change.oldPath),
+      oldSourceDigest: change.oldSourceDigest,
+    };
+  }
+  return {
+    kind: "rename",
+    oldPath: normalizeCanonicalRepoRelativePath(change.oldPath),
+    newPath: normalizeCanonicalRepoRelativePath(change.newPath),
+    oldSourceDigest: change.oldSourceDigest,
+    newSourceDigest: change.newSourceDigest,
+  };
 }
 
 function syntheticAddPatch(path: string, bytes: Uint8Array): Uint8Array {

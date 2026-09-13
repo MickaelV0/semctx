@@ -102,6 +102,133 @@ function hashObject(root: string, path: string, payload: Uint8Array): string {
   return objectId;
 }
 
+type GitObjectFormat = "sha1" | "sha256";
+
+function gitObjectFormat(headCommit: string): GitObjectFormat {
+  if (headCommit.length === 64) return "sha256";
+  if (headCommit.length === 40) return "sha1";
+  throw new SemctxError("GIT_ERROR", "cannot determine verification object hash algorithm", { headCommit });
+}
+
+/** Compute the Git blob object id locally for payloads whose clean conversion is provably the
+ *  identity, avoiding a `git hash-object` subprocess per materialized file. */
+function localBlobObjectId(objectFormat: GitObjectFormat, payload: Uint8Array): string {
+  const hash = createHash(objectFormat);
+  hash.update(`blob ${payload.byteLength}\0`, "utf8");
+  hash.update(payload);
+  return hash.digest("hex");
+}
+
+const VERIFICATION_ATTRIBUTES = ["filter", "ident", "working-tree-encoding"] as const;
+
+interface AttributeSnapshot {
+  filter: string;
+  ident: string;
+  workingTreeEncoding: string;
+  explicitTransformer: boolean;
+}
+
+function attributeSnapshotIsSafe(snapshot: AttributeSnapshot): boolean {
+  return !snapshot.explicitTransformer && snapshot.filter === "unspecified"
+    && snapshot.ident === "unspecified" && snapshot.workingTreeEncoding === "unspecified";
+}
+
+/** Batch-resolve `filter`/`ident`/`working-tree-encoding` for candidate paths in one `git
+ *  check-attr --stdin` call. Every requested path must yield a complete triple; anything else
+ *  (malformed output, duplicates, missing records) refuses rather than admitting raw hashing. */
+function checkAttrBatch(root: string, paths: readonly string[]): Map<string, AttributeSnapshot> {
+  if (paths.length === 0) return new Map();
+  const stdin = new TextEncoder().encode(paths.map((path) => `${path}\0`).join(""));
+  const raw = new TextDecoder().decode(
+    git(root, ["check-attr", "--stdin", "-z", ...VERIFICATION_ATTRIBUTES], stdin),
+  );
+  if (!raw.endsWith("\0")) {
+    throw new SemctxError("GIT_ERROR", "cannot capture verification source state: unterminated check-attr output");
+  }
+  const expectedPaths = new Set(paths);
+  const fields = raw.split("\0");
+  if (fields[fields.length - 1] === "") fields.pop();
+  if (fields.length % 3 !== 0) {
+    throw new SemctxError("GIT_ERROR", "cannot capture verification source state: malformed check-attr output");
+  }
+  const values = new Map<string, string>();
+  for (let index = 0; index < fields.length; index += 3) {
+    const path = fields[index];
+    const attribute = fields[index + 1];
+    const value = fields[index + 2];
+    if (path === undefined || attribute === undefined || value === undefined) {
+      throw new SemctxError("GIT_ERROR", "cannot capture verification source state: malformed check-attr output");
+    }
+    if (!expectedPaths.has(path) || !(VERIFICATION_ATTRIBUTES as readonly string[]).includes(attribute)
+      || value.length === 0) {
+      throw new SemctxError("GIT_ERROR", "cannot capture verification source state: unexpected check-attr record");
+    }
+    const key = `${attribute}\0${path}`;
+    if (values.has(key)) {
+      throw new SemctxError(
+        "GIT_ERROR",
+        "cannot capture verification source state: duplicate check-attr record",
+        { path, attribute },
+      );
+    }
+    values.set(key, value);
+  }
+  const result = new Map<string, AttributeSnapshot>();
+  // Named check-attr output conflates sentinel states with literal values such as filter=unset.
+  // --all omits truly unspecified attributes, so explicit transformer values stay on Git's path.
+  const allRaw = new TextDecoder().decode(git(root, ["check-attr", "--stdin", "-z", "--all"], stdin));
+  if (allRaw.length > 0 && !allRaw.endsWith("\0")) {
+    throw new SemctxError("GIT_ERROR", "cannot capture verification source state: unterminated check-attr output");
+  }
+  const allFields = allRaw.length === 0 ? [] : allRaw.slice(0, -1).split("\0");
+  if (allFields.length % 3 !== 0) {
+    throw new SemctxError("GIT_ERROR", "cannot capture verification source state: malformed check-attr output");
+  }
+  const explicitTransformers = new Set<string>();
+  const allKeys = new Set<string>();
+  for (let index = 0; index < allFields.length; index += 3) {
+    const path = allFields[index]!;
+    const attribute = allFields[index + 1]!;
+    const value = allFields[index + 2]!;
+    const key = `${attribute}\0${path}`;
+    if (!expectedPaths.has(path) || attribute.length === 0 || value.length === 0 || allKeys.has(key)) {
+      throw new SemctxError("GIT_ERROR", "cannot capture verification source state: invalid all-attributes record");
+    }
+    allKeys.add(key);
+    if ((VERIFICATION_ATTRIBUTES as readonly string[]).includes(attribute)) {
+      if (values.get(key) !== value) {
+        throw new SemctxError("GIT_ERROR", "cannot capture verification source state: attribute metadata changed during capture", { path });
+      }
+      explicitTransformers.add(path);
+    }
+  }
+  for (const path of paths) {
+    const filter = values.get(`filter\0${path}`);
+    const ident = values.get(`ident\0${path}`);
+    const workingTreeEncoding = values.get(`working-tree-encoding\0${path}`);
+    if (filter === undefined || ident === undefined || workingTreeEncoding === undefined) {
+      throw new SemctxError(
+        "GIT_ERROR",
+        "cannot capture verification source state: incomplete check-attr metadata",
+        { path },
+      );
+    }
+    result.set(path, { filter, ident, workingTreeEncoding, explicitTransformer: explicitTransformers.has(path) });
+  }
+  return result;
+}
+
+type VerificationAttributeBarrier = () => void;
+let verificationAttributeBarrierForTesting: VerificationAttributeBarrier | undefined;
+
+/** One-shot test seam invoked immediately before the reobservation `check-attr` call, so a test
+ *  can mutate `.gitattributes` between the two observations without a real concurrent process. */
+export function __setVerificationAttributeBarrierForTesting(
+  barrier: VerificationAttributeBarrier | undefined,
+): void {
+  verificationAttributeBarrierForTesting = barrier;
+}
+
 function unstagedPaths(root: string): Set<string> {
   const records = new TextDecoder().decode(
     git(root, ["diff", "--name-only", "-z", "--relative", "--no-ext-diff", "--no-textconv", "--", "."]),
@@ -180,6 +307,7 @@ function captureHeadTreeHash(root: string): string {
 
 function captureContentState(
   root: string,
+  objectFormat: GitObjectFormat,
   tracked: ReadonlyMap<string, IndexEntry>,
   untracked: readonly string[],
   changedOutsideIndex: ReadonlySet<string>,
@@ -191,6 +319,8 @@ function captureContentState(
   const hiddenTrackedPaths: string[] = [];
 
   const paths = sortedPaths(new Set([...tracked.keys(), ...untracked.map(normalizedPath)]));
+  const initialSnapshots = checkAttrBatch(root, paths);
+  const fastResolvedPaths: string[] = [];
   for (const path of paths) {
     const indexEntry = tracked.get(path);
     if (indexEntry?.mode === "160000") {
@@ -244,12 +374,17 @@ function captureContentState(
     frame(contentHash, "mode", mode);
     frame(contentHash, "kind", kind);
     frame(contentHash, "content", payload);
-    const objectId = stat === undefined
-        && indexEntry !== undefined
-        && indexEntry.mode === mode
-        && !changedOutsideIndex.has(path)
-      ? indexEntry.objectId
-      : hashObject(root, path, payload);
+    let objectId: string;
+    if (stat === undefined && indexEntry !== undefined && indexEntry.mode === mode
+      && !changedOutsideIndex.has(path)) {
+      objectId = indexEntry.objectId;
+    } else if (stat?.isFile() && mode !== "120000" && !payload.includes(0x0d)
+      && attributeSnapshotIsSafe(initialSnapshots.get(path)!)) {
+      objectId = localBlobObjectId(objectFormat, payload);
+      fastResolvedPaths.push(path);
+    } else {
+      objectId = hashObject(root, path, payload);
+    }
     if (
       stat !== undefined
       && indexEntry !== undefined
@@ -261,6 +396,26 @@ function captureContentState(
     frame(repositoryHash, "path", path);
     frame(repositoryHash, "mode", mode);
     frame(repositoryHash, "object", objectId);
+  }
+
+  if (fastResolvedPaths.length > 0) {
+    const barrier = verificationAttributeBarrierForTesting;
+    verificationAttributeBarrierForTesting = undefined;
+    barrier?.();
+    const reobserved = checkAttrBatch(root, fastResolvedPaths);
+    for (const path of fastResolvedPaths) {
+      const before = initialSnapshots.get(path)!;
+      const after = reobserved.get(path)!;
+      if (before.filter !== after.filter || before.ident !== after.ident
+        || before.workingTreeEncoding !== after.workingTreeEncoding
+        || before.explicitTransformer !== after.explicitTransformer) {
+        throw new SemctxError(
+          "GIT_ERROR",
+          "cannot capture verification source state: attribute metadata changed during capture",
+          { path },
+        );
+      }
+    }
   }
 
   return {
@@ -317,7 +472,13 @@ function captureVerificationGitSnapshot(root: string): VerificationGitSnapshot {
     }
   }
   const tracked = trackedIndexEntries(root);
-  const { hiddenTrackedPaths, ...contentState } = captureContentState(root, tracked, untracked, unstagedPaths(root));
+  const { hiddenTrackedPaths, ...contentState } = captureContentState(
+    root,
+    gitObjectFormat(headCommit),
+    tracked,
+    untracked,
+    unstagedPaths(root),
+  );
   return {
     state: {
       headCommit,

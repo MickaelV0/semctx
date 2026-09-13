@@ -52,7 +52,8 @@ import {
   resolveVerifiedRelationEvidence,
 } from "./control-evidence";
 import { openReadyRepository } from "./readiness";
-import { inspectSemanticLifecycle } from "./semantic-check";
+import { inspectSemanticLifecycleWithIdentity } from "./semantic-check";
+import { digestCanonical } from "@semantic-context/plane-a-internal";
 import {
   CONTROL_ATTESTATION_INDEX_META_KEY,
   architectureComparisonQuery,
@@ -153,13 +154,22 @@ function semanticProjectionReasons(error: SemctxError): [UnsealedInputReason, ..
 
 /** Load Plane A+B through the read-only store without creating or mutating repository state. */
 export function loadControlState(root: string): CurrentControlState {
+  return loadObservedControlState(root);
+}
+
+function loadObservedControlState(root: string, observeSemanticInput?: (hash: string) => void): CurrentControlState {
   const reader = openReadyRepository(root);
   try {
     const gitBefore = captureGitState(root);
     const configBefore = loadConfig(root);
     const analysisInputHash = fingerprintAnalysisInputs(configBefore, discoverFiles(configBefore));
     const semanticBefore = loadSemanticModel(root);
-    const lifecycleBefore = inspectSemanticLifecycle(root, semanticBefore.model.changes);
+    const lifecycleBeforeObservation = inspectSemanticLifecycleWithIdentity(root, semanticBefore.model.changes);
+    const lifecycleBefore = lifecycleBeforeObservation.findings;
+    observeSemanticInput?.(digestCanonical({
+      semanticModelHash: fingerprintSemanticModel(semanticBefore.model),
+      lifecycleInputHash: lifecycleBeforeObservation.inputHash,
+    }));
     const projection = classifySemanticProjection(semanticBefore, lifecycleBefore);
     if (projection !== null) {
       throw new SemctxError("CONFIG_INVALID", "semantic model cannot be projected into Plane C", {
@@ -223,7 +233,12 @@ export function loadControlState(root: string): CurrentControlState {
     const configAfter = loadConfig(root);
     const analysisInputHashAfter = fingerprintAnalysisInputs(configAfter, discoverFiles(configAfter));
     const semanticAfter = loadSemanticModel(root);
-    const lifecycleAfter = inspectSemanticLifecycle(root, semanticAfter.model.changes);
+    const lifecycleAfterObservation = inspectSemanticLifecycleWithIdentity(root, semanticAfter.model.changes);
+    const lifecycleAfter = lifecycleAfterObservation.findings;
+    observeSemanticInput?.(digestCanonical({
+      semanticModelHash: fingerprintSemanticModel(semanticAfter.model),
+      lifecycleInputHash: lifecycleAfterObservation.inputHash,
+    }));
     const semanticModelHash = fingerprintSemanticModel(semanticBefore.model);
     const semanticModelHashAfter = fingerprintSemanticModel(semanticAfter.model);
     const gitAfter = captureGitState(root);
@@ -232,6 +247,7 @@ export function loadControlState(root: string): CurrentControlState {
       || gitBefore.workingDiffHash !== gitAfter.workingDiffHash
       || analysisInputHash !== analysisInputHashAfter
       || semanticModelHash !== semanticModelHashAfter
+      || lifecycleBeforeObservation.inputHash !== lifecycleAfterObservation.inputHash
       || JSON.stringify(lifecycleBefore) !== JSON.stringify(lifecycleAfter)
     ) {
       throw new SemctxError("GIT_ERROR", "repository inputs changed while Plane C captured its state", {
@@ -338,11 +354,21 @@ export function loadControlQueryRuntime(root: string): ControlQueryRuntime {
 }
 
 export function controlStatus(root: string): ControlFreshnessStatusReport {
+  return controlStatusWithSemanticInputs(root).status;
+}
+
+/** Internal proof binding; callers cannot supply or override the observed inputs. */
+export function controlStatusWithSemanticInputs(root: string): {
+  status: ControlFreshnessStatusReport;
+  semanticInputHashes: string[];
+} {
+  const semanticInputHashes: string[] = [];
   try {
-    return loadControlState(root).freshnessStatus;
+    const status = loadObservedControlState(root, (hash) => semanticInputHashes.push(hash)).freshnessStatus;
+    return { status, semanticInputHashes };
   } catch (error) {
     const unavailable = unavailableStatus(error);
-    if (unavailable !== null) return unavailable;
+    if (unavailable !== null) return { status: unavailable, semanticInputHashes };
     throw error;
   }
 }

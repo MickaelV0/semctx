@@ -125,7 +125,15 @@ describe("packaged MCP runtime", () => {
     try {
       await client.connect(transport);
       const { tools } = await client.listTools();
-      expect(tools).toHaveLength(38);
+      expect(tools).toHaveLength(39);
+      expect(tools.some((tool) => tool.name === "semctx_control_handoff_explain")).toBe(true);
+      const missingHandoff = await client.callTool({
+        name: "semctx_control_handoff_explain",
+        arguments: { repositoryRoot: target, request: { schemaVersion: 1, capsuleHash: `sha256:${"0".repeat(64)}` } },
+      });
+      expect(missingHandoff.isError).not.toBe(true);
+      const missingText = missingHandoff.content.find((item) => item.type === "text")?.text ?? "{}";
+      expect(JSON.parse(missingText)).toMatchObject({ status: "REFUSED", reasonCode: "ARTIFACT_MISSING", report: null });
       expect(tools.some((tool) => tool.name === "semctx_control_agent_lifecycle")).toBe(true);
       expect(tools.some((tool) => tool.name === "semctx_cli_compatibility")).toBe(true);
       expect(tools.some((tool) => tool.name === "semctx_control_explorer")).toBe(true);

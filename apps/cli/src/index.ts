@@ -45,8 +45,10 @@ Core:
       --polyglot                    opt into config v2 glob selection + TS/Python analyzers
       --dry-run --force            preview / overwrite existing files
       --with-github-action --with-claude-code --with-devcontainer   preset extras
-  index [--json] [--workers auto|N]
+  index [--json] [--workers auto|N] [--record]
                                    analyse the repo -> deterministic graph (default: 1; auto is evidence-gated by platform)
+      --record                       rebuild, verify the working tree, and atomically record evidence
+                                    (recovers a stale verification baseline in one command)
   index-health [--json]            report index binding, freshness, and analysis coverage
   verify diff [options]            analyse a git range -> impact + PASS/WARN/BLOCK
       --base <ref>                   compare against <ref> (real merge-base; required in CI)
@@ -79,6 +81,7 @@ Control plane (bounded semantic coordination and migration planning):
   control reconcile-diff <input.json> [--json]
       reconciliation is read-only, accepts no Git refs, and grants no execution authority
   control handoff <input.json> [--json]
+  control handoff explain --hash <sha256> [--json]
   control resume-handoff <capsule-hash> [--json]
       deterministic Control Handoff v2 capture/resume; no execution authority
   control verify-authorization <request.json> [--json]

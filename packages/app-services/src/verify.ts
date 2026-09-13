@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { digestCanonical } from "@semantic-context/plane-a-internal";
 import { SemctxError, type VerifyReport } from "@semantic-context/core";
 import { loadConfig } from "@semantic-context/repository-store";
 import { discoverRepository, isPathSelected } from "@semantic-context/ts-analyzer";
@@ -15,12 +16,12 @@ import {
 } from "@semantic-context/context-engine";
 import { openReadyRepository } from "./readiness";
 import { indexHealth, type IndexHealthReportV1 } from "./index-health";
-import { controlStatus } from "./control";
+import { controlStatusWithSemanticInputs } from "./control";
 import {
   readUnresolvedReferenceBinding,
   type UnresolvedReferenceBindingReason,
 } from "./unresolved-references";
-import { CONTROL_INDEX_SNAPSHOT_META_KEY, parseIndexedControlSnapshot } from "./freshness";
+import { CONTROL_INDEX_SNAPSHOT_META_KEY, fingerprintRepositoryFacts, parseIndexedControlSnapshot } from "./freshness";
 import type { ControlFreshnessReason } from "@semantic-context/control-model";
 import { fingerprintVerificationSource } from "./verification-state";
 
@@ -46,6 +47,11 @@ export interface VerifyComputation {
   coChanges: CoChange[];
   /** Exact resolved HEAD plus diff bytes consumed by working-tree analysis; absent for other sources. */
   analyzedSourceHash: string | null;
+  /** Exact in-memory inputs consumed by analysis, independent of persisted metadata claims. */
+  analyzedRepositoryFactsHash: string;
+  analyzedConfigHash: string;
+  analyzedIndexSnapshotHash: string;
+  analyzedSemanticInputHashes: string[];
 }
 
 /**
@@ -85,6 +91,18 @@ interface ResolvedVerifySource {
 type VerifyCaptureBarrier = () => void;
 
 let verifyCaptureBarrierForTesting: VerifyCaptureBarrier | undefined;
+let verifyAnalysisBarrierForTesting: VerifyCaptureBarrier | undefined;
+let verifyControlBarrierForTesting: VerifyCaptureBarrier | undefined;
+
+/** Internal one-shot boundary after the lifecycle inputs have actually been consumed. */
+export function __setVerifyControlBarrierForTesting(barrier: VerifyCaptureBarrier | undefined): void {
+  verifyControlBarrierForTesting = barrier;
+}
+
+/** Internal one-shot boundary after analysis, for deterministic index A-B-A regression tests. */
+export function __setVerifyAnalysisBarrierForTesting(barrier: VerifyCaptureBarrier | undefined): void {
+  verifyAnalysisBarrierForTesting = barrier;
+}
 
 /**
  * Internal deterministic injection point between ref resolution and hunk capture. Intentionally
@@ -431,6 +449,7 @@ function applyIndexBindingGate(
   store: ReturnType<typeof openReadyRepository>,
   result: VerifyResult,
   identity: SourceIdentity,
+  observeSemanticInput: (hash: string) => void,
 ): VerifyResult {
   const breaks: IndexBindingBreak[] = [];
   // A diff nobody attributed to a commit cannot be joined with line ranges frozen at one. This is
@@ -472,7 +491,12 @@ function applyIndexBindingGate(
 
   let freshness;
   try {
-    freshness = controlStatus(root);
+    const observed = controlStatusWithSemanticInputs(root);
+    freshness = observed.status;
+    observed.semanticInputHashes.forEach(observeSemanticInput);
+    const afterControl = verifyControlBarrierForTesting;
+    verifyControlBarrierForTesting = undefined;
+    afterControl?.();
   } catch {
     // The probe annotates the verification rather than driving it, so it must not throw through —
     // but a binding that cannot be probed is a binding that is not proven, and an unproven binding
@@ -487,7 +511,10 @@ function applyIndexBindingGate(
 
   if (!freshness.canRunHighRiskControl) {
     const detail = freshness.reasons.length > 0 ? `${freshness.verdict}: ${freshness.reasons.join(", ")}` : freshness.verdict;
-    return withUnknown(result, `Could not confirm index binding (${detail}); impact is reported without a freshness proof.`);
+    const remedy = freshness.reasons.includes("SEMANTIC_LIFECYCLE_INVALID")
+      ? " Run semctx semantic check; for EVIDENCE_BASELINE_STALE, recover with semctx index --record."
+      : "";
+    return withUnknown(result, `Could not confirm index binding (${detail}); impact is reported without a freshness proof.${remedy}`);
   }
   return result;
 }
@@ -524,21 +551,29 @@ export function runVerify(root: string, source: VerifySource): VerifyComputation
   try {
     const config = loadConfig(root);
     const resolved = resolveSource(root, source, false);
+    const graph = store.loadGraph();
+    const claims = store.loadClaims();
+    const analyzedRepositoryFactsHash = fingerprintRepositoryFacts({ graph, claims, evidence: store.loadEvidence() });
+    const analyzedIndexSnapshotHash = digestCanonical(store.getMeta(CONTROL_INDEX_SNAPSHOT_META_KEY) ?? null);
     const baseResult = analyzeDiff({
-      index: new GraphIndex(store.loadGraph()),
-      claims: store.loadClaims(),
+      index: new GraphIndex(graph),
+      claims,
       config,
       diffText: resolved.diffText ?? "",
       // Working-tree and staged indexes describe the old HEAD snapshot. A commit range is
       // analysed against its indexed head, so its graph ranges use the diff's new coordinates.
       nodeRangeSide: source.kind === "range" ? "new" : "old",
     });
+    const afterAnalysis = verifyAnalysisBarrierForTesting;
+    verifyAnalysisBarrierForTesting = undefined;
+    afterAnalysis?.();
     const changedScopePaths = parseUnifiedDiffScopePaths(resolved.diffText ?? "");
+    const analyzedSemanticInputHashes: string[] = [];
     // Unconditional: the analysis-health preflight below only runs for `config.version === 2`, so a
     // v1 repository would otherwise carry no index-binding proof at all.
     const gated = discloseUnresolvedReferences(
       store,
-      applyIndexBindingGate(root, store, baseResult, resolved.identity),
+      applyIndexBindingGate(root, store, baseResult, resolved.identity, (hash) => analyzedSemanticInputHashes.push(hash)),
     );
     const result = config.version === 2
       ? applyAnalysisHealthPreflight(
@@ -558,6 +593,10 @@ export function runVerify(root: string, source: VerifySource): VerifyComputation
       git: resolved.git,
       coChanges,
       analyzedSourceHash: resolved.analyzedSourceHash ?? null,
+      analyzedRepositoryFactsHash,
+      analyzedConfigHash: digestCanonical(config),
+      analyzedIndexSnapshotHash,
+      analyzedSemanticInputHashes,
     };
   } finally {
     store.close();

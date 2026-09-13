@@ -642,7 +642,7 @@ function staleReason(
   return null;
 }
 
-function recordPath(root: string, capsuleHash: Sha256Hash): string {
+export function recordPath(root: string, capsuleHash: Sha256Hash): string {
   return join(root, ...HANDOFF_V2_RELATIVE_DIR, `${capsuleHash.slice("sha256:".length)}.json`);
 }
 
@@ -658,7 +658,7 @@ function ensureSafeHandoffDirectory(root: string): void {
   }
 }
 
-function validateRecordPathForRead(
+export function validateRecordPathForRead(
   root: string,
   target: string,
 ): "file" | "missing" | "invalid" {

@@ -3,7 +3,9 @@
 For a clean clone, start with [your first check](docs/contributing/first-check.md). It diagnoses
 prerequisites and runs explicit existing test scopes; the canonical `bun run verify:pr` gate below
 remains mandatory. The [packaged first-use demo](docs/contributing/first-use-demo.md) exercises the
-public journey without writing authored declarations or installing a global plugin.
+public journey without writing authored declarations or installing a global plugin. The
+[packaged continuity demo](docs/contributing/continuity-demo.md) exercises task/plan/reconcile,
+Control Handoff v2 capture/explain, staleness detection, and a refused resume, end to end.
 
 <!-- semctx:compatibility:start -->
 Semctx **0.2.1** requires **Bun >=1.4.0**.
