@@ -443,7 +443,7 @@ application. See
 
 ## MCP server (agents)
 
-Current `main` registers **38 schema-declared tools with validated structured outputs**. Individual
+This source tree registers **39 schema-declared tools with validated structured outputs**. Individual
 machine reports remain versioned where their public contract defines a schema version. The
 [authoritative catalogue](packages/mcp-server/src/tool-contract.ts) groups them into these
 surfaces:
@@ -457,6 +457,7 @@ surfaces:
 | Lifecycle | `semctx_control_agent_lifecycle` | record explicit shadow checkpoint presence without telemetry, enforcement, or authority; the shipped hook automates `before_completion` only |
 | Compatibility | `semctx_cli_compatibility` | compare the MCP/plugin runtime with the global CLI offline; advisory only, with no executable path exposed |
 | Explorer | `semctx_control_explorer` | return a bounded read-only snapshot for model clients and the Control Explorer MCP App |
+| Continuation | `semctx_control_handoff_explain` | explain an intact capsule and current dependency applicability without granting authority or rewriting historical evidence |
 
 `semctx_prepare_task` remains experimental and is not a code-search replacement. Plane C
 authorization tools report whether a transition, step, or deletion is admissible; they do not
@@ -562,7 +563,7 @@ Implemented and tested (full suite via `bun run test`):
 - `verify diff` — impact analysis + strict/advisory PASS/WARN/BLOCK, with provenance;
   `--base/--head` merge-base ranges, `text/json/github` formats (versioned JSON contract),
   `--fail-on`, `--output`, `--record`, and fail-closed config-v2 analysis-health preflight;
-- MCP 2026-07-28 stdio server (38 schema-declared tools with validated structured results and a
+- MCP 2026-07-28 stdio server (39 schema-declared tools with validated structured results and a
   bounded Control Explorer App)
   + aligned Codex/Claude Code plugins (shared control workflow; Claude advisory + guarded profiles);
 - composite GitHub Action (annotations, summary, PASS/WARN/BLOCK gate);

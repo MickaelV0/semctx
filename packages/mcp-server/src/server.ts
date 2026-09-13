@@ -36,6 +36,7 @@ import {
   registerReconciliationTools,
 } from "./reconciliation-tools";
 import { registerControlHandoffTools } from "./control-handoff-tools";
+import { registerControlContinuationTools } from "./control-continuation-tools";
 import { registerTargetTools } from "./target-tools";
 import { registerChangeAuthorizationVerifierTools } from "./change-authorization-verifier-tools";
 import {
@@ -720,6 +721,7 @@ export function createSemctxServer(
 
   registerReconciliationTools(tools, rootResolver);
   registerControlHandoffTools(tools, rootResolver);
+  registerControlContinuationTools(tools, rootResolver);
   registerTargetTools(tools, rootResolver);
   registerControlExplorerApp(server, tools, rootResolver);
   registerChangeAuthorizationVerifierTools(tools);

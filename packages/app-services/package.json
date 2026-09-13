@@ -10,7 +10,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./reconciliation": "./src/reconciliation-index.ts",
-    "./control-handoff": "./src/control-handoff.ts"
+    "./control-handoff": "./src/control-handoff.ts",
+    "./control-continuation": "./src/control-continuation.ts"
   },
   "dependencies": {
     "@semantic-context/core": "workspace:*",

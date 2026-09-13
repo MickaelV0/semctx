@@ -4,29 +4,50 @@ import {
   captureControlHandoffV2,
   resumeControlHandoffV2,
 } from "@semantic-context/app-services/control-handoff";
+import { explainControlHandoffV2 } from "@semantic-context/app-services/control-continuation";
 import {
   ControlHandoffCaptureRequestV2Schema,
   ControlHandoffResumeRequestV2Schema,
   type ControlHandoffCaptureRequestV2,
   type ControlHandoffResumeRequestV2,
 } from "@semantic-context/control-model/control-handoff";
+import { ControlContinuationExplainRequestV1Schema } from "@semantic-context/control-model/control-continuation";
 import { serializeControlReport } from "@semantic-context/control-model/reconciliation";
 import type { ParsedArgs } from "../args";
+import { flagString } from "../args";
 import { info } from "../output";
 
 export const CONTROL_HANDOFF_HELP = `  control handoff <input.json> [--json]
       capture a strict Control Handoff v2 capsule in ignored working state
   control resume-handoff <capsule-hash> [--json]
-      resume exactly one Control Handoff v2 capsule by its canonical hash`;
+      resume exactly one Control Handoff v2 capsule by its canonical hash
+  control handoff explain --hash <sha256> [--json]
+      explain one intact Control Handoff v2 capsule's historical context and
+      current dependency applicability, granting no execution authority`;
 
 export function runControlHandoff(
   root: string,
   args: ParsedArgs,
 ): number | undefined {
   const subcommand = args.positionals[1];
+  if (subcommand === "handoff" && args.positionals[2] === "explain") return explain(root, args);
   if (subcommand === "handoff") return capture(root, args);
   if (subcommand === "resume-handoff") return resume(root, args);
   return undefined;
+}
+
+function explain(root: string, args: ParsedArgs): number {
+  const hash = flagString(args, "hash");
+  if (hash === undefined || hash.length === 0) {
+    throw new Error("usage: semctx control handoff explain --hash <sha256>");
+  }
+  const request = ControlContinuationExplainRequestV1Schema.parse({
+    schemaVersion: 1,
+    capsuleHash: hash,
+  });
+  const result = explainControlHandoffV2(root, request);
+  info(serializeControlReport(result));
+  return result.status === "REFUSED" ? 2 : 0;
 }
 
 function capture(root: string, args: ParsedArgs): number {

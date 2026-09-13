@@ -98,8 +98,20 @@ Analyse the repository into the deterministic graph and atomically capture its c
 snapshot. `--json` prints counts plus the versioned `freshnessSeal`; text output prints its hash.
 
 ```text
-semctx index [--json] [--workers auto|1..8]
+semctx index [--json] [--workers auto|1..8] [--record]
 ```
+
+`--record` recovers a stale `.semctx/verification-state.json` baseline in one command: it rebuilds
+the index, computes a fresh working-tree verification, checks that source, index, and semantic
+inputs stayed stable across the whole operation, and atomically records the actual PASS/WARN/BLOCK
+verdict. Plain `index` never touches recorded evidence, even when the current baseline is stale —
+it only repairs the index binding, so `semctx status`/`verify` can still see the stale baseline and
+name it. `--record` refuses non-ignored untracked files and tracked bytes hidden from the analysed
+diff, the same way `verify diff --record` does. `--json` adds a `verification: { recorded: true,
+report }` field carrying the same versioned `verify diff` report (ADR 0008); exit is 3 for a
+recorded `BLOCK`, otherwise 0. If verification or recording fails after a successful rebuild, the
+old evidence file is left byte-identical and the error names the partial outcome
+(`indexRebuilt: true`, `evidenceRecorded: false`).
 
 The default is `--workers 1`: current portable benchmarks prove deterministic equivalence but do
 not justify imposing extra compiler heaps on every repository. `--workers auto` stays single-core
@@ -557,6 +569,35 @@ Exit code 3 means `REFUSED`; `RESUMED`, `EMPTY`, and `NO_OP` exit 0. Normal post
 make `semctx status` report `STALE / WORKING_DIFF_MISMATCH`; resume validation comes from the fresh,
 task-bound reconciliation. It neither upgrades that global freshness verdict nor grants execution
 authority.
+
+## `control handoff explain`
+
+Explain one intact Control Handoff v2 capsule without rewriting it or granting any authority (ADR
+0027):
+
+```text
+semctx control handoff explain --hash <sha256> [--json]
+```
+
+The report projects the capsule's historical objective, declared decisions/non-goals, expected and
+observed changes, risks, missing evidence and next checks, each with a source artifact hash and
+field/coordinate, plus a dependency-by-dependency current-applicability comparison
+(`APPLICABLE` / `STALE` / `UNKNOWN`, never a favorable upgrade of a losing or unreadable
+dependency). Every report fixes `executionAuthority: "none"`, `enforcementMode: "shadow"`,
+`blockingEnabled: false`, `sourceContentCollected: false`, and `gateAdmission: "NOT_EVALUATED"`; the
+report's `captureTime` is excluded from its `reportHash` and from CLI/MCP fact parity.
+
+Handoff v2 carries no separate worktree binding, so `worktree_identity` is always reported
+`UNKNOWN / DEPENDENCY_UNVERIFIED`, even when the repository identity matches exactly. Missing
+producer/configuration/environment/policy/expiry evidence dimensions are reported
+`UNKNOWN / DEPENDENCY_MISSING`, never backfilled from current values. An unreadable or wrong-repository
+capsule, an unsupported schema version, or a serialized report that cannot fit its 64 KiB budget
+without dropping mandatory stale/unknown/missing-evidence/next-check content returns a typed refusal
+with no trusted historical projection.
+
+Exit code 2 means a typed refusal (`ARTIFACT_MISSING`, `ARTIFACT_INVALID`, `UNSUPPORTED_VERSION`,
+`WRONG_REPOSITORY`, or `BUDGET_EXCEEDED`); `EXPLAINED` exits 0 even when dependencies are stale or
+unknown, because explanation itself succeeded.
 
 These commands are additive. The legacy Plane-B `semantic handoff` / `semantic resume` and MCP
 `semctx_handoff` / `semctx_resume` retain their version-1 compatibility contract and files.
