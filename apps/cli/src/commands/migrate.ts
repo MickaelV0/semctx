@@ -13,20 +13,30 @@
 
 import { SemctxError } from "@semantic-context/core";
 import { openStore } from "@semantic-context/repository-store";
-import { anchorMigrationAuthority, fingerprintRepositoryFacts } from "@semantic-context/app-services";
+import {
+  anchorMigrationAuthority,
+  applyConfigMigration,
+  fingerprintRepositoryFacts,
+  planConfigMigration,
+  restoreConfigMigration,
+} from "@semantic-context/app-services";
 import {
   migrateAnchors,
   refusedAuthority,
   type AnchorMigrationReport,
   type RepositoryFacts,
 } from "@semantic-context/semantic-engine";
+import type { ConfigMigrationReportV1 } from "@semantic-context/control-model";
 import type { ParsedArgs } from "../args";
 import { flagBool, flagString } from "../args";
-import { info, json, c } from "../output";
+import { info, json, c, fail } from "../output";
 
-export const MIGRATE_HELP = `semctx migrate — one-shot rewrites of authored coordinates
+export const MIGRATE_HELP = `semctx migrate — one-shot rewrites of authored coordinates and explicit config migration
 
 Usage: semctx migrate anchors [--apply] [--format text|json]
+       semctx migrate config --proposal <repository-relative-json> [--format text|json]
+       semctx migrate config --proposal <repository-relative-json> --apply --plan <sha256> [--format text|json]
+       semctx migrate config --restore <run-id> [--format text|json]
 
   anchors    rewrite deprecated line-bearing 'sym:<kind>:<path>:<name>:<line>' links to their
              canonical, line-independent form. Dry by default. An anchor that matches several
@@ -35,6 +45,11 @@ Usage: semctx migrate anchors [--apply] [--format text|json]
 
   This subcommand is temporary: it is removed in the release that retires support for
   line-bearing anchors, and refuses to run once that support is gone.
+
+  config     explicit v1 -> v2 configuration migration (ADR 0028). Dry by default: shows the
+             selection diff and a plan digest, writes nothing. '--apply --plan <sha256>' applies
+             only that exact plan, after an exact backup of the current config.json. '--restore
+             <run-id>' restores a previously applied run, including after a process interruption.
 `;
 
 /** Human-readable repair for each way an index can fail to authorize a rewrite. */
@@ -106,8 +121,179 @@ function loadFacts(root: string): RepositoryFacts {
   }
 }
 
+const CONFIG_MIGRATION_REFUSAL_HELP: Record<string, string> = {
+  INVALID_INPUT: "the current config, the proposal file or the plan digest is missing, unreadable, or fails validation",
+  POLICY_CHANGE_REJECTED: "the proposal changes a field other than version/include/exclude/selectionMode/languages",
+  STALE_PLAN: "the repository, its authored .sem files or verification-state.json changed since this plan digest was computed; re-run without --apply and retry",
+  ACTIVE_MIGRATION: "another config migration is running against this repository right now; retry shortly",
+  RECOVERY_REQUIRED: "a published run is not yet restored; restore it (command below) before any new apply",
+  INVALID_ARTIFACT: "the run id, its manifest or stored artifacts, or an authored .sem / verification-state entry failed validation",
+  DIVERGENT_CONFIG: "current config.json matches neither the run's before nor after bytes, so it was left as is",
+};
+
+function restoreCommand(runId: string): string {
+  return `semctx migrate config --restore ${runId}`;
+}
+
+/** One line per required action — the same list the JSON report carries in `requiredActions`. */
+function renderRequiredActions(report: ConfigMigrationReportV1): void {
+  for (const action of report.requiredActions) {
+    if (action === "RESTORE_RUN" && report.runId !== null) info(`  next: ${restoreCommand(report.runId)}`);
+    if (action === "REBUILD_INDEX") info("  next: rebuild the index: semctx index");
+    if (action === "RERUN_VERIFICATION") {
+      info("  next: re-run verification (for example: semctx index --record); earlier proof is not restamped");
+    }
+  }
+}
+
+function renderConfigMigrationText(report: ConfigMigrationReportV1): void {
+  if (report.status === "REFUSED") {
+    info(c.bold(`migrate config ${report.operation} — refused`));
+    for (const reason of report.reasons) {
+      info(`  ${c.red(reason)} — ${CONFIG_MIGRATION_REFUSAL_HELP[reason] ?? "see docs/adr/0028"}`);
+    }
+    for (const dir of report.abandonedPreparations) {
+      info(c.dim(`  unpublished preparation left in place (never auto-removed): ${dir}`));
+    }
+    // Only a plan is write-free. An apply/restore took the lock (creating the coordinator database),
+    // and a run id means that run is published and config.json may already hold its bytes.
+    if (report.runId !== null) {
+      info(`  run id              : ${report.runId}`);
+      info("  this run is published under .semctx/config-migrations/runs/ and not restored; config.json may already have been rewritten.");
+    } else if (report.operation === "plan") {
+      info("  nothing was written.");
+    } else {
+      info("  config.json was not modified; .semctx/config-migrations/coordinator.db may have been created for the lock (kept).");
+    }
+    renderRequiredActions(report);
+    return;
+  }
+
+  info(c.bold(`migrate config ${report.operation} — ${report.status.toLowerCase()}`));
+  if (report.planDigest !== null) info(`  plan digest        : ${report.planDigest}`);
+  if (report.runId !== null) info(`  run id              : ${report.runId}`);
+  if (report.plan !== null) {
+    const { selectionDiff, authoredInventory, verificationState } = report.plan;
+    const totalSelected = selectionDiff.added.length + selectionDiff.unchanged.length;
+    info(`  selection added     : ${selectionDiff.added.length}`);
+    for (const path of selectionDiff.added) info(`    + ${path}`);
+    info(`  selection removed   : ${selectionDiff.removed.length}`);
+    for (const path of selectionDiff.removed) info(`    - ${path}`);
+    info(`  selection unchanged : ${selectionDiff.unchanged.length}`);
+    if (totalSelected === 0) info(`  ${c.red("resulting selection is EMPTY")} — no files would be selected`);
+    info("  (full selection diff, authored inventory and verification-state in --format json)");
+    info(`  authored .sem files : ${authoredInventory.length}`);
+    info(`  verification-state  : ${verificationState.present ? "present" : "absent"}`);
+  }
+  for (const dir of report.abandonedPreparations) {
+    info(c.dim(`  unpublished preparation left in place (never auto-removed): ${dir}`));
+  }
+  if (report.operation === "plan" && report.status === "PLANNED") {
+    info("");
+    info(`Re-run with --apply --plan ${report.planDigest} to write this migration.`);
+  }
+  if (report.operation === "apply" && report.status === "APPLIED") {
+    info("");
+    info(`Applied as run ${report.runId}; undo with: ${restoreCommand(report.runId as string)}`);
+    info("This command never re-indexes or restamps proof:");
+  }
+  if (report.operation === "restore" && report.status === "RESTORED") {
+    info("");
+    info(`Restored run ${report.runId}. This command never re-indexes or restamps proof:`);
+  }
+  renderRequiredActions(report);
+}
+
+const CONFIG_MIGRATION_ALLOWED_FLAGS = new Set(["proposal", "apply", "plan", "restore", "format", "dry-run", "root"]);
+
+function runMigrateConfig(root: string, args: ParsedArgs): number {
+  const unsupported = [...args.flags.keys()].filter((flag) => !CONFIG_MIGRATION_ALLOWED_FLAGS.has(flag));
+  if (unsupported.length > 0) {
+    fail(`migrate config: unsupported option(s): ${unsupported.map((flag) => `--${flag}`).join(", ")}`);
+    return 2;
+  }
+  // The shared parser keeps the last value of a repeated option. For a command that can replace
+  // config.json that is ambiguity, so every repeat is refused before any service call.
+  if (args.duplicateFlags !== undefined) {
+    fail(`migrate config: option(s) given more than once: ${args.duplicateFlags.map((flag) => `--${flag}`).join(", ")}`);
+    return 2;
+  }
+  // A switch given a value ('--apply=false', '--dry-run true', '--apply <digest>') is ambiguous.
+  for (const flag of ["apply", "dry-run"]) {
+    const value = args.flags.get(flag);
+    if (value !== undefined && value !== true) {
+      fail(`migrate config --${flag} takes no value, got '${String(value)}'`);
+      return 2;
+    }
+  }
+  if (args.flags.get("format") === true) {
+    fail("migrate config --format requires a value (text or json)");
+    return 2;
+  }
+  if (args.positionals.length > 2) {
+    fail(`migrate config: unexpected extra argument(s): ${args.positionals.slice(2).join(", ")}`);
+    return 2;
+  }
+
+  const proposal = flagString(args, "proposal");
+  const apply = flagBool(args, "apply");
+  const plan = flagString(args, "plan");
+  const restore = flagString(args, "restore");
+  const format = flagString(args, "format");
+  const dryRun = flagBool(args, "dry-run");
+
+  if (format !== undefined && format !== "text" && format !== "json") {
+    fail(`migrate config --format must be 'text' or 'json', got '${format}'`);
+    return 2;
+  }
+  if (args.flags.has("proposal") && proposal === undefined) {
+    fail("migrate config --proposal requires a value");
+    return 2;
+  }
+  if (args.flags.has("plan") && plan === undefined) {
+    fail("migrate config --plan requires a value");
+    return 2;
+  }
+  if (args.flags.has("restore") && restore === undefined) {
+    fail("migrate config --restore requires a run id value");
+    return 2;
+  }
+  if (dryRun && apply) {
+    fail("migrate config --dry-run cannot be combined with --apply");
+    return 2;
+  }
+
+  if (restore !== undefined) {
+    if (proposal !== undefined || apply || plan !== undefined || dryRun) {
+      fail("migrate config --restore cannot be combined with --proposal, --apply, --plan or --dry-run");
+      return 2;
+    }
+    const report = restoreConfigMigration(root, restore);
+    if (format === "json") json(report); else renderConfigMigrationText(report);
+    return report.status === "REFUSED" ? 1 : 0;
+  }
+
+  if (proposal === undefined) {
+    fail("migrate config requires --proposal <repository-relative-json> (or --restore <run-id>)");
+    return 2;
+  }
+  if (apply && plan === undefined) {
+    fail("migrate config --apply requires --plan <sha256>");
+    return 2;
+  }
+  if (!apply && plan !== undefined) {
+    fail("migrate config --plan is only valid together with --apply");
+    return 2;
+  }
+
+  const report = apply ? applyConfigMigration(root, proposal, plan as string) : planConfigMigration(root, proposal);
+  if (format === "json") json(report); else renderConfigMigrationText(report);
+  return report.status === "REFUSED" ? 1 : 0;
+}
+
 export function runMigrate(root: string, args: ParsedArgs): number {
   const sub = args.positionals[1];
+  if (sub === "config") return runMigrateConfig(root, args);
   if (sub !== "anchors") {
     info(MIGRATE_HELP);
     return sub === undefined ? 0 : 1;

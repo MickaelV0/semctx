@@ -144,6 +144,59 @@ The report keeps `freshness` and `coverage` separate. Coverage is `complete`, `p
 binding, high-risk-capable freshness, and complete coverage. Partial coverage exits 2. Invalid or
 absent binding, freshness that cannot run high-risk control, or insufficient coverage exits 3.
 
+## `migrate config`
+
+Explicit, CLI-only v1 -> v2 configuration migration (ADR 0028). Dry by default; every write is
+gated behind an exact plan digest or an explicit run id. See the
+[configuration reference](configuration.md#config-migration-v1-to-v2) for the field-level policy
+this command enforces.
+
+```text
+semctx migrate config --proposal <repository-relative-json> [--format text|json]
+semctx migrate config --proposal <repository-relative-json> --apply --plan <sha256> [--format text|json]
+semctx migrate config --restore <run-id> [--format text|json]
+```
+
+`--proposal` and `--restore` are mutually exclusive. `--plan` is required with `--apply` and
+invalid without it; `--dry-run` (the default) cannot be combined with `--apply` or `--restore`.
+Ambiguous input exits 2 before any service call: a repeated option (the shared parser would keep
+only its last value), a value given to `--apply` or `--dry-run` (`--apply=false`, `--apply <digest>`),
+or a bare `--format`. The versioned JSON report (`kind: "config_migration_report"`) carries
+`operation` (`plan`/`apply`/`restore`), `status` (`PLANNED`/`APPLIED`/`RESTORED`/`REFUSED`), a
+nullable `planDigest` and `runId`, the plan details on a successful plan/apply, a `reasons` array,
+and `requiredActions`:
+
+| reason | meaning |
+| --- | --- |
+| `INVALID_INPUT` | the current config, the proposal file or the plan digest is missing, unreadable, or fails schema validation |
+| `POLICY_CHANGE_REJECTED` | the proposal changes a field other than `version`/`include`/`exclude`/`selectionMode`/`languages` |
+| `STALE_PLAN` | the repository changed since the supplied plan digest was computed, or authored `.sem` / `verification-state.json` changed while the apply ran |
+| `ACTIVE_MIGRATION` | another process holds the cooperative migration lock right now |
+| `RECOVERY_REQUIRED` | a published run is not yet restored; `runId` names it |
+| `INVALID_ARTIFACT` | a run id, manifest or stored before/after bytes failed validation, or an authored `.sem` / `verification-state.json` entry could not be read |
+| `DIVERGENT_CONFIG` | current `config.json` matches neither the run's recorded before nor after bytes |
+
+| required action | what to run |
+| --- | --- |
+| `RESTORE_RUN` | `semctx migrate config --restore <runId>` with the report's `runId` |
+| `REBUILD_INDEX` | `semctx index`; an index built under the other config never becomes current |
+| `RERUN_VERIFICATION` | the existing verification flow (for example `semctx index --record`); earlier proof is not restamped |
+
+A refused report carries a `runId` only for a published run that still requires restoration
+(`RECOVERY_REQUIRED` or `DIVERGENT_CONFIG`); that run may already have replaced `config.json`. Only
+a refused plan is write-free: an apply or restore takes the lock, which may create
+`.semctx/config-migrations/coordinator.db`. A genuine I/O failure after a run is published stays an
+error, not a refusal; its details carry `recoveryRunId` and `recoveryCommand`.
+
+Apply and restore re-inventory authored `.sem` files and `verification-state.json` before and after
+replacing `config.json` and refuse on any observed change. Restore compares with what it observed
+at its own start, so later legitimate edits are never rolled back. These are observations for a
+trusted, quiescent worktree, not a guarantee against concurrent writers.
+
+Exit 0 on `PLANNED`/`APPLIED`/`RESTORED`; 1 on `REFUSED` or an I/O failure; 2 on a usage error.
+This command never opens the index store, never re-indexes, and never rewrites authored `.sem`
+files or `verification-state.json` — it only inventories them.
+
 ## `verify diff`
 
 Analyse a git range (or the current diff) for impact and violations.
