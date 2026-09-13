@@ -150,7 +150,7 @@ describe("CI governance", () => {
     expect(bun?.with?.["bun-version"]).toBe("1.4.0");
     expect(ci).toContain("bun install --frozen-lockfile");
     expect(ci).toContain("bun run verify:pr");
-    expect(verify["timeout-minutes"]).toBe(30);
+    expect(verify["timeout-minutes"]).toBe(90);
     expect(verify.env?.SEMCTX_VERIFY_BASE).toBe(
       "${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}",
     );
