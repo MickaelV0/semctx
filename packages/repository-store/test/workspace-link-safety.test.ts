@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SemctxError, createDefaultConfig } from "@semantic-context/core";
+import { configMigrationsDir, coordinatorDbPath, withConfigMigrationLock } from "../src/config-migration-store";
 import { SqliteRepositoryReader, SqliteRepositoryStore } from "../src/store";
 import { dbPath, initWorkspace, loadConfig, openReader, openStore, saveConfig, writeFileNoFollow } from "../src/workspace";
 
@@ -218,6 +219,36 @@ describe("writeFileNoFollow", () => {
   });
 });
 
+describe("config migration coordinator uses a separate guarded database (ADR 0028)", () => {
+  it("takes the mutex without opening or changing the index", () => {
+    const root = temporary("semctx-coordinator-separate-");
+    mkdirSync(join(root, ".semctx"));
+    const indexBytes = Buffer.from("deliberately not a SQLite index\n");
+    writeFileSync(dbPath(root), indexBytes);
+    let ran = false;
+    withConfigMigrationLock(root, () => { ran = true; });
+    expect(ran).toBe(true);
+    expect(existsSync(coordinatorDbPath(root))).toBe(true);
+    expect(readFileSync(dbPath(root))).toEqual(indexBytes);
+  });
+
+  for (const suffix of ["", "-wal", "-shm", "-journal"]) {
+    fileLinked(`refuses a linked coordinator database or sidecar before taking the mutex: ${suffix || "database"}`, () => {
+      const root = temporary("semctx-coordinator-linked-");
+      const outside = temporary("semctx-coordinator-neighbour-");
+      mkdirSync(configMigrationsDir(root), { recursive: true });
+      const target = join(outside, "preserved.db");
+      const bytes = Buffer.from("unrelated database bytes\n");
+      writeFileSync(target, bytes);
+      symlinkSync(target, coordinatorDbPath(root) + suffix, "file");
+      let ran = false;
+      expectConfigInvalid(() => withConfigMigrationLock(root, () => { ran = true; }));
+      expect(ran).toBe(false);
+      expect(readFileSync(target)).toEqual(bytes);
+    });
+  }
+});
+
 describe("every production open of the index goes through the workspace guard", () => {
   it("no source outside workspace.ts opens the SQLite store or reader by path", () => {
     const repository = join(import.meta.dir, "..", "..", "..");
@@ -227,6 +258,8 @@ describe("every production open of the index goes through the workspace guard", 
         const path = join(repository, base, file);
         if (path.endsWith(join("repository-store", "src", "workspace.ts"))) continue;
         if (path.endsWith(join("repository-store", "src", "store.ts"))) continue;
+        // ADR 0028 requires a separate coordinator DB; its guards and index isolation are exercised above.
+        if (path.endsWith(join("repository-store", "src", "config-migration-store.ts"))) continue;
         const source = readFileSync(path, "utf8");
         // Any spelling of a direct open: the reader or store methods (renamed imports included, so the
         // bare method names count), a raw SQLite handle, or an import of the SQLite bindings.

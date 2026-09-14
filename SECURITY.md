@@ -4,6 +4,7 @@
 
 | Version | Security updates |
 | --- | --- |
+| 0.3.x | Supported |
 | 0.2.x | Supported |
 | < 0.2.0 | Not supported; upgrade to the current release before requesting a patch |
 
@@ -19,6 +20,12 @@ semctx runs locally against repositories that may be untrusted. It:
   (the optional CocoIndex provider) — both with fixed argument lists, never a shell string;
 - stores results in a local SQLite file (`.semctx/semctx.db`) using bound parameters;
 - performs no network I/O in its deterministic core.
+
+The opt-in configuration migration command requires a trusted local worktree without concurrent
+outside writers. It checks paths, preserves exact recovery artifacts and detects observed drift;
+its cooperative mutex does not coordinate editors or other configuration-writing commands.
+It does not promise protection against concurrent hostile pathname replacement or power loss.
+See [ADR 0028](docs/adr/0028-explicit-config-migration-and-restoration.md).
 
 ## Reporting a vulnerability
 
