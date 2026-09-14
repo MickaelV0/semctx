@@ -281,3 +281,70 @@ describe("semantic store refuses dangling links, planted temporaries and linked 
     expect(readdirSync(outside)).toEqual(["semantic"]);
   });
 });
+
+// An id already declared in a mixed `.sem` file is rewritten at its `sourceRefs` location rather
+// than duplicated into `changes/<id>.sem`. Nothing else covered that branch, which is how a merge
+// could leave its writer call orphaned.
+//
+// That rewrite used to stage through a fixed `<source>.tmp` with a link-following write, so a
+// checkout could plant that exact name and receive the rewrite outside the repository. Measured:
+// `assertUnlinkedSemanticTree` does NOT catch a planted `<source>.tmp` — only the no-follow writer
+// does, through an unguessable temporary checked with `lstat` and created exclusively (SEC-PB-01).
+// A link at the declared source itself is not retested here: it never reaches the writer, because
+// the model load refuses it first, and that is covered above.
+describe("semantic store rewrites a declared change in place", () => {
+  const MIXED = `goal goal.before
+  statement: untouched before
+  status: declared
+
+change change.in.place
+  statement: before rewrite
+  status: draft
+  provenance: author
+
+goal goal.after
+  statement: untouched after
+  status: declared
+`;
+
+  function declared(root: string) {
+    const found = loadSemanticModel(root).model.changes.find((change) => change.id === "change.in.place");
+    expect(found?.sourceRefs[0]?.file).toBe(".semctx/semantic/mixed.sem");
+    return found as NonNullable<typeof found>;
+  }
+
+  test("control: the change block is rewritten and every other byte is left alone", () => {
+    const root = temporary("semctx-inplace-control-");
+    mkdirSync(join(root, ".semctx", "semantic"), { recursive: true });
+    const mixed = join(root, ".semctx", "semantic", "mixed.sem");
+    writeFileSync(mixed, MIXED);
+
+    writeChangeFile(root, { ...declared(root), statement: "after rewrite" });
+
+    const after = readFileSync(mixed, "utf8");
+    expect(after).toContain("statement: after rewrite");
+    expect(after).not.toContain("statement: before rewrite");
+    expect(after).toContain("statement: untouched before");
+    expect(after).toContain("statement: untouched after");
+    expect(existsSync(changeFilePath(root, "change.in.place"))).toBe(false);
+    expect(readdirSync(join(root, ".semctx", "semantic")).filter((entry) => entry.includes(".tmp"))).toEqual([]);
+  });
+
+  fileLinked("a planted <source>.tmp link never receives the rewrite", () => {
+    const root = temporary("semctx-inplace-temp-");
+    const outside = temporary("semctx-inplace-outside-");
+    mkdirSync(join(root, ".semctx", "semantic"), { recursive: true });
+    const mixed = join(root, ".semctx", "semantic", "mixed.sem");
+    writeFileSync(mixed, MIXED);
+    const change = declared(root);
+
+    const victim = join(outside, "victim.sem");
+    writeFileSync(victim, GOAL);
+    symlinkSync(victim, `${mixed}.tmp`, "file");
+
+    writeChangeFile(root, { ...change, statement: "after rewrite" });
+
+    expect(readFileSync(victim, "utf8")).toBe(GOAL);
+    expect(readFileSync(mixed, "utf8")).toContain("statement: after rewrite");
+  });
+});
