@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isSemctxError } from "@semantic-context/core";
 import {
   configMigrationsDir,
+  isConfigMigrationStructuralInvalidArtifact,
   listAbandonedConfigMigrationPreparations,
   listConfigMigrationRuns,
   publishConfigMigrationRun,
@@ -97,6 +98,132 @@ describe("listAbandonedConfigMigrationPreparations", () => {
     expect(listAbandonedConfigMigrationPreparations(root)).toEqual([`prepare-${id}`]);
     expect(listConfigMigrationRuns(root)).toEqual([]);
     expect(existsSync(join(configMigrationsDir(root), `prepare-${id}`))).toBe(true);
+  });
+});
+
+describe("listAbandonedConfigMigrationPreparations — structural validation", () => {
+  test("throws a structural invalid-artifact error for a malformed prepare suffix, and never deletes it", () => {
+    const root = tempRoot();
+    mkdirSync(configMigrationsDir(root), { recursive: true });
+    mkdirSync(join(configMigrationsDir(root), "prepare-foo"));
+    writeFileSync(join(configMigrationsDir(root), "prepare-foo", "before.json"), "kept", "utf8");
+
+    let caught: unknown;
+    try {
+      listAbandonedConfigMigrationPreparations(root);
+    } catch (error) {
+      caught = error;
+    }
+    expect(isConfigMigrationStructuralInvalidArtifact(caught)).toBe(true);
+    expect(existsSync(join(configMigrationsDir(root), "prepare-foo", "before.json"))).toBe(true);
+  });
+
+  test("throws a structural invalid-artifact error for a non-directory prepare-<run-id>, and never deletes it", () => {
+    const root = tempRoot();
+    const id = runId("1");
+    mkdirSync(configMigrationsDir(root), { recursive: true });
+    writeFileSync(join(configMigrationsDir(root), `prepare-${id}`), "not a directory", "utf8");
+
+    let caught: unknown;
+    try {
+      listAbandonedConfigMigrationPreparations(root);
+    } catch (error) {
+      caught = error;
+    }
+    expect(isConfigMigrationStructuralInvalidArtifact(caught)).toBe(true);
+    expect(existsSync(join(configMigrationsDir(root), `prepare-${id}`))).toBe(true);
+  });
+
+  linked("throws a structural invalid-artifact error for a linked prepare-<run-id>, and never deletes it", () => {
+    const root = tempRoot();
+    const id = runId("2");
+    const outside = mkdtempSync(join(tmpdir(), "semctx-config-migration-outside-"));
+    roots.push(outside);
+    writeFileSync(join(outside, "before.json"), "leaked", "utf8");
+    mkdirSync(configMigrationsDir(root), { recursive: true });
+    link(outside, join(configMigrationsDir(root), `prepare-${id}`));
+
+    let caught: unknown;
+    try {
+      listAbandonedConfigMigrationPreparations(root);
+    } catch (error) {
+      caught = error;
+    }
+    expect(isConfigMigrationStructuralInvalidArtifact(caught)).toBe(true);
+    expect(existsSync(join(outside, "before.json"))).toBe(true);
+  });
+
+  test("throws a structural invalid-artifact error when config-migrations itself is not a directory", () => {
+    const root = tempRoot();
+    mkdirSync(semctxDir(root), { recursive: true });
+    writeFileSync(configMigrationsDir(root), "not a directory", "utf8");
+
+    let caught: unknown;
+    try {
+      listAbandonedConfigMigrationPreparations(root);
+    } catch (error) {
+      caught = error;
+    }
+    expect(isConfigMigrationStructuralInvalidArtifact(caught)).toBe(true);
+  });
+});
+
+describe("listConfigMigrationRuns and run-artifact reads — structural validation", () => {
+  for (const container of ["config-migrations", "runs"] as const) {
+    test(`run readers refuse a regular-file ${container} ancestor before traversing children`, () => {
+      const root = tempRoot();
+      mkdirSync(semctxDir(root), { recursive: true });
+      if (container === "runs") mkdirSync(configMigrationsDir(root), { recursive: true });
+      const path = container === "runs" ? runsDir(root) : configMigrationsDir(root);
+      writeFileSync(path, "retained ancestor", "utf8");
+      for (const read of [readConfigMigrationManifest, readConfigMigrationBefore, readConfigMigrationAfter]) {
+        let caught: unknown;
+        try { read(root, runId("5")); } catch (error) { caught = error; }
+        expect(isConfigMigrationStructuralInvalidArtifact(caught)).toBe(true);
+      }
+      expect(readFileSync(path, "utf8")).toBe("retained ancestor");
+    });
+  }
+
+  test("throws a structural invalid-artifact error when runs/ itself is not a directory", () => {
+    const root = tempRoot();
+    mkdirSync(configMigrationsDir(root), { recursive: true });
+    writeFileSync(runsDir(root), "not a directory", "utf8");
+
+    let caught: unknown;
+    try {
+      listConfigMigrationRuns(root);
+    } catch (error) {
+      caught = error;
+    }
+    expect(isConfigMigrationStructuralInvalidArtifact(caught)).toBe(true);
+  });
+
+  test("listConfigMigrationRuns lists a run entry that is a regular file rather than filtering it out", () => {
+    const root = tempRoot();
+    const id = runId("3");
+    mkdirSync(runsDir(root), { recursive: true });
+    writeFileSync(join(runsDir(root), id), "not a directory", "utf8");
+
+    expect(listConfigMigrationRuns(root)).toEqual([id]);
+  });
+
+  test("reading manifest/before/after of a run-file (not a directory) refuses structurally, identically on every platform", () => {
+    const root = tempRoot();
+    const id = runId("4");
+    mkdirSync(runsDir(root), { recursive: true });
+    writeFileSync(join(runsDir(root), id), "not a directory", "utf8");
+
+    for (const read of [readConfigMigrationManifest, readConfigMigrationBefore, readConfigMigrationAfter]) {
+      let caught: unknown;
+      try {
+        read(root, id);
+      } catch (error) {
+        caught = error;
+      }
+      expect(isConfigMigrationStructuralInvalidArtifact(caught)).toBe(true);
+    }
+    expect(readFileSync(join(runsDir(root), id), "utf8")).toBe("not a directory");
   });
 });
 

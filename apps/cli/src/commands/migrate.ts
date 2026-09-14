@@ -207,6 +207,14 @@ function renderConfigMigrationText(report: ConfigMigrationReportV1): void {
 const CONFIG_MIGRATION_ALLOWED_FLAGS = new Set(["proposal", "apply", "plan", "restore", "format", "dry-run", "root"]);
 
 function runMigrateConfig(root: string, args: ParsedArgs): number {
+  // The shared resolver falls back to `process.cwd()` for anything that is not a string (a bare
+  // `--root`, parsed as boolean `true`) — silently reaching the service against the wrong
+  // repository instead of refusing. A present `--root` must be a real, non-blank path.
+  const rawRoot = args.flags.get("root");
+  if (rawRoot !== undefined && (typeof rawRoot !== "string" || rawRoot.trim().length === 0)) {
+    fail("migrate config --root requires a non-empty path value");
+    return 2;
+  }
   const unsupported = [...args.flags.keys()].filter((flag) => !CONFIG_MIGRATION_ALLOWED_FLAGS.has(flag));
   if (unsupported.length > 0) {
     fail(`migrate config: unsupported option(s): ${unsupported.map((flag) => `--${flag}`).join(", ")}`);

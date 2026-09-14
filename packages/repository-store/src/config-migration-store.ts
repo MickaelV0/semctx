@@ -31,7 +31,7 @@ import {
   writeSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-import { SemctxError, attachSuppressedError } from "@semantic-context/core";
+import { SemctxError, attachSuppressedError, isSemctxError } from "@semantic-context/core";
 import { configMigrationCheckpoint } from "./config-migration-checkpoint";
 import { assertUnlinkedDatabase } from "./store";
 import { assertUnlinkedBelow, configPath, isLinkedEntry, semctxDir } from "./workspace";
@@ -80,6 +80,23 @@ function assertNotLinked(path: string): void {
   if (isLinkedEntry(path)) {
     throw new SemctxError("CONFIG_INVALID", "linked config-migration entries are unsupported", { path });
   }
+}
+
+/**
+ * A stable, internal-only reason attached to a `STORE_ERROR` for an admission-relevant structural
+ * defect (a container or a `prepare-<run-id>`/`runs/<run-id>` entry that is not a real directory).
+ * Public services key on this exact reason to refuse `INVALID_ARTIFACT` — never on `STORE_ERROR`
+ * itself, which also covers unrelated genuine I/O failures.
+ */
+const CONFIG_MIGRATION_STRUCTURAL_INVALID_ARTIFACT_REASON = "CONFIG_MIGRATION_STRUCTURAL_INVALID_ARTIFACT";
+
+function structuralInvalidArtifact(message: string, details: Record<string, unknown>): SemctxError {
+  return new SemctxError("STORE_ERROR", message, { ...details, reason: CONFIG_MIGRATION_STRUCTURAL_INVALID_ARTIFACT_REASON });
+}
+
+/** Whether `error` is this module's own structural-defect marker, never a broader `SemctxError`/errno check. */
+export function isConfigMigrationStructuralInvalidArtifact(error: unknown): boolean {
+  return isSemctxError(error) && error.code === "STORE_ERROR" && error.details["reason"] === CONFIG_MIGRATION_STRUCTURAL_INVALID_ARTIFACT_REASON;
 }
 
 /** Every ancestor down to and including the config-migrations tree must be link-free. */
@@ -155,21 +172,40 @@ function assertReadableDirectory(root: string, directory: string): void {
   if (!existsSync(directory)) return;
   const info = lstatSync(directory);
   if (!info.isDirectory()) {
-    throw new SemctxError("STORE_ERROR", "config-migration path is not a regular directory", { directory });
+    throw structuralInvalidArtifact("config-migration path is not a regular directory", { directory });
   }
 }
 
-/** Names of `prepare-<run-id>` directories still present — never published, never removed. */
+/**
+ * Names of `prepare-<run-id>` directories still present — never published, never removed. Each
+ * entry is validated structurally (safe run-id suffix, not linked, a real directory): a malformed,
+ * linked, dangling or non-directory entry is never silently filtered out or hidden — it throws, so
+ * every caller refuses before touching config, a run or a manifest, instead of admitting a report
+ * that would only fail its schema later, possibly after a mutation.
+ */
 export function listAbandonedConfigMigrationPreparations(root: string): string[] {
   const directory = configMigrationsDir(root);
   assertReadableDirectory(root, directory);
   if (!existsSync(directory)) return [];
-  return readdirSync(directory)
+  const names = readdirSync(directory)
     .filter((name) => name.startsWith(PREPARE_PREFIX))
     .sort();
+  for (const name of names) {
+    const path = join(directory, name);
+    const suffix = name.slice(PREPARE_PREFIX.length);
+    const valid = RUN_ID_RE.test(suffix)
+      && !isLinkedEntry(path)
+      && existsSync(path)
+      && lstatSync(path).isDirectory();
+    if (!valid) {
+      throw structuralInvalidArtifact("config-migration preparation entry failed structural validation", { name, path });
+    }
+  }
+  return names;
 }
 
 export function listConfigMigrationRuns(root: string): string[] {
+  assertReadableDirectory(root, configMigrationsDir(root));
   const directory = runsDir(root);
   assertReadableDirectory(root, directory);
   if (!existsSync(directory)) return [];
@@ -222,8 +258,30 @@ export function rewriteConfigMigrationManifest(root: string, runId: string, mani
   replaceExclusiveFsyncReadback(path, manifestBytes);
 }
 
+/**
+ * Validate the run directory itself before any child path is constructed or traversed. A
+ * `runs/<run-id>` entry that is a regular file rather than a directory would otherwise surface as
+ * an ENOTDIR while `lstat`-ing a child on POSIX, but as a plain missing-child ENOENT on Windows —
+ * an unclassified, platform-dependent error either way. Checking the directory shape up front
+ * yields the same structured refusal on every platform.
+ */
+function assertReadableRunDirectory(root: string, runId: string): string {
+  const directory = runDir(root, runId);
+  assertReadableDirectory(root, configMigrationsDir(root));
+  assertReadableDirectory(root, runsDir(root));
+  assertUnlinkedBelow(root, directory);
+  if (!existsSync(directory)) {
+    throw new SemctxError("STORE_ERROR", "config-migration run artifact is missing", { runId, path: directory });
+  }
+  if (!lstatSync(directory).isDirectory()) {
+    throw structuralInvalidArtifact("config-migration run is not a regular directory", { runId, path: directory });
+  }
+  return directory;
+}
+
 function readRunArtifact(root: string, runId: string, fileName: string): Buffer {
-  const path = join(runDir(root, runId), fileName);
+  const directory = assertReadableRunDirectory(root, runId);
+  const path = join(directory, fileName);
   assertUnlinkedBelow(root, path);
   if (!existsSync(path)) {
     throw new SemctxError("STORE_ERROR", "config-migration run artifact is missing", { runId, path });
@@ -329,7 +387,7 @@ export function withConfigMigrationLock<T>(
   fn: () => T,
   busyTimeoutMs: number = MUTEX_BUSY_TIMEOUT_MS,
 ): T {
-  assertUnlinkedConfigMigrationsTree(root);
+  assertReadableDirectory(root, configMigrationsDir(root));
   mkdirSync(configMigrationsDir(root), { recursive: true });
   const dbPath = coordinatorDbPath(root);
   assertUnlinkedDatabase(dbPath);

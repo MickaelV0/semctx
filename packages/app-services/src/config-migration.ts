@@ -29,6 +29,7 @@ import {
   configMigrationsDir,
   configPath,
   generateConfigMigrationRunId,
+  isConfigMigrationStructuralInvalidArtifact,
   isLinkedEntry,
   listAbandonedConfigMigrationPreparations,
   listConfigMigrationRuns,
@@ -107,6 +108,37 @@ function isPreimageDrifted(error: unknown): boolean {
   return isSemctxError(error) && error.code === "STORE_ERROR" && error.details["reason"] === "PREIMAGE_DRIFTED";
 }
 
+/**
+ * Best-effort abandoned-preparation listing for a report that is already refusing for another,
+ * unrelated reason (a malformed run-id or mutex contention) without mutating anything: a
+ * structural defect elsewhere in `config-migrations/` must not itself crash that unrelated refusal
+ * with an unclassified `STORE_ERROR`. The primary listing that actually gates a mutation never uses
+ * this: see `listAbandonedPreparationsOrInvalid`.
+ */
+function abandonedPreparationsForRefusal(root: string): string[] {
+  try {
+    return listAbandonedConfigMigrationPreparations(root);
+  } catch (error) {
+    if (isConfigMigrationStructuralInvalidArtifact(error)) return [];
+    throw error;
+  }
+}
+
+/**
+ * The gating listing for plan/apply/restore: a structural defect in `config-migrations/` (a
+ * malformed, linked, dangling or non-directory `prepare-<run-id>`) must refuse `INVALID_ARTIFACT`
+ * before any further read or write, never be silently dropped from the list and never let a
+ * schema-shaped report reach `assertConfigMigrationReport` only to fail it after a mutation.
+ */
+function listAbandonedPreparationsOrInvalid(root: string): { abandoned: string[] } | { invalid: true } {
+  try {
+    return { abandoned: listAbandonedConfigMigrationPreparations(root) };
+  } catch (error) {
+    if (isConfigMigrationStructuralInvalidArtifact(error)) return { invalid: true };
+    throw error;
+  }
+}
+
 function errorEvidence(error: Error): Record<string, unknown> {
   const code = (error as NodeJS.ErrnoException).code;
   return { name: error.name, message: error.message, ...(code === undefined ? {} : { code }) };
@@ -147,6 +179,12 @@ function listAuthoredSemanticFiles(root: string): ConfigMigrationInventoryEntryV
     return [{ relPath: normalizePath(relative(root, semanticDir)), status: "unreadable", digest: null }];
   }
   if (!existsSync(semanticDir)) return [];
+  // A present, non-linked, non-directory entry (a plain file where a directory is expected) is a
+  // structural refusal, not an absence: `readdirSync` below would throw ENOTDIR. A genuine stat
+  // failure here (EACCES/EIO) is a real error and must not be caught and turned into a refusal.
+  if (!statSync(semanticDir).isDirectory()) {
+    return [{ relPath: normalizePath(relative(root, semanticDir)), status: "unreadable", digest: null }];
+  }
   const entries: ConfigMigrationInventoryEntryV1[] = [];
   const walk = (dir: string): void => {
     for (const name of readdirSync(dir)) {
@@ -371,7 +409,11 @@ function assertConfigMigrationReport(report: ConfigMigrationReportV1, repository
 /** Deterministic, zero-write comparison of the current v1 config against a v2 proposal. */
 export function planConfigMigration(root: string, proposalRelPath: string): ConfigMigrationReportV1 {
   const repositoryRoot = canonicalRepositoryRoot(root);
-  const abandoned = listAbandonedConfigMigrationPreparations(root);
+  const listing = listAbandonedPreparationsOrInvalid(root);
+  if ("invalid" in listing) {
+    return assertConfigMigrationReport(refused("plan", repositoryRoot, ["INVALID_ARTIFACT"], []), repositoryRoot);
+  }
+  const abandoned = listing.abandoned;
   const result = computeConfigMigrationPlan(root, proposalRelPath);
   if (!result.ok) return assertConfigMigrationReport(refused("plan", repositoryRoot, result.reasons, abandoned), repositoryRoot);
   return assertConfigMigrationReport({
@@ -453,19 +495,32 @@ export function applyConfigMigration(
   const repositoryRoot = canonicalRepositoryRoot(root);
   // A digest that is not even a sha256 value can never match: refuse before creating anything.
   if (!Sha256HashSchema.safeParse(suppliedPlanDigest).success) {
-    const abandoned = listAbandonedConfigMigrationPreparations(root);
-    return assertConfigMigrationReport(refused("apply", repositoryRoot, ["INVALID_INPUT"], abandoned), repositoryRoot);
+    const listing = listAbandonedPreparationsOrInvalid(root);
+    return assertConfigMigrationReport("invalid" in listing
+      ? refused("apply", repositoryRoot, ["INVALID_INPUT", "INVALID_ARTIFACT"], [])
+      : refused("apply", repositoryRoot, ["INVALID_INPUT"], listing.abandoned), repositoryRoot);
   }
   // Set the moment `runs/<run-id>` exists, never before: from then on every refusal names that run
   // and every thrown failure carries it, so a landed write always keeps its exact recovery.
   const recovery: { runId: string | null } = { runId: null };
   try {
     const report = withConfigMigrationLock(root, (): ConfigMigrationReportV1 => {
-      const abandoned = listAbandonedConfigMigrationPreparations(root);
+      const listing = listAbandonedPreparationsOrInvalid(root);
+      if ("invalid" in listing) return refused("apply", repositoryRoot, ["INVALID_ARTIFACT"], []);
+      const abandoned = listing.abandoned;
 
+      let runNames: string[];
+      try {
+        runNames = listConfigMigrationRuns(root);
+      } catch (error) {
+        if (isConfigMigrationStructuralInvalidArtifact(error)) {
+          return refused("apply", repositoryRoot, ["INVALID_ARTIFACT"], abandoned);
+        }
+        throw error;
+      }
       const unrestored: string[] = [];
       let invalidRun = false;
-      for (const existing of listConfigMigrationRuns(root)) {
+      for (const existing of runNames) {
         const run = admitRun(root, repositoryRoot, existing);
         if (run === undefined) invalidRun = true;
         else if (run.manifest.state !== "RESTORED") unrestored.push(existing);
@@ -536,8 +591,11 @@ export function applyConfigMigration(
     return assertConfigMigrationReport(report, repositoryRoot);
   } catch (error) {
     if (recovery.runId !== null) throw attachConfigMigrationRecovery(error, recovery.runId);
+    if (isConfigMigrationStructuralInvalidArtifact(error)) {
+      return assertConfigMigrationReport(refused("apply", repositoryRoot, ["INVALID_ARTIFACT"], []), repositoryRoot);
+    }
     if (isMutexBusy(error)) {
-      const abandoned = listAbandonedConfigMigrationPreparations(root);
+      const abandoned = abandonedPreparationsForRefusal(root);
       return assertConfigMigrationReport(refused("apply", repositoryRoot, ["ACTIVE_MIGRATION"], abandoned), repositoryRoot);
     }
     throw error;
@@ -553,13 +611,15 @@ export function restoreConfigMigration(root: string, runId: string): ConfigMigra
   const repositoryRoot = canonicalRepositoryRoot(root);
   // A malformed run id can name no run: refuse before creating anything.
   if (!CONFIG_MIGRATION_RUN_ID_PATTERN.test(runId)) {
-    const abandoned = listAbandonedConfigMigrationPreparations(root);
+    const abandoned = abandonedPreparationsForRefusal(root);
     return assertConfigMigrationReport(refused("restore", repositoryRoot, ["INVALID_ARTIFACT"], abandoned), repositoryRoot);
   }
   const recovery: { runId: string | null } = { runId: null };
   try {
     const report = withConfigMigrationLock(root, () => {
-      const abandoned = listAbandonedConfigMigrationPreparations(root);
+      const listing = listAbandonedPreparationsOrInvalid(root);
+      if ("invalid" in listing) return refused("restore", repositoryRoot, ["INVALID_ARTIFACT"], []);
+      const abandoned = listing.abandoned;
       const run = admitRun(root, repositoryRoot, runId);
       if (run === undefined) return refused("restore", repositoryRoot, ["INVALID_ARTIFACT"], abandoned);
       const { manifest, beforeBytes, afterBytes } = run;
@@ -630,8 +690,11 @@ export function restoreConfigMigration(root: string, runId: string): ConfigMigra
     return assertConfigMigrationReport(report, repositoryRoot);
   } catch (error) {
     if (recovery.runId !== null) throw attachConfigMigrationRecovery(error, recovery.runId);
+    if (isConfigMigrationStructuralInvalidArtifact(error)) {
+      return assertConfigMigrationReport(refused("restore", repositoryRoot, ["INVALID_ARTIFACT"], []), repositoryRoot);
+    }
     if (isMutexBusy(error)) {
-      const abandoned = listAbandonedConfigMigrationPreparations(root);
+      const abandoned = abandonedPreparationsForRefusal(root);
       return assertConfigMigrationReport(refused("restore", repositoryRoot, ["ACTIVE_MIGRATION"], abandoned), repositoryRoot);
     }
     throw error;
