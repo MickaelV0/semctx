@@ -39,6 +39,7 @@ export {
   configMigrationsDir,
   coordinatorDbPath,
   generateConfigMigrationRunId,
+  isConfigMigrationStructuralInvalidArtifact,
   listAbandonedConfigMigrationPreparations,
   listConfigMigrationRuns,
   publishConfigMigrationRun,

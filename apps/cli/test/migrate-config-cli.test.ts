@@ -12,11 +12,40 @@ import { configMigrationsDir, configPath, initWorkspace, listConfigMigrationRuns
 import { parseArgs } from "../src/args";
 import { runMigrate } from "../src/commands/migrate";
 
+const REPO_ROOT = process.cwd();
+const CLI_ENTRYPOINT = join(REPO_ROOT, "apps", "cli", "src", "index.ts");
+const SUBPROCESS_TIMEOUT_MS = 20_000;
+
 const roots: string[] = [];
 
 afterEach(() => {
   for (const dir of roots.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
+
+/** Runs the real `semctx` entrypoint as a subprocess with `argv` and `cwd` as given, no `--root`
+ * injected here: this is what proves the actual dispatch path, not `runMigrate` called directly. */
+async function runEntrypoint(cwd: string, argv: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+  const child = Bun.spawn([process.execPath, CLI_ENTRYPOINT, ...argv], {
+    cwd,
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const [stdout, stderr, code] = await Promise.race([
+      Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("timed out waiting for the CLI subprocess to exit")), SUBPROCESS_TIMEOUT_MS);
+      }),
+    ]);
+    return { code, stdout, stderr };
+  } finally {
+    clearTimeout(timer);
+    if (child.exitCode === null) child.kill("SIGKILL");
+    await child.exited;
+  }
+}
 
 function tempRoot(): string {
   const root = mkdtempSync(join(tmpdir(), "semctx-migrate-config-cli-"));
@@ -116,6 +145,76 @@ describe("migrate config — flag validation", () => {
     const result = run(root, ["migrate", "config", "extra", "--proposal", "p.json", "--root", root]);
     expect(result.code).toBe(2);
   });
+
+  test("rejects a bare --root (no value) before any service call", () => {
+    const root = setUpRepository();
+    writeProposal(root);
+    const before = readFileSync(configPath(root));
+    const result = run(root, ["migrate", "config", "--proposal", "proposal.json", "--root"]);
+    expect(result.code).toBe(2);
+    expect(result.out).toBe("");
+    expect(readFileSync(configPath(root))).toEqual(before);
+    expect(existsSync(configMigrationsDir(root))).toBe(false);
+  });
+
+  test("rejects an empty --root= before any service call", () => {
+    const root = setUpRepository();
+    writeProposal(root);
+    const before = readFileSync(configPath(root));
+    const result = run(root, ["migrate", "config", "--proposal", "proposal.json", "--root="]);
+    expect(result.code).toBe(2);
+    expect(result.out).toBe("");
+    expect(readFileSync(configPath(root))).toEqual(before);
+    expect(existsSync(configMigrationsDir(root))).toBe(false);
+  });
+
+  test("rejects a whitespace-only --root before any service call", () => {
+    const root = setUpRepository();
+    writeProposal(root);
+    const before = readFileSync(configPath(root));
+    const result = run(root, ["migrate", "config", "--proposal", "proposal.json", "--root", "   "]);
+    expect(result.code).toBe(2);
+    expect(result.out).toBe("");
+    expect(readFileSync(configPath(root))).toEqual(before);
+    expect(existsSync(configMigrationsDir(root))).toBe(false);
+  });
+});
+
+describe("migrate config — real entrypoint dispatch, not runMigrate called directly", () => {
+  test(
+    "a malformed --root at the true entrypoint refuses with usage2 instead of silently falling back to cwd",
+    async () => {
+      const root = setUpRepository();
+      writeProposal(root);
+      const before = readFileSync(configPath(root));
+
+      for (const malformedRoot of ["--root", "--root="]) {
+        const result = await runEntrypoint(root, ["migrate", "config", "--proposal", "proposal.json", malformedRoot]);
+        expect(result.code).toBe(2);
+        expect(result.stdout).toBe("");
+        expect(readFileSync(configPath(root))).toEqual(before);
+        expect(existsSync(configMigrationsDir(root))).toBe(false);
+      }
+    },
+    SUBPROCESS_TIMEOUT_MS + 5_000,
+  );
+
+  test(
+    "omitted and explicit valid --root at the true entrypoint both plan normally",
+    async () => {
+      const root = setUpRepository();
+      writeProposal(root);
+
+      for (const rootArgs of [[], ["--root", root]]) {
+        const result = await runEntrypoint(root, [
+          "migrate", "config", "--proposal", "proposal.json", "--format", "json", ...rootArgs,
+        ]);
+        expect(result.code).toBe(0);
+        expect(jsonReport(result.stdout).status).toBe("PLANNED");
+      }
+    },
+    SUBPROCESS_TIMEOUT_MS + 5_000,
+  );
 });
 
 describe("migrate config — plan, apply, restore", () => {

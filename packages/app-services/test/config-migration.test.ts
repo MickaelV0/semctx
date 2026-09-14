@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { configMigrationsDir, configPath, initWorkspace, runDir, semctxDir } from "@semantic-context/repository-store";
+import { configMigrationsDir, configPath, initWorkspace, runDir, runsDir, semctxDir } from "@semantic-context/repository-store";
 import { applyConfigMigration, planConfigMigration, restoreConfigMigration } from "../src/config-migration";
 
 /** A directory link; junctions need no privilege on Windows. */
@@ -144,6 +144,35 @@ describe("planConfigMigration", () => {
     expect(report.plan).toBeNull();
     expect(report.planDigest).toBeNull();
   });
+
+  test("refuses planning outright when .semctx/semantic is a regular file rather than a directory", () => {
+    const root = setUpRepository();
+    writeProposal(root, "proposal.json", v2Proposal(root));
+    writeFileSync(join(semctxDir(root), "semantic"), "not a directory", "utf8");
+
+    const report = planConfigMigration(root, "proposal.json");
+    expect(report.status).toBe("REFUSED");
+    expect(report.reasons).toEqual(["INVALID_ARTIFACT"]);
+    expect(report.plan).toBeNull();
+    expect(report.planDigest).toBeNull();
+    expect(readFileSync(join(semctxDir(root), "semantic"), "utf8")).toBe("not a directory");
+  });
+
+  test("refuses applying outright when .semctx/semantic is a regular file, before any run is published", () => {
+    const root = setUpRepository();
+    writeProposal(root, "proposal.json", v2Proposal(root));
+    const plan = planConfigMigration(root, "proposal.json");
+    writeFileSync(join(semctxDir(root), "semantic"), "not a directory", "utf8");
+
+    const report = applyConfigMigration(root, "proposal.json", plan.planDigest as string);
+    expect(report.status).toBe("REFUSED");
+    expect(report.reasons).toEqual(["INVALID_ARTIFACT"]);
+    expect(report.runId).toBeNull();
+    // The coordinator database may exist (the mutex directory is created before this refusal fires),
+    // but no run was ever published and config.json was never touched.
+    expect(existsSync(runsDir(root))).toBe(false);
+    expect(JSON.parse(readFileSync(configPath(root), "utf8")).version).toBe(1);
+  });
 });
 
 describe("applyConfigMigration / restoreConfigMigration", () => {
@@ -231,6 +260,173 @@ describe("applyConfigMigration / restoreConfigMigration", () => {
   });
 });
 
+describe("abandoned preparation directories are never filtered out — plan/apply/restore all refuse first", () => {
+  function appliedForRestore(root: string) {
+    writeProposal(root, "proposal.json", v2Proposal(root));
+    const plan = planConfigMigration(root, "proposal.json");
+    const applied = applyConfigMigration(root, "proposal.json", plan.planDigest as string);
+    expect(applied.status).toBe("APPLIED");
+    const runId = applied.runId as string;
+    return { runId, config: readFileSync(configPath(root)), manifest: readFileSync(join(runDir(root, runId), "manifest.json")) };
+  }
+
+  const shapes: Array<[string, (root: string) => string]> = [
+    [
+      "a malformed prepare-<run-id> suffix",
+      (root) => {
+        const path = join(configMigrationsDir(root), "prepare-not-a-run-id");
+        mkdirSync(path, { recursive: true });
+        writeFileSync(join(path, "before.json"), "kept", "utf8");
+        return path;
+      },
+    ],
+    [
+      "a non-directory prepare-<run-id>",
+      (root) => {
+        const id = `1700000000000-${"b".repeat(32)}`;
+        const path = join(configMigrationsDir(root), `prepare-${id}`);
+        mkdirSync(configMigrationsDir(root), { recursive: true });
+        writeFileSync(path, "not a directory", "utf8");
+        return path;
+      },
+    ],
+  ];
+
+  for (const [name, seed] of shapes) {
+    test(`invalid arguments keep structural evidence visible when ${name} is present`, () => {
+      const root = setUpRepository();
+      const path = seed(root);
+      const retainedPath = lstatSync(path).isDirectory() ? join(path, "before.json") : path;
+      const retainedBytes = readFileSync(retainedPath);
+      const before = readFileSync(configPath(root));
+      const applied = applyConfigMigration(root, "proposal.json", "not-a-digest");
+      expect(applied.reasons).toEqual(["INVALID_INPUT", "INVALID_ARTIFACT"]);
+      const restored = restoreConfigMigration(root, "not-a-run-id");
+      expect(restored.reasons).toEqual(["INVALID_ARTIFACT"]);
+      expect(readFileSync(configPath(root))).toEqual(before);
+      expect(readFileSync(retainedPath)).toEqual(retainedBytes);
+      expect(existsSync(runsDir(root))).toBe(false);
+    });
+
+    test(`plan refuses INVALID_ARTIFACT before any write when ${name} is present, and preserves it`, () => {
+      const root = setUpRepository();
+      writeProposal(root, "proposal.json", v2Proposal(root));
+      const path = seed(root);
+      const before = readFileSync(configPath(root));
+
+      const report = planConfigMigration(root, "proposal.json");
+
+      expect(report.status).toBe("REFUSED");
+      expect(report.reasons).toEqual(["INVALID_ARTIFACT"]);
+      expect(report.plan).toBeNull();
+      expect(readFileSync(configPath(root))).toEqual(before);
+      expect(existsSync(path)).toBe(true);
+    });
+
+    test(`apply refuses INVALID_ARTIFACT before publishing a run when ${name} is present, and preserves it`, () => {
+      const root = setUpRepository();
+      writeProposal(root, "proposal.json", v2Proposal(root));
+      const plan = planConfigMigration(root, "proposal.json");
+      const before = readFileSync(configPath(root));
+      const path = seed(root);
+
+      const report = applyConfigMigration(root, "proposal.json", plan.planDigest as string);
+
+      expect(report.status).toBe("REFUSED");
+      expect(report.reasons).toEqual(["INVALID_ARTIFACT"]);
+      expect(report.runId).toBeNull();
+      expect(existsSync(runsDir(root))).toBe(false);
+      expect(readFileSync(configPath(root))).toEqual(before);
+      expect(existsSync(path)).toBe(true);
+    });
+
+    test(`restore refuses INVALID_ARTIFACT before touching config.json when ${name} is present, and preserves it`, () => {
+      const root = setUpRepository();
+      const original = appliedForRestore(root);
+      const path = seed(root);
+      const retainedPath = lstatSync(path).isDirectory() ? join(path, "before.json") : path;
+      const retainedBytes = readFileSync(retainedPath);
+
+      const report = restoreConfigMigration(root, original.runId);
+
+      expect(report.status).toBe("REFUSED");
+      expect(report.reasons).toEqual(["INVALID_ARTIFACT"]);
+      expect(readFileSync(configPath(root))).toEqual(original.config);
+      expect(readFileSync(join(runDir(root, original.runId), "manifest.json"))).toEqual(original.manifest);
+      expect(readFileSync(retainedPath)).toEqual(retainedBytes);
+    });
+  }
+
+  linked(`plan/apply/restore refuse INVALID_ARTIFACT before any write when a linked prepare-<run-id> is present, and preserve it`, () => {
+    const id = `1700000000000-${"c".repeat(32)}`;
+
+    const planRoot = setUpRepository();
+    writeProposal(planRoot, "proposal.json", v2Proposal(planRoot));
+    const outsidePlan = tempRoot();
+    writeFileSync(join(outsidePlan, "before.json"), "leaked", "utf8");
+    mkdirSync(configMigrationsDir(planRoot), { recursive: true });
+    link(outsidePlan, join(configMigrationsDir(planRoot), `prepare-${id}`));
+    const planReport = planConfigMigration(planRoot, "proposal.json");
+    expect(planReport.status).toBe("REFUSED");
+    expect(planReport.reasons).toEqual(["INVALID_ARTIFACT"]);
+    expect(applyConfigMigration(planRoot, "proposal.json", "not-a-digest").reasons).toEqual(["INVALID_INPUT", "INVALID_ARTIFACT"]);
+    expect(restoreConfigMigration(planRoot, "not-a-run-id").reasons).toEqual(["INVALID_ARTIFACT"]);
+    expect(readFileSync(join(outsidePlan, "before.json"), "utf8")).toBe("leaked");
+
+    const applyRoot = setUpRepository();
+    writeProposal(applyRoot, "proposal.json", v2Proposal(applyRoot));
+    const plan = planConfigMigration(applyRoot, "proposal.json");
+    const beforeApply = readFileSync(configPath(applyRoot));
+    const outsideApply = tempRoot();
+    writeFileSync(join(outsideApply, "before.json"), "leaked", "utf8");
+    mkdirSync(configMigrationsDir(applyRoot), { recursive: true });
+    link(outsideApply, join(configMigrationsDir(applyRoot), `prepare-${id}`));
+    const applyReport = applyConfigMigration(applyRoot, "proposal.json", plan.planDigest as string);
+    expect(applyReport.status).toBe("REFUSED");
+    expect(applyReport.reasons).toEqual(["INVALID_ARTIFACT"]);
+    expect(applyReport.runId).toBeNull();
+    expect(existsSync(runsDir(applyRoot))).toBe(false);
+    expect(readFileSync(configPath(applyRoot))).toEqual(beforeApply);
+    expect(readFileSync(join(outsideApply, "before.json"), "utf8")).toBe("leaked");
+
+    const restoreRoot = setUpRepository();
+    const original = appliedForRestore(restoreRoot);
+    const outsideRestore = tempRoot();
+    writeFileSync(join(outsideRestore, "before.json"), "leaked", "utf8");
+    mkdirSync(configMigrationsDir(restoreRoot), { recursive: true });
+    link(outsideRestore, join(configMigrationsDir(restoreRoot), `prepare-${id}`));
+    const restoreReport = restoreConfigMigration(restoreRoot, original.runId);
+    expect(restoreReport.status).toBe("REFUSED");
+    expect(restoreReport.reasons).toEqual(["INVALID_ARTIFACT"]);
+    expect(readFileSync(configPath(restoreRoot))).toEqual(original.config);
+    expect(readFileSync(join(runDir(restoreRoot, original.runId), "manifest.json"))).toEqual(original.manifest);
+    expect(lstatSync(join(configMigrationsDir(restoreRoot), `prepare-${id}`)).isSymbolicLink()).toBe(true);
+    expect(readFileSync(join(outsideRestore, "before.json"), "utf8")).toBe("leaked");
+  });
+});
+
+describe("migration container admission before lock or run traversal", () => {
+  for (const container of ["config-migrations", "runs"] as const) {
+    test(`apply and restore refuse a regular-file ${container} container without changing config`, () => {
+      const root = setUpRepository();
+      writeProposal(root, "proposal.json", v2Proposal(root));
+      const plan = planConfigMigration(root, "proposal.json");
+      const before = readFileSync(configPath(root));
+      const path = container === "runs" ? runsDir(root) : configMigrationsDir(root);
+      if (container === "runs") mkdirSync(configMigrationsDir(root), { recursive: true });
+      writeFileSync(path, "retained container bytes", "utf8");
+      const applied = applyConfigMigration(root, "proposal.json", plan.planDigest as string);
+      expect(applied.status).toBe("REFUSED");
+      expect(applied.reasons).toEqual(["INVALID_ARTIFACT"]);
+      const restored = restoreConfigMigration(root, `1700000000000-${"e".repeat(32)}`);
+      expect(restored.status).toBe("REFUSED");
+      expect(restored.reasons).toEqual(["INVALID_ARTIFACT"]);
+      expect(readFileSync(configPath(root))).toEqual(before);
+      expect(readFileSync(path, "utf8")).toBe("retained container bytes");
+    });
+  }
+});
+
 describe("run admission, terminal runs and policy preservation", () => {
   function appliedRun(root: string): { planDigest: string; runId: string } {
     writeProposal(root, "proposal.json", v2Proposal(root));
@@ -261,6 +457,48 @@ describe("run admission, terminal runs and policy preservation", () => {
     expect(readFileSync(configPath(root))).toEqual(candidateBytes);
     expect(readFileSync(manifestPath)).toEqual(manifestBytes);
     expect(readFileSync(authoredPath)).toEqual(authoredBytes);
+  });
+
+  test("restore preserves the admitted recovery identity when authored inventory becomes a regular file", () => {
+    const root = setUpRepository();
+    const { runId } = appliedRun(root);
+    const candidateBytes = readFileSync(configPath(root));
+    const manifestPath = join(runDir(root, runId), "manifest.json");
+    const manifestBytes = readFileSync(manifestPath);
+    writeFileSync(join(semctxDir(root), "semantic"), "not a directory", "utf8");
+
+    const report = restoreConfigMigration(root, runId);
+
+    expect(report.status).toBe("REFUSED");
+    expect(report.reasons).toEqual(["RECOVERY_REQUIRED", "INVALID_ARTIFACT"]);
+    expect(report.runId).toBe(runId);
+    expect(report.requiredActions).toEqual(["RESTORE_RUN"]);
+    expect(readFileSync(configPath(root))).toEqual(candidateBytes);
+    expect(readFileSync(manifestPath)).toEqual(manifestBytes);
+    expect(readFileSync(join(semctxDir(root), "semantic"), "utf8")).toBe("not a directory");
+  });
+
+  test("a runs/<id> entry that is a regular file is never filtered out: apply refuses INVALID_ARTIFACT and names no runId", () => {
+    const root = setUpRepository();
+    writeProposal(root, "proposal.json", v2Proposal(root));
+    const plan = planConfigMigration(root, "proposal.json");
+    const before = readFileSync(configPath(root));
+    const fileRunId = `1700000000000-${"d".repeat(32)}`;
+    mkdirSync(join(semctxDir(root), "config-migrations", "runs"), { recursive: true });
+    writeFileSync(runDir(root, fileRunId), "not a directory", "utf8");
+
+    const applied = applyConfigMigration(root, "proposal.json", plan.planDigest as string);
+    expect(applied.status).toBe("REFUSED");
+    expect(applied.reasons).toEqual(["INVALID_ARTIFACT"]);
+    expect(applied.runId).toBeNull();
+    expect(readFileSync(configPath(root))).toEqual(before);
+    expect(readFileSync(runDir(root, fileRunId), "utf8")).toBe("not a directory");
+
+    const restored = restoreConfigMigration(root, fileRunId);
+    expect(restored.status).toBe("REFUSED");
+    expect(restored.reasons).toEqual(["INVALID_ARTIFACT"]);
+    expect(readFileSync(configPath(root))).toEqual(before);
+    expect(readFileSync(runDir(root, fileRunId), "utf8")).toBe("not a directory");
   });
 
   for (const terminal of [false, true]) {
