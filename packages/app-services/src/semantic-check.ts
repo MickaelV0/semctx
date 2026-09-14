@@ -10,8 +10,9 @@ import {
   type RepositoryFacts,
   type SemanticLifecycleFinding,
 } from "@semantic-context/semantic-engine";
-import { SqliteRepositoryReader, dbPath } from "@semantic-context/repository-store";
+import { assertUnlinkedWorkspace, dbPath, openReader } from "@semantic-context/repository-store";
 import { captureVerificationGitState } from "./verification-state";
+import { digestCanonical } from "@semantic-context/plane-a-internal";
 
 const ACTIVE_LIFECYCLES = new Set<ChangeContract["lifecycle"]>(["active", "partial", "blocked", "stale"]);
 const TERMINAL_LIFECYCLES = new Set<ChangeContract["lifecycle"]>(["verified", "superseded"]);
@@ -31,12 +32,14 @@ interface VerificationStateV3 {
 
 /** Shared CLI/MCP semantic integrity use case, including local lifecycle hygiene. */
 export function checkSemanticState(root: string): CheckReport {
+  // Covers the read-only index open and the verification-state read below.
+  assertUnlinkedWorkspace(root);
   const loaded = loadSemanticModel(root);
   let facts: RepositoryFacts | undefined;
   let indexed = false;
   const database = dbPath(root);
   if (existsSync(database)) {
-    const store = SqliteRepositoryReader.openExisting(database);
+    const store = openReader(root);
     try {
       indexed = store.isIndexed();
       if (indexed) {
@@ -58,6 +61,14 @@ export function checkSemanticState(root: string): CheckReport {
 }
 
 export function inspectSemanticLifecycle(root: string, changes: readonly ChangeContract[]): SemanticLifecycleFinding[] {
+  return inspectSemanticLifecycleWithIdentity(root, changes).findings;
+}
+
+/** Internal observation: its identity describes the same pointer and baseline used by these findings. */
+export function inspectSemanticLifecycleWithIdentity(root: string, changes: readonly ChangeContract[]): {
+  findings: SemanticLifecycleFinding[];
+  inputHash: string;
+} {
   const findings: SemanticLifecycleFinding[] = [];
   const active = changes.filter((change) => ACTIVE_LIFECYCLES.has(change.lifecycle));
   const pointer = readActiveChangePointer(root);
@@ -114,21 +125,21 @@ export function inspectSemanticLifecycle(root: string, changes: readonly ChangeC
   }
 
   const baseline = inspectVerificationBaseline(root);
-  if (baseline === "invalid") {
+  if (baseline.status === "invalid") {
     findings.push({
       code: "EVIDENCE_BASELINE_INVALID",
       severity: "error",
       message: "The recorded verification baseline is malformed or cannot be compared to the repository.",
       subjectIds: [],
     });
-  } else if (baseline === "stale") {
+  } else if (baseline.status === "stale") {
     findings.push({
       code: "EVIDENCE_BASELINE_STALE",
       severity: "error",
-      message: "The recorded verification baseline does not match the current analyzed content state.",
+      message: "The recorded verification baseline does not match the current analyzed content state. Run semctx index --record to rebuild, verify and record current evidence.",
       subjectIds: [],
     });
-  } else if (baseline === "superseded") {
+  } else if (baseline.status === "superseded") {
     findings.push({
       code: "EVIDENCE_BASELINE_SUPERSEDED",
       severity: "warning",
@@ -136,7 +147,7 @@ export function inspectSemanticLifecycle(root: string, changes: readonly ChangeC
       subjectIds: [],
     });
   }
-  return findings;
+  return { findings, inputHash: digestCanonical({ pointer, baseline: baseline.inputHash }) };
 }
 
 /**
@@ -164,26 +175,32 @@ function isSupersededVerificationState(value: unknown): boolean {
 
 function inspectVerificationBaseline(
   root: string,
-): "missing" | "valid" | "invalid" | "stale" | "superseded" {
+): { status: "missing" | "valid" | "invalid" | "stale" | "superseded"; inputHash: string } {
+  let bytes: Buffer | null = null;
+  const observation = (status: "missing" | "valid" | "invalid" | "stale" | "superseded") => ({
+    status,
+    inputHash: digestCanonical({ kind: "verification_baseline_observation_v1", status, bytes: bytes?.toString("base64") ?? null }),
+  });
   const path = join(root, ".semctx", "verification-state.json");
-  if (!existsSync(path)) return "missing";
+  if (!existsSync(path)) return observation("missing");
   let parsed: unknown;
   try {
-    parsed = JSON.parse(readFileSync(path, "utf8"));
+    bytes = readFileSync(path);
+    parsed = JSON.parse(bytes.toString("utf8"));
   } catch {
-    return "invalid";
+    return observation("invalid");
   }
   if (!isVerificationState(parsed)) {
-    return isSupersededVerificationState(parsed) ? "superseded" : "invalid";
+    return observation(isSupersededVerificationState(parsed) ? "superseded" : "invalid");
   }
   try {
     const current = captureVerificationGitState(root);
-    return current.contentStateHash === parsed.contentStateHash
+    return observation(current.contentStateHash === parsed.contentStateHash
         && current.repositoryStateHash === parsed.repositoryStateHash
       ? "valid"
-      : "stale";
+      : "stale");
   } catch {
-    return "invalid";
+    return observation("invalid");
   }
 }
 

@@ -1,5 +1,16 @@
 # Security Policy
 
+## Supported versions
+
+| Version | Security updates |
+| --- | --- |
+| 0.3.x | Supported |
+| 0.2.x | Supported |
+| < 0.2.0 | Not supported; upgrade to the current release before requesting a patch |
+
+This table describes maintenance eligibility, not a claim that a version has no vulnerabilities.
+The exact current release is listed on the [GitHub Releases page](https://github.com/hoklims/semctx/releases).
+
 ## Scope
 
 semctx runs locally against repositories that may be untrusted. It:
@@ -9,6 +20,12 @@ semctx runs locally against repositories that may be untrusted. It:
   (the optional CocoIndex provider) — both with fixed argument lists, never a shell string;
 - stores results in a local SQLite file (`.semctx/semctx.db`) using bound parameters;
 - performs no network I/O in its deterministic core.
+
+The opt-in configuration migration command requires a trusted local worktree without concurrent
+outside writers. It checks paths, preserves exact recovery artifacts and detects observed drift;
+its cooperative mutex does not coordinate editors or other configuration-writing commands.
+It does not promise protection against concurrent hostile pathname replacement or power loss.
+See [ADR 0028](docs/adr/0028-explicit-config-migration-and-restoration.md).
 
 ## Reporting a vulnerability
 
@@ -26,6 +43,24 @@ as quickly as the severity warrants.
   or file contents cannot inject shell commands.
 - All SQL uses parameter binding; no value is concatenated into a query string.
 - Config and task files are parsed with `JSON.parse` and validated with Zod at the boundary.
+- Nothing opened under `.semctx` may be a symlink or junction, dangling ones included: the
+  directory itself, `config.json`, `semctx.db` with its SQLite `-wal`/`-shm`/`-journal` sidecars,
+  `context-packs`, `verification-state.json`, the `semantic`, `changes` and `targets` directories
+  down to each target directory, the `working` directory with its pointer and handoff files, the
+  anchor-migration transaction directory (journal, owner file, blobs) and the feedback store with
+  its writer lock. They are checked with `lstat` before every read, write, scaffold, `init` and
+  `init --preset` — the read-only index reader behind readiness and `semantic check`, the
+  reconciliation loader and the anchor migration included — and refused rather than followed
+  outside the repository. The refusal code depends on the surface: `CONFIG_INVALID` (workspace,
+  semantic store, presets, migration entry), `CONTROL_INPUTS_UNSAFE` (reconciliation loader,
+  target artifacts) or `STORE_ERROR` (feedback store, migration transaction). Files under
+  `.semctx` — and `.gitignore`, which `init` maintains — are written through `writeFileNoFollow`,
+  which refuses a link at the destination or at any ancestor below the repository root, then
+  stages through an unguessable temporary name checked with `lstat` and created with
+  `O_CREAT | O_EXCL`. The writers with their own protocol (feedback store, anchor migration,
+  target artifacts, control handoff) check every name a checkout can ship with `lstat`; their own
+  temporaries are unguessable and created with `O_CREAT | O_EXCL`. `.semctx/guard.json`, read by
+  the cooperative guard hook, is outside this guarantee.
 
 ## Integrations
 
@@ -34,7 +69,17 @@ as quickly as the severity warrants.
   no secret. It never comments on PRs. All user-controlled inputs are routed through the step
   `env:` and referenced as shell variables, so the `${{ }}` template engine never interpolates a
   value into a run script (no Actions injection). It runs a fixed set of `semctx` commands plus a
-  Node adapter — it does not execute arbitrary PR scripts.
+  Node adapter — it does not execute arbitrary PR scripts. Every `bun` step runs from the action's
+  own checkout with the analysed repository passed as an absolute `--root`, so the pull request's
+  `bunfig.toml` `preload` scripts and `.env` are never loaded by the runtime. The JSON report is
+  written inside the analysed checkout through an unguessable temporary name that is never a
+  link, so a committed `<report>.tmp` link cannot redirect it.
+- **Plugin MCP servers** (`plugins/claude-code`, `plugins/semctx-control`): Bun starts with its
+  working directory pinned to the installed plugin (`--cwd ${CLAUDE_PLUGIN_ROOT}` on Claude Code,
+  `--cwd ${PLUGIN_ROOT}` on Oh My Pi; Codex joins a plugin MCP `cwd` to the plugin root and
+  rejects one outside it), so the analysed checkout's `bunfig.toml` `preload` scripts and `.env`
+  never run inside the server process. The server reaches repository content only through
+  explicit absolute `repositoryRoot` arguments.
 - **Claude Code guarded hook** (`plugins/claude-code`): advisory (never blocks) by default. When
   a project opts in, it gates only `git commit`/`git push`, keyed on a diff hash — it runs no
   analysis and parses the command structurally (argv tokens, never a shell eval). It is strictly

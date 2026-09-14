@@ -299,6 +299,31 @@ HEAD, diff, seals, repository identity, record bytes, or rebuilt hash no longer 
 returns stored facts as current merely because a file exists. A repository without Semctx returns a
 write-free `NO_OP`; an unready Semctx repository refuses.
 
+## Control Continuation v1 (ADR 0027)
+
+`semctx control handoff explain --hash <sha256>` and the read-only `semctx_control_handoff_explain`
+MCP tool derive an ephemeral `control_continuation_report` from one intact Handoff v2 capsule plus a
+fresh current capture. They never mutate the capsule, never initialize/index/test/record/capture on
+write paths, and never grant authority: the report fixes `executionAuthority: "none"`,
+`enforcementMode: "shadow"`, `blockingEnabled: false`, `sourceContentCollected: false`, and
+`gateAdmission: "NOT_EVALUATED"`.
+
+The report projects the capsule's historical objective, declared decisions/non-goals, expected and
+observed changes, risks, missing evidence and next checks — each statement carrying its source
+artifact hash, field/coordinate, and declared/historically-observed/currently-observed provenance —
+plus a fixed, canonically ordered dependency comparison over repository/worktree identity, source
+commit, working diff, semantic/index inputs, and producer/configuration/environment/policy/expiry.
+Every dependency is `APPLICABLE`, `STALE`, or `UNKNOWN`; losing or unreadable evidence never becomes
+a favorable admission, and Handoff v2's missing worktree binding and missing evidence dimensions
+report `UNKNOWN` rather than an inferred default. An invalid, oversize, unsupported-version, or
+wrong-repository capsule returns a typed refusal with no trusted historical projection. The
+serialized report is bounded to 64 KiB; mandatory stale/unknown/missing-evidence/next-check content
+is never silently dropped to fit — an unfittable mandatory payload refuses with `BUDGET_EXCEEDED`
+instead. `captureTime` is excluded from the report's canonical hash and from CLI/MCP fact parity.
+
+This surface is strictly additive: it consumes only intact, existing Handoff v2 records, adds no
+retention or persistence, and is fully reversible by removing its CLI/MCP registration.
+
 Global `semctx status` freshness is not the post-edit handoff validation basis. Normal edits can
 make the global seal `STALE / WORKING_DIFF_MISMATCH`; Handoff v2 instead relies on the task-bound,
 double-captured reconciliation described above. `REALIZED`, `VIOLATED`, and `UNPROVEN` are all
@@ -420,12 +445,14 @@ semctx control plan-change <change-id> --task-id <task-id> --input <planner.json
 semctx control reconcile-diff <input.json> [--json]
 semctx control handoff <input.json> [--json]
 semctx control resume-handoff <capsule-hash> [--json]
+semctx control handoff explain --hash <sha256> [--json]
 ```
 
 MCP exposes the equivalent `semctx_control_status`, `semctx_control_trace`, and
 `semctx_control_plan` tools, plus `semctx_control_target_propose`, `semctx_control_bind_scope`,
 `semctx_control_plan_change`, `semctx_control_reconcile_diff`, `semctx_control_handoff`,
-`semctx_control_resume`, and the MCP-only `semctx_control_agent_lifecycle` checkpoint. The older
+`semctx_control_resume`, the read-only `semctx_control_handoff_explain`, and the MCP-only
+`semctx_control_agent_lifecycle` checkpoint. The older
 `frame-task`/`semctx_control_frame_task` surfaces retain their wider framing contract and are
 byte-compatible when given binding-only inputs. CLI and MCP call the same application services,
 validate the same strict schemas and serialize successful results with the same canonical byte
@@ -446,7 +473,9 @@ transition authorization, step authorization and deletion authorization.
 Trace and plan envelopes may additionally carry a `ControlFreshnessSeal` with its independent
 `sealSchemaVersion: 1`. Fields may be added compatibly; a semantic break requires a new schema
 version. Manual Control Handoff capture/resume and capsules use the separate strict
-`schemaVersion: 2` contract.
+`schemaVersion: 2` contract. Control Continuation's `control_continuation_report` and its
+`control_continuation_result` envelope use their own strict `schemaVersion: 1` contract, accepting
+only intact existing Handoff v2 capsules.
 
 ## Non-goals
 

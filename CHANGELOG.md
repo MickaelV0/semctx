@@ -17,7 +17,76 @@ GitHub Release advance together through the tag-driven lockstep workflow documen
   `post-commit`, `post-rewrite`, `reference-transaction` and unknown hook names
   remain banned. `pre-push` is allowed by name; its contents are not inspected.
 
-## [0.2.0] - 2026-09-08
+## [0.3.0] - 2026-09-13
+
+### Added
+
+- Explicit `semctx index --record` recovery rebuilds the current index and records a new
+  verification without treating an obsolete baseline as authority or erasing failed-rebuild evidence.
+- `semctx control handoff explain` and its MCP counterpart produce source-backed continuation
+  reports from immutable Handoff v2 capsules, with applicability, remaining work and limitations.
+  A packaged continuity walkthrough exercises capture, drift and refused resumption.
+- Opt-in `semctx migrate config` compares legacy v1 discovery with an explicit v2 proposal.
+  Applying binds to the reviewed plan, preserves exact backups and supports explicit restoration;
+  authored declarations, index data and verification baselines remain untouched.
+- Index lifecycle tests cover edits, branches, concurrent linked worktrees, a persistent MCP
+  consumer and abrupt process termination before and after SQLite commit.
+- Repeated indexing benchmarks capture native CPU and peak RSS with full semantic fingerprints
+  on synthetic Windows, Linux and macOS corpora.
+
+### Changed
+
+- Repository-state hashing avoids per-file Git subprocesses when no Git content conversion applies,
+  preserving the Git fallback, before/after observations and exact source-binding semantics.
+
+### Limits
+
+- Mac/lobby performance, full indexing budgets and human outcomes remain NOT_MEASURED.
+  No incremental indexing, provider replacement, daemon or new execution authority is claimed.
+  Configuration migration is explicit; installation alone does not migrate a repository.
+
+## [0.2.1] - 2026-09-12
+
+### Security
+
+- Plugin MCP servers pin Bun's working directory to the installed plugin: Claude Code launches
+  `bun --cwd ${CLAUDE_PLUGIN_ROOT}` and Oh My Pi `bun --cwd ${PLUGIN_ROOT}` before the bundle
+  path. A host that started the server inside the analysed checkout previously let that checkout's
+  `bunfig.toml` `preload` scripts run, and its `.env` load, before the server existed. Codex already
+  resolves its launch against the installed plugin. (Quality audit 2026-09-09, SEC-PPLUG-01.)
+- The GitHub Action runs every `bun` step from the action's own checkout and passes the analysed
+  repository as an absolute `--root`. The verify step previously ran Bun inside the pull-request
+  checkout, so a pull request's `bunfig.toml` could execute code on the runner before semctx
+  started. `working-directory`, `config-path` and `report-path` keep their documented meaning.
+  (SEC-PPLUG-02.)
+- Nothing semctx opens under `.semctx` may be a symlink or junction, dangling ones included: the
+  directory itself, `config.json`, `semctx.db` with its SQLite `-wal`/`-shm`/`-journal` sidecars,
+  `context-packs`, `verification-state.json`, the `semantic`, `changes` and `targets` directories
+  (down to each target directory), the `working` directory with its pointer and handoff files,
+  the anchor-migration transaction directory and the feedback store with its writer lock are
+  checked before every read, write, scaffold, `init` and `init --preset` — including
+  the read-only index reader behind readiness and `semantic check`, the reconciliation loader
+  and the anchor migration. The refusal code depends on the surface: `CONFIG_INVALID` for the
+  workspace, the semantic store and the migration entry, `CONTROL_INPUTS_UNSAFE` for the
+  reconciliation loader and target artifacts, `STORE_ERROR` for the feedback store and a
+  migration transaction. Every file written under `.semctx` (and `.gitignore`, which `init`
+  maintains) goes through a writer that refuses a link at the destination or at any ancestor
+  below the root and stages through an unguessable temporary name checked with `lstat` and
+  created exclusively, so a planted `<file>.tmp` link is never followed; the writers with their
+  own protocol (feedback store, anchor migration, target artifacts, control handoff) check every
+  name a checkout can ship the same way. The `verify --output` report, which the GitHub Action
+  writes inside the analysed checkout, is staged through an unguessable temporary name as well
+  instead of a fixed `<report>.tmp` a pull request could ship as a link. Reads and rewrites could
+  previously land outside the repository through a planted link. (SEC-PB-01.)
+
+### Compatibility
+
+- Quality tooling moves to ruff 0.16.6 and zizmor 1.30.0; `requirements-quality.txt` and the
+  `ruff.toml` `required-version` stay aligned, as the governance test requires. The ESLint
+  development dependencies move to typescript-eslint 8.70.0 and globals 17.12.0. No runtime
+  dependency changes.
+
+## [0.2.0] - 2026-09-10
 
 ### Added
 
@@ -581,7 +650,9 @@ declared stable).
 - GitHub Action passes all user-controlled inputs through the step `env:` (no `${{ }}` template
   interpolation into run scripts) to prevent Actions injection.
 
-[Unreleased]: https://github.com/hoklims/semctx/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/hoklims/semctx/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/hoklims/semctx/compare/v0.2.1...v0.3.0
+[0.2.1]: https://github.com/hoklims/semctx/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/hoklims/semctx/compare/v0.1.20...v0.2.0
 [0.1.20]: https://github.com/hoklims/semctx/compare/v0.1.19...v0.1.20
 [0.1.19]: https://github.com/hoklims/semctx/compare/v0.1.18...v0.1.19

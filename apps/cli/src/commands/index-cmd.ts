@@ -1,9 +1,16 @@
 import { SemctxError } from "@semantic-context/core";
-import { indexRepository, indexRepositoryAsync, type RepositoryIndex } from "@semantic-context/app-services";
+import {
+  indexRepository,
+  indexRepositoryAsync,
+  recoverIndexEvidence,
+  recoverIndexEvidenceAsync,
+  type IndexRecoveryOutcome,
+  type RepositoryIndex,
+} from "@semantic-context/app-services";
 import type { RepositoryNode, Claim } from "@semantic-context/core";
 import type { ParsedArgs } from "../args";
 import { flagBool } from "../args";
-import { info, success, warn, heading, json, c, nowIso } from "../output";
+import { info, success, warn, fail, heading, json, c, nowIso } from "../output";
 
 function countBy<T>(items: T[], key: (item: T) => string): Record<string, number> {
   const out: Record<string, number> = {};
@@ -16,38 +23,38 @@ function countBy<T>(items: T[], key: (item: T) => string): Record<string, number
 
 /** `semctx index` — analyse the repo, (re)build the graph + claims, persist them. */
 export function runIndex(root: string, args: ParsedArgs): number {
+  if (flagBool(args, "record")) {
+    return renderIndexRecovery(recoverIndexEvidence(root, nowIso()), args);
+  }
   return renderIndex(indexRepository(root, nowIso()), args);
 }
 
 export async function runIndexAsync(root: string, args: ParsedArgs): Promise<number> {
   const workers = parseIndexWorkers(args);
+  if (flagBool(args, "record")) {
+    return renderIndexRecovery(await recoverIndexEvidenceAsync(root, nowIso(), workers), args);
+  }
   return renderIndex(await indexRepositoryAsync(root, nowIso(), workers), args);
 }
 
-function renderIndex(
-  { analysis, claims, freshnessSeal, parallelism }: RepositoryIndex,
-  args: ParsedArgs,
-): number {
+function indexJsonPayload({ analysis, claims, freshnessSeal, parallelism }: RepositoryIndex): Record<string, unknown> {
+  return {
+    indexed: true,
+    nodes: analysis.graph.nodes.length,
+    edges: analysis.graph.edges.length,
+    evidence: analysis.evidence.length,
+    claims: claims.length,
+    nodeKinds: countBy<RepositoryNode>(analysis.graph.nodes, (n) => n.kind),
+    claimKinds: countBy<Claim>(claims, (c2) => c2.kind),
+    unresolvedReferences: analysis.unresolvedReferences,
+    freshnessSeal,
+    parallelism,
+  };
+}
 
+function printIndexSummary({ analysis, claims, freshnessSeal, parallelism }: RepositoryIndex): void {
   const nodeKinds = countBy<RepositoryNode>(analysis.graph.nodes, (n) => n.kind);
   const claimKinds = countBy<Claim>(claims, (c2) => c2.kind);
-
-  if (flagBool(args, "json")) {
-    json({
-      indexed: true,
-      nodes: analysis.graph.nodes.length,
-      edges: analysis.graph.edges.length,
-      evidence: analysis.evidence.length,
-      claims: claims.length,
-      nodeKinds,
-      claimKinds,
-      unresolvedReferences: analysis.unresolvedReferences,
-      freshnessSeal,
-      parallelism,
-    });
-    return 0;
-  }
-
   success(
     `indexed ${c.bold(String(analysis.graph.nodes.length))} nodes, ${c.bold(String(analysis.graph.edges.length))} edges, ${c.bold(String(claims.length))} claims`,
   );
@@ -68,9 +75,47 @@ function renderIndex(
       info(c.dim(`  ${reference.from} —${reference.kind}→ ${reference.missing}`));
     }
   }
+}
+
+function renderIndex(index: RepositoryIndex, args: ParsedArgs): number {
+  if (index.staleEvidenceBaseline) {
+    warn("The stale verification baseline was preserved. Run semctx index --record to rebuild, verify and record current evidence.");
+  }
+  if (flagBool(args, "json")) {
+    json(indexJsonPayload(index));
+    return 0;
+  }
+  printIndexSummary(index);
   info("");
   info(c.dim("Next: semctx task create --from-file <task.md>"));
   return 0;
+}
+
+/** `semctx index --record` — rebuild, verify the working tree, and atomically record evidence. */
+function renderIndexRecovery({ index, verification, recordedPath }: IndexRecoveryOutcome, args: ParsedArgs): number {
+  const { report } = verification;
+  const exit = report.verdict === "BLOCK" ? 3 : 0;
+
+  if (flagBool(args, "json")) {
+    json({ ...indexJsonPayload(index), verification: { recorded: true, report } });
+    return exit;
+  }
+
+  printIndexSummary(index);
+  heading("Recovery verification");
+  const label =
+    report.verdict === "PASS" ? c.green("PASS") : report.verdict === "WARN" ? c.yellow("WARN") : c.red("BLOCK");
+  info(`  verdict: ${label}`);
+  if (report.unknowns.length > 0) {
+    heading("Unknowns");
+    for (const unknown of report.unknowns) info(`  ${c.dim("?")} ${unknown}`);
+  }
+  info("");
+  info(c.dim(`recorded verification state -> ${recordedPath}`));
+  if (report.verdict === "PASS") success("evidence recorded — no blocking violations");
+  else if (report.verdict === "WARN") warn("evidence recorded — non-blocking warnings present");
+  else fail("evidence recorded — blocking violations present");
+  return exit;
 }
 
 export function parseIndexWorkers(args: ParsedArgs): "auto" | number {

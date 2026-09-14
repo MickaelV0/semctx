@@ -73,6 +73,9 @@ export type {
 } from "./plugin-delivery";
 export { openReadyRepository, openReadyRepositoryWriter } from "./readiness";
 export type { RepositoryAnalysis, RepositoryIndex } from "./indexing";
+export { recoverIndexEvidence, recoverIndexEvidenceAsync } from "./index-recovery";
+export type { IndexRecoveryOutcome } from "./index-recovery";
+export { recordVerificationState, requireStableVerificationGitState } from "./verification-recording";
 export { indexHealth, indexHealthStatus } from "./index-health";
 export type {
   IndexHealthCandidateV1,
@@ -116,6 +119,11 @@ export {
   trustedControlSealHash,
 } from "./control";
 export type { ControlPlanCommand, ControlTraceCommand, CurrentControlState } from "./control";
+export {
+  applyConfigMigration,
+  planConfigMigration,
+  restoreConfigMigration,
+} from "./config-migration";
 export {
   exportFeedbackAggregate,
   listFeedback,

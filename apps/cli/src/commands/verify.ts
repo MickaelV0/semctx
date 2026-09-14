@@ -1,19 +1,23 @@
-import { writeFileSync, renameSync, mkdirSync } from "node:fs";
-import { resolve, join } from "node:path";
+import { resolve } from "node:path";
 import { SemctxError } from "@semantic-context/core";
+import { replaceLocalReportFile } from "../report-output";
 import type { VerifyReport } from "@semantic-context/core";
 import type { VerifyResult, VerifyReportGitMeta, CoChange } from "@semantic-context/context-engine";
 import {
   captureRecordableVerificationGitState,
   planVerify,
+  recordVerificationState,
+  requireStableVerificationGitState,
   runVerify,
   type VerifyComputation,
   type VerifySource,
-  type VerificationGitState,
 } from "@semantic-context/app-services";
 import type { ParsedArgs } from "../args";
 import { flagBool, flagString } from "../args";
 import { info, heading, json, c, success, warn, fail, nowIso } from "../output";
+
+// Re-exported for existing test-facing behavior: this module used to own the implementation.
+export { requireStableVerificationGitState } from "@semantic-context/app-services";
 
 type Format = "text" | "json" | "github";
 type FailOn = "block" | "warn" | "none";
@@ -153,46 +157,8 @@ function renderText(
   else fail("blocking violations present");
 }
 
-function writeReportAtomic(path: string, report: VerifyReport): void {
-  const tmp = `${path}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(report, null, 2)}\n`, "utf8");
-  renameSync(tmp, path);
-}
-
-/** Record the exact analyzed content and its canonical Git representation for guarded-mode replay. */
-function recordVerification(
-  root: string,
-  verdict: VerifyReport["verdict"],
-  verifiedState: VerificationGitState,
-): string {
-  const dir = join(root, ".semctx");
-  mkdirSync(dir, { recursive: true });
-  const path = join(dir, "verification-state.json");
-  const state = { version: 3, ...verifiedState, verdict, recordedAt: nowIso() };
-  const tmp = `${path}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(state, null, 2)}\n`, "utf8");
-  renameSync(tmp, path);
-  return path;
-}
-
-export function requireStableVerificationGitState(
-  before: VerificationGitState,
-  after: VerificationGitState,
-  analyzedSourceHash: string = before.analyzedSourceHash,
-): VerificationGitState {
-  if (
-    before.headCommit !== after.headCommit
-    || before.analyzedSourceHash !== after.analyzedSourceHash
-    || before.analyzedSourceHash !== analyzedSourceHash
-    || before.workingStateHash !== after.workingStateHash
-    || before.contentStateHash !== after.contentStateHash
-    || before.repositoryStateHash !== after.repositoryStateHash
-    || before.indexStateHash !== after.indexStateHash
-    || before.headTreeHash !== after.headTreeHash
-  ) {
-    throw new SemctxError("GIT_ERROR", "repository state changed while verification was running", { before, after });
-  }
-  return before;
+function writeReportAtomic(root: string, path: string, report: VerifyReport): void {
+  replaceLocalReportFile(path, `${JSON.stringify(report, null, 2)}\n`, root);
 }
 
 /**
@@ -248,8 +214,10 @@ export function runVerifyDiff(root: string, args: ParsedArgs): number {
         analyzedSourceHash ?? "",
       );
 
-  if (outputPath !== undefined) writeReportAtomic(resolve(process.cwd(), outputPath), report);
-  const recordedPath = verifiedState === undefined ? undefined : recordVerification(root, report.verdict, verifiedState);
+  if (outputPath !== undefined) writeReportAtomic(root, resolve(process.cwd(), outputPath), report);
+  const recordedPath = verifiedState === undefined
+    ? undefined
+    : recordVerificationState(root, report.verdict, verifiedState, nowIso());
 
   if (format === "json") json(report);
   else if (format === "github") renderGithub(report, source, g);

@@ -1,6 +1,6 @@
 # Semctx roadmap
 
-> Revised 2026-09-08. Released baseline: **v0.1.20**.
+> Revised 2026-09-13. Released baseline: **v0.3.0**.
 > Future versions are outcome targets, not available features or promised dates.
 
 ## Understand the risk of a change before running the checks
@@ -19,9 +19,13 @@ repeated use cheaper than rediscovering the same context. We will measure that t
 
 ## Available today
 
-[v0.1.20](https://github.com/hoklims/semctx/releases/tag/v0.1.20) provides local change-impact
+[v0.3.0](https://github.com/hoklims/semctx/releases/tag/v0.3.0) provides local change-impact
 analysis, explainable PASS/WARN/BLOCK reports, source-bound index health, authored intent and
-contracts, read-only control/replay surfaces, and Codex/Claude integrations.
+contracts, read-only control/replay surfaces, and Codex/Claude integrations. Version 0.3.0 adds
+explicit index recovery, source-backed continuation reports, process lifecycle tests and
+opt-in configuration migration with exact restoration. The [release brief](docs/releases/v0.3.0.md)
+states the delivered scope. Incremental indexing, full resource budgets, Mac/lobby performance
+and independent human outcomes remain open; publication does not complete the whole 0.3 roadmap.
 
 TypeScript is the semantic baseline. Python support is bounded through Python 3.12; Markdown and
 SQL provide structural facts, not equivalent semantic analysis. Suggested tests are inferred from

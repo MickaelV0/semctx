@@ -1,11 +1,11 @@
 # Getting started
 
 <!-- semctx:compatibility:start -->
-Semctx **0.2.0** requires **Bun >=1.4.0**.
+Semctx **0.3.0** requires **Bun >=1.4.0**.
 The supported, tested host baseline is **Codex 0.147.0** and
 **Claude Code 2.1.229**. Other host versions are **unknown** until tested;
 these pins do not claim the earliest historically compatible versions.
-[Baseline delivery evidence](https://github.com/hoklims/semctx/actions/runs/33921551614).
+[Baseline delivery evidence](https://github.com/hoklims/semctx/actions/runs/34664142432).
 Installation does not reload an active session: open a new Codex task, or run
 `/reload-plugins` in Claude Code (restart if reload fails).
 <!-- semctx:compatibility:end -->
@@ -68,6 +68,10 @@ semctx init --preset github-claude --dry-run
 semctx init --preset github-claude
 semctx index
 ```
+
+Moving an existing v1 config to v2 explicit selection is a deliberate migration, not an `init`
+overwrite: see [`semctx migrate config`](reference/cli.md#migrate-config) and
+[Configuration reference](reference/configuration.md#config-migration-v1-to-v2).
 
 ## 3. Verify a change
 

@@ -16,6 +16,7 @@ export {
   controlHandoffTool,
   controlResumeHandoffTool,
 } from "./control-handoff-tools";
+export { controlHandoffExplainTool } from "./control-continuation-tools";
 export { controlTargetProposeTool } from "./target-tools";
 export { registerChangeAuthorizationVerifierTools } from "./change-authorization-verifier-tools";
 

@@ -1,4 +1,5 @@
 import { describe, it, expect, afterAll } from "bun:test";
+import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -113,5 +114,115 @@ describe("SqliteRepositoryStore", () => {
     store.setMeta("k", "v");
     expect(store.getMeta("k")).toBe("v");
     expect(store.getMeta("absent")).toBeUndefined();
+  });
+});
+
+describe("SqliteRepositoryStore replaceIndex transactional rollback", () => {
+  it("keeps the prior complete snapshot when a later metadata write throws mid-transaction", () => {
+    const localDir = mkdtempSync(join(tmpdir(), "semctx-store-rollback-"));
+    const localPath = join(localDir, "test.db");
+    let localStore = SqliteRepositoryStore.open(localPath);
+    try {
+      const oldGraph: RepositoryGraph = {
+        nodes: [
+          { id: "mod:old.ts", kind: "module", name: "old.ts", filePath: "old.ts", evidence: [], tags: [], metadata: {} },
+        ],
+        edges: [],
+      };
+      const oldEvidence: EvidenceRecord[] = [
+        { id: "ev:code:old.ts:1:0", filePath: "old.ts", startLine: 1, sourceKind: "code" },
+      ];
+      const oldClaims: Claim[] = [
+        {
+          id: "claim:behavior:old",
+          kind: "behavior",
+          statement: "old snapshot",
+          subjectNodeIds: ["mod:old.ts"],
+          evidenceIds: ["ev:code:old.ts:1:0"],
+          authority: 1,
+          freshness: 1,
+          confidence: 1,
+          verificationStatus: "tested",
+          tags: [],
+        },
+      ];
+      localStore.replaceIndex({
+        graph: oldGraph,
+        evidence: oldEvidence,
+        claims: oldClaims,
+        metadata: { indexed_at: "2026-07-21T00:00:00.000Z", marker: "old" },
+      });
+
+      const newGraph: RepositoryGraph = {
+        nodes: [
+          { id: "mod:new.ts", kind: "module", name: "new.ts", filePath: "new.ts", evidence: [], tags: [], metadata: {} },
+          { id: "sym:new", kind: "function", name: "newFn", filePath: "new.ts", evidence: [], tags: [], metadata: {} },
+        ],
+        edges: [{ id: "edge:new", kind: "declares", from: "mod:new.ts", to: "sym:new", evidence: [], metadata: {} }],
+      };
+      const newEvidence: EvidenceRecord[] = [
+        { id: "ev:code:new.ts:1:0", filePath: "new.ts", startLine: 1, sourceKind: "code" },
+      ];
+      const newClaims: Claim[] = [
+        {
+          id: "claim:behavior:new",
+          kind: "behavior",
+          statement: "new snapshot",
+          subjectNodeIds: ["mod:new.ts"],
+          evidenceIds: ["ev:code:new.ts:1:0"],
+          authority: 1,
+          freshness: 1,
+          confidence: 1,
+          verificationStatus: "tested",
+          tags: [],
+        },
+      ];
+      const faultConnection = new Database(localPath);
+      try {
+        faultConnection.exec(`
+          CREATE TRIGGER fail_late_metadata BEFORE INSERT ON meta
+          WHEN NEW.key = 'poison'
+          BEGIN
+            SELECT CASE WHEN
+              (SELECT value FROM meta WHERE key = 'newOnly') = 'present' AND
+              (SELECT value FROM meta WHERE key = 'indexed_at') = '2026-07-21T01:00:00.000Z' AND
+              (SELECT value FROM meta WHERE key = 'marker') = 'new' AND
+              (SELECT value FROM meta WHERE key = 'node_count') = '2' AND
+              (SELECT value FROM meta WHERE key = 'edge_count') = '1'
+            THEN RAISE(ABORT, 'simulated replace interruption')
+            ELSE RAISE(ABORT, 'fault reached before expected writes') END;
+          END;
+        `);
+      } finally {
+        faultConnection.close();
+      }
+
+      expect(() => localStore.replaceIndex({
+        graph: newGraph,
+        evidence: newEvidence,
+        claims: newClaims,
+        metadata: {
+          indexed_at: "2026-07-21T01:00:00.000Z",
+          marker: "new",
+          newOnly: "present",
+          poison: "fail after the preceding writes",
+        },
+      })).toThrow("simulated replace interruption");
+
+      localStore.close();
+      localStore = SqliteRepositoryStore.open(localPath);
+
+      expect(localStore.loadGraph()).toEqual(oldGraph);
+      expect(localStore.loadEvidence()).toEqual(oldEvidence);
+      expect(localStore.loadClaims()).toEqual(oldClaims);
+      expect(localStore.getMeta("marker")).toBe("old");
+      expect(localStore.getMeta("indexed_at")).toBe("2026-07-21T00:00:00.000Z");
+      expect(localStore.getMeta("node_count")).toBe("1");
+      expect(localStore.getMeta("edge_count")).toBe("0");
+      expect(localStore.getMeta("newOnly")).toBeUndefined();
+    } finally {
+      localStore.close();
+      rmSync(localDir, { recursive: true, force: true });
+    }
   });
 });

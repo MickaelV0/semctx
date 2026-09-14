@@ -40,6 +40,7 @@ import {
   ControlHandoffCaptureResultV2Schema,
   ControlHandoffResumeResultV2Schema,
 } from "@semantic-context/control-model/control-handoff";
+import { ControlContinuationExplainResultV1Schema } from "@semantic-context/control-model/control-continuation";
 import {
   ChangeContractSchema as SemanticChangeContractSchema,
   RepositoryLinkSchema,
@@ -958,6 +959,7 @@ export const TOOL_OUTPUT_SCHEMAS = {
   semctx_control_reconcile_diff: mcpSchema(ReconcileDiffReportV1Schema),
   semctx_control_handoff: mcpSchema(ControlHandoffCaptureResultV2Schema),
   semctx_control_resume: mcpSchema(ControlHandoffResumeResultV2Schema),
+  semctx_control_handoff_explain: mcpSchema(ControlContinuationExplainResultV1Schema),
   semctx_control_target_propose: TargetProposalSchema,
   semctx_control_explorer: ControlExplorerOutputSchema,
   semctx_control_verify_authorization: ChangeAuthorizationVerificationReportSchema,

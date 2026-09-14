@@ -98,8 +98,20 @@ Analyse the repository into the deterministic graph and atomically capture its c
 snapshot. `--json` prints counts plus the versioned `freshnessSeal`; text output prints its hash.
 
 ```text
-semctx index [--json] [--workers auto|1..8]
+semctx index [--json] [--workers auto|1..8] [--record]
 ```
+
+`--record` recovers a stale `.semctx/verification-state.json` baseline in one command: it rebuilds
+the index, computes a fresh working-tree verification, checks that source, index, and semantic
+inputs stayed stable across the whole operation, and atomically records the actual PASS/WARN/BLOCK
+verdict. Plain `index` never touches recorded evidence, even when the current baseline is stale —
+it only repairs the index binding, so `semctx status`/`verify` can still see the stale baseline and
+name it. `--record` refuses non-ignored untracked files and tracked bytes hidden from the analysed
+diff, the same way `verify diff --record` does. `--json` adds a `verification: { recorded: true,
+report }` field carrying the same versioned `verify diff` report (ADR 0008); exit is 3 for a
+recorded `BLOCK`, otherwise 0. If verification or recording fails after a successful rebuild, the
+old evidence file is left byte-identical and the error names the partial outcome
+(`indexRebuilt: true`, `evidenceRecorded: false`).
 
 The default is `--workers 1`: current portable benchmarks prove deterministic equivalence but do
 not justify imposing extra compiler heaps on every repository. `--workers auto` stays single-core
@@ -131,6 +143,59 @@ The report keeps `freshness` and `coverage` separate. Coverage is `complete`, `p
 `insufficient`; it never upgrades the nested control-freshness verdict. Exit 0 requires a valid
 binding, high-risk-capable freshness, and complete coverage. Partial coverage exits 2. Invalid or
 absent binding, freshness that cannot run high-risk control, or insufficient coverage exits 3.
+
+## `migrate config`
+
+Explicit, CLI-only v1 -> v2 configuration migration (ADR 0028). Dry by default; every write is
+gated behind an exact plan digest or an explicit run id. See the
+[configuration reference](configuration.md#config-migration-v1-to-v2) for the field-level policy
+this command enforces.
+
+```text
+semctx migrate config --proposal <repository-relative-json> [--format text|json]
+semctx migrate config --proposal <repository-relative-json> --apply --plan <sha256> [--format text|json]
+semctx migrate config --restore <run-id> [--format text|json]
+```
+
+`--proposal` and `--restore` are mutually exclusive. `--plan` is required with `--apply` and
+invalid without it; `--dry-run` (the default) cannot be combined with `--apply` or `--restore`.
+Ambiguous input exits 2 before any service call: a repeated option (the shared parser would keep
+only its last value), a value given to `--apply` or `--dry-run` (`--apply=false`, `--apply <digest>`),
+or a bare `--format`. The versioned JSON report (`kind: "config_migration_report"`) carries
+`operation` (`plan`/`apply`/`restore`), `status` (`PLANNED`/`APPLIED`/`RESTORED`/`REFUSED`), a
+nullable `planDigest` and `runId`, the plan details on a successful plan/apply, a `reasons` array,
+and `requiredActions`:
+
+| reason | meaning |
+| --- | --- |
+| `INVALID_INPUT` | the current config, the proposal file or the plan digest is missing, unreadable, or fails schema validation |
+| `POLICY_CHANGE_REJECTED` | the proposal changes a field other than `version`/`include`/`exclude`/`selectionMode`/`languages` |
+| `STALE_PLAN` | the repository changed since the supplied plan digest was computed, or authored `.sem` / `verification-state.json` changed while the apply ran |
+| `ACTIVE_MIGRATION` | another process holds the cooperative migration lock right now |
+| `RECOVERY_REQUIRED` | a published run is not yet restored; `runId` names it |
+| `INVALID_ARTIFACT` | a run id, manifest or stored before/after bytes failed validation, or an authored `.sem` / `verification-state.json` entry could not be read |
+| `DIVERGENT_CONFIG` | current `config.json` matches neither the run's recorded before nor after bytes |
+
+| required action | what to run |
+| --- | --- |
+| `RESTORE_RUN` | `semctx migrate config --restore <runId>` with the report's `runId` |
+| `REBUILD_INDEX` | `semctx index`; an index built under the other config never becomes current |
+| `RERUN_VERIFICATION` | the existing verification flow (for example `semctx index --record`); earlier proof is not restamped |
+
+A refused report carries a `runId` only for a published run that still requires restoration
+(`RECOVERY_REQUIRED` or `DIVERGENT_CONFIG`); that run may already have replaced `config.json`. Only
+a refused plan is write-free: an apply or restore takes the lock, which may create
+`.semctx/config-migrations/coordinator.db`. A genuine I/O failure after a run is published stays an
+error, not a refusal; its details carry `recoveryRunId` and `recoveryCommand`.
+
+Apply and restore re-inventory authored `.sem` files and `verification-state.json` before and after
+replacing `config.json` and refuse on any observed change. Restore compares with what it observed
+at its own start, so later legitimate edits are never rolled back. These are observations for a
+trusted, quiescent worktree, not a guarantee against concurrent writers.
+
+Exit 0 on `PLANNED`/`APPLIED`/`RESTORED`; 1 on `REFUSED` or an I/O failure; 2 on a usage error.
+This command never opens the index store, never re-indexes, and never rewrites authored `.sem`
+files or `verification-state.json` — it only inventories them.
 
 ## `verify diff`
 
@@ -557,6 +622,35 @@ Exit code 3 means `REFUSED`; `RESUMED`, `EMPTY`, and `NO_OP` exit 0. Normal post
 make `semctx status` report `STALE / WORKING_DIFF_MISMATCH`; resume validation comes from the fresh,
 task-bound reconciliation. It neither upgrades that global freshness verdict nor grants execution
 authority.
+
+## `control handoff explain`
+
+Explain one intact Control Handoff v2 capsule without rewriting it or granting any authority (ADR
+0027):
+
+```text
+semctx control handoff explain --hash <sha256> [--json]
+```
+
+The report projects the capsule's historical objective, declared decisions/non-goals, expected and
+observed changes, risks, missing evidence and next checks, each with a source artifact hash and
+field/coordinate, plus a dependency-by-dependency current-applicability comparison
+(`APPLICABLE` / `STALE` / `UNKNOWN`, never a favorable upgrade of a losing or unreadable
+dependency). Every report fixes `executionAuthority: "none"`, `enforcementMode: "shadow"`,
+`blockingEnabled: false`, `sourceContentCollected: false`, and `gateAdmission: "NOT_EVALUATED"`; the
+report's `captureTime` is excluded from its `reportHash` and from CLI/MCP fact parity.
+
+Handoff v2 carries no separate worktree binding, so `worktree_identity` is always reported
+`UNKNOWN / DEPENDENCY_UNVERIFIED`, even when the repository identity matches exactly. Missing
+producer/configuration/environment/policy/expiry evidence dimensions are reported
+`UNKNOWN / DEPENDENCY_MISSING`, never backfilled from current values. An unreadable or wrong-repository
+capsule, an unsupported schema version, or a serialized report that cannot fit its 64 KiB budget
+without dropping mandatory stale/unknown/missing-evidence/next-check content returns a typed refusal
+with no trusted historical projection.
+
+Exit code 2 means a typed refusal (`ARTIFACT_MISSING`, `ARTIFACT_INVALID`, `UNSUPPORTED_VERSION`,
+`WRONG_REPOSITORY`, or `BUDGET_EXCEEDED`); `EXPLAINED` exits 0 even when dependencies are stale or
+unknown, because explanation itself succeeded.
 
 These commands are additive. The legacy Plane-B `semantic handoff` / `semantic resume` and MCP
 `semctx_handoff` / `semctx_resume` retain their version-1 compatibility contract and files.

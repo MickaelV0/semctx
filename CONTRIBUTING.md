@@ -3,14 +3,16 @@
 For a clean clone, start with [your first check](docs/contributing/first-check.md). It diagnoses
 prerequisites and runs explicit existing test scopes; the canonical `bun run verify:pr` gate below
 remains mandatory. The [packaged first-use demo](docs/contributing/first-use-demo.md) exercises the
-public journey without writing authored declarations or installing a global plugin.
+public journey without writing authored declarations or installing a global plugin. The
+[packaged continuity demo](docs/contributing/continuity-demo.md) exercises task/plan/reconcile,
+Control Handoff v2 capture/explain, staleness detection, and a refused resume, end to end.
 
 <!-- semctx:compatibility:start -->
-Semctx **0.2.0** requires **Bun >=1.4.0**.
+Semctx **0.3.0** requires **Bun >=1.4.0**.
 The supported, tested host baseline is **Codex 0.147.0** and
 **Claude Code 2.1.229**. Other host versions are **unknown** until tested;
 these pins do not claim the earliest historically compatible versions.
-[Baseline delivery evidence](https://github.com/hoklims/semctx/actions/runs/33921551614).
+[Baseline delivery evidence](https://github.com/hoklims/semctx/actions/runs/34664142432).
 Installation does not reload an active session: open a new Codex task, or run
 `/reload-plugins` in Claude Code (restart if reload fails).
 <!-- semctx:compatibility:end -->

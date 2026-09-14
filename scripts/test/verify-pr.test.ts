@@ -78,6 +78,7 @@ describe("argument parsing and command construction", () => {
     const steps = verificationSteps({ base: "origin/main", skipDiff: true }, "python3");
     expect(steps.map((step) => step.argv)).toEqual([
       ["bun", "scripts/compatibility.ts"],
+      ["bun", "scripts/documentation-integrity.ts"],
       ["bun", "run", "quality"],
       ["python3", "-m", "compileall", "-q", "benchmarks/change-impact-eval/scripts"],
       ["python3", "benchmarks/change-impact-eval/scripts/smoke_test.py"],
@@ -177,10 +178,11 @@ describe("execution", () => {
     expect(exitCode).toBe(17);
     expect(commands).toEqual([
       ["bun", "scripts/compatibility.ts"],
+      ["bun", "scripts/documentation-integrity.ts"],
       ["bun", "run", "quality"],
-      ["python-from-test", "-m", "compileall", "-q", "benchmarks/change-impact-eval/scripts"],
+
     ]);
-    expect(logs.at(-1)).toBe("[verify:pr] FAIL  Python compileall (exit 17)");
+    expect(logs.at(-1)).toBe("[verify:pr] FAIL  quality (exit 17)");
   });
 
   test("passes clean committed, staged, and unstaged changes", async () => {
