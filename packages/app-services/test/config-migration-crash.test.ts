@@ -6,7 +6,8 @@
  * which also proves the killed owner's cooperative lock was released.
  */
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
@@ -19,6 +20,7 @@ import {
   listAbandonedConfigMigrationPreparations,
   listConfigMigrationRuns,
   readConfigMigrationAfter,
+  readConfigMigrationBefore,
   readConfigMigrationManifest,
   runDir,
   semctxDir,
@@ -209,6 +211,110 @@ describe("observed preservation of authored data, baseline and index", () => {
 });
 
 describe("recovery identity of a genuine I/O failure", () => {
+  const sites = [
+    { name: "nested stat", method: "statSync", path: ".semctx/semantic/nested/deep.sem" },
+    { name: "authored read", method: "readFileSync", path: ".semctx/semantic/nested/deep.sem" },
+    { name: "baseline read", method: "readFileSync", path: ".semctx/verification-state.json" },
+  ] as const;
+
+  function withInventoryFailure(
+    root: string,
+    site: (typeof sites)[number],
+    failure: NodeJS.ErrnoException,
+    action: () => void,
+    enabled: () => boolean = () => true,
+  ): void {
+    const target = join(root, ...site.path.split("/"));
+    const original = fs[site.method];
+    let injections = 0;
+    const probe = spyOn(fs, site.method).mockImplementation((...args: unknown[]) => {
+      if (String(args[0]) === target && enabled()) {
+        injections += 1;
+        throw failure;
+      }
+      return Reflect.apply(original, fs, args);
+    });
+    try {
+      action();
+    } finally {
+      probe.mockRestore();
+    }
+    expect(injections).toBeGreaterThan(0);
+  }
+
+  for (const site of sites) {
+    for (const code of ["EACCES", "EIO"]) {
+      test(`inventory I/O: ${site.name} preserves ${code} before publication`, () => {
+        const root = setUpRepository();
+        const configBefore = readFileSync(configPath(root));
+        const protectedBefore = protectedSnapshot(root);
+        const failure = Object.assign(new Error(`${code}: injected ${site.name}`), { code });
+        withInventoryFailure(root, site, failure, () => {
+          let caught: unknown;
+          try { planConfigMigration(root, "proposal.json"); } catch (error) { caught = error; }
+          expect(caught).toBe(failure);
+        });
+        expect(readFileSync(configPath(root))).toEqual(configBefore);
+        expectProtected(root, protectedBefore);
+        expect(listConfigMigrationRuns(root)).toEqual([]);
+      });
+
+      test(`inventory I/O: ${site.name} preserves ${code} and recovery identity after the config swap`, () => {
+        const root = setUpRepository();
+        const original = readFileSync(configPath(root));
+        const protectedBefore = protectedSnapshot(root);
+        const digest = planned(root);
+        const restoring = site.name === "baseline read";
+        const existingRun = restoring ? applied(root, digest).runId as string : undefined;
+        let armed = false;
+        const checkpoint = atCheckpoint("config:after-rename", () => { armed = true; });
+        const failure = Object.assign(new Error(`${code}: injected ${site.name}`), { code });
+        let caught: unknown;
+        withInventoryFailure(root, site, failure, () => {
+          try {
+            if (existingRun !== undefined) restoreConfigMigration(root, existingRun);
+            else applyConfigMigration(root, "proposal.json", digest);
+          } catch (error) { caught = error; }
+        }, () => armed);
+        expect(checkpoint.fired()).toBe(1);
+        const runId = onlyRun(root);
+        expect(isSemctxError(caught)).toBe(true);
+        const error = caught as SemctxError;
+        expect(error.code).toBe("IO_ERROR");
+        expect(error.message).toBe(failure.message);
+        expect(error.cause).toBe(failure);
+        expect((error.cause as NodeJS.ErrnoException).code).toBe(code);
+        expect(error.details["recoveryRunId"]).toBe(runId);
+        expect(error.details["recoveryCommand"]).toBe(`semctx migrate config --restore ${runId}`);
+        expect(manifestState(root, runId)).toBe(restoring ? "RESTORING" : "APPLYING");
+        expect(readConfigMigrationBefore(root, runId)).toEqual(original);
+        expect(readFileSync(configPath(root))).toEqual(Buffer.from(restoring ? original : readConfigMigrationAfter(root, runId)));
+        expectProtected(root, protectedBefore);
+        setConfigMigrationCheckpointObserver(undefined);
+        expect(restoreConfigMigration(root, runId).status).toBe("RESTORED");
+        expect(readFileSync(configPath(root))).toEqual(original);
+        expectProtected(root, protectedBefore);
+      });
+    }
+
+    for (const code of ["ENOENT", "ENOTDIR", "EISDIR"]) {
+      test(`inventory I/O: ${site.name} keeps structural ${code} as an invalid artifact`, () => {
+        const root = setUpRepository();
+        const configBefore = readFileSync(configPath(root));
+        const protectedBefore = protectedSnapshot(root);
+        const failure = Object.assign(new Error(`${code}: injected ${site.name}`), { code });
+        withInventoryFailure(root, site, failure, () => {
+          const report = planConfigMigration(root, "proposal.json");
+          expect(report.status).toBe("REFUSED");
+          expect(report.reasons).toContain("INVALID_ARTIFACT");
+        });
+        expect(readFileSync(configPath(root))).toEqual(configBefore);
+        expectProtected(root, protectedBefore);
+        expect(listConfigMigrationRuns(root)).toEqual([]);
+      });
+    }
+  }
+
   test("a write failure after publication and the config rename is thrown, not refused, and names the run", () => {
     const root = setUpRepository();
     const original = readFileSync(configPath(root));

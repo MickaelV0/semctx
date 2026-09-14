@@ -173,6 +173,11 @@ export function attachConfigMigrationRecovery(error: unknown, runId: string): Se
  * `unreadable` inventory row rather than silently shrinking the count to zero, and recursion never
  * follows the link.
  */
+function isStructuralInventoryFailure(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  return code === "ENOENT" || code === "ENOTDIR" || code === "EISDIR";
+}
+
 function listAuthoredSemanticFiles(root: string): ConfigMigrationInventoryEntryV1[] {
   const semanticDir = join(root, ".semctx", "semantic");
   if (isLinkedEntry(semanticDir)) {
@@ -197,7 +202,8 @@ function listAuthoredSemanticFiles(root: string): ConfigMigrationInventoryEntryV
       let info;
       try {
         info = statSync(abs);
-      } catch {
+      } catch (error) {
+        if (!isStructuralInventoryFailure(error)) throw error;
         entries.push({ relPath, status: "unreadable", digest: null });
         continue;
       }
@@ -212,7 +218,8 @@ function listAuthoredSemanticFiles(root: string): ConfigMigrationInventoryEntryV
       if (!name.endsWith(".sem")) continue;
       try {
         entries.push({ relPath, status: "present", digest: digestOf(readFileSync(abs)) });
-      } catch {
+      } catch (error) {
+        if (!isStructuralInventoryFailure(error)) throw error;
         entries.push({ relPath, status: "unreadable", digest: null });
       }
     }
@@ -228,7 +235,8 @@ function verificationStateSummary(root: string): ConfigMigrationVerificationStat
   if (!existsSync(path)) return { present: false, digest: null };
   try {
     return { present: true, digest: digestOf(readFileSync(path)) };
-  } catch {
+  } catch (error) {
+    if (!isStructuralInventoryFailure(error)) throw error;
     return { present: true, digest: null };
   }
 }
