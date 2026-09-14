@@ -282,16 +282,19 @@ describe("semantic store refuses dangling links, planted temporaries and linked 
   });
 });
 
-// An id already declared in a mixed `.sem` file is rewritten at its `sourceRefs` location rather
-// than duplicated into `changes/<id>.sem`. Nothing else covered that branch, which is how a merge
-// could leave its writer call orphaned.
+// `writeChangeFile` rewrites an id already declared in a mixed `.sem` file at its `sourceRefs`
+// location. That the rewrite happens in place, preserves neighbouring declarations and comments,
+// and writes no `changes/<id>.sem` sidecar is already covered by
+// `packages/app-services/test/change-inplace.test.ts`; it is not restated here.
 //
-// That rewrite used to stage through a fixed `<source>.tmp` with a link-following write, so a
-// checkout could plant that exact name and receive the rewrite outside the repository. Measured:
-// `assertUnlinkedSemanticTree` does NOT catch a planted `<source>.tmp` — only the no-follow writer
-// does, through an unguessable temporary checked with `lstat` and created exclusively (SEC-PB-01).
-// A link at the declared source itself is not retested here: it never reaches the writer, because
-// the model load refuses it first, and that is covered above.
+// What was uncovered is the writer this branch uses. It used to stage through a fixed
+// `<source>.tmp` with a link-following write, so a checkout could plant that exact name and
+// receive the rewrite outside the repository. Measured both ways: `assertUnlinkedSemanticTree`
+// does NOT catch a planted `<source>.tmp` and nothing throws — only the no-follow writer closes
+// it, through an unguessable temporary checked with `lstat` and created exclusively (SEC-PB-01).
+//
+// A link at the declared source itself is deliberately not retested: it never reaches the writer,
+// because the model load refuses it first, and that refusal is covered above.
 describe("semantic store rewrites a declared change in place", () => {
   const MIXED = `goal goal.before
   statement: untouched before
@@ -312,23 +315,6 @@ goal goal.after
     expect(found?.sourceRefs[0]?.file).toBe(".semctx/semantic/mixed.sem");
     return found as NonNullable<typeof found>;
   }
-
-  test("control: the change block is rewritten and every other byte is left alone", () => {
-    const root = temporary("semctx-inplace-control-");
-    mkdirSync(join(root, ".semctx", "semantic"), { recursive: true });
-    const mixed = join(root, ".semctx", "semantic", "mixed.sem");
-    writeFileSync(mixed, MIXED);
-
-    writeChangeFile(root, { ...declared(root), statement: "after rewrite" });
-
-    const after = readFileSync(mixed, "utf8");
-    expect(after).toContain("statement: after rewrite");
-    expect(after).not.toContain("statement: before rewrite");
-    expect(after).toContain("statement: untouched before");
-    expect(after).toContain("statement: untouched after");
-    expect(existsSync(changeFilePath(root, "change.in.place"))).toBe(false);
-    expect(readdirSync(join(root, ".semctx", "semantic")).filter((entry) => entry.includes(".tmp"))).toEqual([]);
-  });
 
   fileLinked("a planted <source>.tmp link never receives the rewrite", () => {
     const root = temporary("semctx-inplace-temp-");
