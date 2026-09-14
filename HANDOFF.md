@@ -1,48 +1,40 @@
-# Semctx v0.2 delivery handoff
+# Semctx v0.3 delivery handoff
 
 ## Objective and authority
 
-Deliver v0.2 through the existing release pipeline. The maintainer delegated implementation,
-review, correction and delivery to Codex. Use Codex only: no Claude model calls, runners or
-reviewers. Deterministic host-installation checks do not invoke a model.
+Deliver 0.3.0 through the existing annotated-tag release pipeline. The maintainer requested
+implementation, review, correction and publication. Codex owns acceptance and external actions;
+preserve every unrelated dirty checkout.
 
-The maintainer explicitly waived human participant studies. Do not recruit volunteers or schedule
-J+14 follow-up. Adoption, retention, comprehension and contribution time stay NOT_MEASURED.
-Thirty public changes have UNKNOWN ground truth; no accuracy or benefit claim follows from replay.
+[HOK-752](https://linear.app/hoklims/issue/HOK-752) tracks technical publication of explicit
+recovery, source-backed continuation, index lifecycle and opt-in configuration migration.
+Mac/lobby performance and independent human outcomes remain NOT_MEASURED; original roadmap
+criteria stay open. Publication does not complete the whole 0.3 roadmap.
 
 ## Governing sources
 
-- [Release scope and limits](docs/releases/v0.2.1.md)
-- ADRs [0018](docs/adr/0018-packaged-first-use-demo.md),
-  [0019](docs/adr/0019-local-pilot-evidence.md), [0020](docs/adr/0020-omp-standard-plugin.md),
-  [0021](docs/adr/0021-voluntary-local-reports.md), [0022](docs/adr/0022-contributor-first-check.md),
-  [0023](docs/adr/0023-public-evidence-page.md)
-- [Delivery checkpoint](docs/implementation/v0.2-delivery.md)
-- [Publishing contract](docs/publishing.md) and [pilot protocol](docs/pilot/README.md)
+- [Release scope and rollback](docs/releases/v0.3.0.md)
+- [Delivery checkpoint](docs/implementation/v0.3-delivery.md)
+- ADRs [0025](docs/adr/0025-explicit-index-recovery-records-new-verification.md),
+  [0026](docs/adr/0026-repeated-index-baselines-before-optimization.md),
+  [0027](docs/adr/0027-continuation-and-evidence-applicability.md) and
+  [0028](docs/adr/0028-explicit-config-migration-and-restoration.md)
+- [Publishing contract](docs/publishing.md), [configuration reference](docs/reference/configuration.md)
+  and [contribution contract](docs/contributing/public-contracts.md)
 
-## Resume from evidence
+## Resume from current evidence
 
-Read current main, stable, v0.2.1, npm gitHead, GitHub Release and release-workflow jobs before
-reporting delivery. They must identify the same immutable released commit. Host delivery is a
-separate proof; existing sessions do not reload merely because installation succeeded. OMP remains
-experimental and is not part of --host all attestation. Its selected installation route is the
-existing semctx-stable catalogue, with an exact-tag git-subdir source and no mirror.
+Read main, annotated v0.3.0, npm gitHead, stable, GitHub Release and release-workflow jobs.
+Publication and isolated Codex/Claude delivery require the same exact released commit.
+An installation does not reload an existing session. OMP remains experimental and outside
+two-host stable-delivery proof. Do not force stable or rewrite a published tag.
 
-The public evidence page is additive under gh-pages/demo/. Preserve the existing root landing
-page. Generate public data from the selected package and sanitized pilot summary; never copy raw
-local reports, logs or source mappings to Pages. Keep candidate and downloaded-release identities
-separate and retain failed attempts.
+Run the unchanged canonical `bun run verify:pr` on the final staged candidate after frozen
+dependency installation and artifact generation. On Windows use the real Bun binary and
+platform-safe quality commands. Stage intended new files first. A changed proof surface requires
+fresh aggregate independent review and observed negative witnesses. Hosted CI, merge, tag,
+registry, promotion and delivery remain separate gates.
 
-## Verification
-
-Use frozen Bun dependencies, build generated plugin and CLI artifacts, then run the unchanged
-canonical bun run verify:pr gate. On Windows, put the real Bun binary directory first on PATH;
-Scoop wrappers and extensionless POSIX shims are not execution evidence. Quality-tool versions
-come from requirements-quality.txt. Stage intended new files before the canonical gate.
-
-A proof-system change requires fresh aggregate independent read-only review and real red/green
-witnesses bound to the final candidate; local success is insufficient. Cross-platform required CI,
-merge, tag publication, npm availability, stable promotion and host delivery remain distinct.
-Use only personal Hoklims Linear for HOK-629/632/633/634/645 and HOK-637/642/643/644. Reconcile issue
-status only after reading the corresponding proof. Historical earliest-compatibility HOK-585 and
-OMP stable-attestation HOK-456 remain separate from the tested baseline.
+Regenerate the public demo from the candidate and, after publication, the downloaded release.
+Keep runtime digests and both identities. Preserve historic pilot evidence and failed attempts.
+Use only personal Hoklims Linear; never translate unknown outcomes into successful observations.

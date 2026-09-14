@@ -22,3 +22,5 @@ export * from "./link-resolution";
 export * from "./change-authorization-types";
 export * from "./change-authorization-canonical";
 export * from "./change-authorization-schemas";
+export * from "./config-migration-types";
+export * from "./config-migration-schemas";
