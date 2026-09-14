@@ -555,7 +555,7 @@ describe("guardDecision — diff-hash gate (ADR 0007)", () => {
     expect(d.block).toBe(true);
     expect(d.reason).toContain("was BLOCK");
   });
-  it("blocks when a repository commit hook can restage after the pre-tool check", () => {
+  it("blocks when a disallowed commit hook is present", () => {
     const decision = guardDecision({
       enabled: true,
       terminalVerb: "commit",
@@ -564,9 +564,9 @@ describe("guardDecision — diff-hash gate (ADR 0007)", () => {
       currentState: CURRENT,
     });
     expect(decision.block).toBe(true);
-    expect(decision.reason).toContain("commit hooks can change the index");
+    expect(decision.reason).toContain("other than pre-commit, prepare-commit-msg, or commit-msg");
   });
-  it("blocks when a repository pre-push hook can add side effects after the pre-tool check", () => {
+  it("blocks when a disallowed push hook is present", () => {
     const decision = guardDecision({
       enabled: true,
       terminalVerb: "push",
@@ -575,7 +575,7 @@ describe("guardDecision — diff-hash gate (ADR 0007)", () => {
       currentState: CURRENT,
     });
     expect(decision.block).toBe(true);
-    expect(decision.reason).toContain("pre-push hook can execute unverified side effects");
+    expect(decision.reason).toContain("other than pre-push and the commit pre-hooks");
   });
   it("blocks legacy diff-only baselines", () => {
     const d = guardDecision({ enabled: true, terminalVerb: "commit", state: { diffHash: HASH, verdict: "PASS" }, currentState: CURRENT });
@@ -640,16 +640,16 @@ describe("guardDecision — verify, commit, push replay", () => {
       const preCommit = join(repo, ".git", "hooks", "pre-commit");
       expect(commitHookSurfaceClear(repo)).toBe(true);
       writeFileSync(preCommit, "#!/bin/sh\ngit add b.ts\n");
-      expect(commitHookSurfaceClear(repo)).toBe(false);
-      expect(guardStatus("git commit -m hook-restage")).toBe(2);
+      expect(commitHookSurfaceClear(repo)).toBe(true);
+      expect(guardStatus("git commit -m hook-restage")).toBe(0);
       rmSync(preCommit);
       const configuredHooks = join(repo, ".git", "configured-hooks");
       mkdirSync(configuredHooks);
       git(["config", "core.hooksPath", configuredHooks]);
       const prepareCommitMessage = join(configuredHooks, "prepare-commit-msg");
       writeFileSync(prepareCommitMessage, "#!/bin/sh\ngit add b.ts\n");
-      expect(commitHookSurfaceClear(repo)).toBe(false);
-      expect(guardStatus("git commit -m configured-hook-restage")).toBe(2);
+      expect(commitHookSurfaceClear(repo)).toBe(true);
+      expect(guardStatus("git commit -m configured-hook-restage")).toBe(0);
       rmSync(prepareCommitMessage);
       expect(commitHookSurfaceClear(repo)).toBe(true);
       for (const hookName of ["post-commit", "post-rewrite"]) {
@@ -667,7 +667,13 @@ describe("guardDecision — verify, commit, push replay", () => {
         rmSync(hook);
       }
       git(["config", "--unset", "core.hooksPath"]);
-      expect(guardStatus("git commit -m exact")).toBe(0);
+      const hooksDir = join(repo, ".git", "hooks");
+      for (const name of ["pre-commit", "prepare-commit-msg", "commit-msg", "pre-push"]) {
+        writeFileSync(join(hooksDir, name), "#!/bin/sh\nexit 0\n");
+      }
+      expect(commitHookSurfaceClear(repo)).toBe(true);
+      expect(pushHookSurfaceClear(repo)).toBe(true);
+      expect(guardStatus("git commit -m leftover")).toBe(0);
       expect(guardStatus("git commit -am exact")).toBe(2);
       expect(guardStatus("git commit --fixup=HEAD")).toBe(2);
       expect(guardStatus("git commit --fixup=amend:HEAD")).toBe(2);
@@ -682,9 +688,11 @@ describe("guardDecision — verify, commit, push replay", () => {
       const prePush = join(repo, ".git", "hooks", "pre-push");
       expect(pushHookSurfaceClear(repo)).toBe(true);
       expect(guardStatus("git push . HEAD")).toBe(0);
+      // Residue: pre-push is allowed by name. A hook that pushes elsewhere is
+      // not caught here; post-* / unknown names below still are.
       writeFileSync(prePush, "#!/bin/sh\ngit push attacker HEAD\n");
-      expect(pushHookSurfaceClear(repo)).toBe(false);
-      expect(guardStatus("git push . HEAD")).toBe(2);
+      expect(pushHookSurfaceClear(repo)).toBe(true);
+      expect(guardStatus("git push . HEAD")).toBe(0);
       rmSync(prePush);
       expect(pushHookSurfaceClear(repo)).toBe(true);
       for (const hookName of ["reference-transaction", "post-index-change", "pre-auto-gc", "future-git-hook"]) {

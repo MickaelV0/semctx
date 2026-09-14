@@ -10,9 +10,9 @@
       "name": "semctx",
       "source": {
         "source": "git-subdir",
-        "url": "https://github.com/hoklims/semctx.git",
+        "url": "https://github.com/MickaelV0/semctx.git",
         "path": "plugins/claude-code",
-        "ref": "v0.2.0"
+        "ref": "omp-dogfood-5"
       },
       "description": "Trace repository impact, authored intent and fail-closed migration plans in Oh My Pi.",
       "version": "0.2.0",

@@ -963,6 +963,14 @@ export function commitUsesWholeIndex(command) {
   return true;
 }
 
+/**
+ * Lefthook/husky install these four. `pre-commit`/`commit-msg`/`prepare-commit-msg`
+ * may restage; `exactCommittedContent` at push still refuses a mutated HEAD.
+ * `pre-push` does not run on commit; it is allowed by name on push too (contents
+ * not inspected — accepted residue).
+ */
+const PRE_HOOKS = new Set(["pre-commit", "prepare-commit-msg", "commit-msg", "pre-push"]);
+
 function gitHookSurfaceClear(cwd) {
   try {
     const result = spawnSync("git", ["rev-parse", "--git-path", "hooks"], { cwd, encoding: "utf8" });
@@ -971,18 +979,21 @@ function gitHookSurfaceClear(cwd) {
     if (raw === "") return false;
     const hooks = isAbsolute(raw) ? resolve(raw) : resolve(cwd, raw);
     return readdirSync(hooks, { withFileTypes: true })
-      .every((entry) => entry.isFile() && entry.name.endsWith(".sample"));
+      .every((entry) => {
+        if (!entry.isFile()) return false;
+        if (entry.name.endsWith(".sample")) return true;
+        return PRE_HOOKS.has(entry.name);
+      });
   } catch {
     return false;
   }
 }
 
-/** A pre-tool proof is valid only when no commit hook can restage or trigger follow-up effects. */
+/** Disallowed hooks (post-*, reference-transaction, unknown names) can exfiltrate during commit/push. */
 export function commitHookSurfaceClear(cwd) {
   return gitHookSurfaceClear(cwd);
 }
 
-/** A pre-tool proof is valid only when no pre-push hook can add uninspected side effects. */
 export function pushHookSurfaceClear(cwd) {
   return gitHookSurfaceClear(cwd);
 }
@@ -1351,13 +1362,13 @@ export function guardDecision(ctx) {
   if (ctx.terminalVerb === "commit" && ctx.commitHooksAbsent === false) {
     return {
       block: true,
-      reason: "semctx guarded mode: repository commit hooks can change the index after verification; disable pre-commit, prepare-commit-msg, and commit-msg hooks, then retry the commit.",
+      reason: "semctx guarded mode: a repository hook other than pre-commit, prepare-commit-msg, or commit-msg can run unverified side effects during the commit; remove it, then retry the commit.",
     };
   }
   if (ctx.terminalVerb === "push" && ctx.pushHooksAbsent === false) {
     return {
       block: true,
-      reason: "semctx guarded mode: a repository pre-push hook can execute unverified side effects; disable the pre-push hook, then retry the push.",
+      reason: "semctx guarded mode: a repository hook other than pre-push and the commit pre-hooks can run unverified side effects; remove it, then retry the push.",
     };
   }
   if (!isGuardVerificationState(ctx.state) || !ctx.currentState) {
