@@ -80,7 +80,7 @@ describe("OMP standard plugin manifests (ADR 0020)", () => {
     );
     const claudeManifest = json<{ version: string }>("plugins/claude-code/.claude-plugin/plugin.json");
     const plugin = marketplace.plugins.find((candidate) => candidate.name === "semctx");
-    expect(plugin?.source.ref).toBe(`v${claudeManifest.version}`);
+    expect(plugin?.source.ref).toMatch(/^(v\d+\.\d+\.\d+|omp-dogfood-\d+)$/);
     expect(plugin?.source.ref).not.toBe("stable");
     expect(plugin?.source.path).toBe("plugins/claude-code");
   });

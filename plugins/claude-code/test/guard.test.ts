@@ -740,7 +740,46 @@ describe("guardDecision — verify, commit, push replay", () => {
       rmSync(repo, { recursive: true, force: true });
     }
   }, 30_000);
+
+  it("refuses push when a restaging pre-commit mutated HEAD after verification", () => {
+    const repo = mkdtempSync(join(tmpdir(), "semctx-guard-restage-"));
+    const git = (args: string[]) => execFileSync("git", args, { cwd: repo, stdio: "ignore" });
+    try {
+      git(["init"]);
+      writeFileSync(join(repo, ".gitignore"), ".semctx/\n");
+      writeFileSync(join(repo, "a.ts"), "export const a = 1;\n");
+      git(["add", "-A"]);
+      git(["-c", "user.name=Semctx Test", "-c", "user.email=semctx@example.invalid", "commit", "-m", "base"]);
+
+      writeFileSync(join(repo, "a.ts"), "export const a = 2;\n");
+      git(["add", "-A"]);
+      const verified = captureVerificationGitState(repo);
+      const state = { version: 3, ...verified, verdict: "PASS" as const, recordedAt: "2026-08-31T00:00:00.000Z" };
+      mkdirSync(join(repo, ".semctx"));
+      writeFileSync(join(repo, ".semctx", "guard.json"), JSON.stringify({ enabled: true }));
+      writeFileSync(join(repo, ".semctx", "verification-state.json"), JSON.stringify(state));
+
+      const hook = join(repo, ".git", "hooks", "pre-commit");
+      writeFileSync(hook, "#!/bin/sh\nprintf '\\nmutated\\n' >> a.ts\ngit add a.ts\n");
+      chmodSync(hook, 0o755);
+      expect(commitHookSurfaceClear(repo)).toBe(true);
+      git(["-c", "user.name=Semctx Test", "-c", "user.email=semctx@example.invalid", "commit", "-m", "restage"]);
+
+      const after = captureVerificationGitState(repo);
+      expect(after.headTreeHash).not.toBe(state.repositoryStateHash);
+      expect(guardDecision({
+        enabled: true,
+        terminalVerb: "push",
+        state,
+        currentState: after,
+      }).block).toBe(true);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  }, 30_000);
 });
+
+
 
 describe("guard runtime — large working diffs", () => {
   it("blocks every push source that is not exactly the verified HEAD", () => {

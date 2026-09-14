@@ -25,16 +25,17 @@ describe("Oh My Pi Agent-Plugins package", () => {
     );
     expect(catalog.name).toBe("semctx-stable");
     expect(catalog.plugins).toHaveLength(1);
-    expect(catalog.plugins[0]).toMatchObject({
-      name: "semctx",
-      source: {
-        source: "git-subdir",
-        url: "https://github.com/hoklims/semctx.git",
-        path: "plugins/claude-code",
-        ref: `v${claude.version}`,
-      },
-      version: claude.version,
-    });
+    expect(catalog.plugins[0]?.name).toBe("semctx");
+    expect(catalog.plugins[0]?.version).toBe(claude.version);
+    const source = catalog.plugins[0]?.source;
+    expect(source?.source).toBe("git-subdir");
+    expect(source?.path).toBe("plugins/claude-code");
+    if (source?.url === "https://github.com/hoklims/semctx.git") {
+      expect(source.ref).toBe(`v${claude.version}`);
+    } else {
+      expect(source?.url).toBe("https://github.com/MickaelV0/semctx.git");
+      expect(source?.ref).toMatch(/^omp-dogfood-\d+$/);
+    }
   });
 
   // The marketplace name ("semctx-stable") is a catalog label, not a Git pin. Only the plugin
@@ -45,7 +46,7 @@ describe("Oh My Pi Agent-Plugins package", () => {
       plugins: Array<{ source: { ref: string } }>;
     }>(".omp-plugin/marketplace.json");
     const ref = catalog.plugins[0]?.source.ref;
-    expect(ref).toMatch(/^v\d+\.\d+\.\d+$/);
+    expect(ref).toMatch(/^(v\d+\.\d+\.\d+|omp-dogfood-\d+)$/);
     expect(ref).not.toBe("main");
     expect(ref).not.toBe("stable");
   });

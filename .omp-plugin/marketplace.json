@@ -12,7 +12,7 @@
         "source": "git-subdir",
         "url": "https://github.com/MickaelV0/semctx.git",
         "path": "plugins/claude-code",
-        "ref": "omp-dogfood-5"
+        "ref": "omp-dogfood-6"
       },
       "description": "Trace repository impact, authored intent and fail-closed migration plans in Oh My Pi.",
       "version": "0.2.0",

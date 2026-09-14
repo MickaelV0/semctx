@@ -171,6 +171,19 @@ function objectKeysEqual(value: unknown, expected: readonly string[]): boolean {
     && Object.keys(value).sort().join("\n") === [...expected].sort().join("\n");
 }
 
+const UPSTREAM_CATALOGUE_URL = "https://github.com/hoklims/semctx.git";
+const FORK_CATALOGUE_URL = "https://github.com/MickaelV0/semctx.git";
+const FORK_DOGFOOD_REF = /^omp-dogfood-\d+$/;
+
+/** Upstream release tag, or this fork's dogfood tag. */
+export function ompCatalogueSourceAllowed(source: JsonObject | undefined, releaseVersion: string): boolean {
+  if (source?.source !== "git-subdir" || source.path !== "plugins/claude-code") return false;
+  if (source.url === UPSTREAM_CATALOGUE_URL && source.ref === `v${releaseVersion}`) return true;
+  return source.url === FORK_CATALOGUE_URL
+    && typeof source.ref === "string"
+    && FORK_DOGFOOD_REF.test(source.ref);
+}
+
 /** Closed local validation for the OMP Agent-Plugins package; no remote schema fetch is required. */
 export function ompStandardContractErrors(input: {
   plugin: JsonObject;
@@ -215,8 +228,8 @@ export function ompStandardContractErrors(input: {
     errors.push("OMP catalogue git-subdir source fields are not closed");
   }
   if (cataloguePlugin?.version !== releaseVersion || source?.source !== "git-subdir"
-    || source.url !== "https://github.com/hoklims/semctx.git" || source.path !== "plugins/claude-code"
-    || source.ref !== `v${releaseVersion}`) {
+    || source.path !== "plugins/claude-code"
+    || !ompCatalogueSourceAllowed(source, releaseVersion)) {
     errors.push("OMP catalogue version or immutable git-subdir source mismatch");
   }
   return errors;
