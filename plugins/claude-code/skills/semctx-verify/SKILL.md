@@ -52,7 +52,7 @@ A repository git hook blocks the gated verb unless the project declares it: a co
 `pre-commit`, `prepare-commit-msg`, `commit-msg` and `post-rewrite`; a push declares `pre-push`;
 `post-checkout` and `post-merge` are ignored because they run during neither. Any other hook —
 `post-commit` and every unrecognized name — blocks until it is removed, and the block message
-names the offending file. Record a verification with:
+names the offending hook. Record a verification with:
 
 ```
 bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" verify diff --record   # or: semctx verify diff --record

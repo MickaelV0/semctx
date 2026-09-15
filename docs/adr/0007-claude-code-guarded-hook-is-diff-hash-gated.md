@@ -88,20 +88,11 @@ authorize a terminal Git operation.
   selection, partial-index options, pathspecs, and every `--fixup` form fail closed, including Git's
   accepted long-option abbreviations. Every persisted version 3
   field is shape-validated before authorization. Verification diff capture disables external diff
-  and textconv helpers so repository configuration cannot substitute the analyzed hunks. A gated
-  verb is non-authorizing while the effective hooks directory contains an entry that can run during
-  that verb and is not one the project declares. Measured on git 2.55, a commit declares
-  `pre-commit`, `prepare-commit-msg`, `commit-msg` and `post-rewrite`, a push declares `pre-push`,
-  and `post-checkout`/`post-merge` run during neither verb so they are ignored at both. Every other
-  name — `post-commit`, `reference-transaction`, `post-index-change`, `pre-auto-gc`, and any name
-  git adds later — stays refused, because absence from the declared set is the fail-closed default.
-  Declaring a hook is a statement of trust, not a claim that its effects are covered: a declared
-  `pre-commit` restages, so its effects are outside the recorded proof exactly as much as a refused
-  hook's would be. What holds the line is the tree-based push gate, which refuses a HEAD whose tree
-  is not the verified one and so forces a fresh verification of whatever a commit-time hook
-  produced. A declared `pre-push` cannot alter the commits of the ref being pushed — git resolves
-  the refspec first — but it can move local HEAD and push refs of its own that no verification
-  covered; that residue is accepted, not proven absent.
+  and textconv helpers so repository configuration cannot substitute the analyzed hunks. A commit
+  is non-authorizing while the effective hooks directory contains any entry except ordinary
+  `*.sample` files. This covers current and future hook names, including `reference-transaction`,
+  `post-index-change`, `pre-auto-gc`, and `pre-push`: earlier hooks can restage a different tree,
+  while later hooks can initiate unguarded follow-up effects after the pre-tool check.
   All command-scoped config (`-c key=value`, attached `-ckey=value`, and `--config-env`) is outside
   the authorizing contract so direct or included config cannot evade that hook-surface probe.
 - Push refspecs are resolved before authorization. Deletions, multi-ref, mirror, tag-wide, wildcard,
@@ -128,3 +119,39 @@ authorize a terminal Git operation.
   unchanged.
 - Cross-platform: the state/hash logic is a plain script; the guard reads stdin JSON from Claude
   Code's hook protocol and returns a structured decision.
+
+## Amendment (fork, 2026-09-15)
+
+This fork does not replace the 2026-07-04 decision above. The upstream hook-surface
+rule remains:
+
+> A commit is non-authorizing while the effective hooks directory contains any entry
+> except ordinary `*.sample` files. This covers current and future hook names, including
+> `reference-transaction`, `post-index-change`, `pre-auto-gc`, and `pre-push`: earlier
+> hooks can restage a different tree, while later hooks can initiate unguarded follow-up
+> effects after the pre-tool check.
+
+On this fork the guarded hook instead authorizes per verb, by declaration:
+
+- A gated verb is non-authorizing while the effective hooks directory contains an entry
+  that can run during that verb and is not one the project declares.
+- Measured on git 2.55: a commit declares `pre-commit`, `prepare-commit-msg`,
+  `commit-msg` and `post-rewrite`; a push declares `pre-push`; `post-checkout` and
+  `post-merge` run during neither verb and are ignored at both. Every other name —
+  `post-commit`, `reference-transaction`, `post-index-change`, `pre-auto-gc`, and any
+  name git adds later — stays refused. Absence from the declared set is the fail-closed
+  default, not a claim that the hook is dangerous.
+- Declaring a hook is a statement of trust, not a claim that its effects are covered.
+  A declared `pre-commit` restages, so its effects are outside the recorded proof
+  exactly as much as a refused hook's would be. What holds the line is the tree-based
+  push gate, which refuses a HEAD whose tree is not the verified one and so forces a
+  fresh verification of whatever a commit-time hook produced.
+- A declared `pre-push` cannot alter the commits of the ref being pushed — git resolves
+  the refspec first — but it can move local HEAD and push refs of its own that no
+  verification covered. That residue is accepted, not proven absent.
+
+The reason this fork diverges: a mutating `pre-commit` (formatter `--write` + `git add`)
+is a deliberate code-quality standard, and `git commit --amend` is an authorized commit
+form, so refusing `post-rewrite` blocked an authorized operation. The 2026-07-04
+justification ("earlier hooks can restage") is true and is why the push gate exists;
+it is not a reason to refuse the restage at commit.
