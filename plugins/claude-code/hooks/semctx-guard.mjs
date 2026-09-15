@@ -964,38 +964,88 @@ export function commitUsesWholeIndex(command) {
 }
 
 /**
- * Lefthook/husky install these four. `pre-commit`/`commit-msg`/`prepare-commit-msg`
- * may restage; `exactCommittedContent` at push still refuses a mutated HEAD.
- * `pre-push` does not run on commit; it is allowed by name on push too (contents
- * not inspected — accepted residue).
+ * Which client hooks Git can run during each gated verb. Measured on git 2.55 by installing every
+ * name and recording what fired (see `plugins/claude-code/test/guard.test.ts`):
+ *
+ *   git commit          pre-commit prepare-commit-msg commit-msg post-commit post-index-change
+ *                       reference-transaction
+ *   git commit --amend  the same, plus post-rewrite
+ *   git push            pre-push reference-transaction
+ *   git checkout/merge  post-checkout post-index-change reference-transaction
+ *
+ * Two consequences, and only two. A hook trusted on one verb is ignored on the other, because it
+ * cannot run there. A hook measured never to run during either gated verb is ignored at both.
+ * Everything else — `post-commit`, `post-index-change`, `reference-transaction`, `pre-auto-gc`
+ * and every unrecognized name — stays refused at both verbs: absence from the trusted set is the
+ * fail-closed default, not a claim that the hook is dangerous.
  */
-const PRE_HOOKS = new Set(["pre-commit", "prepare-commit-msg", "commit-msg", "pre-push"]);
+const INERT_AT_COMMIT_AND_PUSH = new Set(["post-checkout", "post-merge"]);
 
-function gitHookSurfaceClear(cwd) {
+/**
+ * Trusted during a commit. Not "harmless": every hook is arbitrary code, and a restaging
+ * `pre-commit` puts effects outside the recorded proof just as much as a refused one would. These
+ * are accepted because the project declares them, and because the push gate is tree-based:
+ * `exactCommittedContent` refuses a HEAD whose tree is not the verified one, so a hook that
+ * changes the committed content forces a fresh verification that analyzes what the hook produced.
+ * `post-rewrite` is here because `git commit --amend` is an authorized commit form, and the
+ * fleet's own `post-rewrite` only reindexes a code-search database.
+ */
+const TRUSTED_AT_COMMIT = new Set([
+  "pre-commit",
+  "prepare-commit-msg",
+  "commit-msg",
+  "post-rewrite",
+]);
+
+/**
+ * Trusted during a push. A `pre-push` hook cannot alter the commits of the ref being pushed — git
+ * resolves the refspec before invoking it — but it can move local HEAD, and it can push refs of
+ * its own that no verification ever covered. This guard does not inspect its contents or its
+ * refspecs; declaring it accepts that residue.
+ */
+const TRUSTED_AT_PUSH = new Set(["pre-push"]);
+
+/**
+ * First hook entry that can run during this verb and is not trusted, or `null` when the surface
+ * is clear.
+ */
+function firstUntrustedHook(cwd, trusted, trustedOnOtherVerb) {
   try {
     const result = spawnSync("git", ["rev-parse", "--git-path", "hooks"], { cwd, encoding: "utf8" });
-    if (result.status !== 0) return false;
+    if (result.status !== 0) return "<unresolved hooks directory>";
     const raw = result.stdout.trim();
-    if (raw === "") return false;
+    if (raw === "") return "<unresolved hooks directory>";
     const hooks = isAbsolute(raw) ? resolve(raw) : resolve(cwd, raw);
-    return readdirSync(hooks, { withFileTypes: true })
-      .every((entry) => {
-        if (!entry.isFile()) return false;
-        if (entry.name.endsWith(".sample")) return true;
-        return PRE_HOOKS.has(entry.name);
-      });
+    for (const entry of readdirSync(hooks, { withFileTypes: true })) {
+      if (!entry.isFile()) return entry.name;
+      if (entry.name.endsWith(".sample")) continue;
+      if (trusted.has(entry.name)) continue;
+      if (trustedOnOtherVerb.has(entry.name)) continue;
+      if (INERT_AT_COMMIT_AND_PUSH.has(entry.name)) continue;
+      return entry.name;
+    }
+    return null;
   } catch {
-    return false;
+    return "<unreadable hooks directory>";
   }
 }
 
-/** Disallowed hooks (post-*, reference-transaction, unknown names) can exfiltrate during commit/push. */
+/** Name of the refused hook for the commit surface, or `null`. */
+export function commitHookOffender(cwd) {
+  return firstUntrustedHook(cwd, TRUSTED_AT_COMMIT, TRUSTED_AT_PUSH);
+}
+
+/** Name of the refused hook for the push surface, or `null`. */
+export function pushHookOffender(cwd) {
+  return firstUntrustedHook(cwd, TRUSTED_AT_PUSH, TRUSTED_AT_COMMIT);
+}
+
 export function commitHookSurfaceClear(cwd) {
-  return gitHookSurfaceClear(cwd);
+  return commitHookOffender(cwd) === null;
 }
 
 export function pushHookSurfaceClear(cwd) {
-  return gitHookSurfaceClear(cwd);
+  return pushHookOffender(cwd) === null;
 }
 
 const UNSAFE_PUSH_OPTIONS = new Set([
@@ -1360,15 +1410,17 @@ export function guardDecision(ctx) {
     return { block: true, reason: `semctx guarded mode: no verification on record. Run:\n  ${verifyCmd}\n${retry}` };
   }
   if (ctx.terminalVerb === "commit" && ctx.commitHooksAbsent === false) {
+    const named = ctx.commitHookOffender ? ` (${ctx.commitHookOffender})` : "";
     return {
       block: true,
-      reason: "semctx guarded mode: a repository hook other than pre-commit, prepare-commit-msg, or commit-msg can run unverified side effects during the commit; remove it, then retry the commit.",
+      reason: `semctx guarded mode: a repository hook${named} runs during the commit and is not one this project declares (pre-commit, prepare-commit-msg, commit-msg, post-rewrite); remove it or declare it, then retry the commit.`,
     };
   }
   if (ctx.terminalVerb === "push" && ctx.pushHooksAbsent === false) {
+    const named = ctx.pushHookOffender ? ` (${ctx.pushHookOffender})` : "";
     return {
       block: true,
-      reason: "semctx guarded mode: a repository hook other than pre-push and the commit pre-hooks can run unverified side effects; remove it, then retry the push.",
+      reason: `semctx guarded mode: a repository hook${named} runs during the push and is not one this project declares (pre-push); remove it or declare it, then retry the push.`,
     };
   }
   if (!isGuardVerificationState(ctx.state) || !ctx.currentState) {
@@ -1755,8 +1807,10 @@ export function evaluateGuard({ command, cwd, sessionCwd, env, overriddenEnvKeys
   const pushSourceAuthorized = terminalVerb !== "push"
     || (currentState !== null && pushSourceMatchesHead(command, targetCwd, currentState.headCommit));
   const commitContentAuthorized = terminalVerb !== "commit" || commitUsesWholeIndex(command);
-  const commitHooksAbsent = terminalVerb !== "commit" || (commandIsolated && commitHookSurfaceClear(targetCwd));
-  const pushHooksAbsent = terminalVerb !== "push" || (commandIsolated && pushHookSurfaceClear(targetCwd));
+  const commitOffender = terminalVerb === "commit" && commandIsolated ? commitHookOffender(targetCwd) : null;
+  const pushOffender = terminalVerb === "push" && commandIsolated ? pushHookOffender(targetCwd) : null;
+  const commitHooksAbsent = terminalVerb !== "commit" || (commandIsolated && commitOffender === null);
+  const pushHooksAbsent = terminalVerb !== "push" || (commandIsolated && pushOffender === null);
   return guardDecision({
     enabled,
     terminalVerb,
@@ -1765,6 +1819,8 @@ export function evaluateGuard({ command, cwd, sessionCwd, env, overriddenEnvKeys
     commitContentAuthorized,
     commitHooksAbsent,
     pushHooksAbsent,
+    commitHookOffender: commitOffender,
+    pushHookOffender: pushOffender,
     state,
     currentState,
     verifyCommand: verifyRecordCommand(effectiveEnv),

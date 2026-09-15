@@ -13,6 +13,8 @@ import {
   commitUsesWholeIndex,
   commitHookSurfaceClear,
   pushHookSurfaceClear,
+  commitHookOffender,
+  pushHookOffender,
   pushSourceMatchesHead,
   resolveGitCwd,
   verifyRecordCommand,
@@ -555,27 +557,29 @@ describe("guardDecision — diff-hash gate (ADR 0007)", () => {
     expect(d.block).toBe(true);
     expect(d.reason).toContain("was BLOCK");
   });
-  it("blocks when a disallowed commit hook is present", () => {
+  it("blocks when an undeclared commit hook is present, and names it", () => {
     const decision = guardDecision({
       enabled: true,
       terminalVerb: "commit",
       commitHooksAbsent: false,
+      commitHookOffender: "post-commit",
       state: STATE,
       currentState: CURRENT,
     });
     expect(decision.block).toBe(true);
-    expect(decision.reason).toContain("other than pre-commit, prepare-commit-msg, or commit-msg");
+    expect(decision.reason).toContain("(post-commit)");
   });
-  it("blocks when a disallowed push hook is present", () => {
+  it("blocks when an undeclared push hook is present, and names it", () => {
     const decision = guardDecision({
       enabled: true,
       terminalVerb: "push",
       pushHooksAbsent: false,
+      pushHookOffender: "post-receive",
       state: STATE,
       currentState: CURRENT,
     });
     expect(decision.block).toBe(true);
-    expect(decision.reason).toContain("other than pre-push and the commit pre-hooks");
+    expect(decision.reason).toContain("(post-receive)");
   });
   it("blocks legacy diff-only baselines", () => {
     const d = guardDecision({ enabled: true, terminalVerb: "commit", state: { diffHash: HASH, verdict: "PASS" }, currentState: CURRENT });
@@ -652,7 +656,7 @@ describe("guardDecision — verify, commit, push replay", () => {
       expect(guardStatus("git commit -m configured-hook-restage")).toBe(0);
       rmSync(prepareCommitMessage);
       expect(commitHookSurfaceClear(repo)).toBe(true);
-      for (const hookName of ["post-commit", "post-rewrite"]) {
+      for (const hookName of ["post-commit"]) {
         const hook = join(configuredHooks, hookName);
         writeFileSync(hook, "#!/bin/sh\ngit push origin HEAD\n");
         expect(commitHookSurfaceClear(repo)).toBe(false);
@@ -668,7 +672,7 @@ describe("guardDecision — verify, commit, push replay", () => {
       }
       git(["config", "--unset", "core.hooksPath"]);
       const hooksDir = join(repo, ".git", "hooks");
-      for (const name of ["pre-commit", "prepare-commit-msg", "commit-msg", "pre-push"]) {
+      for (const name of ["pre-commit", "prepare-commit-msg", "commit-msg", "post-rewrite", "pre-push"]) {
         writeFileSync(join(hooksDir, name), "#!/bin/sh\nexit 0\n");
       }
       expect(commitHookSurfaceClear(repo)).toBe(true);
@@ -1483,5 +1487,67 @@ describe("resolveGitCwd — evaluate the repo the command targets, not the sessi
     // whose (absent) guard.json makes it advisory — never the session repo's guard state.
     const other = resolve("/other/repo");
     expect(resolveGitCwd(`git -C ${other} commit -m x`, SESSION)).not.toBe(SESSION);
+  });
+});
+
+// Per-verb hook surface. Measured on git 2.55: `git commit` fires pre-commit, prepare-commit-msg,
+// commit-msg, post-commit, post-index-change and reference-transaction; `--amend` adds post-rewrite;
+// `git push` fires only pre-push and reference-transaction; post-checkout and post-merge fire on
+// neither.
+//
+// A hook that cannot run during the gated verb is ignored there. A hook this project declares is
+// trusted on the verb it runs in — not because it is harmless, but because the tree-based push gate
+// forces a fresh verification of whatever it produced. An undeclared name stays refused.
+describe("hook surface per verb", () => {
+  function repository(): string {
+    const root = mkdtempSync(join(tmpdir(), "semctx-stage-hooks-"));
+    execFileSync("git", ["init", "--quiet", root]);
+    return root;
+  }
+
+  function installHook(root: string, name: string): string {
+    const path = join(root, ".git", "hooks", name);
+    writeFileSync(path, "#!/bin/sh\nexit 0\n");
+    return path;
+  }
+
+  it("names the first refused hook instead of only reporting a boolean", () => {
+    const root = repository();
+    installHook(root, "post-commit");
+    expect(commitHookOffender(root)).toBe("post-commit");
+    expect(pushHookOffender(root)).toBe("post-commit");
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("still refuses post-commit, reference-transaction, pre-auto-gc and unknown names on both verbs", () => {
+    const root = repository();
+    for (const name of ["post-commit", "reference-transaction", "pre-auto-gc", "future-git-hook"]) {
+      const path = installHook(root, name);
+      expect(commitHookOffender(root)).toBe(name);
+      expect(pushHookOffender(root)).toBe(name);
+      rmSync(path);
+    }
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("accepts a hook measured never to run during a commit or a push", () => {
+    const root = repository();
+    for (const name of ["post-checkout", "post-merge"]) {
+      const path = installHook(root, name);
+      expect(commitHookOffender(root)).toBeNull();
+      expect(pushHookOffender(root)).toBeNull();
+      rmSync(path);
+    }
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("accepts every declared hook, each ignored on the verb it cannot run in", () => {
+    const root = repository();
+    for (const name of ["pre-commit", "prepare-commit-msg", "commit-msg", "post-rewrite", "pre-push"]) {
+      installHook(root, name);
+    }
+    expect(commitHookOffender(root)).toBeNull();
+    expect(pushHookOffender(root)).toBeNull();
+    rmSync(root, { recursive: true, force: true });
   });
 });
