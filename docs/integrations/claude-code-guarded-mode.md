@@ -66,11 +66,18 @@ Initialized submodule HEADs are
 checked directly even when Git configuration suppresses submodule diffs; a failed initialized
 submodule repository/HEAD probe blocks rather than reusing the indexed commit. Malformed version 3
 records and `--fixup=reword:` commits are non-authorizing.
-Guarded commit and push require the effective hooks directory to contain no entry except ordinary
-`*.sample` files. This future-proof rule covers every current hook name, including
-`reference-transaction`, `post-index-change`, `pre-auto-gc`, and `pre-push`; any active, custom, or
-unknown hook entry is non-authorizing because it could restage or execute follow-up effects after
-the pre-tool proof.
+Guarded commit and push require the effective hooks directory to contain, besides ordinary
+`*.sample` files, only hooks the project declares for the verb being gated. A commit declares
+`pre-commit`, `prepare-commit-msg`, `commit-msg` and `post-rewrite`; a push declares `pre-push`;
+`post-checkout` and `post-merge` run during neither verb and are ignored at both. Every other name
+— `post-commit`, `reference-transaction`, `post-index-change`, `pre-auto-gc`, and any hook git adds
+later — is non-authorizing, because absence from the declared set is the fail-closed default.
+Declaring a hook states that you trust it; it does not claim its effects are covered by the proof.
+A declared `pre-commit` restages, so a formatter that rewrites your staged files is exactly the case
+this allows — and the push gate is what keeps it honest, refusing a HEAD whose tree is not the
+verified one until you re-verify what the formatter produced. A declared `pre-push` cannot change
+the commits of the ref being pushed, but it can move local HEAD and publish refs of its own that no
+verification covered.
 Run `git commit` and `git push` as isolated commands in guarded mode. Compound commands,
 redirections, and shell substitutions are rejected because they could mutate repository bytes
 after the hook's pre-check. Cwd prefixes must use literal paths: unexpanded `$VAR`, `${VAR}`, `~`,

@@ -12,10 +12,11 @@ GitHub Release advance together through the tag-driven lockstep workflow documen
 ### Fixed
 
 - Guarded-mode Git commits no longer fail closed on Lefthook/husky `pre-commit`,
-  `prepare-commit-msg`, and `commit-msg` stubs. Index mutation by those hooks is
-  still refused at `git push` (`HEAD` tree vs verified repository hash).
-  `post-commit`, `post-rewrite`, `reference-transaction` and unknown hook names
-  remain banned. `pre-push` is allowed by name; its contents are not inspected.
+  `prepare-commit-msg`, `commit-msg`, and `post-rewrite`. Index mutation by those
+  hooks is still refused at `git push` (`HEAD` tree vs verified repository hash)
+  until a fresh verification analyzes what they produced. `post-commit`,
+  `reference-transaction` and unknown hook names remain banned. `pre-push` is
+  allowed by name; its contents and extra refspecs are not inspected.
 
 ## [0.3.0] - 2026-09-13
 

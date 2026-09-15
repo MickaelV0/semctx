@@ -32,8 +32,10 @@ runtime behaviour. The analysis is local and deterministic; semctx itself needs 
 - **Guard hook** (`hooks/`): a `PreToolUse` guard that is **inert by default** (advisory) and, when
   the project opts into guarded mode, blocks non-isolated `git commit` / `git push` commands or an
   unverified working state. Verification disables external diff/textconv helpers; commit-time
-  selection abbreviations and repository commit hooks that could restage after the pre-check are
-  rejected. Push requires an explicit non-delegating remote and exact `HEAD`; configured push/server options, remote helpers,
+  selection abbreviations are rejected, and a repository git hook is rejected unless the project
+  declares it for the verb being gated — a declared `pre-commit` may restage, and the tree-based
+  push gate is what forces a fresh verification of what it produced.
+  Push requires an explicit non-delegating remote and exact `HEAD`; configured push/server options, remote helpers,
   executable transport configuration, and URL rewrites fail closed. Block messages point at the plugin-bundled CLI by absolute path when
   the bundle is in reach, and at a global `semctx` otherwise. The semantic and control tools do not
   change this host-specific behaviour.

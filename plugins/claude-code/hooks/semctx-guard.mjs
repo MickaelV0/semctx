@@ -987,8 +987,8 @@ const INERT_AT_COMMIT_AND_PUSH = new Set(["post-checkout", "post-merge"]);
  * are accepted because the project declares them, and because the push gate is tree-based:
  * `exactCommittedContent` refuses a HEAD whose tree is not the verified one, so a hook that
  * changes the committed content forces a fresh verification that analyzes what the hook produced.
- * `post-rewrite` is here because `git commit --amend` is an authorized commit form, and the
- * fleet's own `post-rewrite` only reindexes a code-search database.
+ * `post-rewrite` is here because `git commit --amend` is an authorized commit form, and its content
+ * effects fall under the same push gate as a `pre-commit`'s.
  */
 const TRUSTED_AT_COMMIT = new Set([
   "pre-commit",

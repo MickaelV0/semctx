@@ -48,9 +48,11 @@ After a non-trivial change, **before** committing or pushing:
 If the project has guarded mode enabled (`.semctx/guard.json` with `{"enabled": true}`), a
 harness pre-tool-call hook intercepts the agent's `git commit` / `git push` until the current
 diff has been verified. It is not a git hook; a human terminal `git` is not intercepted.
-Repository git hooks must stay absent (`pre-commit`, `prepare-commit-msg`, `commit-msg` for a
-commit; `pre-push` for a push) — otherwise the guard blocks, because a hook can change the
-index after verification. Record a verification with:
+A repository git hook blocks the gated verb unless the project declares it: a commit declares
+`pre-commit`, `prepare-commit-msg`, `commit-msg` and `post-rewrite`; a push declares `pre-push`;
+`post-checkout` and `post-merge` are ignored because they run during neither. Any other hook —
+`post-commit` and every unrecognized name — blocks until it is removed, and the block message
+names the offending file. Record a verification with:
 
 ```
 bun "${CLAUDE_PLUGIN_ROOT}/dist/semctx.js" verify diff --record   # or: semctx verify diff --record

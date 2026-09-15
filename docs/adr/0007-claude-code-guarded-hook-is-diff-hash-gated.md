@@ -88,11 +88,20 @@ authorize a terminal Git operation.
   selection, partial-index options, pathspecs, and every `--fixup` form fail closed, including Git's
   accepted long-option abbreviations. Every persisted version 3
   field is shape-validated before authorization. Verification diff capture disables external diff
-  and textconv helpers so repository configuration cannot substitute the analyzed hunks. A commit
-  is non-authorizing while the effective hooks directory contains any entry except ordinary
-  `*.sample` files. This covers current and future hook names, including `reference-transaction`,
-  `post-index-change`, `pre-auto-gc`, and `pre-push`: earlier hooks can restage a different tree,
-  while later hooks can initiate unguarded follow-up effects after the pre-tool check.
+  and textconv helpers so repository configuration cannot substitute the analyzed hunks. A gated
+  verb is non-authorizing while the effective hooks directory contains an entry that can run during
+  that verb and is not one the project declares. Measured on git 2.55, a commit declares
+  `pre-commit`, `prepare-commit-msg`, `commit-msg` and `post-rewrite`, a push declares `pre-push`,
+  and `post-checkout`/`post-merge` run during neither verb so they are ignored at both. Every other
+  name — `post-commit`, `reference-transaction`, `post-index-change`, `pre-auto-gc`, and any name
+  git adds later — stays refused, because absence from the declared set is the fail-closed default.
+  Declaring a hook is a statement of trust, not a claim that its effects are covered: a declared
+  `pre-commit` restages, so its effects are outside the recorded proof exactly as much as a refused
+  hook's would be. What holds the line is the tree-based push gate, which refuses a HEAD whose tree
+  is not the verified one and so forces a fresh verification of whatever a commit-time hook
+  produced. A declared `pre-push` cannot alter the commits of the ref being pushed — git resolves
+  the refspec first — but it can move local HEAD and push refs of its own that no verification
+  covered; that residue is accepted, not proven absent.
   All command-scoped config (`-c key=value`, attached `-ckey=value`, and `--config-env`) is outside
   the authorizing contract so direct or included config cannot evade that hook-surface probe.
 - Push refspecs are resolved before authorization. Deletions, multi-ref, mirror, tag-wide, wildcard,
