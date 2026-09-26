@@ -2169,6 +2169,75 @@ describe("Claude plugin metadata — declarative read-only inventory", () => {
     }
   });
 
+  test("rejects malformed declared paths before filtering another project's registration", () => {
+    const value = fixture();
+    const writeEntry = (entry: Record<string, unknown>): void => writeFileSync(
+      value.installed,
+      JSON.stringify({ version: 2, plugins: { "semctx@semctx-stable": [entry] } }),
+    );
+    const installPath = join(value.home, "plugins", "cache", "semctx-stable", "semctx", RELEASE_VERSION);
+    try {
+      for (const projectPath of ["\0", "relative-project", `${value.project}\nchild`]) {
+        writeEntry({ scope: "project", projectPath, installPath, version: RELEASE_VERSION });
+        expect(readClaudePluginMetadataInventory(value.project, value.home)).toBeNull();
+      }
+      for (const malformedInstallPath of ["\0", "relative-cache", `${installPath}\nchild`]) {
+        writeEntry({ scope: "user", installPath: malformedInstallPath, version: RELEASE_VERSION });
+        expect(readClaudePluginMetadataInventory(value.project, value.home)).toBeNull();
+      }
+
+      writeEntry({
+        scope: "local",
+        projectPath: join(value.project, "..", "other-project"),
+        installPath,
+        version: RELEASE_VERSION,
+      });
+      expect(readClaudePluginMetadataInventory(value.project, value.home)).toEqual({
+        marketplaces: [{
+          name: "semctx-stable",
+          repo: "hoklims/semctx",
+          ref: "stable",
+          installLocation: join(value.home, "plugins", "marketplaces", "semctx-stable"),
+        }],
+        plugins: [],
+        settingsValid: true,
+        effectiveEnablement: { "semctx@semctx-stable": { enabled: true, scope: "user" } },
+      });
+    } finally {
+      rmSync(join(value.home, ".."), { recursive: true, force: true });
+    }
+  });
+
+  test("uses platform-correct backslash semantics for declared project identities", () => {
+    const value = fixture();
+    const installPath = join(value.home, "plugins", "cache", "semctx-stable", "semctx", RELEASE_VERSION);
+    const declaredProject = process.platform === "win32"
+      ? value.project
+      : `${resolve(value.project, "..")}\\project`;
+    try {
+      writeFileSync(value.installed, JSON.stringify({
+        version: 2,
+        plugins: {
+          "semctx@semctx-stable": [{
+            scope: "project",
+            projectPath: declaredProject,
+            installPath,
+            version: RELEASE_VERSION,
+          }],
+        },
+      }));
+      const inventory = readClaudePluginMetadataInventory(value.project, value.home);
+      expect(inventory).not.toBeNull();
+      expect(inventory?.plugins).toHaveLength(process.platform === "win32" ? 1 : 0);
+      if (process.platform !== "win32") {
+        expect(resolve(declaredProject)).toBe(declaredProject);
+        expect(resolve(declaredProject)).not.toBe(resolve(value.project));
+      }
+    } finally {
+      rmSync(join(value.home, ".."), { recursive: true, force: true });
+    }
+  });
+
   test("keeps enablement unknown when settings are absent or malformed", () => {
     for (const settings of [null, "{not-json"]) {
       const value = fixture();

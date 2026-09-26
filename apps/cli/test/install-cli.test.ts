@@ -770,6 +770,78 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
     }
   });
 
+  test("malformed Claude project identity blocks dry-run and apply before every mutation", () => {
+    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "semctx-install-identity-claude-")));
+    const project = join(root, "project");
+    const profile = join(root, "profile");
+    const plugins = join(profile, "plugins");
+    const bin = join(root, "bin");
+    const unexpected = join(root, "unexpected-plugin-mutation");
+    mkdirSync(project);
+    mkdirSync(plugins, { recursive: true });
+    mkdirSync(bin);
+    writeFileSync(join(profile, "settings.json"), "{}");
+    const installed = join(plugins, "installed_plugins.json");
+    const installedBytes = JSON.stringify({
+      version: 2,
+      plugins: {
+        "semctx@semctx-stable": [{
+          scope: "project",
+          projectPath: "\0",
+          installPath: join(plugins, "cache", "semctx-stable", "semctx", packageJson.version),
+          version: packageJson.version,
+        }],
+      },
+    });
+    writeFileSync(installed, installedBytes);
+    const script = join(bin, "claude-shim.js");
+    writeFileSync(
+      script,
+      `const fs = require("node:fs");\n`
+        + `if (process.argv.slice(2).join(" ") === "--version") { console.log("2.1.229"); process.exit(0); }\n`
+        + `fs.writeFileSync(${JSON.stringify(unexpected)}, "called"); process.exit(9);\n`,
+    );
+    if (process.platform === "win32") {
+      const compiled = Bun.spawnSync(
+        [process.execPath, "build", "--compile", script, "--outfile", join(bin, "claude.exe")],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      expect(compiled.exitCode).toBe(0);
+    } else {
+      writeFileSync(join(bin, "claude"), `#!/bin/sh\n"${process.execPath}" "${script}" "$@"\n`);
+      chmodSync(join(bin, "claude"), 0o755);
+    }
+    const environment: Record<string, string | undefined> = { ...process.env };
+    environment["PATH"] = `${bin}${delimiter}${process.env["PATH"] ?? ""}`;
+    environment["CLAUDE_CONFIG_DIR"] = profile;
+    const entrypoint = resolve(import.meta.dir, "../src/index.ts");
+    try {
+      for (const dryRun of [true, false]) {
+        const child = Bun.spawnSync([
+          process.execPath,
+          entrypoint,
+          "install",
+          "--root",
+          project,
+          "--host",
+          "claude",
+          ...(dryRun ? ["--dry-run"] : []),
+          "--skip-setup",
+          "--json",
+        ], { env: environment, stdout: "pipe", stderr: "pipe" });
+        const report = JSON.parse(new TextDecoder().decode(child.stdout)) as InstallReport;
+        expect(child.exitCode).toBe(1);
+        expect(report.hosts.claude.status).toBe("failed");
+        expect(report.hosts.claude.error).toContain("declarative plugin metadata safely");
+        expect(existsSync(unexpected)).toBe(false);
+        expect(readFileSync(installed, "utf8")).toBe(installedBytes);
+        expect(readdirSync(project)).toEqual([]);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("Claude dry-run treats absolute and cwd-relative repository roots identically", () => {
     const root = realpathSync.native(mkdtempSync(join(tmpdir(), "semctx-install-relative-claude-")));
     const project = join(root, "project");

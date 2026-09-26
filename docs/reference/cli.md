@@ -74,8 +74,8 @@ renames that profile or guesses another location. Bun 1.4 cannot safely inspect 
 component containing a literal backslash because its filesystem compatibility layer interprets the
 character as a separator. For that path shape, install refuses the plan and `plugin-status` reports
 the inventory as unknown instead of claiming an empty profile. Select a physical profile path
-without a literal backslash, or use a runtime whose confined filesystem primitives are known to
-handle that shape; Semctx does not copy or reopen the untrusted files through another process.
+without a literal backslash; Semctx does not rename, copy, or reopen the untrusted files through
+another process.
 
 ## `setup`
 
