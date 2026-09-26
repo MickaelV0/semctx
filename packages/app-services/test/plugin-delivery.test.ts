@@ -2257,7 +2257,7 @@ describe("Claude plugin metadata — declarative read-only inventory", () => {
     }
   });
 
-  test("uses the platform separator when a POSIX profile component contains a backslash", () => {
+  test("fails closed on Bun 1.4 POSIX backslash paths while normal physical profiles remain readable", () => {
     const root = realpathSync.native(mkdtempSync(join(tmpdir(), "semctx-claude-separator-")));
     const project = join(root, "project");
     const ordinaryProfile = join(root, "profile");
@@ -2274,7 +2274,12 @@ describe("Claude plugin metadata — declarative read-only inventory", () => {
       expect(readFileSync(installed)).toEqual(malformedBefore);
 
       writeFileSync(installed, '{"version":2,"plugins":{}}');
-      expect(readClaudePluginMetadataInventory(project, home)).toEqual({
+      if (process.platform !== "win32") {
+        expect(readClaudePluginMetadataInventory(project, home)).toBeNull();
+      }
+      mkdirSync(ordinaryProfile, { recursive: true });
+      writeFileSync(join(ordinaryProfile, "settings.json"), "{}");
+      expect(readClaudePluginMetadataInventory(project, ordinaryProfile)).toEqual({
         marketplaces: [],
         plugins: [],
         settingsValid: true,
