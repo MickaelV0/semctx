@@ -587,15 +587,20 @@ function hasIdentityControlCharacter(value: string): boolean {
   return false;
 }
 
+function trimTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 0x2f) end -= 1;
+  return end === value.length ? value : value.slice(0, end);
+}
+
 function normalizeGitSource(value: unknown): string {
   if (typeof value !== "string") return "";
-  return value
+  const normalized = value
     .trim()
     .toLowerCase()
     .replace(/^git@github\.com:/, "https://github.com/")
-    .replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/@]*@/, "$1")
-    .replace(/\/+$/, "")
-    .replace(/\.git$/, "");
+    .replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/@]*@/, "$1");
+  return trimTrailingSlashes(normalized).replace(/\.git$/, "");
 }
 
 function isSemctxSource(value: unknown): boolean {
