@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -695,7 +696,7 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
   });
 
   test("a fresh Claude profile dry-run plans from proven empty metadata and writes no profile file", () => {
-    const root = mkdtempSync(join(tmpdir(), "semctx-install-fresh-claude-"));
+    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "semctx-install-fresh-claude-")));
     const profile = join(root, "profile");
     const bin = join(root, "bin");
     const unexpected = join(root, "unexpected-plugin-query");
