@@ -2027,7 +2027,9 @@ describe("Claude plugin metadata — declarative read-only inventory", () => {
   });
 
   function fixture(): { home: string; project: string; marketplace: string; installed: string } {
-    const root = mkdtempSync(join(tmpdir(), "semctx-claude-metadata-"));
+    // macOS exposes tmpdir() through /var -> /private/var. The production reader correctly rejects
+    // a linked root, so fixtures must pass the physical directory they actually own.
+    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "semctx-claude-metadata-")));
     const home = join(root, ".claude");
     const project = join(root, "project");
     const plugins = join(home, "plugins");
@@ -2219,7 +2221,7 @@ describe("Claude plugin metadata — declarative read-only inventory", () => {
   });
 
   test("a fresh physical profile is empty, creates nothing, and rejects an absent-parent link swap", () => {
-    const root = mkdtempSync(join(tmpdir(), "semctx-claude-fresh-profile-"));
+    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "semctx-claude-fresh-profile-")));
     const home = join(root, ".claude");
     const project = join(root, "project");
     mkdirSync(home);
