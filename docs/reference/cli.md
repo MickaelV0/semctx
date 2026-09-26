@@ -69,6 +69,14 @@ inventory probe up front, so a plan can already be known-failed; the recovery st
 blindly re-running without `--dry-run` when a requested host or the workspace step has already
 failed or conflicted.
 
+Claude metadata is read from the exact absolute `CLAUDE_CONFIG_DIR` when it is set; Semctx never
+renames that profile or guesses another location. Bun 1.4 cannot safely inspect a legal POSIX path
+component containing a literal backslash because its filesystem compatibility layer interprets the
+character as a separator. For that path shape, install refuses the plan and `plugin-status` reports
+the inventory as unknown instead of claiming an empty profile. Select a physical profile path
+without a literal backslash, or use a runtime whose confined filesystem primitives are known to
+handle that shape; Semctx does not copy or reopen the untrusted files through another process.
+
 ## `setup`
 
 Idempotently create or preserve configuration and authored semantic files, index the repository,

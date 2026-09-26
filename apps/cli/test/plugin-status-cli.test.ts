@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -26,7 +26,19 @@ function temporaryRoot(): string {
  */
 function runPluginStatus(
   root: string,
-  { json = false, path = "", args = [] }: { json?: boolean; path?: string; args?: readonly string[] } = {},
+  {
+    json = false,
+    path = "",
+    args = [],
+    cwd,
+    environment = {},
+  }: {
+    json?: boolean;
+    path?: string;
+    args?: readonly string[];
+    cwd?: string;
+    environment?: Record<string, string>;
+  } = {},
 ): { code: number; out: string } {
   const result = Bun.spawnSync([
     process.execPath,
@@ -38,7 +50,8 @@ function runPluginStatus(
     ...args,
     ...(json ? ["--json"] : []),
   ], {
-    env: { ...process.env, PATH: path },
+    ...(cwd === undefined ? {} : { cwd }),
+    env: { ...process.env, ...environment, PATH: path },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -160,6 +173,48 @@ describe("semctx plugin-status — read-only cross-host delivery report", () => 
 
     // A read-only diagnostic must not initialise a workspace or leave any artifact behind.
     expect(Array.from(new Bun.Glob("**/*").scanSync({ cwd: root, dot: true }))).toEqual([]);
+  }, SPAWN_TIMEOUT_MS);
+
+  test("Claude metadata resolves relative roots against the CLI cwd without querying plugin commands", () => {
+    const base = realpathSync.native(temporaryRoot());
+    const project = join(base, "project");
+    const subdir = join(project, "subdir");
+    const profile = join(base, "profile");
+    const shimDirectory = unsupportedHostShim("claude");
+    mkdirSync(subdir, { recursive: true });
+    mkdirSync(profile);
+    writeFileSync(join(profile, "settings.json"), "{}");
+
+    const reports = [project, ".", join("subdir", "..")].map((root) => {
+      const result = runPluginStatus(root, {
+        json: true,
+        path: shimDirectory,
+        args: ["--host", "claude"],
+        cwd: project,
+        environment: { CLAUDE_CONFIG_DIR: profile },
+      });
+      return JSON.parse(result.out);
+    });
+
+    for (const report of reports) {
+      expect(report.hosts.claude.detected).toBe(true);
+      expect(report.hosts.claude.marketplace.configured).toBe(false);
+      expect(report.hosts.claude.reasons).toContain("MARKETPLACE_NOT_CONFIGURED");
+      expect(report.hosts.claude.reasons).not.toContain("HOST_QUERY_FAILED");
+    }
+    expect(reports[1].hosts.claude).toEqual(reports[0].hosts.claude);
+    expect(reports[2].hosts.claude).toEqual(reports[0].hosts.claude);
+
+    const unsafeHome = runPluginStatus(".", {
+      json: true,
+      path: shimDirectory,
+      args: ["--host", "claude"],
+      cwd: project,
+      environment: { CLAUDE_CONFIG_DIR: "relative-profile" },
+    });
+    const unsafeReport = JSON.parse(unsafeHome.out);
+    expect(unsafeReport.hosts.claude.reasons).toContain("HOST_QUERY_FAILED");
+    expect(unsafeReport.hosts.claude.marketplace.configured).toBeNull();
   }, SPAWN_TIMEOUT_MS);
 
   test("prints the three delivery layers and the activation step in human output", () => {

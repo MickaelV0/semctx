@@ -1253,6 +1253,30 @@ function installClaude(
     report.error = "cannot determine effective Claude plugin enablement from user, project, and local settings";
     return;
   }
+  if (metadata === undefined) {
+    const unknownRegistration = applicableRegistrations.find(
+      (item) => typeof item.enabled !== "boolean",
+    );
+    if (unknownRegistration !== undefined) {
+      report.status = "failed";
+      report.error = "cannot determine effective Claude plugin enablement from user, project, and local settings";
+      return;
+    }
+    const disabledOutsideUserScope = applicableRegistrations.find(
+      (item) => item.enabled === false && (
+        item.scope === "project"
+        || item.scope === "local"
+        || item.enablementScope === "project"
+        || item.enablementScope === "local"
+      ),
+    );
+    if (disabledOutsideUserScope !== undefined) {
+      report.status = "conflict";
+      report.error = "Claude plugin is disabled outside user scope; change the project or local"
+        + " settings override before installing or updating Semctx";
+      return;
+    }
+  }
   if (
     effectiveEnablement?.enabled === false
     && (effectiveEnablement.scope === "project" || effectiveEnablement.scope === "local")
@@ -1266,11 +1290,6 @@ function installClaude(
     (item) => item.id === pluginId && item.scope === "user",
   );
   const installed = installedPlugin !== undefined;
-  if (metadata === undefined && installed && typeof installedPlugin.enabled !== "boolean") {
-    report.status = "failed";
-    report.error = "cannot determine effective Claude plugin enablement from user, project, and local settings";
-    return;
-  }
   if (
     metadata === undefined
     &&

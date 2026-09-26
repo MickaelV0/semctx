@@ -1564,6 +1564,13 @@ function readOptionalMetadataFile(file: string, root: string): OptionalMetadataF
   try {
     const resolvedRoot = resolve(root);
     const resolvedFile = resolve(file);
+    // Bun 1.4's POSIX `node:fs` compatibility layer treats a literal backslash as a separator.
+    // It therefore cannot safely prove either presence or absence for this legal POSIX filename.
+    // Refuse the observation rather than misreporting an empty profile or reopening it through an
+    // unconfined external process.
+    if (process.platform !== "win32" && resolvedFile.includes("\\")) {
+      return { status: "unsafe" };
+    }
     if (!isWithin(resolvedFile, resolvedRoot)) return { status: "unsafe" };
     const anchor = parse(resolvedRoot).root;
     let current = anchor;
@@ -1630,7 +1637,9 @@ export function readClaudePluginMetadataInventory(
   claudeHome: string,
   afterObservation?: () => void,
 ): ClaudePluginMetadataInventory | null {
-  if (!isLocalFilesystemPath(repositoryRoot) || !isLocalFilesystemPath(claudeHome)) return null;
+  if (!isLocalFilesystemPath(claudeHome)) return null;
+  const absoluteRepositoryRoot = resolve(repositoryRoot);
+  if (!isLocalFilesystemPath(absoluteRepositoryRoot)) return null;
   const marketplacesPath = join(claudeHome, "plugins", "known_marketplaces.json");
   const installedPath = join(claudeHome, "plugins", "installed_plugins.json");
   const userSettingsPath = join(claudeHome, "settings.json");
@@ -1695,20 +1704,20 @@ export function readClaudePluginMetadataInventory(
     });
   }
 
-  const repositoryIdentity = lexicalPathIdentity(repositoryRoot);
-  const projectSettingsPath = join(repositoryRoot, ".claude", "settings.json");
-  const localSettingsPath = join(repositoryRoot, ".claude", "settings.local.json");
+  const repositoryIdentity = lexicalPathIdentity(absoluteRepositoryRoot);
+  const projectSettingsPath = join(absoluteRepositoryRoot, ".claude", "settings.json");
+  const localSettingsPath = join(absoluteRepositoryRoot, ".claude", "settings.local.json");
   const settingsObservations = [
     { path: userSettingsPath, root: claudeHome, observation: userSettingsObservation },
     {
       path: projectSettingsPath,
-      root: repositoryRoot,
-      observation: readOptionalMetadataFile(projectSettingsPath, repositoryRoot),
+      root: absoluteRepositoryRoot,
+      observation: readOptionalMetadataFile(projectSettingsPath, absoluteRepositoryRoot),
     },
     {
       path: localSettingsPath,
-      root: repositoryRoot,
-      observation: readOptionalMetadataFile(localSettingsPath, repositoryRoot),
+      root: absoluteRepositoryRoot,
+      observation: readOptionalMetadataFile(localSettingsPath, absoluteRepositoryRoot),
     },
   ] as const;
   const settingsLayers = settingsObservations.map(({ observation }) =>

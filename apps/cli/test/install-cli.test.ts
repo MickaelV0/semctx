@@ -770,6 +770,84 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
     }
   });
 
+  test("Claude dry-run treats absolute and cwd-relative repository roots identically", () => {
+    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "semctx-install-relative-claude-")));
+    const project = join(root, "project");
+    const profile = join(root, "profile");
+    const bin = join(root, "bin");
+    const subdir = join(project, "subdir");
+    mkdirSync(subdir, { recursive: true });
+    mkdirSync(profile);
+    mkdirSync(bin);
+    writeFileSync(join(profile, "settings.json"), "{}");
+    const script = join(bin, "claude-shim.js");
+    writeFileSync(
+      script,
+      `if (process.argv.slice(2).join(" ") === "--version") { console.log("2.1.229"); process.exit(0); }\n`
+        + `process.exit(9);\n`,
+    );
+    if (process.platform === "win32") {
+      const compiled = Bun.spawnSync(
+        [process.execPath, "build", "--compile", script, "--outfile", join(bin, "claude.exe")],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      expect(compiled.exitCode).toBe(0);
+    } else {
+      writeFileSync(join(bin, "claude"), `#!/bin/sh\n"${process.execPath}" "${script}" "$@"\n`);
+      chmodSync(join(bin, "claude"), 0o755);
+    }
+    const environment: Record<string, string | undefined> = { ...process.env };
+    environment["PATH"] = `${bin}${delimiter}${process.env["PATH"] ?? ""}`;
+    environment["CLAUDE_CONFIG_DIR"] = profile;
+    const entrypoint = resolve(import.meta.dir, "../src/index.ts");
+    try {
+      const reports = [project, ".", join("subdir", "..")].map((repositoryRoot) => {
+        const child = Bun.spawnSync([
+          process.execPath,
+          entrypoint,
+          "install",
+          "--root",
+          repositoryRoot,
+          "--host",
+          "claude",
+          "--dry-run",
+          "--skip-setup",
+          "--json",
+        ], { cwd: project, env: environment, stdout: "pipe", stderr: "pipe" });
+        expect(child.exitCode).toBe(0);
+        return JSON.parse(new TextDecoder().decode(child.stdout)) as InstallReport;
+      });
+      for (const report of reports) expect(report.hosts.claude.status).toBe("planned");
+      expect(reports[1]?.hosts.claude.steps).toEqual(reports[0]?.hosts.claude.steps);
+      expect(reports[2]?.hosts.claude.steps).toEqual(reports[0]?.hosts.claude.steps);
+
+      const unsafe = Bun.spawnSync([
+        process.execPath,
+        entrypoint,
+        "install",
+        "--root",
+        ".",
+        "--host",
+        "claude",
+        "--dry-run",
+        "--skip-setup",
+        "--json",
+      ], {
+        cwd: project,
+        env: { ...environment, CLAUDE_CONFIG_DIR: "relative-profile" },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const unsafeReport = JSON.parse(new TextDecoder().decode(unsafe.stdout)) as InstallReport;
+      expect(unsafe.exitCode).toBe(1);
+      expect(unsafeReport.hosts.claude.status).toBe("failed");
+      expect(unsafeReport.hosts.claude.error).toContain("declarative plugin metadata safely");
+      expect(readdirSync(profile)).toEqual(["settings.json"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("malformed Claude settings block dry-run and apply before every plugin mutation", () => {
     for (const dryRun of [true, false]) {
       for (const plugins of [[], [{
@@ -915,6 +993,43 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
       action: "enable Semctx Claude plugin",
       status: "planned",
     }));
+  });
+
+  test("legacy Claude inventory refuses project and local registrations with false or unknown enablement", () => {
+    for (const scope of ["project", "local"] as const) {
+      for (const state of ["unknown", "false"] as const) {
+        for (const dryRun of [true, false]) {
+          const runtime = fakeRuntime({
+            codex: false,
+            claude: true,
+            claudeMarketplaces: [],
+            claudePlugins: [{
+              id: "semctx@semctx-stable",
+              scope,
+              version: packageJson.version,
+              ...(state === "false" ? { enabled: false, enablementScope: scope } : {}),
+            }],
+          });
+          const report = executeInstall(
+            "C:\\work\\project",
+            parseArgs([
+              "install",
+              "--host",
+              "claude",
+              ...(dryRun ? ["--dry-run"] : []),
+              "--skip-setup",
+            ]),
+            runtime,
+          );
+          expect(report.ok).toBe(false);
+          expect(report.hosts.claude.status).toBe(state === "false" ? "conflict" : "failed");
+          expect(runtime.commands.filter((command) =>
+            command[0] === "claude"
+            && command.some((token) => ["add", "install", "update", "enable", "remove"].includes(token))
+          )).toEqual([]);
+        }
+      }
+    }
   });
 
   test("two-host aggregate preflight blocks Codex and workspace writes on Claude source conflict", () => {
