@@ -18,6 +18,7 @@ import {
   PLUGIN_DELIVERY_MAX_MANIFEST_BYTES,
   PLUGIN_DELIVERY_RELEASE_URL,
   PLUGIN_RUNTIME_BUNDLES,
+  isCanonicalClaudeMarketplaceSource,
   isHostInterfaceUnsupportedFailure,
   pluginDeliveryStatus,
   readClaudePluginMetadataInventory,
@@ -373,6 +374,20 @@ describe("isHostInterfaceUnsupportedFailure — closed recognition, shared with 
     })).toBe(false);
   });
 });
+
+test("Claude Git source normalization preserves identities across large slash runs", () => {
+  const slashRun = "/".repeat(100_000);
+  expect(isCanonicalClaudeMarketplaceSource(
+    "git",
+    `https://github.com/hoklims/semctx.git${slashRun}`,
+  )).toBe(true);
+  expect(isCanonicalClaudeMarketplaceSource(
+    "git",
+    `https://github.com/hoklims/semctx${slashRun}x`,
+  )).toBe(false);
+  expect(isCanonicalClaudeMarketplaceSource("github", "hoklims/semctx")).toBe(true);
+  expect(isCanonicalClaudeMarketplaceSource("git", "hoklims/semctx")).toBe(false);
+}, 30_000);
 
 describe("plugin delivery — five distinct layers", () => {
   test("uses declarative Claude metadata without launching Claude plugin inventory commands", () => {
