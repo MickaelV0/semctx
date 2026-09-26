@@ -1237,6 +1237,61 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
     }
   });
 
+  test("legacy Claude marketplace shapes use the shared raw source matcher before mutations", () => {
+    for (const marketplace of [
+      { name: "semctx-stable", source: "git", repo: "hoklims/semctx" },
+      { name: "semctx-stable", source: "future", repo: "hoklims/semctx" },
+      { name: "semctx-stable", repo: "hoklims/semctx " },
+      { name: "semctx-stable", source: null, repo: "hoklims/semctx" },
+      { name: "semctx-stable", source: "", repo: "hoklims/semctx" },
+      { name: "semctx-stable", source: 7, repo: "hoklims/semctx" },
+      { name: "semctx-stable", source: "github\n", repo: "hoklims/semctx" },
+      { name: "semctx-stable", sourceKind: "github", source: "git", repo: "hoklims/semctx" },
+    ]) {
+      for (const dryRun of [true, false]) {
+        const runtime = fakeRuntime({
+          codex: false,
+          claude: true,
+          claudeMarketplaces: [marketplace],
+          claudePlugins: [],
+        });
+        const report = executeInstall(
+          "C:\\work\\project",
+          parseArgs([
+            "install",
+            "--host",
+            "claude",
+            ...(dryRun ? ["--dry-run"] : []),
+            "--skip-setup",
+          ]),
+          runtime,
+        );
+        expect(report.ok).toBe(false);
+        expect(report.hosts.claude.status).toBe("conflict");
+        expect(runtime.commands.filter((command) =>
+          command[0] === "claude"
+          && command.some((token) => ["add", "install", "update", "enable", "remove"].includes(token))
+        )).toEqual([]);
+      }
+    }
+
+    for (const repo of ["hoklims/semctx", SEMCTX_SOURCE]) {
+      const control = fakeRuntime({
+        codex: false,
+        claude: true,
+        claudeMarketplaces: [{ name: "semctx-stable", repo }],
+        claudePlugins: [],
+      });
+      const controlReport = executeInstall(
+        "C:\\work\\project",
+        parseArgs(["install", "--host", "claude", "--dry-run", "--skip-setup"]),
+        control,
+      );
+      expect(controlReport.ok).toBe(true);
+      expect(controlReport.hosts.claude.status).toBe("planned");
+    }
+  });
+
   test("two-host aggregate preflight blocks Codex and workspace writes on Claude source conflict", () => {
     const runtime = fakeRuntime({
       codex: true,

@@ -1,6 +1,6 @@
 import packageJson from "../../package.json";
 import {
-  isCanonicalClaudeMarketplaceSource,
+  isCanonicalClaudeMarketplaceRecord,
   isHostInterfaceUnsupportedFailure,
   readClaudePluginMetadataInventory,
   resolveClaudePluginHome,
@@ -1026,13 +1026,7 @@ function isSemctxSource(value: unknown): boolean {
 }
 
 function isCanonicalClaudeMarketplace(item: ClaudeMarketplace): boolean {
-  const kind = item.sourceKind ?? item.source;
-  if (kind === "directory") return false;
-  if (kind === "github" || kind === "git") {
-    return isCanonicalClaudeMarketplaceSource(kind, item.repo);
-  }
-  // Compatibility for an older injected query seam that did not preserve Claude's source kind.
-  return kind === undefined && isSemctxSource(item.repo) && item.path === undefined;
+  return isCanonicalClaudeMarketplaceRecord(item);
 }
 
 function installCodex(

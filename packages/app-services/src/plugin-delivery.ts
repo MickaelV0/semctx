@@ -613,13 +613,61 @@ function isValidClaudeSourceIdentity(kind: unknown, value: unknown): value is st
   return kind === "github" || kind === "git";
 }
 
+function hasExplicitGitTransport(value: string): boolean {
+  return /^(?:https?|git|ssh):\/\//i.test(value)
+    || /^[^/@\s]+@[^:\s]+:/.test(value);
+}
+
 export function isCanonicalClaudeMarketplaceSource(kind: unknown, value: unknown): boolean {
   if (!isValidClaudeSourceIdentity(kind, value)) return false;
   if (kind === "github") return normalizeGitSource(value) === "hoklims/semctx";
   if (kind !== "git") return false;
-  const remoteTransport = /^(?:https?|git|ssh):\/\//i.test(value)
-    || /^[^/@\s]+@[^:\s]+:/.test(value);
-  return remoteTransport && isSemctxSource(value);
+  return hasExplicitGitTransport(value) && isSemctxSource(value);
+}
+
+interface ClaudeMarketplaceSourceFields {
+  sourceKind?: unknown;
+  source?: unknown;
+  repo?: unknown;
+  path?: unknown;
+}
+
+function claudeMarketplaceSourceIdentity(
+  marketplace: ClaudeMarketplaceSourceFields,
+): { kind: unknown; value: unknown } | null {
+  const hasSourceKind = Object.prototype.hasOwnProperty.call(marketplace, "sourceKind");
+  const hasSource = Object.prototype.hasOwnProperty.call(marketplace, "source");
+  if (hasSourceKind || hasSource) {
+    const sourceKind = hasSourceKind ? rawText(marketplace.sourceKind) : null;
+    const legacyKind = hasSource ? rawText(marketplace.source) : null;
+    if (hasSourceKind && sourceKind === null) return null;
+    if (hasSource && legacyKind === null) return null;
+    if (sourceKind !== null && legacyKind !== null && sourceKind !== legacyKind) return null;
+    const explicitKind = sourceKind ?? legacyKind;
+    if (explicitKind === null) return null;
+    return {
+      kind: explicitKind,
+      value: explicitKind === "directory" ? marketplace.path : marketplace.repo,
+    };
+  }
+  // Claude 2.1's older list shape omitted the kind and exposed only `repo`. Interpret exactly that
+  // shape as Git when it has an explicit transport, otherwise as GitHub shorthand. The shared raw
+  // matcher still rejects whitespace, controls, relative Git spellings and unknown kinds.
+  if (marketplace.path === undefined && marketplace.repo !== undefined) {
+    const kind = typeof marketplace.repo === "string" && hasExplicitGitTransport(marketplace.repo)
+      ? "git"
+      : "github";
+    return { kind, value: marketplace.repo };
+  }
+  return null;
+}
+
+export function isCanonicalClaudeMarketplaceRecord(
+  marketplace: ClaudeMarketplaceSourceFields,
+): boolean {
+  const identity = claudeMarketplaceSourceIdentity(marketplace);
+  return identity !== null
+    && isCanonicalClaudeMarketplaceSource(identity.kind, identity.value);
 }
 
 /**
@@ -631,7 +679,7 @@ export function isCanonicalClaudeMarketplaceSource(kind: unknown, value: unknown
 export function isLocalFilesystemPath(candidate: string): boolean {
   if (!isAbsolute(candidate) || hasIdentityControlCharacter(candidate)) return false;
   if (process.platform === "win32") return /^[A-Za-z]:[\\/]/.test(candidate);
-  return !candidate.startsWith("//");
+  return !candidate.startsWith("//") && !candidate.includes("\\");
 }
 
 /** `candidate` must be `root` itself or strictly inside it, comparing resolved forms. */
@@ -942,15 +990,15 @@ function evaluateHost(
   }
   report.marketplace.configured = true;
 
-  const claudeSourceKind = rawText(marketplace["sourceKind"]);
+  const claudeSourceIdentity = host === "claude"
+    ? claudeMarketplaceSourceIdentity(marketplace)
+    : null;
   const rawHostSource = host === "codex"
     ? rawText((marketplace["marketplaceSource"] as { source?: unknown } | undefined)?.source)
-    : claudeSourceKind === "directory"
-      ? rawText(marketplace["path"])
-      : rawText(marketplace["repo"]);
+    : rawText(claudeSourceIdentity?.value);
   report.marketplace.source = safeText(rawHostSource);
-  report.marketplace.matchesSemctx = host === "claude" && claudeSourceKind !== null
-    ? isCanonicalClaudeMarketplaceSource(claudeSourceKind, rawHostSource)
+  report.marketplace.matchesSemctx = host === "claude"
+    ? isCanonicalClaudeMarketplaceRecord(marketplace)
     : isSemctxSource(rawHostSource);
   if (report.marketplace.matchesSemctx !== true) reasons.push("MARKETPLACE_SOURCE_MISMATCH");
 
@@ -1485,6 +1533,7 @@ interface ConfinedPath {
  */
 function walkExistingPathWithoutLinks(candidate: string, root: string, kind: PathKind): ConfinedPath | null {
   try {
+    if (!isLocalFilesystemPath(candidate) || !isLocalFilesystemPath(root)) return null;
     const resolvedRoot = resolve(root);
     const resolvedCandidate = resolve(candidate);
     const canonicalRoot = realpathSync.native(resolvedRoot);
@@ -1683,6 +1732,7 @@ export function readClaudePluginMetadataInventory(
   afterObservation?: () => void,
 ): ClaudePluginMetadataInventory | null {
   if (!isLocalFilesystemPath(claudeHome)) return null;
+  if (hasIdentityControlCharacter(repositoryRoot)) return null;
   const absoluteRepositoryRoot = resolve(repositoryRoot);
   if (!isLocalFilesystemPath(absoluteRepositoryRoot)) return null;
   const marketplacesPath = join(claudeHome, "plugins", "known_marketplaces.json");
