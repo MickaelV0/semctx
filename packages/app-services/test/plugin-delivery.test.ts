@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   readdirSync,
   realpathSync,
   rmSync,
@@ -10,7 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   PLUGIN_DELIVERY_MAX_BUNDLE_BYTES,
@@ -19,6 +20,8 @@ import {
   PLUGIN_RUNTIME_BUNDLES,
   isHostInterfaceUnsupportedFailure,
   pluginDeliveryStatus,
+  readClaudePluginMetadataInventory,
+  resolveClaudePluginHome,
   readConfinedFile,
   type InstalledPayloadProbe,
   type MarketplaceSnapshotProbe,
@@ -96,6 +99,7 @@ interface FakeOptions {
   queryOutcomes?: Record<string, Partial<{ code: number; out: string; err: string; timedOut: boolean; truncated: boolean }>>;
   repositoryChannel?: ReturnType<PluginDeliveryDependencies["readRepositoryChannel"]>;
   sessions?: Partial<Record<PluginDeliveryHost, ReturnType<PluginDeliveryDependencies["observeSessionVersion"]>>>;
+  claudeMetadata?: ReturnType<NonNullable<PluginDeliveryDependencies["readClaudePluginMetadata"]>>;
   failQuery?: string;
 }
 
@@ -212,6 +216,11 @@ function fakeDependencies(
 
   return {
     queries,
+    ...(Object.prototype.hasOwnProperty.call(options, "claudeMetadata")
+      ? {
+          readClaudePluginMetadata: () => options.claudeMetadata ?? null,
+        }
+      : {}),
     runQuery(command, _cwd) {
       const argv = [...command];
       queries.push(argv);
@@ -366,6 +375,26 @@ describe("isHostInterfaceUnsupportedFailure — closed recognition, shared with 
 });
 
 describe("plugin delivery — five distinct layers", () => {
+  test("uses declarative Claude metadata without launching Claude plugin inventory commands", () => {
+    const dependencies = fakeDependencies({
+      scope: "claude",
+      claudeMetadata: {
+        marketplaces: claudeMarketplaces() as Record<string, unknown>[],
+        plugins: claudePlugins() as Record<string, unknown>[],
+        settingsValid: true,
+      },
+    });
+    const report = pluginDeliveryStatus(
+      { repositoryRoot: "/work/project", version: RELEASE_VERSION, scope: "claude" },
+      dependencies,
+    );
+
+    expect(report.hosts.claude.installed.installed).toBe(true);
+    expect(dependencies.queries.filter((command) => command[0] === "claude")).toEqual([
+      ["claude", "--version"],
+    ]);
+  });
+
   test("emits a versioned, deterministic contract envelope", () => {
     const report = statusOf();
 
@@ -1169,6 +1198,38 @@ describe("plugin delivery — convergence guidance", () => {
     expect(report.hosts.claude.activation ?? "").toContain("/reload-plugins");
   });
 
+  test("never recommends a user enable command against a project or local disable override", () => {
+    const reportFor = (enablementScope: "user" | "project" | "local") => statusOf({
+      scope: "claude",
+      claudeMetadata: {
+        marketplaces: claudeMarketplaces() as Record<string, unknown>[],
+        plugins: claudePlugins({ enabled: false, enablementScope }) as Record<string, unknown>[],
+        settingsValid: true,
+      },
+    });
+    for (const scope of ["project", "local"] as const) {
+      const report = reportFor(scope);
+      expect(report.hosts.claude.installed.enabled).toBe(false);
+      expect(report.hosts.claude.reasons).toContain("PLUGIN_DISABLED");
+      expect(report.hosts.claude.convergence).not.toContainEqual([
+        "claude",
+        "plugin",
+        "enable",
+        "semctx@semctx-stable",
+        "--scope",
+        "user",
+      ]);
+    }
+    expect(reportFor("user").hosts.claude.convergence).toContainEqual([
+      "claude",
+      "plugin",
+      "enable",
+      "semctx@semctx-stable",
+      "--scope",
+      "user",
+    ]);
+  });
+
   test("a converged host proposes no convergence command", () => {
     const report = statusOf();
 
@@ -1942,6 +2003,349 @@ describe("plugin delivery — local artifacts are bounded before they are read",
       expect(bytes).toBeNull();
     } finally {
       rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Claude plugin metadata — declarative read-only inventory", () => {
+  test("honours an absolute CLAUDE_CONFIG_DIR and refuses relative or network roots", () => {
+    const configured = join(tmpdir(), "claude-config-root");
+    expect(resolveClaudePluginHome(configured, join(tmpdir(), "ignored-home"))).toBe(resolve(configured));
+    const nonBreakingSpace = `${configured}\u00a0`;
+    expect(resolveClaudePluginHome(nonBreakingSpace, join(tmpdir(), "ignored-home"))).toBe(
+      resolve(nonBreakingSpace),
+    );
+    expect(resolveClaudePluginHome("relative-profile", join(tmpdir(), "ignored-home"))).toBeNull();
+    expect(resolveClaudePluginHome("   ", join(tmpdir(), "ignored-home"))).toBeNull();
+    expect(resolveClaudePluginHome("\\\\server\\share", join(tmpdir(), "ignored-home"))).toBeNull();
+    expect(resolveClaudePluginHome("", join(tmpdir(), "user-home"))).toBe(
+      resolve(join(tmpdir(), "user-home", ".claude")),
+    );
+    expect(resolveClaudePluginHome(undefined, join(tmpdir(), "user-home"))).toBe(
+      resolve(join(tmpdir(), "user-home", ".claude")),
+    );
+  });
+
+  function fixture(): { home: string; project: string; marketplace: string; installed: string } {
+    const root = mkdtempSync(join(tmpdir(), "semctx-claude-metadata-"));
+    const home = join(root, ".claude");
+    const project = join(root, "project");
+    const plugins = join(home, "plugins");
+    mkdirSync(plugins, { recursive: true });
+    mkdirSync(join(project, ".claude"), { recursive: true });
+    const marketplace = join(plugins, "known_marketplaces.json");
+    const installed = join(plugins, "installed_plugins.json");
+    writeFileSync(marketplace, JSON.stringify({
+      "semctx-stable": {
+        source: { source: "github", repo: "hoklims/semctx", ref: "stable" },
+        installLocation: join(plugins, "marketplaces", "semctx-stable"),
+        lastUpdated: "2026-09-26T00:00:00Z",
+      },
+    }));
+    writeFileSync(installed, JSON.stringify({
+      version: 2,
+      plugins: {
+        "semctx@semctx-stable": [{
+          scope: "user",
+          installPath: join(plugins, "cache", "semctx-stable", "semctx", RELEASE_VERSION),
+          version: RELEASE_VERSION,
+        }],
+      },
+    }));
+    writeFileSync(join(home, "settings.json"), JSON.stringify({
+      enabledPlugins: { "semctx@semctx-stable": true },
+    }));
+    return { home, project, marketplace, installed };
+  }
+
+  test("projects the pinned Claude metadata shape without changing profile bytes", () => {
+    const value = fixture();
+    const before = [value.marketplace, value.installed, join(value.home, "settings.json")]
+      .map((path) => readFileSync(path));
+    try {
+      const inventory = readClaudePluginMetadataInventory(value.project, value.home);
+      expect(inventory?.marketplaces).toEqual([{
+        name: "semctx-stable",
+        repo: "hoklims/semctx",
+        ref: "stable",
+        installLocation: join(value.home, "plugins", "marketplaces", "semctx-stable"),
+      }]);
+      expect(inventory?.plugins).toEqual([{
+        id: "semctx@semctx-stable",
+        scope: "user",
+        enabled: true,
+        enablementScope: "user",
+        version: RELEASE_VERSION,
+        installPath: join(value.home, "plugins", "cache", "semctx-stable", "semctx", RELEASE_VERSION),
+      }]);
+      const after = [value.marketplace, value.installed, join(value.home, "settings.json")]
+        .map((path) => readFileSync(path));
+      expect(after).toEqual(before);
+    } finally {
+      rmSync(join(value.home, ".."), { recursive: true, force: true });
+    }
+  });
+
+  test("projects every native marketplace source form and rejects unknown or incomplete entries", () => {
+    const sources = [
+      { source: { source: "github", repo: "hoklims/semctx", ref: "stable" }, value: "hoklims/semctx" },
+      {
+        source: { source: "git", url: "https://github.com/hoklims/semctx.git", ref: "stable" },
+        value: "https://github.com/hoklims/semctx.git",
+      },
+      { source: { source: "directory", path: "C:/local/semctx" }, value: "C:/local/semctx" },
+    ] as const;
+    for (const scenario of sources) {
+      const value = fixture();
+      try {
+        writeFileSync(value.marketplace, JSON.stringify({
+          "semctx-stable": {
+            source: scenario.source,
+            installLocation: join(value.home, "plugins", "marketplaces", "semctx-stable"),
+            lastUpdated: "2026-09-26T00:00:00Z",
+          },
+        }));
+        const inventory = readClaudePluginMetadataInventory(value.project, value.home);
+        expect(inventory?.marketplaces[0]?.["repo"]).toBe(scenario.value);
+      } finally {
+        rmSync(join(value.home, ".."), { recursive: true, force: true });
+      }
+    }
+
+    for (const entry of [
+      {
+        source: { source: "future", repo: "hoklims/semctx" },
+        installLocation: "C:/fixture",
+        lastUpdated: "2026-09-26T00:00:00Z",
+      },
+      {
+        source: { source: "github", repo: "hoklims/semctx" },
+        installLocation: "C:/fixture",
+      },
+    ]) {
+      const value = fixture();
+      try {
+        writeFileSync(value.marketplace, JSON.stringify({ "semctx-stable": entry }));
+        expect(readClaudePluginMetadataInventory(value.project, value.home)).toBeNull();
+      } finally {
+        rmSync(join(value.home, ".."), { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("matches native optional installed fields while refusing present fields of the wrong type", () => {
+    const value = fixture();
+    const writeEntry = (entry: Record<string, unknown>): void => writeFileSync(
+      value.installed,
+      JSON.stringify({ version: 2, plugins: { "semctx@semctx-stable": [entry] } }),
+    );
+    const base = {
+      scope: "user",
+      installPath: join(value.home, "plugins", "cache", "semctx-stable", "semctx", RELEASE_VERSION),
+    };
+    try {
+      writeEntry(base);
+      expect(readClaudePluginMetadataInventory(value.project, value.home)?.plugins[0]?.["version"])
+        .toBeUndefined();
+      writeEntry({ ...base, installedAt: "2026-09-26T00:00:00Z" });
+      expect(readClaudePluginMetadataInventory(value.project, value.home)).not.toBeNull();
+      for (const malformed of [
+        { ...base, version: 7 },
+        { ...base, installedAt: 7 },
+        { ...base, lastUpdated: 7 },
+        { ...base, gitCommitSha: 7 },
+      ]) {
+        writeEntry(malformed);
+        expect(readClaudePluginMetadataInventory(value.project, value.home)).toBeNull();
+      }
+    } finally {
+      rmSync(join(value.home, ".."), { recursive: true, force: true });
+    }
+  });
+
+  test("keeps enablement unknown when settings are absent or malformed", () => {
+    for (const settings of [null, "{not-json"]) {
+      const value = fixture();
+      try {
+        const path = join(value.home, "settings.json");
+        rmSync(path, { force: true });
+        if (settings !== null) writeFileSync(path, settings);
+        const inventory = readClaudePluginMetadataInventory(value.project, value.home);
+        expect(inventory?.plugins[0]?.["enabled"]).toBeUndefined();
+      } finally {
+        rmSync(join(value.home, ".."), { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("treats proven missing registries as empty and refuses malformed, linked or drifting metadata", () => {
+    const missing = fixture();
+    try {
+      rmSync(missing.installed);
+      expect(readClaudePluginMetadataInventory(missing.project, missing.home)?.plugins).toEqual([]);
+    } finally {
+      rmSync(join(missing.home, ".."), { recursive: true, force: true });
+    }
+
+    const malformed = fixture();
+    try {
+      writeFileSync(malformed.installed, JSON.stringify({ version: 2, plugins: [] }));
+      expect(readClaudePluginMetadataInventory(malformed.project, malformed.home)).toBeNull();
+    } finally {
+      rmSync(join(malformed.home, ".."), { recursive: true, force: true });
+    }
+
+    const linked = fixture();
+    try {
+      const outside = join(linked.home, "..", "outside-plugins");
+      mkdirSync(outside);
+      writeFileSync(join(outside, "known_marketplaces.json"), readFileSync(linked.marketplace));
+      writeFileSync(join(outside, "installed_plugins.json"), readFileSync(linked.installed));
+      rmSync(join(linked.home, "plugins"), { recursive: true });
+      symlinkSync(outside, join(linked.home, "plugins"), process.platform === "win32" ? "junction" : "dir");
+      expect(readClaudePluginMetadataInventory(linked.project, linked.home)).toBeNull();
+    } finally {
+      rmSync(join(linked.home, ".."), { recursive: true, force: true });
+    }
+
+    const drifting = fixture();
+    try {
+      expect(readClaudePluginMetadataInventory(drifting.project, drifting.home, () => {
+        writeFileSync(drifting.installed, JSON.stringify({ version: 2, plugins: {} }));
+      })).toBeNull();
+    } finally {
+      rmSync(join(drifting.home, ".."), { recursive: true, force: true });
+    }
+  });
+
+  test("a fresh physical profile is empty, creates nothing, and rejects an absent-parent link swap", () => {
+    const root = mkdtempSync(join(tmpdir(), "semctx-claude-fresh-profile-"));
+    const home = join(root, ".claude");
+    const project = join(root, "project");
+    mkdirSync(home);
+    mkdirSync(project);
+    try {
+      expect(readClaudePluginMetadataInventory(project, home)).toEqual({
+        marketplaces: [],
+        plugins: [],
+        settingsValid: true,
+      });
+      expect(readdirSync(home)).toEqual([]);
+
+      const outside = join(root, "outside");
+      mkdirSync(outside);
+      writeFileSync(join(outside, "known_marketplaces.json"), "{}");
+      writeFileSync(join(outside, "installed_plugins.json"), '{"version":2,"plugins":{}}');
+      const swapped = readClaudePluginMetadataInventory(project, home, () => {
+        symlinkSync(outside, join(home, "plugins"), process.platform === "win32" ? "junction" : "dir");
+      });
+      expect(swapped).toBeNull();
+
+      const linkedParent = join(root, "linked-parent");
+      symlinkSync(outside, linkedParent, process.platform === "win32" ? "junction" : "dir");
+      expect(readClaudePluginMetadataInventory(project, join(linkedParent, "missing-profile")))
+        .toBeNull();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("uses only the selected project's project and local enablement scopes", () => {
+    const value = fixture();
+    try {
+      writeFileSync(value.installed, JSON.stringify({
+        version: 2,
+        plugins: {
+          "semctx@semctx-stable": [
+            {
+              scope: "project",
+              projectPath: value.project,
+              installPath: join(value.home, "plugins", "cache", "semctx-stable", "semctx", RELEASE_VERSION),
+              version: RELEASE_VERSION,
+            },
+            {
+              scope: "local",
+              projectPath: join(value.project, "..", "other"),
+              installPath: join(value.home, "plugins", "cache", "semctx-stable", "semctx", RELEASE_VERSION),
+              version: RELEASE_VERSION,
+            },
+          ],
+        },
+      }));
+      writeFileSync(join(value.project, ".claude", "settings.json"), JSON.stringify({
+        enabledPlugins: { "semctx@semctx-stable": false },
+      }));
+      const inventory = readClaudePluginMetadataInventory(value.project, value.home);
+      expect(inventory?.plugins).toHaveLength(1);
+      expect(inventory?.plugins[0]).toMatchObject({ scope: "project", enabled: false });
+    } finally {
+      rmSync(join(value.home, ".."), { recursive: true, force: true });
+    }
+  });
+
+  test("matches Claude's user then project then local enablement precedence", () => {
+    const scenarios = [
+      { user: true, project: undefined, local: undefined, expected: true },
+      { user: true, project: false, local: undefined, expected: false },
+      { user: true, project: true, local: false, expected: false },
+      { user: false, project: true, local: undefined, expected: true },
+    ] as const;
+    for (const scenario of scenarios) {
+      const value = fixture();
+      try {
+        const id = "semctx@semctx-stable";
+        writeFileSync(join(value.home, "settings.json"), JSON.stringify({
+          enabledPlugins: { [id]: scenario.user },
+        }));
+        if (scenario.project !== undefined) {
+          writeFileSync(join(value.project, ".claude", "settings.json"), JSON.stringify({
+            enabledPlugins: { [id]: scenario.project },
+          }));
+        }
+        if (scenario.local !== undefined) {
+          writeFileSync(join(value.project, ".claude", "settings.local.json"), JSON.stringify({
+            enabledPlugins: { [id]: scenario.local },
+          }));
+        }
+        const inventory = readClaudePluginMetadataInventory(value.project, value.home);
+        expect(inventory?.plugins[0]?.["enabled"]).toBe(scenario.expected);
+        const expectedScope = scenario.local !== undefined
+          ? "local"
+          : scenario.project !== undefined ? "project" : "user";
+        expect(inventory?.plugins[0]?.["enablementScope"]).toBe(expectedScope);
+      } finally {
+        rmSync(join(value.home, ".."), { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("a malformed higher-precedence settings file makes enablement unknown", () => {
+    const value = fixture();
+    try {
+      writeFileSync(join(value.project, ".claude", "settings.json"), "{not-json");
+      const inventory = readClaudePluginMetadataInventory(value.project, value.home);
+      expect(inventory?.plugins[0]?.["enabled"]).toBeUndefined();
+      expect(inventory?.settingsValid).toBe(false);
+    } finally {
+      rmSync(join(value.home, ".."), { recursive: true, force: true });
+    }
+  });
+
+  test("revalidates every settings layer before returning effective enablement", () => {
+    const value = fixture();
+    try {
+      const projectSettings = join(value.project, ".claude", "settings.json");
+      writeFileSync(projectSettings, JSON.stringify({
+        enabledPlugins: { "semctx@semctx-stable": true },
+      }));
+      const inventory = readClaudePluginMetadataInventory(value.project, value.home, () => {
+        writeFileSync(projectSettings, JSON.stringify({
+          enabledPlugins: { "semctx@semctx-stable": false },
+        }));
+      });
+      expect(inventory).toBeNull();
+    } finally {
+      rmSync(join(value.home, ".."), { recursive: true, force: true });
     }
   });
 });

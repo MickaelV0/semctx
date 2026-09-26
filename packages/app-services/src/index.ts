@@ -48,8 +48,11 @@ export {
   codexCacheEntryFromMarketplaceRoot,
   isHostInterfaceUnsupportedFailure,
   pluginDeliveryStatus,
+  readClaudePluginMetadataInventory,
+  resolveClaudePluginHome,
 } from "./plugin-delivery";
 export type {
+  ClaudePluginMetadataInventory,
   HostInstalledStateV2,
   HostMarketplaceStateV2,
   HostPluginDeliveryV2,

@@ -1,5 +1,10 @@
 import packageJson from "../../package.json";
-import { isHostInterfaceUnsupportedFailure } from "@semantic-context/app-services";
+import {
+  isHostInterfaceUnsupportedFailure,
+  readClaudePluginMetadataInventory,
+  resolveClaudePluginHome,
+  type ClaudePluginMetadataInventory,
+} from "@semantic-context/app-services";
 import { isSemctxError, SemctxError } from "@semantic-context/core";
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
@@ -108,6 +113,8 @@ export interface InstallRuntime {
   codexHome(): string | null;
   /** Probe a plugin directory. `null` when it is not a readable directory. */
   readCodexPluginPayload(path: string): CodexPayloadProbe | null;
+  /** Declarative Claude inventory; production never launches Claude Code for an inventory probe. */
+  readClaudePluginMetadata?(root: string): ClaudePluginMetadataInventory | null;
 }
 
 interface InstallStep {
@@ -209,6 +216,7 @@ interface ClaudePlugin {
   id?: unknown;
   scope?: unknown;
   enabled?: unknown;
+  enablementScope?: unknown;
   version?: unknown;
 }
 
@@ -627,6 +635,14 @@ const DEFAULT_RUNTIME: InstallRuntime = {
   deferCodexCacheCleanup: defaultDeferCodexCacheCleanup,
   codexHome: defaultCodexHome,
   readCodexPluginPayload: defaultReadCodexPluginPayload,
+  readClaudePluginMetadata: (root) => {
+    try {
+      const home = resolveClaudePluginHome(process.env["CLAUDE_CONFIG_DIR"]);
+      return home === null ? null : readClaudePluginMetadataInventory(root, home);
+    } catch {
+      return null;
+    }
+  },
 };
 
 function hostReport(requested: boolean): HostInstallReport {
@@ -1029,7 +1045,6 @@ function installCodex(
     );
     return;
   }
-
   const named = marketplaces.find((item) => item.name === CODEX_MARKETPLACE);
   if (named !== undefined && !isSemctxSource(named.marketplaceSource?.source)) {
     report.status = "conflict";
@@ -1184,21 +1199,34 @@ function installClaude(
   runtime: InstallRuntime,
   report: HostInstallReport,
 ): void {
-  const marketplacesResult = runtime.run(
-    ["claude", "plugin", "marketplace", "list", "--json"],
-    root,
-  );
-  const pluginsResult = runtime.run(["claude", "plugin", "list", "--json"], root);
-  const marketplaces = parseJsonArray<ClaudeMarketplace>(marketplacesResult);
-  const plugins = parseJsonArray<ClaudePlugin>(pluginsResult);
+  const metadata = runtime.readClaudePluginMetadata?.(root);
+  const marketplacesResult = metadata === undefined
+    ? runtime.run(["claude", "plugin", "marketplace", "list", "--json"], root)
+    : null;
+  const pluginsResult = metadata === undefined
+    ? runtime.run(["claude", "plugin", "list", "--json"], root)
+    : null;
+  const marketplaces: ClaudeMarketplace[] | null = metadata === undefined
+    ? parseJsonArray<ClaudeMarketplace>(marketplacesResult as CommandResult)
+    : metadata === null ? null : metadata.marketplaces;
+  const plugins: ClaudePlugin[] | null = metadata === undefined
+    ? parseJsonArray<ClaudePlugin>(pluginsResult as CommandResult)
+    : metadata === null ? null : metadata.plugins;
   if (marketplaces === null || plugins === null) {
     report.status = "failed";
-    report.error = marketplaces === null
-      ? `cannot inspect Claude marketplaces: ${compactError(marketplacesResult)}`
-      : `cannot inspect Claude plugins: ${compactError(pluginsResult)}`;
-    report.interfaceUnsupported = isHostInterfaceUnsupportedFailure(
-      marketplaces === null ? marketplacesResult : pluginsResult,
+    report.error = metadata === null
+      ? "cannot inspect Claude declarative plugin metadata safely"
+      : marketplaces === null
+        ? `cannot inspect Claude marketplaces: ${compactError(marketplacesResult as CommandResult)}`
+        : `cannot inspect Claude plugins: ${compactError(pluginsResult as CommandResult)}`;
+    report.interfaceUnsupported = metadata === undefined && isHostInterfaceUnsupportedFailure(
+      marketplaces === null ? marketplacesResult as CommandResult : pluginsResult as CommandResult,
     );
+    return;
+  }
+  if (metadata !== undefined && metadata !== null && !metadata.settingsValid) {
+    report.status = "failed";
+    report.error = "cannot inspect Claude enablement safely: a settings layer is malformed, unreadable, or linked";
     return;
   }
 
@@ -1216,6 +1244,20 @@ function installClaude(
     (item) => item.id === `${CLAUDE_PLUGIN}@${CLAUDE_MARKETPLACE}` && item.scope === "user",
   );
   const installed = installedPlugin !== undefined;
+  if (installed && typeof installedPlugin.enabled !== "boolean") {
+    report.status = "failed";
+    report.error = "cannot determine effective Claude plugin enablement from user, project, and local settings";
+    return;
+  }
+  if (
+    installedPlugin?.enabled === false
+    && (installedPlugin.enablementScope === "project" || installedPlugin.enablementScope === "local")
+  ) {
+    report.status = "conflict";
+    report.error = `Claude plugin is disabled by an explicit ${installedPlugin.enablementScope} settings override;`
+      + " change that override before installing or updating Semctx";
+    return;
+  }
 
   if (named === undefined) {
     if (!runMutation(
@@ -1274,11 +1316,16 @@ function verifyClaudeInstall(
   report: HostInstallReport,
 ): boolean {
   const command = ["claude", "plugin", "list", "--json"];
-  const result = runtime.run(command, root);
-  const plugins = parseJsonArray<ClaudePlugin>(result);
+  const metadata = runtime.readClaudePluginMetadata?.(root);
+  const result = metadata === undefined ? runtime.run(command, root) : null;
+  const plugins: ClaudePlugin[] | null = metadata === undefined
+    ? parseJsonArray<ClaudePlugin>(result as CommandResult)
+    : metadata === null ? null : metadata.plugins;
   let error: string | undefined;
   if (plugins === null) {
-    error = `cannot inspect final Claude plugin state: ${compactError(result)}`;
+    error = metadata === null
+      ? "cannot inspect final Claude declarative plugin metadata safely"
+      : `cannot inspect final Claude plugin state: ${compactError(result as CommandResult)}`;
   } else {
     const installed = plugins.find(
       (item) => item.id === `${CLAUDE_PLUGIN}@${CLAUDE_MARKETPLACE}`

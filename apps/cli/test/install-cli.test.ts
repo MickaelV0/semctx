@@ -1,5 +1,14 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { parseArgs } from "../src/args";
@@ -15,8 +24,10 @@ import {
   type CodexPayloadProbe,
   type CommandResult,
   type InstallRuntime,
+  type InstallReport,
   type SetupExecution,
 } from "../src/commands/install";
+import type { ClaudePluginMetadataInventory } from "@semantic-context/app-services";
 
 const SEMCTX_SOURCE = "https://github.com/hoklims/semctx.git";
 // Absolute on every platform, and never touched on disk: the fake runtime answers all probes.
@@ -84,6 +95,7 @@ interface FakeOptions {
   platform?: NodeJS.Platform;
   setup?: SetupExecution;
   preflight?: SetupExecution;
+  claudeMetadata?: ClaudePluginMetadataInventory | null;
   /** Per-command outcome overrides, keyed by the joined argv, applied before any hardcoded branch. */
   queryOutcomes?: Record<string, Partial<CommandResult>>;
 }
@@ -113,6 +125,11 @@ function fakeRuntime(
 
   return {
     commands,
+    ...(Object.prototype.hasOwnProperty.call(options, "claudeMetadata")
+      ? {
+          readClaudePluginMetadata: () => options.claudeMetadata ?? null,
+        }
+      : {}),
     run(command, _cwd) {
       const argv = [...command];
       commands.push(argv);
@@ -638,6 +655,216 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
       ["claude", "plugin", "marketplace", "list", "--json"],
       ["claude", "plugin", "list", "--json"],
     ]);
+  });
+
+  test("Claude dry-run reads declarative metadata without launching plugin list commands", () => {
+    const runtime = fakeRuntime({
+      codex: false,
+      claude: true,
+      claudeMetadata: { marketplaces: [], plugins: [], settingsValid: true },
+    });
+    const report = executeInstall(
+      "C:\\work\\project",
+      parseArgs(["install", "--host", "claude", "--dry-run", "--skip-setup"]),
+      runtime,
+    );
+
+    expect(report.ok).toBe(true);
+    expect(report.hosts.claude.status).toBe("planned");
+    expect(runtime.commands.filter((command) => command[0] === "claude")).toEqual([
+      ["claude", "--version"],
+    ]);
+    expect(runtime.commands.some((command) => command.includes("install") || command.includes("add")))
+      .toBe(false);
+  });
+
+  test("unavailable Claude declarative metadata fails closed without launching Claude plugin queries", () => {
+    const runtime = fakeRuntime({ codex: false, claude: true, claudeMetadata: null });
+    const report = executeInstall(
+      "C:\\work\\project",
+      parseArgs(["install", "--host", "claude", "--dry-run", "--skip-setup"]),
+      runtime,
+    );
+
+    expect(report.ok).toBe(false);
+    expect(report.hosts.claude.status).toBe("failed");
+    expect(report.hosts.claude.error).toContain("declarative plugin metadata safely");
+    expect(runtime.commands.filter((command) => command[0] === "claude")).toEqual([
+      ["claude", "--version"],
+    ]);
+  });
+
+  test("a fresh Claude profile dry-run plans from proven empty metadata and writes no profile file", () => {
+    const root = mkdtempSync(join(tmpdir(), "semctx-install-fresh-claude-"));
+    const profile = join(root, "profile");
+    const bin = join(root, "bin");
+    const unexpected = join(root, "unexpected-plugin-query");
+    mkdirSync(profile);
+    mkdirSync(bin);
+    const script = join(bin, "claude-shim.js");
+    writeFileSync(
+      script,
+      `const fs = require("node:fs");\n`
+        + `if (process.argv.slice(2).join(" ") === "--version") { console.log("2.1.229"); process.exit(0); }\n`
+        + `fs.writeFileSync(${JSON.stringify(unexpected)}, "called"); process.exit(9);\n`,
+    );
+    if (process.platform === "win32") {
+      const compiled = Bun.spawnSync(
+        [process.execPath, "build", "--compile", script, "--outfile", join(bin, "claude.exe")],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      expect(compiled.exitCode).toBe(0);
+    } else {
+      writeFileSync(join(bin, "claude"), `#!/bin/sh\n"${process.execPath}" "${script}" "$@"\n`);
+      chmodSync(join(bin, "claude"), 0o755);
+    }
+    const environment: Record<string, string | undefined> = {};
+    for (const [name, value] of Object.entries(process.env)) {
+      if (name.toUpperCase() !== "PATH") environment[name] = value;
+    }
+    environment["PATH"] = `${bin}${delimiter}${process.env["PATH"] ?? ""}`;
+    environment["CLAUDE_CONFIG_DIR"] = profile;
+    const entrypoint = resolve(import.meta.dir, "../src/index.ts");
+    try {
+      const child = Bun.spawnSync([
+        process.execPath,
+        entrypoint,
+        "install",
+        "--host",
+        "claude",
+        "--dry-run",
+        "--skip-setup",
+        "--json",
+      ], { env: environment, stdout: "pipe", stderr: "pipe" });
+      const report = JSON.parse(new TextDecoder().decode(child.stdout)) as InstallReport;
+      expect(child.exitCode).toBe(0);
+      expect(report.hosts.claude.status).toBe("planned");
+      expect(existsSync(unexpected)).toBe(false);
+      expect(existsSync(join(profile, "plugins"))).toBe(false);
+      expect(readdirSync(profile)).toEqual([]);
+
+      const settings = join(profile, "settings.json");
+      writeFileSync(settings, "{not-json");
+      const malformed = Bun.spawnSync([
+        process.execPath,
+        entrypoint,
+        "install",
+        "--host",
+        "claude",
+        "--dry-run",
+        "--skip-setup",
+        "--json",
+      ], { env: environment, stdout: "pipe", stderr: "pipe" });
+      const malformedReport = JSON.parse(
+        new TextDecoder().decode(malformed.stdout),
+      ) as InstallReport;
+      expect(malformed.exitCode).toBe(1);
+      expect(malformedReport.hosts.claude.status).toBe("failed");
+      expect(malformedReport.hosts.claude.error).toContain("settings layer is malformed");
+      expect(existsSync(unexpected)).toBe(false);
+      expect(readdirSync(profile)).toEqual(["settings.json"]);
+      expect(readFileSync(settings, "utf8")).toBe("{not-json");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("malformed Claude settings block dry-run and apply before every plugin mutation", () => {
+    for (const dryRun of [true, false]) {
+      for (const plugins of [[], [{
+        id: "semctx@semctx-stable",
+        scope: "user",
+        version: packageJson.version,
+        installPath: "C:\\fixture\\semctx",
+      }]]) {
+        const runtime = fakeRuntime({
+          codex: false,
+          claude: true,
+          claudeMetadata: {
+            marketplaces: [],
+            plugins,
+            settingsValid: false,
+          },
+        });
+        const report = executeInstall(
+          "C:\\work\\project",
+          parseArgs([
+            "install",
+            "--host",
+            "claude",
+            ...(dryRun ? ["--dry-run"] : []),
+            "--skip-setup",
+          ]),
+          runtime,
+        );
+
+        expect(report.ok).toBe(false);
+        expect(report.hosts.claude.status).toBe("failed");
+        expect(report.hosts.claude.error).toContain("settings layer is malformed");
+        expect(runtime.commands.filter((command) => command[0] === "claude")).toEqual([
+          ["claude", "--version"],
+        ]);
+      }
+    }
+  });
+
+  test("project and local disable overrides conflict before writes, while a user disable plans enablement", () => {
+    const metadataFor = (
+      enabled: boolean,
+      enablementScope: "user" | "project" | "local",
+    ): ClaudePluginMetadataInventory => ({
+      marketplaces: [{ name: "semctx-stable", repo: SEMCTX_SOURCE }],
+      plugins: [{
+        id: "semctx@semctx-stable",
+        scope: "user",
+        enabled,
+        enablementScope,
+        version: packageJson.version,
+      }],
+      settingsValid: true,
+    });
+    for (const enablementScope of ["project", "local"] as const) {
+      for (const dryRun of [true, false]) {
+        const runtime = fakeRuntime({
+          codex: false,
+          claude: true,
+          claudeMetadata: metadataFor(false, enablementScope),
+        });
+        const report = executeInstall(
+          "C:\\work\\project",
+          parseArgs([
+            "install",
+            "--host",
+            "claude",
+            ...(dryRun ? ["--dry-run"] : []),
+            "--skip-setup",
+          ]),
+          runtime,
+        );
+        expect(report.ok).toBe(false);
+        expect(report.hosts.claude.status).toBe("conflict");
+        expect(report.hosts.claude.error).toContain(`${enablementScope} settings override`);
+        expect(runtime.commands.filter((command) => command[0] === "claude")).toEqual([
+          ["claude", "--version"],
+        ]);
+      }
+    }
+
+    const userRuntime = fakeRuntime({
+      codex: false,
+      claude: true,
+      claudeMetadata: metadataFor(false, "user"),
+    });
+    const userReport = executeInstall(
+      "C:\\work\\project",
+      parseArgs(["install", "--host", "claude", "--dry-run", "--skip-setup"]),
+      userRuntime,
+    );
+    expect(userReport.ok).toBe(true);
+    expect(userReport.hosts.claude.steps).toContainEqual(expect.objectContaining({
+      action: "enable Semctx Claude plugin",
+      status: "planned",
+    }));
   });
 
   test("two-host aggregate preflight blocks Codex and workspace writes on Claude source conflict", () => {
