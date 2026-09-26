@@ -575,6 +575,18 @@ function safeText(value: unknown): string | null {
   return redactSecretParameters(withoutUserInfo);
 }
 
+function rawText(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function hasIdentityControlCharacter(value: string): boolean {
+  for (const character of value) {
+    const code = character.charCodeAt(0);
+    if (code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
+}
+
 function normalizeGitSource(value: unknown): string {
   if (typeof value !== "string") return "";
   return value
@@ -591,14 +603,23 @@ function isSemctxSource(value: unknown): boolean {
   return normalized === "hoklims/semctx" || normalized === "https://github.com/hoklims/semctx";
 }
 
-function isCanonicalClaudeSource(kind: unknown, value: unknown): boolean {
-  if (typeof value !== "string") return false;
-  const trimmed = value.trim();
-  if (kind === "github") return normalizeGitSource(trimmed) === "hoklims/semctx";
+function isValidClaudeSourceIdentity(kind: unknown, value: unknown): value is string {
+  if (
+    typeof value !== "string"
+    || value.length === 0
+    || value.trim() !== value
+    || hasIdentityControlCharacter(value)
+  ) return false;
+  return kind === "github" || kind === "git";
+}
+
+export function isCanonicalClaudeMarketplaceSource(kind: unknown, value: unknown): boolean {
+  if (!isValidClaudeSourceIdentity(kind, value)) return false;
+  if (kind === "github") return normalizeGitSource(value) === "hoklims/semctx";
   if (kind !== "git") return false;
-  const remoteTransport = /^(?:https?|git|ssh):\/\//i.test(trimmed)
-    || /^[^/@\s]+@[^:\s]+:/.test(trimmed);
-  return remoteTransport && isSemctxSource(trimmed);
+  const remoteTransport = /^(?:https?|git|ssh):\/\//i.test(value)
+    || /^[^/@\s]+@[^:\s]+:/.test(value);
+  return remoteTransport && isSemctxSource(value);
 }
 
 /**
@@ -608,7 +629,7 @@ function isCanonicalClaudeSource(kind: unknown, value: unknown): boolean {
  * the shape before any filesystem call can see it.
  */
 export function isLocalFilesystemPath(candidate: string): boolean {
-  if (!isAbsolute(candidate) || candidate.includes("\0")) return false;
+  if (!isAbsolute(candidate) || hasIdentityControlCharacter(candidate)) return false;
   if (process.platform === "win32") return /^[A-Za-z]:[\\/]/.test(candidate);
   return !candidate.startsWith("//");
 }
@@ -921,24 +942,24 @@ function evaluateHost(
   }
   report.marketplace.configured = true;
 
-  const claudeSourceKind = safeText(marketplace["sourceKind"]);
-  const hostSource = host === "codex"
-    ? safeText((marketplace["marketplaceSource"] as { source?: unknown } | undefined)?.source)
+  const claudeSourceKind = rawText(marketplace["sourceKind"]);
+  const rawHostSource = host === "codex"
+    ? rawText((marketplace["marketplaceSource"] as { source?: unknown } | undefined)?.source)
     : claudeSourceKind === "directory"
-      ? safeText(marketplace["path"])
-      : safeText(marketplace["repo"]);
-  report.marketplace.source = hostSource;
+      ? rawText(marketplace["path"])
+      : rawText(marketplace["repo"]);
+  report.marketplace.source = safeText(rawHostSource);
   report.marketplace.matchesSemctx = host === "claude" && claudeSourceKind !== null
-    ? isCanonicalClaudeSource(claudeSourceKind, hostSource)
-    : isSemctxSource(hostSource);
+    ? isCanonicalClaudeMarketplaceSource(claudeSourceKind, rawHostSource)
+    : isSemctxSource(rawHostSource);
   if (report.marketplace.matchesSemctx !== true) reasons.push("MARKETPLACE_SOURCE_MISMATCH");
 
   const reportedRoot = host === "codex"
-    ? safeText(marketplace["root"])
-    : safeText(marketplace["installLocation"]);
+    ? rawText(marketplace["root"])
+    : rawText(marketplace["installLocation"]);
   const marketplaceRoot = acceptHostPath(reportedRoot, home);
   if (reportedRoot !== null && marketplaceRoot === null) reasons.push("HOST_PATH_REJECTED");
-  report.snapshot.path = marketplaceRoot;
+  report.snapshot.path = safeText(marketplaceRoot);
 
   const snapshot = marketplaceRoot === null
     ? null
@@ -989,10 +1010,10 @@ function evaluateHost(
     ? (marketplaceRoot === null || hostVersion === null
       ? null
       : codexCacheEntryFromMarketplaceRoot(marketplaceRoot, hostVersion, home))
-    : safeText(installedEntry?.["installPath"]);
+    : rawText(installedEntry?.["installPath"]);
   const cachePath = acceptHostPath(reportedCachePath, home);
   if (reportedCachePath !== null && cachePath === null) reasons.push("HOST_PATH_REJECTED");
-  report.installed.path = cachePath;
+  report.installed.path = safeText(cachePath);
 
   const payload = cachePath === null ? null : dependencies.readInstalledPayload(host, cachePath);
   const cacheVersion = safeText(payload?.version);
@@ -1629,10 +1650,6 @@ function declaredFilesystemIdentity(value: unknown): string | null {
     typeof value !== "string"
     || !isLocalFilesystemPath(value)
   ) return null;
-  for (const character of value) {
-    const code = character.charCodeAt(0);
-    if (code <= 0x1f || code === 0x7f) return null;
-  }
   return lexicalPathIdentity(value);
 }
 
@@ -1711,15 +1728,16 @@ export function readClaudePluginMetadataInventory(
     const directoryIdentity = sourceKind === "directory"
       ? declaredFilesystemIdentity(sourceValue)
       : null;
+    const sourceIdentityValid = sourceKind === "directory"
+      ? directoryIdentity !== null
+      : isValidClaudeSourceIdentity(sourceKind, sourceValue);
     const installLocationIdentity = declaredFilesystemIdentity(installLocation);
     if (
       name.trim().length === 0
       || entry === null
       || source === null
       || (sourceKind !== "github" && sourceKind !== "git" && sourceKind !== "directory")
-      || typeof sourceValue !== "string"
-      || sourceValue.trim().length === 0
-      || (sourceKind === "directory" && directoryIdentity === null)
+      || !sourceIdentityValid
       || installLocationIdentity === null
       || typeof lastUpdated !== "string"
       || (repo !== undefined && typeof repo !== "string")
