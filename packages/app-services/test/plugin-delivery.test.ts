@@ -2591,6 +2591,12 @@ describe("Claude plugin metadata — declarative read-only inventory", () => {
           value.home,
         )).toBeNull();
       }
+      if (process.platform !== "win32") {
+        expect(readClaudePluginMetadataInventory(
+          `${value.project}/unsupported\\component/..`,
+          value.home,
+        )).toBeNull();
+      }
       mkdirSync(join(value.project, "subdir"));
       const relativeProject = relative(process.cwd(), value.project);
       expect(readClaudePluginMetadataInventory(

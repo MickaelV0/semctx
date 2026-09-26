@@ -1733,6 +1733,7 @@ export function readClaudePluginMetadataInventory(
 ): ClaudePluginMetadataInventory | null {
   if (!isLocalFilesystemPath(claudeHome)) return null;
   if (hasIdentityControlCharacter(repositoryRoot)) return null;
+  if (process.platform !== "win32" && repositoryRoot.includes("\\")) return null;
   const absoluteRepositoryRoot = resolve(repositoryRoot);
   if (!isLocalFilesystemPath(absoluteRepositoryRoot)) return null;
   const marketplacesPath = join(claudeHome, "plugins", "known_marketplaces.json");

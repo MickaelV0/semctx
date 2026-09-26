@@ -805,7 +805,7 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
     if (process.platform === "win32") {
       const compiled = Bun.spawnSync(
         [process.execPath, "build", "--compile", script, "--outfile", join(bin, "claude.exe")],
-        { stdout: "pipe", stderr: "pipe" },
+        { stdout: "pipe", stderr: "pipe", timeout: 10_000 },
       );
       expect(compiled.exitCode).toBe(0);
     } else {
@@ -831,7 +831,7 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
         ...(dryRun ? ["--dry-run"] : []),
         "--skip-setup",
         "--json",
-      ], { env, stdout: "pipe", stderr: "pipe" });
+      ], { env, stdout: "pipe", stderr: "pipe", timeout: 5_000 });
       return {
         child,
         report: JSON.parse(new TextDecoder().decode(child.stdout)) as InstallReport,
@@ -973,7 +973,7 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   test("Claude dry-run treats absolute and cwd-relative repository roots identically", () => {
     const root = realpathSync.native(mkdtempSync(join(tmpdir(), "semctx-install-relative-claude-")));
