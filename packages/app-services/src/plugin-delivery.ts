@@ -591,6 +591,16 @@ function isSemctxSource(value: unknown): boolean {
   return normalized === "hoklims/semctx" || normalized === "https://github.com/hoklims/semctx";
 }
 
+function isCanonicalClaudeSource(kind: unknown, value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  if (kind === "github") return normalizeGitSource(trimmed) === "hoklims/semctx";
+  if (kind !== "git") return false;
+  const remoteTransport = /^(?:https?|git|ssh):\/\//i.test(trimmed)
+    || /^[^/@\s]+@[^:\s]+:/.test(trimmed);
+  return remoteTransport && isSemctxSource(trimmed);
+}
+
 /**
  * A UNC or Win32 device path handed back by a host is not a local read: touching
  * `\\<host>\share` makes Windows open an SMB connection, which is network egress from a product
@@ -918,8 +928,8 @@ function evaluateHost(
       ? safeText(marketplace["path"])
       : safeText(marketplace["repo"]);
   report.marketplace.source = hostSource;
-  report.marketplace.matchesSemctx = host === "claude" && claudeSourceKind === "directory"
-    ? false
+  report.marketplace.matchesSemctx = host === "claude" && claudeSourceKind !== null
+    ? isCanonicalClaudeSource(claudeSourceKind, hostSource)
     : isSemctxSource(hostSource);
   if (report.marketplace.matchesSemctx !== true) reasons.push("MARKETPLACE_SOURCE_MISMATCH");
 
@@ -1701,6 +1711,7 @@ export function readClaudePluginMetadataInventory(
     const directoryIdentity = sourceKind === "directory"
       ? declaredFilesystemIdentity(sourceValue)
       : null;
+    const installLocationIdentity = declaredFilesystemIdentity(installLocation);
     if (
       name.trim().length === 0
       || entry === null
@@ -1709,8 +1720,7 @@ export function readClaudePluginMetadataInventory(
       || typeof sourceValue !== "string"
       || sourceValue.trim().length === 0
       || (sourceKind === "directory" && directoryIdentity === null)
-      || typeof installLocation !== "string"
-      || installLocation.trim().length === 0
+      || installLocationIdentity === null
       || typeof lastUpdated !== "string"
       || (repo !== undefined && typeof repo !== "string")
       || (url !== undefined && typeof url !== "string")
@@ -1774,9 +1784,9 @@ export function readClaudePluginMetadataInventory(
       const lastUpdated = entry?.["lastUpdated"];
       const gitCommitSha = entry?.["gitCommitSha"];
       const installIdentity = declaredFilesystemIdentity(installPath);
-      const projectIdentity = scope === "project" || scope === "local"
-        ? declaredFilesystemIdentity(projectPath)
-        : null;
+      const projectIdentity = projectPath === undefined
+        ? null
+        : declaredFilesystemIdentity(projectPath);
       if (
         entry === null
         || (scope !== "user" && scope !== "project" && scope !== "local")
@@ -1785,6 +1795,7 @@ export function readClaudePluginMetadataInventory(
         || (installedAt !== undefined && typeof installedAt !== "string")
         || (lastUpdated !== undefined && typeof lastUpdated !== "string")
         || (gitCommitSha !== undefined && typeof gitCommitSha !== "string")
+        || (projectPath !== undefined && projectIdentity === null)
         || ((scope === "project" || scope === "local") && projectIdentity === null)
       ) return null;
       if (scope !== "user" && projectIdentity !== repositoryIdentity) continue;
@@ -1793,6 +1804,7 @@ export function readClaudePluginMetadataInventory(
         id,
         scope,
         installPath,
+        ...(typeof projectPath === "string" ? { projectPath } : {}),
         ...(typeof version === "string" ? { version } : {}),
         ...(effective === undefined ? {} : {
           enabled: effective.enabled,

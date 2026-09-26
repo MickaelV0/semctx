@@ -396,8 +396,8 @@ describe("plugin delivery — five distinct layers", () => {
     ]);
   });
 
-  test("a declarative directory source never impersonates the canonical Git marketplace", () => {
-    const report = statusOf({
+  test("declarative local sources never impersonate the canonical Git marketplace", () => {
+    const directoryReport = statusOf({
       scope: "claude",
       claudeMetadata: {
         marketplaces: [{
@@ -413,9 +413,27 @@ describe("plugin delivery — five distinct layers", () => {
       },
     });
 
-    expect(report.hosts.claude.marketplace.source).toBe("hoklims/semctx");
-    expect(report.hosts.claude.marketplace.matchesSemctx).toBe(false);
-    expect(report.hosts.claude.reasons).toContain("MARKETPLACE_SOURCE_MISMATCH");
+    expect(directoryReport.hosts.claude.marketplace.source).toBe("hoklims/semctx");
+    expect(directoryReport.hosts.claude.marketplace.matchesSemctx).toBe(false);
+    expect(directoryReport.hosts.claude.reasons).toContain("MARKETPLACE_SOURCE_MISMATCH");
+
+    const relativeGitReport = statusOf({
+      scope: "claude",
+      claudeMetadata: {
+        marketplaces: [{
+          name: "semctx-stable",
+          sourceKind: "git",
+          repo: "hoklims/semctx",
+          ref: "stable",
+          installLocation: CLAUDE_MARKETPLACE_ROOT,
+        }],
+        plugins: claudePlugins() as Record<string, unknown>[],
+        settingsValid: true,
+        effectiveEnablement: {},
+      },
+    });
+    expect(relativeGitReport.hosts.claude.marketplace.matchesSemctx).toBe(false);
+    expect(relativeGitReport.hosts.claude.reasons).toContain("MARKETPLACE_SOURCE_MISMATCH");
   });
 
   test("emits a versioned, deterministic contract envelope", () => {
@@ -2156,6 +2174,32 @@ describe("Claude plugin metadata — declarative read-only inventory", () => {
       }
     }
 
+    for (const source of [
+      { source: "github", repo: "hoklims/semctx", ref: "stable" },
+      { source: "git", url: "https://github.com/hoklims/semctx.git", ref: "stable" },
+    ]) {
+      const value = fixture();
+      try {
+        for (const installLocation of [
+          "\0",
+          "relative-marketplace",
+          `${value.home}\nmarketplace`,
+          ...(process.platform === "win32" ? ["\\other", "/other", "C:other"] : []),
+        ]) {
+          writeFileSync(value.marketplace, JSON.stringify({
+            "semctx-stable": {
+              source,
+              installLocation,
+              lastUpdated: "2026-09-26T00:00:00Z",
+            },
+          }));
+          expect(readClaudePluginMetadataInventory(value.project, value.home)).toBeNull();
+        }
+      } finally {
+        rmSync(join(value.home, ".."), { recursive: true, force: true });
+      }
+    }
+
     const directory = fixture();
     try {
       const directoryPath = join(directory.home, "local-marketplace");
@@ -2244,6 +2288,8 @@ describe("Claude plugin metadata — declarative read-only inventory", () => {
       for (const projectPath of ["\0", "relative-project", `${value.project}\nchild`]) {
         writeEntry({ scope: "project", projectPath, installPath, version: RELEASE_VERSION });
         expect(readClaudePluginMetadataInventory(value.project, value.home)).toBeNull();
+        writeEntry({ scope: "user", projectPath, installPath, version: RELEASE_VERSION });
+        expect(readClaudePluginMetadataInventory(value.project, value.home)).toBeNull();
       }
       if (process.platform === "win32") {
         for (const projectPath of ["\\other-project", "/other-project", "C:other-project"]) {
@@ -2280,6 +2326,15 @@ describe("Claude plugin metadata — declarative read-only inventory", () => {
         settingsValid: true,
         effectiveEnablement: { "semctx@semctx-stable": { enabled: true, scope: "user" } },
       });
+
+      writeEntry({
+        scope: "user",
+        projectPath: value.project,
+        installPath,
+        version: RELEASE_VERSION,
+      });
+      expect(readClaudePluginMetadataInventory(value.project, value.home)?.plugins[0])
+        .toMatchObject({ scope: "user", projectPath: value.project });
     } finally {
       rmSync(join(value.home, ".."), { recursive: true, force: true });
     }
