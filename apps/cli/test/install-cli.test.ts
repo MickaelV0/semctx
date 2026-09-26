@@ -782,6 +782,7 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
     mkdirSync(bin);
     writeFileSync(join(profile, "settings.json"), "{}");
     const installed = join(plugins, "installed_plugins.json");
+    const marketplace = join(plugins, "known_marketplaces.json");
     const installedBytes = JSON.stringify({
       version: 2,
       plugins: {
@@ -815,26 +816,86 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
     environment["PATH"] = `${bin}${delimiter}${process.env["PATH"] ?? ""}`;
     environment["CLAUDE_CONFIG_DIR"] = profile;
     const entrypoint = resolve(import.meta.dir, "../src/index.ts");
+    const run = (
+      dryRun: boolean,
+      env: Record<string, string | undefined> = environment,
+    ): { child: ReturnType<typeof Bun.spawnSync>; report: InstallReport } => {
+      const child = Bun.spawnSync([
+        process.execPath,
+        entrypoint,
+        "install",
+        "--root",
+        project,
+        "--host",
+        "claude",
+        ...(dryRun ? ["--dry-run"] : []),
+        "--skip-setup",
+        "--json",
+      ], { env, stdout: "pipe", stderr: "pipe" });
+      return {
+        child,
+        report: JSON.parse(new TextDecoder().decode(child.stdout)) as InstallReport,
+      };
+    };
     try {
       for (const dryRun of [true, false]) {
-        const child = Bun.spawnSync([
-          process.execPath,
-          entrypoint,
-          "install",
-          "--root",
-          project,
-          "--host",
-          "claude",
-          ...(dryRun ? ["--dry-run"] : []),
-          "--skip-setup",
-          "--json",
-        ], { env: environment, stdout: "pipe", stderr: "pipe" });
-        const report = JSON.parse(new TextDecoder().decode(child.stdout)) as InstallReport;
+        const { child, report } = run(dryRun);
         expect(child.exitCode).toBe(1);
         expect(report.hosts.claude.status).toBe("failed");
         expect(report.hosts.claude.error).toContain("declarative plugin metadata safely");
         expect(existsSync(unexpected)).toBe(false);
         expect(readFileSync(installed, "utf8")).toBe(installedBytes);
+        expect(readdirSync(project)).toEqual([]);
+      }
+
+      const emptyInstalledBytes = '{"version":2,"plugins":{}}';
+      const directoryMarketplaceBytes = JSON.stringify({
+        "semctx-stable": {
+          source: { source: "directory", path: "hoklims/semctx" },
+          installLocation: join(plugins, "marketplaces", "semctx-stable"),
+          lastUpdated: "2026-09-26T00:00:00Z",
+        },
+      });
+      writeFileSync(installed, emptyInstalledBytes);
+      writeFileSync(marketplace, directoryMarketplaceBytes);
+      for (const dryRun of [true, false]) {
+        const { child, report } = run(dryRun);
+        expect(child.exitCode).toBe(1);
+        expect(report.hosts.claude.status).toBe("failed");
+        expect(report.hosts.claude.error).toContain("declarative plugin metadata safely");
+        expect(existsSync(unexpected)).toBe(false);
+        expect(readFileSync(installed, "utf8")).toBe(emptyInstalledBytes);
+        expect(readFileSync(marketplace, "utf8")).toBe(directoryMarketplaceBytes);
+        expect(readdirSync(project)).toEqual([]);
+      }
+
+      const localDirectory = join(root, "hoklims", "semctx");
+      mkdirSync(localDirectory, { recursive: true });
+      const localDirectoryMarketplaceBytes = JSON.stringify({
+        "semctx-stable": {
+          source: { source: "directory", path: localDirectory },
+          installLocation: join(plugins, "marketplaces", "semctx-stable"),
+          lastUpdated: "2026-09-26T00:00:00Z",
+        },
+      });
+      writeFileSync(marketplace, localDirectoryMarketplaceBytes);
+      for (const dryRun of [true, false]) {
+        const { child, report } = run(dryRun);
+        expect(child.exitCode).toBe(1);
+        expect(report.hosts.claude.status).toBe("conflict");
+        expect(report.hosts.claude.error).toContain("already points to another source");
+        expect(existsSync(unexpected)).toBe(false);
+        expect(readFileSync(marketplace, "utf8")).toBe(localDirectoryMarketplaceBytes);
+        expect(readdirSync(project)).toEqual([]);
+      }
+
+      for (const dryRun of [true, false]) {
+        const invalidHome = process.platform === "win32" ? "\\other-profile" : "relative-profile";
+        const { child, report } = run(dryRun, { ...environment, CLAUDE_CONFIG_DIR: invalidHome });
+        expect(child.exitCode).toBe(1);
+        expect(report.hosts.claude.status).toBe("failed");
+        expect(report.hosts.claude.error).toContain("declarative plugin metadata safely");
+        expect(existsSync(unexpected)).toBe(false);
         expect(readdirSync(project)).toEqual([]);
       }
     } finally {

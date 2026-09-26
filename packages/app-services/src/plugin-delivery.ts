@@ -598,8 +598,9 @@ function isSemctxSource(value: unknown): boolean {
  * the shape before any filesystem call can see it.
  */
 export function isLocalFilesystemPath(candidate: string): boolean {
-  if (!isAbsolute(candidate)) return false;
-  return !/^[\\/]{2}/.test(candidate) && !candidate.includes("\0");
+  if (!isAbsolute(candidate) || candidate.includes("\0")) return false;
+  if (process.platform === "win32") return /^[A-Za-z]:[\\/]/.test(candidate);
+  return !candidate.startsWith("//");
 }
 
 /** `candidate` must be `root` itself or strictly inside it, comparing resolved forms. */
@@ -910,11 +911,16 @@ function evaluateHost(
   }
   report.marketplace.configured = true;
 
+  const claudeSourceKind = safeText(marketplace["sourceKind"]);
   const hostSource = host === "codex"
     ? safeText((marketplace["marketplaceSource"] as { source?: unknown } | undefined)?.source)
-    : safeText(marketplace["repo"]);
+    : claudeSourceKind === "directory"
+      ? safeText(marketplace["path"])
+      : safeText(marketplace["repo"]);
   report.marketplace.source = hostSource;
-  report.marketplace.matchesSemctx = isSemctxSource(hostSource);
+  report.marketplace.matchesSemctx = host === "claude" && claudeSourceKind === "directory"
+    ? false
+    : isSemctxSource(hostSource);
   if (report.marketplace.matchesSemctx !== true) reasons.push("MARKETPLACE_SOURCE_MISMATCH");
 
   const reportedRoot = host === "codex"
@@ -1692,6 +1698,9 @@ export function readClaudePluginMetadataInventory(
         : sourceKind === "directory"
           ? path
           : undefined;
+    const directoryIdentity = sourceKind === "directory"
+      ? declaredFilesystemIdentity(sourceValue)
+      : null;
     if (
       name.trim().length === 0
       || entry === null
@@ -1699,6 +1708,7 @@ export function readClaudePluginMetadataInventory(
       || (sourceKind !== "github" && sourceKind !== "git" && sourceKind !== "directory")
       || typeof sourceValue !== "string"
       || sourceValue.trim().length === 0
+      || (sourceKind === "directory" && directoryIdentity === null)
       || typeof installLocation !== "string"
       || installLocation.trim().length === 0
       || typeof lastUpdated !== "string"
@@ -1709,8 +1719,8 @@ export function readClaudePluginMetadataInventory(
     ) return null;
     marketplaces.push({
       name,
-      repo: sourceValue,
-      ...(sourceKind === "directory" ? { path: sourceValue } : {}),
+      sourceKind,
+      ...(sourceKind === "directory" ? { path: sourceValue } : { repo: sourceValue }),
       ...(typeof ref === "string" ? { ref } : {}),
       installLocation,
     });

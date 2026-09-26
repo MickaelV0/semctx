@@ -207,6 +207,8 @@ interface CodexPlugin {
 
 interface ClaudeMarketplace {
   name?: unknown;
+  source?: unknown;
+  sourceKind?: unknown;
   repo?: unknown;
   path?: unknown;
   ref?: unknown;
@@ -1022,6 +1024,14 @@ function isSemctxSource(value: unknown): boolean {
     || normalized === "https://github.com/hoklims/semctx";
 }
 
+function isCanonicalClaudeMarketplace(item: ClaudeMarketplace): boolean {
+  const kind = item.sourceKind ?? item.source;
+  if (kind === "directory") return false;
+  if (kind === "github" || kind === "git") return isSemctxSource(item.repo);
+  // Compatibility for an older injected query seam that did not preserve Claude's source kind.
+  return kind === undefined && isSemctxSource(item.repo) && item.path === undefined;
+}
+
 function installCodex(
   root: string,
   dryRun: boolean,
@@ -1231,14 +1241,14 @@ function installClaude(
   }
 
   const named = marketplaces.find((item) => item.name === CLAUDE_MARKETPLACE);
-  if (named !== undefined && !isSemctxSource(named.repo) && !isSemctxSource(named.path)) {
+  if (named !== undefined && !isCanonicalClaudeMarketplace(named)) {
     report.status = "conflict";
     report.error = `Claude marketplace "${CLAUDE_MARKETPLACE}" already points to another source`;
     return;
   }
   const legacy = marketplaces.find(
     (item) => item.name === LEGACY_CLAUDE_MARKETPLACE
-      && (isSemctxSource(item.repo) || isSemctxSource(item.path)),
+      && isCanonicalClaudeMarketplace(item),
   );
   const pluginId = `${CLAUDE_PLUGIN}@${CLAUDE_MARKETPLACE}`;
   const applicableRegistrations = plugins.filter((item) => item.id === pluginId);
