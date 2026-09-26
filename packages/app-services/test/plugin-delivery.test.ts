@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   PLUGIN_DELIVERY_MAX_BUNDLE_BYTES,
@@ -492,6 +492,46 @@ describe("plugin delivery — five distinct layers", () => {
       expect(report.hosts.claude.verdict).toBe("UPDATE_AVAILABLE");
       expect(report.hosts.claude.reasons).toContain("INSTALLED_CACHE_BEHIND_SNAPSHOT");
     }
+  });
+
+  test("legacy Claude marketplace shapes use the shared raw source matcher", () => {
+    for (const marketplace of [
+      { name: "semctx-stable", source: "git", repo: "hoklims/semctx" },
+      { name: "semctx-stable", source: "future", repo: "hoklims/semctx" },
+      { name: "semctx-stable", repo: "hoklims/semctx " },
+      { name: "semctx-stable", source: null, repo: "hoklims/semctx" },
+      { name: "semctx-stable", source: "", repo: "hoklims/semctx" },
+      { name: "semctx-stable", source: 7, repo: "hoklims/semctx" },
+      { name: "semctx-stable", source: "github\n", repo: "hoklims/semctx" },
+      { name: "semctx-stable", sourceKind: "github", source: "git", repo: "hoklims/semctx" },
+    ]) {
+      const report = statusOf({ scope: "claude", claudeMarketplaces: [marketplace] });
+      expect(report.hosts.claude.marketplace.matchesSemctx).toBe(false);
+      expect(report.hosts.claude.verdict).toBe("UNKNOWN");
+      expect(report.hosts.claude.reasons).toContain("MARKETPLACE_SOURCE_MISMATCH");
+    }
+
+    const documentedLegacy = statusOf({
+      scope: "claude",
+      claudeMarketplaces: [{ name: "semctx-stable", repo: "hoklims/semctx", ref: "stable" }],
+    });
+    expect(documentedLegacy.hosts.claude.marketplace.matchesSemctx).toBe(true);
+    const documentedLegacyGit = statusOf({
+      scope: "claude",
+      claudeMarketplaces: [{ name: "semctx-stable", repo: SEMCTX_SOURCE, ref: "stable" }],
+    });
+    expect(documentedLegacyGit.hosts.claude.marketplace.matchesSemctx).toBe(true);
+    const matchingDualKind = statusOf({
+      scope: "claude",
+      claudeMarketplaces: [{
+        name: "semctx-stable",
+        sourceKind: "github",
+        source: "github",
+        repo: "hoklims/semctx",
+        ref: "stable",
+      }],
+    });
+    expect(matchingDualKind.hosts.claude.marketplace.matchesSemctx).toBe(true);
   });
 
   test("emits a versioned, deterministic contract envelope", () => {
@@ -2031,6 +2071,22 @@ describe("plugin delivery — activation is an independent dimension", () => {
 });
 
 describe("plugin delivery — local artifacts are bounded before they are read", () => {
+  test("refuses a POSIX backslash before any confined filesystem walk", () => {
+    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "semctx-backslash-root-")));
+    const outside = resolve(root, "..", `${basename(root)}-outside.json`);
+    const inside = join(root, "inside.json");
+    writeFileSync(outside, "outside");
+    writeFileSync(inside, "inside");
+    try {
+      expect(readConfinedFile(inside, root, 64)?.toString("utf8")).toBe("inside");
+      const ambiguous = `${root}/..\\${basename(outside)}`;
+      expect(readConfinedFile(ambiguous, root, 64)).toBeNull();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { force: true });
+    }
+  });
+
   test("an oversized manifest and an oversized bundle are refused on their metadata", () => {
     const home = mkdtempSync(join(tmpdir(), "semctx-plugin-delivery-oversized-"));
     const codexMarketplaceRoot = join(home, ".tmp", "marketplaces", "semctx-stable");
@@ -2369,6 +2425,10 @@ describe("Claude plugin metadata — declarative read-only inventory", () => {
         writeEntry({ scope: "user", installPath: malformedInstallPath, version: RELEASE_VERSION });
         expect(readClaudePluginMetadataInventory(value.project, value.home)).toBeNull();
       }
+      if (process.platform !== "win32") {
+        writeEntry({ scope: "user", installPath: `${installPath}\\child`, version: RELEASE_VERSION });
+        expect(readClaudePluginMetadataInventory(value.project, value.home)).toBeNull();
+      }
       if (process.platform === "win32") {
         for (const malformedInstallPath of ["\\cache", "/cache", "C:cache"]) {
           writeEntry({ scope: "user", installPath: malformedInstallPath, version: RELEASE_VERSION });
@@ -2408,7 +2468,7 @@ describe("Claude plugin metadata — declarative read-only inventory", () => {
     }
   });
 
-  test("uses platform-correct backslash semantics for declared project identities", () => {
+  test("accepts native Windows separators and refuses unsupported POSIX backslashes", () => {
     const value = fixture();
     const installPath = join(value.home, "plugins", "cache", "semctx-stable", "semctx", RELEASE_VERSION);
     const declaredProject = process.platform === "win32"
@@ -2427,12 +2487,8 @@ describe("Claude plugin metadata — declarative read-only inventory", () => {
         },
       }));
       const inventory = readClaudePluginMetadataInventory(value.project, value.home);
-      expect(inventory).not.toBeNull();
-      expect(inventory?.plugins).toHaveLength(process.platform === "win32" ? 1 : 0);
-      if (process.platform !== "win32") {
-        expect(resolve(declaredProject)).toBe(declaredProject);
-        expect(resolve(declaredProject)).not.toBe(resolve(value.project));
-      }
+      if (process.platform === "win32") expect(inventory?.plugins).toHaveLength(1);
+      else expect(inventory).toBeNull();
     } finally {
       rmSync(join(value.home, ".."), { recursive: true, force: true });
     }
@@ -2523,6 +2579,26 @@ describe("Claude plugin metadata — declarative read-only inventory", () => {
         .toBeNull();
     } finally {
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("validates repository-root controls before resolving relative segments", () => {
+    const value = fixture();
+    try {
+      for (const control of ["\0", "\n", "\u007f"]) {
+        expect(readClaudePluginMetadataInventory(
+          `${value.project}/invalid${control}/..`,
+          value.home,
+        )).toBeNull();
+      }
+      mkdirSync(join(value.project, "subdir"));
+      const relativeProject = relative(process.cwd(), value.project);
+      expect(readClaudePluginMetadataInventory(
+        join(relativeProject, "subdir", ".."),
+        value.home,
+      )).not.toBeNull();
+    } finally {
+      rmSync(join(value.home, ".."), { recursive: true, force: true });
     }
   });
 
