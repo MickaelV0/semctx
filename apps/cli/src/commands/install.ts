@@ -1024,10 +1024,18 @@ function isSemctxSource(value: unknown): boolean {
     || normalized === "https://github.com/hoklims/semctx";
 }
 
+function isRecognizedGitRemote(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  return /^(?:https?|git|ssh):\/\//i.test(trimmed)
+    || /^[^/@\s]+@[^:\s]+:/.test(trimmed);
+}
+
 function isCanonicalClaudeMarketplace(item: ClaudeMarketplace): boolean {
   const kind = item.sourceKind ?? item.source;
   if (kind === "directory") return false;
-  if (kind === "github" || kind === "git") return isSemctxSource(item.repo);
+  if (kind === "github") return normalizeGitSource(item.repo) === "hoklims/semctx";
+  if (kind === "git") return isRecognizedGitRemote(item.repo) && isSemctxSource(item.repo);
   // Compatibility for an older injected query seam that did not preserve Claude's source kind.
   return kind === undefined && isSemctxSource(item.repo) && item.path === undefined;
 }

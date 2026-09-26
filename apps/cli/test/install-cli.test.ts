@@ -889,6 +889,63 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
         expect(readdirSync(project)).toEqual([]);
       }
 
+      const canonicalGithub = { source: "github", repo: "hoklims/semctx", ref: "stable" };
+      const canonicalGit = {
+        source: "git",
+        url: "https://github.com/hoklims/semctx.git",
+        ref: "stable",
+      };
+      const fullyQualifiedLocation = join(plugins, "marketplaces", "semctx-stable");
+      const writeMarketplace = (source: Record<string, string>, installLocation: string): string => {
+        const bytes = JSON.stringify({
+          "semctx-stable": {
+            source,
+            installLocation,
+            lastUpdated: "2026-09-27T00:00:00Z",
+          },
+        });
+        writeFileSync(marketplace, bytes);
+        return bytes;
+      };
+      for (const installLocation of [
+        "\0",
+        "relative-marketplace",
+        `${profile}\nmarketplace`,
+        ...(process.platform === "win32" ? ["\\other", "/other", "C:other"] : []),
+      ]) {
+        const bytes = writeMarketplace(canonicalGithub, installLocation);
+        for (const dryRun of [true, false]) {
+          const { child, report } = run(dryRun);
+          expect(child.exitCode).toBe(1);
+          expect(report.hosts.claude.status).toBe("failed");
+          expect(report.hosts.claude.error).toContain("declarative plugin metadata safely");
+          expect(existsSync(unexpected)).toBe(false);
+          expect(readFileSync(marketplace, "utf8")).toBe(bytes);
+          expect(readdirSync(project)).toEqual([]);
+        }
+      }
+
+      const relativeGitBytes = writeMarketplace(
+        { source: "git", url: "hoklims/semctx", ref: "stable" },
+        fullyQualifiedLocation,
+      );
+      for (const dryRun of [true, false]) {
+        const { child, report } = run(dryRun);
+        expect(child.exitCode).toBe(1);
+        expect(report.hosts.claude.status).toBe("conflict");
+        expect(report.hosts.claude.error).toContain("already points to another source");
+        expect(existsSync(unexpected)).toBe(false);
+        expect(readFileSync(marketplace, "utf8")).toBe(relativeGitBytes);
+      }
+
+      for (const source of [canonicalGithub, canonicalGit]) {
+        writeMarketplace(source, fullyQualifiedLocation);
+        const { child, report } = run(true);
+        expect(child.exitCode).toBe(0);
+        expect(report.hosts.claude.status).toBe("planned");
+        expect(existsSync(unexpected)).toBe(false);
+      }
+
       for (const dryRun of [true, false]) {
         const invalidHome = process.platform === "win32" ? "\\other-profile" : "relative-profile";
         const { child, report } = run(dryRun, { ...environment, CLAUDE_CONFIG_DIR: invalidHome });
