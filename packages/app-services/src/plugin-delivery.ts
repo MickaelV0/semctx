@@ -14,7 +14,7 @@ import {
   type Dirent,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 
 /**
  * Cross-host plugin delivery observability.
@@ -29,14 +29,14 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
  *
  * The whole surface is read-only with respect to plugin delivery state: it never adds, updates,
  * upgrades, removes, enables or promotes anything, and Semctx itself never writes inside the
- * inspected project or a host's tree. A host inventory command may maintain its own operational
- * bookkeeping (Claude currently records `.in_use` markers); that is host-owned process state, not a
- * plugin delivery mutation. Any unavailable, malformed, or partial evidence produces an explicit
- * `UNKNOWN`, never an optimistic `UP_TO_DATE`.
+ * inspected project or a host's tree. Claude inventory is read from its declarative metadata,
+ * because starting its CLI for a nominal list query writes profile bookkeeping. Any unavailable,
+ * malformed, or partial evidence produces an explicit `UNKNOWN`, never an optimistic
+ * `UP_TO_DATE`.
  *
  * Two modes, and they differ in exactly one respect:
  *
- * - **default** — host `list` queries and local reads only. No network operation of any kind.
+ * - **default** — Codex `list` queries plus local declarative Claude reads. No network operation.
  * - **`--attest`** — additionally resolves and *fetches* the canonical public release into a
  *   throwaway store outside the project, then deletes it. This is a real network transfer, opt-in
  *   by name, and it is the only one. Saying "never fetches" of the whole command would be false;
@@ -293,6 +293,14 @@ export interface PluginDeliveryQueryOutcome {
   truncated?: boolean;
 }
 
+/** Claude's declarative plugin metadata, projected to the stable CLI inventory shape. */
+export interface ClaudePluginMetadataInventory {
+  marketplaces: Record<string, unknown>[];
+  plugins: Record<string, unknown>[];
+  /** False when any applicable settings layer is linked, unreadable or malformed. */
+  settingsValid: boolean;
+}
+
 /** What a marketplace snapshot directory declares about the source it was resolved from. */
 export interface MarketplaceSnapshotProbe {
   /** Commit the host checked out for this marketplace; `null` when it cannot be proven. */
@@ -361,6 +369,12 @@ export interface PluginDeliveryDependencies {
     cwd: string,
     limits?: PluginDeliveryQueryLimits,
   ): PluginDeliveryQueryOutcome;
+  /**
+   * Read Claude's declarative metadata without launching Claude Code. The native `plugin list`
+   * commands maintain profile bookkeeping even when used only for diagnosis, so the production
+   * default uses this seam and treats unavailable metadata as unknown.
+   */
+  readClaudePluginMetadata?(repositoryRoot: string): ClaudePluginMetadataInventory | null;
   readMarketplaceSnapshot(host: PluginDeliveryHost, root: string): MarketplaceSnapshotProbe | null;
   readInstalledPayload(host: PluginDeliveryHost, path: string): InstalledPayloadProbe | null;
   readRepositoryChannel(repositoryRoot: string): RepositoryChannelProbe;
@@ -717,6 +731,11 @@ function readHostQueries(
   cwd: string,
   dependencies: PluginDeliveryDependencies,
 ): HostQueries | PluginDeliveryReason {
+  if (host === "claude" && dependencies.readClaudePluginMetadata !== undefined) {
+    const inventory = dependencies.readClaudePluginMetadata(cwd);
+    if (inventory === null) return "HOST_QUERY_FAILED";
+    return validateHostInventory(host, inventory.marketplaces, inventory.plugins);
+  }
   const limits = { timeoutMs: PLUGIN_DELIVERY_QUERY_TIMEOUT_MS, maxBytes: PLUGIN_DELIVERY_MAX_HOST_OUTPUT_BYTES };
   const marketplacesResult = dependencies.runQuery(
     [host, "plugin", "marketplace", "list", "--json"],
@@ -751,6 +770,14 @@ function readHostQueries(
     : plugins;
   if (!Array.isArray(marketplaceList) || !Array.isArray(pluginList)) return "HOST_OUTPUT_MALFORMED";
 
+  return validateHostInventory(host, marketplaceList, pluginList);
+}
+
+function validateHostInventory(
+  host: PluginDeliveryHost,
+  marketplaceList: unknown[],
+  pluginList: unknown[],
+): HostQueries | PluginDeliveryReason {
   // An unidentifiable entry might be Semctx: dropping it cannot prove absence.
   const marketplaceEntries = objectEntries(marketplaceList);
   const pluginEntries = objectEntries(pluginList);
@@ -930,6 +957,7 @@ function evaluateHost(
   // Host JSON is untrusted, and a missing field is not proof of `false`: only a boolean the host
   // actually reported counts as known, everything else stays an unprovable `null`.
   const enabledRaw = installedEntry?.["enabled"];
+  const enablementScope = installedEntry?.["enablementScope"];
   report.installed.enabled = typeof enabledRaw === "boolean" ? enabledRaw : null;
   if (report.installed.enabled === false) reasons.push("PLUGIN_DISABLED");
   else if (report.installed.enabled === null) reasons.push("PLUGIN_ENABLEMENT_UNKNOWN");
@@ -1018,9 +1046,12 @@ function evaluateHost(
   // the delivery authority proposes nothing to install: that is the fail-closed half.
   if (report.delivery === "UPDATE_AVAILABLE") {
     const enable = ENABLE_COMMAND[host];
+    const userEnableCanConverge = enablementScope !== "project" && enablementScope !== "local";
     report.convergence = [
       ...CONVERGENCE[host].map((entry) => [...entry]),
-      ...(report.installed.enabled === false && enable !== undefined ? [[...enable]] : []),
+      ...(report.installed.enabled === false && enable !== undefined && userEnableCanConverge
+        ? [[...enable]]
+        : []),
     ];
   }
   // Activation is an independent dimension, and it is required in two unrelated situations: a
@@ -1105,8 +1136,16 @@ export function pluginDeliveryStatus(
   // the Git reads too and the read-only guarantee is provable, not merely asserted.
   const runQuery = dependencies.runQuery ?? defaultRunQuery;
   const resolveHostHome = dependencies.resolveHostHome ?? defaultResolveHostHome;
+  const readClaudePluginMetadata = dependencies.readClaudePluginMetadata
+    ?? (dependencies.runQuery === undefined
+      ? (root: string) => {
+          const home = resolveHostHome("claude");
+          return home === null ? null : readClaudePluginMetadataInventory(root, home);
+        }
+      : undefined);
   const resolved: PluginDeliveryDependencies = {
     runQuery,
+    ...(readClaudePluginMetadata === undefined ? {} : { readClaudePluginMetadata }),
     readMarketplaceSnapshot: dependencies.readMarketplaceSnapshot
       ?? ((host, root) => defaultReadMarketplaceSnapshot(host, root, runQuery)),
     readInstalledPayload: dependencies.readInstalledPayload ?? defaultReadInstalledPayload,
@@ -1348,6 +1387,7 @@ function environmentFor(
 
 /** Both hosts keep their own root; nothing outside it is ever read. */
 function defaultResolveHostHome(host: PluginDeliveryHost): string | null {
+  if (host === "claude") return resolveClaudePluginHome(process.env["CLAUDE_CONFIG_DIR"]);
   let home: string;
   try {
     home = homedir();
@@ -1361,7 +1401,30 @@ function defaultResolveHostHome(host: PluginDeliveryHost): string | null {
       return isLocalFilesystemPath(candidate) ? resolve(candidate) : null;
     }
   }
-  return isLocalFilesystemPath(home) ? resolve(join(home, host === "codex" ? ".codex" : ".claude")) : null;
+  return isLocalFilesystemPath(home) ? resolve(join(home, ".codex")) : null;
+}
+
+/** Resolve Claude's exact profile root without starting Claude Code. */
+export function resolveClaudePluginHome(configured?: string, userHome?: string): string | null {
+  if (configured !== undefined) {
+    if (configured.length === 0) {
+      // Claude treats an empty override as absent; use the normal profile root below.
+    } else {
+      // Whitespace-only and relative overrides are invalid. Do not trim a valid absolute path:
+      // U+00A0 and ordinary spaces are legal filename characters and name a different profile.
+      if (configured.trim().length === 0 || !isLocalFilesystemPath(configured)) return null;
+      return resolve(configured);
+    }
+  }
+  let home = userHome;
+  if (home === undefined) {
+    try {
+      home = homedir();
+    } catch {
+      return null;
+    }
+  }
+  return isLocalFilesystemPath(home) ? resolve(join(home, ".claude")) : null;
 }
 
 type PathKind = "any" | "directory" | "file";
@@ -1472,6 +1535,249 @@ export function readConfinedFile(
       }
     }
   }
+}
+
+function plainRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function decodeMetadataObject(bytes: Buffer | null): Record<string, unknown> | null {
+  if (bytes === null) return null;
+  const parsed = parseJsonValue(bytes.toString("utf8"));
+  return plainRecord(parsed);
+}
+
+type OptionalMetadataFile =
+  | { status: "absent" }
+  | { status: "unsafe" }
+  | { status: "ok"; bytes: Buffer };
+
+/** Distinguish a proven absent file from an unsafe path; `readConfinedFile` intentionally cannot. */
+function readOptionalMetadataFile(file: string, root: string): OptionalMetadataFile {
+  try {
+    const resolvedRoot = resolve(root);
+    const resolvedFile = resolve(file);
+    if (!isWithin(resolvedFile, resolvedRoot)) return { status: "unsafe" };
+    const anchor = parse(resolvedRoot).root;
+    let current = anchor;
+    const components = relative(anchor, resolvedFile).split(/[\\/]/).filter(Boolean);
+    for (let index = -1; index < components.length; index += 1) {
+      if (index >= 0) current = join(current, components[index] ?? "");
+      let stats;
+      try {
+        stats = lstatSync(current);
+      } catch (cause) {
+        return cause !== null && typeof cause === "object" && "code" in cause
+            && (cause as { code?: unknown }).code === "ENOENT"
+          ? { status: "absent" }
+          : { status: "unsafe" };
+      }
+      if (stats.isSymbolicLink()) return { status: "unsafe" };
+      const final = index === components.length - 1;
+      if (!final && !stats.isDirectory()) return { status: "unsafe" };
+      if (final && !stats.isFile()) return { status: "unsafe" };
+    }
+    const bytes = readConfinedFile(file, root, PLUGIN_DELIVERY_MAX_HOST_OUTPUT_BYTES);
+    return bytes === null ? { status: "unsafe" } : { status: "ok", bytes };
+  } catch {
+    return { status: "unsafe" };
+  }
+}
+
+function sameOptionalObservation(before: OptionalMetadataFile, after: OptionalMetadataFile): boolean {
+  if (before.status !== after.status) return false;
+  return before.status !== "ok" || (after.status === "ok" && before.bytes.equals(after.bytes));
+}
+
+function lexicalPathIdentity(path: string): string {
+  const absolute = resolve(path);
+  return process.platform === "win32" ? absolute.toLowerCase() : absolute;
+}
+
+function enabledPluginsFromSettings(bytes: Buffer | null): Record<string, boolean> | null {
+  if (bytes === null) return null;
+  const settings = decodeMetadataObject(bytes);
+  if (settings === null) return null;
+  if (settings["enabledPlugins"] === undefined) return {};
+  const enabled = plainRecord(settings["enabledPlugins"]);
+  if (enabled === null) return null;
+  const result: Record<string, boolean> = {};
+  for (const [plugin, value] of Object.entries(enabled)) {
+    if (plugin.length === 0 || typeof value !== "boolean") return null;
+    result[plugin] = value;
+  }
+  return result;
+}
+
+/**
+ * Read Claude Code's pinned declarative plugin metadata without starting Claude Code.
+ *
+ * Inventory files and settings are confined, bounded, parsed once and re-read before the snapshot
+ * is returned. A link-free absent inventory file proves an empty corresponding registry, matching
+ * Claude Code 2.1.x on a fresh profile. Malformed, linked, oversized or drifting inventory returns
+ * `null`; unavailable settings leave enablement unknown. Project/local entries are considered only
+ * for the repository being inspected, so metadata can never direct this reader elsewhere.
+ */
+export function readClaudePluginMetadataInventory(
+  repositoryRoot: string,
+  claudeHome: string,
+  afterObservation?: () => void,
+): ClaudePluginMetadataInventory | null {
+  if (!isLocalFilesystemPath(repositoryRoot) || !isLocalFilesystemPath(claudeHome)) return null;
+  const marketplacesPath = join(claudeHome, "plugins", "known_marketplaces.json");
+  const installedPath = join(claudeHome, "plugins", "installed_plugins.json");
+  const userSettingsPath = join(claudeHome, "settings.json");
+  const marketplacesObservation = readOptionalMetadataFile(marketplacesPath, claudeHome);
+  const installedObservation = readOptionalMetadataFile(installedPath, claudeHome);
+  const userSettingsObservation = readOptionalMetadataFile(userSettingsPath, claudeHome);
+  if (marketplacesObservation.status === "unsafe" || installedObservation.status === "unsafe") {
+    return null;
+  }
+  const marketplacesBytes = marketplacesObservation.status === "ok"
+    ? marketplacesObservation.bytes
+    : Buffer.from("{}");
+  const installedBytes = installedObservation.status === "ok"
+    ? installedObservation.bytes
+    : Buffer.from('{"version":2,"plugins":{}}');
+  const marketplaceRecord = decodeMetadataObject(marketplacesBytes);
+  const installedRecord = decodeMetadataObject(installedBytes);
+  if (marketplaceRecord === null || installedRecord === null) return null;
+  if (installedRecord["version"] !== 2) return null;
+  const pluginsRecord = plainRecord(installedRecord["plugins"]);
+  if (pluginsRecord === null) return null;
+
+  const marketplaces: Record<string, unknown>[] = [];
+  for (const [name, rawEntry] of Object.entries(marketplaceRecord)) {
+    const entry = plainRecord(rawEntry);
+    const source = plainRecord(entry?.["source"]);
+    const sourceKind = source?.["source"];
+    const repo = source?.["repo"];
+    const url = source?.["url"];
+    const path = source?.["path"];
+    const ref = source?.["ref"];
+    const installLocation = entry?.["installLocation"];
+    const lastUpdated = entry?.["lastUpdated"];
+    const sourceValue = sourceKind === "github"
+      ? repo
+      : sourceKind === "git"
+        ? url
+        : sourceKind === "directory"
+          ? path
+          : undefined;
+    if (
+      name.trim().length === 0
+      || entry === null
+      || source === null
+      || (sourceKind !== "github" && sourceKind !== "git" && sourceKind !== "directory")
+      || typeof sourceValue !== "string"
+      || sourceValue.trim().length === 0
+      || typeof installLocation !== "string"
+      || installLocation.trim().length === 0
+      || typeof lastUpdated !== "string"
+      || (repo !== undefined && typeof repo !== "string")
+      || (url !== undefined && typeof url !== "string")
+      || (path !== undefined && typeof path !== "string")
+      || (ref !== undefined && typeof ref !== "string")
+    ) return null;
+    marketplaces.push({
+      name,
+      repo: sourceValue,
+      ...(sourceKind === "directory" ? { path: sourceValue } : {}),
+      ...(typeof ref === "string" ? { ref } : {}),
+      installLocation,
+    });
+  }
+
+  const repositoryIdentity = lexicalPathIdentity(repositoryRoot);
+  const projectSettingsPath = join(repositoryRoot, ".claude", "settings.json");
+  const localSettingsPath = join(repositoryRoot, ".claude", "settings.local.json");
+  const settingsObservations = [
+    { path: userSettingsPath, root: claudeHome, observation: userSettingsObservation },
+    {
+      path: projectSettingsPath,
+      root: repositoryRoot,
+      observation: readOptionalMetadataFile(projectSettingsPath, repositoryRoot),
+    },
+    {
+      path: localSettingsPath,
+      root: repositoryRoot,
+      observation: readOptionalMetadataFile(localSettingsPath, repositoryRoot),
+    },
+  ] as const;
+  const settingsLayers = settingsObservations.map(({ observation }) =>
+    observation.status === "absent"
+      ? {}
+      : observation.status === "ok"
+        ? enabledPluginsFromSettings(observation.bytes)
+        : null);
+  const settingsReliable = settingsLayers.every(
+    (layer): layer is Record<string, boolean> => layer !== null,
+  );
+  const plugins: Record<string, unknown>[] = [];
+  for (const [id, rawEntries] of Object.entries(pluginsRecord)) {
+    if (id.trim().length === 0 || !Array.isArray(rawEntries)) return null;
+    for (const rawEntry of rawEntries) {
+      const entry = plainRecord(rawEntry);
+      const scope = entry?.["scope"];
+      const installPath = entry?.["installPath"];
+      const version = entry?.["version"];
+      const projectPath = entry?.["projectPath"];
+      const installedAt = entry?.["installedAt"];
+      const lastUpdated = entry?.["lastUpdated"];
+      const gitCommitSha = entry?.["gitCommitSha"];
+      if (
+        entry === null
+        || (scope !== "user" && scope !== "project" && scope !== "local")
+        || typeof installPath !== "string"
+        || installPath.trim().length === 0
+        || (version !== undefined && typeof version !== "string")
+        || (installedAt !== undefined && typeof installedAt !== "string")
+        || (lastUpdated !== undefined && typeof lastUpdated !== "string")
+        || (gitCommitSha !== undefined && typeof gitCommitSha !== "string")
+        || ((scope === "project" || scope === "local") && typeof projectPath !== "string")
+      ) return null;
+      if (
+        scope !== "user"
+        && (typeof projectPath !== "string" || lexicalPathIdentity(projectPath) !== repositoryIdentity)
+      ) continue;
+      let enabled: boolean | undefined;
+      let enablementScope: "user" | "project" | "local" | undefined;
+      if (settingsReliable) {
+        for (const [index, layer] of settingsLayers.entries()) {
+          if (Object.prototype.hasOwnProperty.call(layer, id)) {
+            enabled = layer[id];
+            enablementScope = (["user", "project", "local"] as const)[index];
+          }
+        }
+      }
+      plugins.push({
+        id,
+        scope,
+        installPath,
+        ...(typeof version === "string" ? { version } : {}),
+        ...(typeof enabled === "boolean" ? { enabled } : {}),
+        ...(enablementScope === undefined ? {} : { enablementScope }),
+      });
+    }
+  }
+
+  // Deterministic test seam for cross-file drift; production never supplies it.
+  afterObservation?.();
+
+  if (!sameOptionalObservation(
+    marketplacesObservation,
+    readOptionalMetadataFile(marketplacesPath, claudeHome),
+  )) return null;
+  if (!sameOptionalObservation(
+    installedObservation,
+    readOptionalMetadataFile(installedPath, claudeHome),
+  )) return null;
+  for (const { path, root, observation } of settingsObservations) {
+    if (!sameOptionalObservation(observation, readOptionalMetadataFile(path, root))) return null;
+  }
+  return { marketplaces, plugins, settingsValid: settingsReliable };
 }
 
 /** Digest a confined file. A host cache is untrusted input, so the read is bounded throughout. */
