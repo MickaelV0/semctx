@@ -1608,6 +1608,18 @@ function lexicalPathIdentity(path: string): string {
   return process.platform === "win32" ? absolute.toLowerCase() : absolute;
 }
 
+function declaredFilesystemIdentity(value: unknown): string | null {
+  if (
+    typeof value !== "string"
+    || !isLocalFilesystemPath(value)
+  ) return null;
+  for (const character of value) {
+    const code = character.charCodeAt(0);
+    if (code <= 0x1f || code === 0x7f) return null;
+  }
+  return lexicalPathIdentity(value);
+}
+
 function enabledPluginsFromSettings(bytes: Buffer | null): Record<string, boolean> | null {
   if (bytes === null) return null;
   const settings = decodeMetadataObject(bytes);
@@ -1751,21 +1763,21 @@ export function readClaudePluginMetadataInventory(
       const installedAt = entry?.["installedAt"];
       const lastUpdated = entry?.["lastUpdated"];
       const gitCommitSha = entry?.["gitCommitSha"];
+      const installIdentity = declaredFilesystemIdentity(installPath);
+      const projectIdentity = scope === "project" || scope === "local"
+        ? declaredFilesystemIdentity(projectPath)
+        : null;
       if (
         entry === null
         || (scope !== "user" && scope !== "project" && scope !== "local")
-        || typeof installPath !== "string"
-        || installPath.trim().length === 0
+        || installIdentity === null
         || (version !== undefined && typeof version !== "string")
         || (installedAt !== undefined && typeof installedAt !== "string")
         || (lastUpdated !== undefined && typeof lastUpdated !== "string")
         || (gitCommitSha !== undefined && typeof gitCommitSha !== "string")
-        || ((scope === "project" || scope === "local") && typeof projectPath !== "string")
+        || ((scope === "project" || scope === "local") && projectIdentity === null)
       ) return null;
-      if (
-        scope !== "user"
-        && (typeof projectPath !== "string" || lexicalPathIdentity(projectPath) !== repositoryIdentity)
-      ) continue;
+      if (scope !== "user" && projectIdentity !== repositoryIdentity) continue;
       const effective = effectiveEnablement[id];
       plugins.push({
         id,
