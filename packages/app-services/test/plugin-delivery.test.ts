@@ -382,6 +382,7 @@ describe("plugin delivery — five distinct layers", () => {
         marketplaces: claudeMarketplaces() as Record<string, unknown>[],
         plugins: claudePlugins() as Record<string, unknown>[],
         settingsValid: true,
+        effectiveEnablement: {},
       },
     });
     const report = pluginDeliveryStatus(
@@ -1205,6 +1206,9 @@ describe("plugin delivery — convergence guidance", () => {
         marketplaces: claudeMarketplaces() as Record<string, unknown>[],
         plugins: claudePlugins({ enabled: false, enablementScope }) as Record<string, unknown>[],
         settingsValid: true,
+        effectiveEnablement: {
+          "semctx@semctx-stable": { enabled: false, scope: enablementScope },
+        },
       },
     });
     for (const scope of ["project", "local"] as const) {
@@ -2231,6 +2235,7 @@ describe("Claude plugin metadata — declarative read-only inventory", () => {
         marketplaces: [],
         plugins: [],
         settingsValid: true,
+        effectiveEnablement: {},
       });
       expect(readdirSync(home)).toEqual([]);
 
@@ -2249,6 +2254,35 @@ describe("Claude plugin metadata — declarative read-only inventory", () => {
         .toBeNull();
     } finally {
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("uses the platform separator when a POSIX profile component contains a backslash", () => {
+    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "semctx-claude-separator-")));
+    const project = join(root, "project");
+    const ordinaryProfile = join(root, "profile");
+    const home = process.platform === "win32" ? ordinaryProfile : `${ordinaryProfile}\\literal`;
+    const plugins = join(home, "plugins");
+    const installed = join(plugins, "installed_plugins.json");
+    mkdirSync(project);
+    mkdirSync(plugins, { recursive: true });
+    writeFileSync(join(home, "settings.json"), "{}");
+    writeFileSync(installed, "{not-json");
+    const malformedBefore = readFileSync(installed);
+    try {
+      expect(readClaudePluginMetadataInventory(project, home)).toBeNull();
+      expect(readFileSync(installed)).toEqual(malformedBefore);
+
+      writeFileSync(installed, '{"version":2,"plugins":{}}');
+      expect(readClaudePluginMetadataInventory(project, home)).toEqual({
+        marketplaces: [],
+        plugins: [],
+        settingsValid: true,
+        effectiveEnablement: {},
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      if (process.platform !== "win32") rmSync(home, { recursive: true, force: true });
     }
   });
 

@@ -662,7 +662,7 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
     const runtime = fakeRuntime({
       codex: false,
       claude: true,
-      claudeMetadata: { marketplaces: [], plugins: [], settingsValid: true },
+      claudeMetadata: { marketplaces: [], plugins: [], settingsValid: true, effectiveEnablement: {} },
     });
     const report = executeInstall(
       "C:\\work\\project",
@@ -785,6 +785,7 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
             marketplaces: [],
             plugins,
             settingsValid: false,
+            effectiveEnablement: {},
           },
         });
         const report = executeInstall(
@@ -811,25 +812,58 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
 
   test("project and local disable overrides conflict before writes, while a user disable plans enablement", () => {
     const metadataFor = (
-      enabled: boolean,
-      enablementScope: "user" | "project" | "local",
+      enabled: boolean | undefined,
+      enablementScope: "user" | "project" | "local" | undefined,
+      registrationScope: "user" | "project" | "local" | null = "user",
     ): ClaudePluginMetadataInventory => ({
       marketplaces: [{ name: "semctx-stable", repo: SEMCTX_SOURCE }],
-      plugins: [{
+      plugins: registrationScope === null ? [] : [{
         id: "semctx@semctx-stable",
-        scope: "user",
-        enabled,
-        enablementScope,
+        scope: registrationScope,
+        ...(enabled === undefined ? {} : { enabled }),
+        ...(enablementScope === undefined ? {} : { enablementScope }),
         version: packageJson.version,
       }],
       settingsValid: true,
+      effectiveEnablement: enabled === undefined || enablementScope === undefined
+        ? {}
+        : { "semctx@semctx-stable": { enabled, scope: enablementScope } },
     });
     for (const enablementScope of ["project", "local"] as const) {
+      for (const registrationScope of [null, "user", "project", "local"] as const) {
+        for (const dryRun of [true, false]) {
+          const runtime = fakeRuntime({
+            codex: false,
+            claude: true,
+            claudeMetadata: metadataFor(false, enablementScope, registrationScope),
+          });
+          const report = executeInstall(
+            "C:\\work\\project",
+            parseArgs([
+              "install",
+              "--host",
+              "claude",
+              ...(dryRun ? ["--dry-run"] : []),
+              "--skip-setup",
+            ]),
+            runtime,
+          );
+          expect(report.ok).toBe(false);
+          expect(report.hosts.claude.status).toBe("conflict");
+          expect(report.hosts.claude.error).toContain(`${enablementScope} settings override`);
+          expect(runtime.commands.filter((command) => command[0] === "claude")).toEqual([
+            ["claude", "--version"],
+          ]);
+        }
+      }
+    }
+
+    for (const registrationScope of ["project", "local"] as const) {
       for (const dryRun of [true, false]) {
         const runtime = fakeRuntime({
           codex: false,
           claude: true,
-          claudeMetadata: metadataFor(false, enablementScope),
+          claudeMetadata: metadataFor(undefined, undefined, registrationScope),
         });
         const report = executeInstall(
           "C:\\work\\project",
@@ -843,8 +877,8 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
           runtime,
         );
         expect(report.ok).toBe(false);
-        expect(report.hosts.claude.status).toBe("conflict");
-        expect(report.hosts.claude.error).toContain(`${enablementScope} settings override`);
+        expect(report.hosts.claude.status).toBe("failed");
+        expect(report.hosts.claude.error).toContain("cannot determine effective Claude plugin enablement");
         expect(runtime.commands.filter((command) => command[0] === "claude")).toEqual([
           ["claude", "--version"],
         ]);
@@ -863,6 +897,21 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
     );
     expect(userReport.ok).toBe(true);
     expect(userReport.hosts.claude.steps).toContainEqual(expect.objectContaining({
+      action: "enable Semctx Claude plugin",
+      status: "planned",
+    }));
+    const unregisteredUserRuntime = fakeRuntime({
+      codex: false,
+      claude: true,
+      claudeMetadata: metadataFor(false, "user", null),
+    });
+    const unregisteredUserReport = executeInstall(
+      "C:\\work\\project",
+      parseArgs(["install", "--host", "claude", "--dry-run", "--skip-setup"]),
+      unregisteredUserRuntime,
+    );
+    expect(unregisteredUserReport.ok).toBe(true);
+    expect(unregisteredUserReport.hosts.claude.steps).toContainEqual(expect.objectContaining({
       action: "enable Semctx Claude plugin",
       status: "planned",
     }));

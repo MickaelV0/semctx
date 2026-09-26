@@ -1240,16 +1240,40 @@ function installClaude(
     (item) => item.name === LEGACY_CLAUDE_MARKETPLACE
       && (isSemctxSource(item.repo) || isSemctxSource(item.path)),
   );
-  const installedPlugin = plugins.find(
-    (item) => item.id === `${CLAUDE_PLUGIN}@${CLAUDE_MARKETPLACE}` && item.scope === "user",
-  );
-  const installed = installedPlugin !== undefined;
-  if (installed && typeof installedPlugin.enabled !== "boolean") {
+  const pluginId = `${CLAUDE_PLUGIN}@${CLAUDE_MARKETPLACE}`;
+  const applicableRegistrations = plugins.filter((item) => item.id === pluginId);
+  const effectiveEnablement = metadata?.effectiveEnablement[pluginId];
+  if (
+    metadata !== undefined
+    && metadata !== null
+    && applicableRegistrations.length > 0
+    && effectiveEnablement === undefined
+  ) {
     report.status = "failed";
     report.error = "cannot determine effective Claude plugin enablement from user, project, and local settings";
     return;
   }
   if (
+    effectiveEnablement?.enabled === false
+    && (effectiveEnablement.scope === "project" || effectiveEnablement.scope === "local")
+  ) {
+    report.status = "conflict";
+    report.error = `Claude plugin is disabled by an explicit ${effectiveEnablement.scope} settings override;`
+      + " change that override before installing or updating Semctx";
+    return;
+  }
+  const installedPlugin = plugins.find(
+    (item) => item.id === pluginId && item.scope === "user",
+  );
+  const installed = installedPlugin !== undefined;
+  if (metadata === undefined && installed && typeof installedPlugin.enabled !== "boolean") {
+    report.status = "failed";
+    report.error = "cannot determine effective Claude plugin enablement from user, project, and local settings";
+    return;
+  }
+  if (
+    metadata === undefined
+    &&
     installedPlugin?.enabled === false
     && (installedPlugin.enablementScope === "project" || installedPlugin.enablementScope === "local")
   ) {
@@ -1288,7 +1312,10 @@ function installClaude(
     pluginCommand,
     dryRun,
   )) return;
-  if (installedPlugin?.enabled === false && !runMutation(
+  const shouldEnableUser = metadata === undefined
+    ? installedPlugin?.enabled === false
+    : effectiveEnablement?.enabled === false && effectiveEnablement.scope === "user";
+  if (shouldEnableUser && !runMutation(
     runtime,
     root,
     report,

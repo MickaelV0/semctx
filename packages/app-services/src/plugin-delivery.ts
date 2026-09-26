@@ -299,6 +299,11 @@ export interface ClaudePluginMetadataInventory {
   plugins: Record<string, unknown>[];
   /** False when any applicable settings layer is linked, unreadable or malformed. */
   settingsValid: boolean;
+  /** Effective explicit setting after user -> project -> local precedence, including uninstalled ids. */
+  effectiveEnablement: Record<
+    string,
+    { enabled: boolean; scope: "user" | "project" | "local" }
+  >;
 }
 
 /** What a marketplace snapshot directory declares about the source it was resolved from. */
@@ -1562,7 +1567,7 @@ function readOptionalMetadataFile(file: string, root: string): OptionalMetadataF
     if (!isWithin(resolvedFile, resolvedRoot)) return { status: "unsafe" };
     const anchor = parse(resolvedRoot).root;
     let current = anchor;
-    const components = relative(anchor, resolvedFile).split(/[\\/]/).filter(Boolean);
+    const components = relative(anchor, resolvedFile).split(sep).filter(Boolean);
     for (let index = -1; index < components.length; index += 1) {
       if (index >= 0) current = join(current, components[index] ?? "");
       let stats;
@@ -1715,6 +1720,16 @@ export function readClaudePluginMetadataInventory(
   const settingsReliable = settingsLayers.every(
     (layer): layer is Record<string, boolean> => layer !== null,
   );
+  const effectiveEnablement: ClaudePluginMetadataInventory["effectiveEnablement"] = {};
+  if (settingsReliable) {
+    for (const [index, layer] of settingsLayers.entries()) {
+      const scope = (["user", "project", "local"] as const)[index];
+      if (scope === undefined) continue;
+      for (const [id, enabled] of Object.entries(layer)) {
+        effectiveEnablement[id] = { enabled, scope };
+      }
+    }
+  }
   const plugins: Record<string, unknown>[] = [];
   for (const [id, rawEntries] of Object.entries(pluginsRecord)) {
     if (id.trim().length === 0 || !Array.isArray(rawEntries)) return null;
@@ -1742,23 +1757,16 @@ export function readClaudePluginMetadataInventory(
         scope !== "user"
         && (typeof projectPath !== "string" || lexicalPathIdentity(projectPath) !== repositoryIdentity)
       ) continue;
-      let enabled: boolean | undefined;
-      let enablementScope: "user" | "project" | "local" | undefined;
-      if (settingsReliable) {
-        for (const [index, layer] of settingsLayers.entries()) {
-          if (Object.prototype.hasOwnProperty.call(layer, id)) {
-            enabled = layer[id];
-            enablementScope = (["user", "project", "local"] as const)[index];
-          }
-        }
-      }
+      const effective = effectiveEnablement[id];
       plugins.push({
         id,
         scope,
         installPath,
         ...(typeof version === "string" ? { version } : {}),
-        ...(typeof enabled === "boolean" ? { enabled } : {}),
-        ...(enablementScope === undefined ? {} : { enablementScope }),
+        ...(effective === undefined ? {} : {
+          enabled: effective.enabled,
+          enablementScope: effective.scope,
+        }),
       });
     }
   }
@@ -1777,7 +1785,7 @@ export function readClaudePluginMetadataInventory(
   for (const { path, root, observation } of settingsObservations) {
     if (!sameOptionalObservation(observation, readOptionalMetadataFile(path, root))) return null;
   }
-  return { marketplaces, plugins, settingsValid: settingsReliable };
+  return { marketplaces, plugins, settingsValid: settingsReliable, effectiveEnablement };
 }
 
 /** Digest a confined file. A host cache is untrusted input, so the read is bounded throughout. */
