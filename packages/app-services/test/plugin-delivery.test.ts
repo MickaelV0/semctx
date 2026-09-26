@@ -396,6 +396,28 @@ describe("plugin delivery — five distinct layers", () => {
     ]);
   });
 
+  test("a declarative directory source never impersonates the canonical Git marketplace", () => {
+    const report = statusOf({
+      scope: "claude",
+      claudeMetadata: {
+        marketplaces: [{
+          name: "semctx-stable",
+          sourceKind: "directory",
+          path: "hoklims/semctx",
+          ref: "stable",
+          installLocation: CLAUDE_MARKETPLACE_ROOT,
+        }],
+        plugins: claudePlugins() as Record<string, unknown>[],
+        settingsValid: true,
+        effectiveEnablement: {},
+      },
+    });
+
+    expect(report.hosts.claude.marketplace.source).toBe("hoklims/semctx");
+    expect(report.hosts.claude.marketplace.matchesSemctx).toBe(false);
+    expect(report.hosts.claude.reasons).toContain("MARKETPLACE_SOURCE_MISMATCH");
+  });
+
   test("emits a versioned, deterministic contract envelope", () => {
     const report = statusOf();
 
@@ -2022,6 +2044,16 @@ describe("Claude plugin metadata — declarative read-only inventory", () => {
     expect(resolveClaudePluginHome("relative-profile", join(tmpdir(), "ignored-home"))).toBeNull();
     expect(resolveClaudePluginHome("   ", join(tmpdir(), "ignored-home"))).toBeNull();
     expect(resolveClaudePluginHome("\\\\server\\share", join(tmpdir(), "ignored-home"))).toBeNull();
+    if (process.platform === "win32") {
+      expect(resolveClaudePluginHome("\\other-project", join(tmpdir(), "ignored-home"))).toBeNull();
+      expect(resolveClaudePluginHome("/other-project", join(tmpdir(), "ignored-home"))).toBeNull();
+      expect(resolveClaudePluginHome("C:other-project", join(tmpdir(), "ignored-home"))).toBeNull();
+      expect(resolveClaudePluginHome("C:\\physical\\profile", join(tmpdir(), "ignored-home")))
+        .toBe(resolve("C:\\physical\\profile"));
+    } else {
+      expect(resolveClaudePluginHome("/other-project", join(tmpdir(), "ignored-home")))
+        .toBe("/other-project");
+    }
     expect(resolveClaudePluginHome("", join(tmpdir(), "user-home"))).toBe(
       resolve(join(tmpdir(), "user-home", ".claude")),
     );
@@ -2072,6 +2104,7 @@ describe("Claude plugin metadata — declarative read-only inventory", () => {
       const inventory = readClaudePluginMetadataInventory(value.project, value.home);
       expect(inventory?.marketplaces).toEqual([{
         name: "semctx-stable",
+        sourceKind: "github",
         repo: "hoklims/semctx",
         ref: "stable",
         installLocation: join(value.home, "plugins", "marketplaces", "semctx-stable"),
@@ -2094,12 +2127,16 @@ describe("Claude plugin metadata — declarative read-only inventory", () => {
 
   test("projects every native marketplace source form and rejects unknown or incomplete entries", () => {
     const sources = [
-      { source: { source: "github", repo: "hoklims/semctx", ref: "stable" }, value: "hoklims/semctx" },
       {
+        kind: "github",
+        source: { source: "github", repo: "hoklims/semctx", ref: "stable" },
+        value: "hoklims/semctx",
+      },
+      {
+        kind: "git",
         source: { source: "git", url: "https://github.com/hoklims/semctx.git", ref: "stable" },
         value: "https://github.com/hoklims/semctx.git",
       },
-      { source: { source: "directory", path: "C:/local/semctx" }, value: "C:/local/semctx" },
     ] as const;
     for (const scenario of sources) {
       const value = fixture();
@@ -2113,9 +2150,31 @@ describe("Claude plugin metadata — declarative read-only inventory", () => {
         }));
         const inventory = readClaudePluginMetadataInventory(value.project, value.home);
         expect(inventory?.marketplaces[0]?.["repo"]).toBe(scenario.value);
+        expect(inventory?.marketplaces[0]?.["sourceKind"]).toBe(scenario.kind);
       } finally {
         rmSync(join(value.home, ".."), { recursive: true, force: true });
       }
+    }
+
+    const directory = fixture();
+    try {
+      const directoryPath = join(directory.home, "local-marketplace");
+      writeFileSync(directory.marketplace, JSON.stringify({
+        "semctx-stable": {
+          source: { source: "directory", path: directoryPath },
+          installLocation: join(directory.home, "plugins", "marketplaces", "semctx-stable"),
+          lastUpdated: "2026-09-26T00:00:00Z",
+        },
+      }));
+      expect(readClaudePluginMetadataInventory(directory.project, directory.home)?.marketplaces[0])
+        .toEqual({
+          name: "semctx-stable",
+          sourceKind: "directory",
+          path: directoryPath,
+          installLocation: join(directory.home, "plugins", "marketplaces", "semctx-stable"),
+        });
+    } finally {
+      rmSync(join(directory.home, ".."), { recursive: true, force: true });
     }
 
     for (const entry of [
@@ -2127,6 +2186,11 @@ describe("Claude plugin metadata — declarative read-only inventory", () => {
       {
         source: { source: "github", repo: "hoklims/semctx" },
         installLocation: "C:/fixture",
+      },
+      {
+        source: { source: "directory", path: "hoklims/semctx" },
+        installLocation: "C:/fixture",
+        lastUpdated: "2026-09-26T00:00:00Z",
       },
     ]) {
       const value = fixture();
@@ -2181,9 +2245,21 @@ describe("Claude plugin metadata — declarative read-only inventory", () => {
         writeEntry({ scope: "project", projectPath, installPath, version: RELEASE_VERSION });
         expect(readClaudePluginMetadataInventory(value.project, value.home)).toBeNull();
       }
+      if (process.platform === "win32") {
+        for (const projectPath of ["\\other-project", "/other-project", "C:other-project"]) {
+          writeEntry({ scope: "project", projectPath, installPath, version: RELEASE_VERSION });
+          expect(readClaudePluginMetadataInventory(value.project, value.home)).toBeNull();
+        }
+      }
       for (const malformedInstallPath of ["\0", "relative-cache", `${installPath}\nchild`]) {
         writeEntry({ scope: "user", installPath: malformedInstallPath, version: RELEASE_VERSION });
         expect(readClaudePluginMetadataInventory(value.project, value.home)).toBeNull();
+      }
+      if (process.platform === "win32") {
+        for (const malformedInstallPath of ["\\cache", "/cache", "C:cache"]) {
+          writeEntry({ scope: "user", installPath: malformedInstallPath, version: RELEASE_VERSION });
+          expect(readClaudePluginMetadataInventory(value.project, value.home)).toBeNull();
+        }
       }
 
       writeEntry({
@@ -2195,6 +2271,7 @@ describe("Claude plugin metadata — declarative read-only inventory", () => {
       expect(readClaudePluginMetadataInventory(value.project, value.home)).toEqual({
         marketplaces: [{
           name: "semctx-stable",
+          sourceKind: "github",
           repo: "hoklims/semctx",
           ref: "stable",
           installLocation: join(value.home, "plugins", "marketplaces", "semctx-stable"),
