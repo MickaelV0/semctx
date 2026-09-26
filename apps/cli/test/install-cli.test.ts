@@ -896,7 +896,7 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
         ref: "stable",
       };
       const fullyQualifiedLocation = join(plugins, "marketplaces", "semctx-stable");
-      const writeMarketplace = (source: Record<string, string>, installLocation: string): string => {
+      const writeMarketplace = (source: Record<string, unknown>, installLocation: string): string => {
         const bytes = JSON.stringify({
           "semctx-stable": {
             source,
@@ -936,6 +936,21 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
         expect(report.hosts.claude.error).toContain("already points to another source");
         expect(existsSync(unexpected)).toBe(false);
         expect(readFileSync(marketplace, "utf8")).toBe(relativeGitBytes);
+      }
+
+      for (const source of [
+        { source: "github", repo: "hoklims/semctx\0", ref: "stable" },
+        { source: "git", url: "https://github.com/hoklims/sem\nctx.git", ref: "stable" },
+      ]) {
+        const bytes = writeMarketplace(source, fullyQualifiedLocation);
+        for (const dryRun of [true, false]) {
+          const { child, report } = run(dryRun);
+          expect(child.exitCode).toBe(1);
+          expect(report.hosts.claude.status).toBe("failed");
+          expect(report.hosts.claude.error).toContain("declarative plugin metadata safely");
+          expect(existsSync(unexpected)).toBe(false);
+          expect(readFileSync(marketplace, "utf8")).toBe(bytes);
+        }
       }
 
       for (const source of [canonicalGithub, canonicalGit]) {

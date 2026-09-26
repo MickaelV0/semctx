@@ -434,6 +434,64 @@ describe("plugin delivery — five distinct layers", () => {
     });
     expect(relativeGitReport.hosts.claude.marketplace.matchesSemctx).toBe(false);
     expect(relativeGitReport.hosts.claude.reasons).toContain("MARKETPLACE_SOURCE_MISMATCH");
+
+    for (const marketplace of [
+      { name: "semctx-stable", sourceKind: "github", repo: "hoklims/semctx\0" },
+      { name: "semctx-stable", sourceKind: "git", repo: "https://github.com/hoklims/sem\nctx.git" },
+    ]) {
+      const malformedReport = statusOf({
+        scope: "claude",
+        claudeMetadata: {
+          marketplaces: [marketplace],
+          plugins: claudePlugins() as Record<string, unknown>[],
+          settingsValid: true,
+          effectiveEnablement: {},
+        },
+      });
+      expect(malformedReport.hosts.claude.marketplace.matchesSemctx).toBe(false);
+      expect(malformedReport.hosts.claude.reasons).toContain("MARKETPLACE_SOURCE_MISMATCH");
+    }
+  });
+
+  test("uses raw Claude filesystem identities for snapshot and cache reads", () => {
+    const suffixes = process.platform === "win32" ? ["\u00a0"] : [" ", "\u00a0"];
+    for (const suffix of suffixes) {
+      const rawMarketplace = `${CLAUDE_MARKETPLACE_ROOT}${suffix}`;
+      const rawCache = `${CLAUDE_CACHE_PATH}${suffix}`;
+      const report = statusOf({
+        scope: "claude",
+        claudeMetadata: {
+          marketplaces: [{
+            name: "semctx-stable",
+            sourceKind: "github",
+            repo: "hoklims/semctx",
+            ref: "stable",
+            installLocation: rawMarketplace,
+          }],
+          plugins: [{
+            id: "semctx@semctx-stable",
+            scope: "user",
+            enabled: true,
+            version: RELEASE_VERSION,
+            installPath: rawCache,
+          }],
+          settingsValid: true,
+          effectiveEnablement: {},
+        },
+        snapshots: {
+          [rawMarketplace]: {},
+          [CLAUDE_MARKETPLACE_ROOT]: {},
+        },
+        installed: {
+          [rawCache]: { version: "0.1.16" },
+          [CLAUDE_CACHE_PATH]: {},
+        },
+      });
+
+      expect(report.hosts.claude.installed.version).toBe("0.1.16");
+      expect(report.hosts.claude.verdict).toBe("UPDATE_AVAILABLE");
+      expect(report.hosts.claude.reasons).toContain("INSTALLED_CACHE_BEHIND_SNAPSHOT");
+    }
   });
 
   test("emits a versioned, deterministic contract envelope", () => {
@@ -2234,6 +2292,16 @@ describe("Claude plugin metadata — declarative read-only inventory", () => {
       {
         source: { source: "directory", path: "hoklims/semctx" },
         installLocation: "C:/fixture",
+        lastUpdated: "2026-09-26T00:00:00Z",
+      },
+      {
+        source: { source: "github", repo: "hoklims/semctx\0" },
+        installLocation: join(tmpdir(), "marketplace"),
+        lastUpdated: "2026-09-26T00:00:00Z",
+      },
+      {
+        source: { source: "git", url: "https://github.com/hoklims/sem\nctx.git" },
+        installLocation: join(tmpdir(), "marketplace"),
         lastUpdated: "2026-09-26T00:00:00Z",
       },
     ]) {

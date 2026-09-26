@@ -46,6 +46,7 @@ export {
   PLUGIN_DELIVERY_SCHEMA_VERSION,
   PLUGIN_RUNTIME_BUNDLES,
   codexCacheEntryFromMarketplaceRoot,
+  isCanonicalClaudeMarketplaceSource,
   isHostInterfaceUnsupportedFailure,
   pluginDeliveryStatus,
   readClaudePluginMetadataInventory,
