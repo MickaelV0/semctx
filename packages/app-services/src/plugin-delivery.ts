@@ -774,6 +774,13 @@ function hasLocalFilesystemShape(candidate: string): boolean {
   return !candidate.startsWith("//") && !candidate.includes("\\");
 }
 
+function hasExplicitTraversalSegment(candidate: string): boolean {
+  const parsed = parse(candidate);
+  const tail = candidate.slice(parsed.root.length);
+  const components = process.platform === "win32" ? tail.split(/[\\/]/) : tail.split("/");
+  return components.some((component) => component === "." || component === "..");
+}
+
 function hasLocalRepositoryRootShape(candidate: string): boolean {
   if (hasIdentityControlCharacter(candidate)) return false;
   if (isAbsolute(candidate)) return hasLocalFilesystemShape(candidate);
@@ -2417,34 +2424,37 @@ function attestationScratchBase(
   }
   // Relative, UNC and device paths are rejected on their shape; a UNC base would additionally make
   // every write an SMB round trip, which is network egress from a path that claims to be local.
-  if (!isLocalFilesystemPath(base)) return null;
+  if (!hasLocalFilesystemShape(base)) return null;
+  if (hasExplicitTraversalSegment(base) && captureRawTraversal(base, false) === null) return null;
   const resolved = resolve(base);
   let canonical: string;
   try {
     canonical = realpathSync.native(resolved);
-    if (!isLocalFilesystemPath(canonical) || !lstatSync(canonical).isDirectory()) return null;
+    if (!hasLocalFilesystemShape(canonical) || !lstatSync(canonical).isDirectory()) return null;
   } catch {
     return null;
   }
 
   const excluded: string[] = [];
-  const exclude = (candidate: string): void => {
-    if (!isLocalFilesystemPath(candidate)) return;
+  const exclude = (candidate: string): boolean => {
+    if (!hasLocalFilesystemShape(candidate)) return true;
+    if (hasExplicitTraversalSegment(candidate) && captureRawTraversal(candidate, false) === null) return false;
     const lexical = resolve(candidate);
     excluded.push(lexical);
     try {
       const actual = realpathSync.native(lexical);
-      if (isLocalFilesystemPath(actual)) excluded.push(actual);
+      if (hasLocalFilesystemShape(actual)) excluded.push(actual);
     } catch {
       // A missing exclusion still participates lexically; existing roots also contribute real paths.
     }
+    return true;
   };
-  exclude(inspectedRoot);
+  if (!exclude(inspectedRoot)) return null;
   for (const host of PLUGIN_DELIVERY_HOSTS) {
     const home = resolveHostHome(host);
     // Host homes are resolved read-only; a host that cannot be located simply contributes no
     // exclusion rather than blocking the attestation.
-    if (home !== null) exclude(home);
+    if (home !== null && !exclude(home)) return null;
   }
   for (const forbidden of excluded) {
     if (isWithin(resolved, forbidden) || isWithin(canonical, forbidden)) return null;
