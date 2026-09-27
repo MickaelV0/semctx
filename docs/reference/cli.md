@@ -447,12 +447,13 @@ Exit status follows `delivery`, the dimension a caller can act on: 0 for `UP_TO_
 `UPDATE_AVAILABLE`, 3 for `UNKNOWN`.
 
 The command never installs, updates, upgrades, removes, enables or promotes anything and never
-advances `stable`. Semctx itself writes neither the inspected project nor host trees, but the
-official host inventory commands it invokes may keep host-owned process bookkeeping (Claude
-currently records `.in_use` markers). Its two modes differ in exactly one respect: **by default it
-performs no network operation at all** — host inventory queries and local reads only — while
-**`--attest` fetches** the canonical public release into a throwaway store outside your project and
-deletes it afterwards. That transfer is real, and it happens only when you ask for it by name.
+advances `stable`. Semctx itself writes neither the inspected project nor host trees. For Codex it
+uses the current read-only marketplace and plugin list queries; for Claude it reads bounded
+declarative metadata directly and does not start Claude's inventory commands or create their profile
+bookkeeping. Its two modes differ in exactly one respect: **by default it performs no network
+operation at all** — Codex inventory queries and local reads only — while **`--attest` fetches** the
+canonical public release into a throwaway store outside your project and deletes it afterwards.
+That transfer is real, and it happens only when you ask for it by name.
 
 ## `status`
 

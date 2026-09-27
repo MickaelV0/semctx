@@ -8,10 +8,11 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, join, resolve } from "node:path";
+import { delimiter, join, resolve, sep } from "node:path";
 import { parseArgs } from "../src/args";
 import packageJson from "../package.json";
 import {
@@ -896,6 +897,7 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
         ref: "stable",
       };
       const fullyQualifiedLocation = join(plugins, "marketplaces", "semctx-stable");
+      mkdirSync(fullyQualifiedLocation, { recursive: true });
       const writeMarketplace = (source: Record<string, unknown>, installLocation: string): string => {
         const bytes = JSON.stringify({
           "semctx-stable": {
@@ -922,6 +924,31 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
           expect(existsSync(unexpected)).toBe(false);
           expect(readFileSync(marketplace, "utf8")).toBe(bytes);
           expect(readdirSync(project)).toEqual([]);
+        }
+      }
+
+      const traversalTarget = join(root, "traversal-target", "nested");
+      const traversalLink = join(root, "traversal-link");
+      const traversalFile = join(root, "traversal-file");
+      mkdirSync(traversalTarget, { recursive: true });
+      symlinkSync(
+        traversalTarget,
+        traversalLink,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+      writeFileSync(traversalFile, "not a directory");
+      for (const installLocation of [
+        `${traversalLink}${sep}..${sep}marketplace`,
+        `${traversalFile}${sep}..${sep}marketplace`,
+      ]) {
+        const bytes = writeMarketplace(canonicalGithub, installLocation);
+        for (const dryRun of [true, false]) {
+          const { child, report } = run(dryRun);
+          expect(child.exitCode).toBe(1);
+          expect(report.hosts.claude.status).toBe("failed");
+          expect(report.hosts.claude.error).toContain("declarative plugin metadata safely");
+          expect(existsSync(unexpected)).toBe(false);
+          expect(readFileSync(marketplace, "utf8")).toBe(bytes);
         }
       }
 
@@ -953,8 +980,15 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
         }
       }
 
-      for (const source of [canonicalGithub, canonicalGit]) {
-        writeMarketplace(source, fullyQualifiedLocation);
+      const safeTraversal = join(root, "safe-traversal");
+      mkdirSync(safeTraversal);
+      const safeLocation = `${safeTraversal}${sep}..${sep}profile${sep}plugins${sep}marketplaces${sep}semctx-stable`;
+      for (const [source, location] of [
+        [canonicalGithub, fullyQualifiedLocation],
+        [canonicalGit, fullyQualifiedLocation],
+        [canonicalGithub, safeLocation],
+      ] as const) {
+        writeMarketplace(source, location);
         const { child, report } = run(true);
         expect(child.exitCode).toBe(0);
         expect(report.hosts.claude.status).toBe("planned");
