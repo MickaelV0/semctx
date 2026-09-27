@@ -2816,6 +2816,75 @@ describe("Claude plugin metadata — declarative read-only inventory", () => {
       rmSync(join(value.home, ".."), { recursive: true, force: true });
     }
   });
+
+  test("revalidates every declared traversal observation before returning inventory", () => {
+    const exercise = (
+      configure: (value: ReturnType<typeof fixture>, rawPath: string) => void,
+    ): void => {
+      const value = fixture();
+      const root = resolve(value.home, "..");
+      const erased = join(root, "erased");
+      const target = join(root, "target", "nested");
+      mkdirSync(erased);
+      mkdirSync(target, { recursive: true });
+      const rawPath = `${erased}${sep}..${sep}declared-target`;
+      try {
+        configure(value, rawPath);
+        expect(readClaudePluginMetadataInventory(value.project, value.home)).not.toBeNull();
+        expect(readClaudePluginMetadataInventory(value.project, value.home, () => {
+          rmSync(erased, { recursive: true });
+          symlinkSync(target, erased, process.platform === "win32" ? "junction" : "dir");
+        })).toBeNull();
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    };
+
+    for (const source of [
+      { source: "github", repo: "hoklims/semctx", ref: "stable" },
+      { source: "git", url: "https://github.com/hoklims/semctx.git", ref: "stable" },
+      { source: "directory", path: join(tmpdir(), "semctx-local-marketplace") },
+    ]) {
+      exercise((value, rawPath) => {
+        writeFileSync(value.marketplace, JSON.stringify({
+          "semctx-stable": {
+            source,
+            installLocation: rawPath,
+            lastUpdated: "2026-09-27T00:00:00Z",
+          },
+        }));
+      });
+    }
+
+    exercise((value, rawPath) => {
+      writeFileSync(value.installed, JSON.stringify({
+        version: 2,
+        plugins: {
+          "semctx@semctx-stable": [{
+            scope: "user",
+            installPath: rawPath,
+            version: RELEASE_VERSION,
+          }],
+        },
+      }));
+    });
+
+    exercise((value, _rawPath) => {
+      const root = resolve(value.project, "..");
+      const rawProject = `${join(root, "erased")}${sep}..${sep}project`;
+      writeFileSync(value.installed, JSON.stringify({
+        version: 2,
+        plugins: {
+          "semctx@semctx-stable": [{
+            scope: "project",
+            projectPath: rawProject,
+            installPath: join(value.home, "plugins", "cache", "semctx", RELEASE_VERSION),
+            version: RELEASE_VERSION,
+          }],
+        },
+      }));
+    });
+  });
 });
 
 /**

@@ -683,6 +683,12 @@ interface RawTraversalEntry {
   mode?: number;
 }
 
+interface RawTraversalObservation {
+  candidate: string;
+  allowRelative: boolean;
+  snapshot: readonly RawTraversalEntry[];
+}
+
 function captureRawTraversal(
   candidate: string,
   allowRelative: boolean,
@@ -757,6 +763,23 @@ function sameRawTraversal(
     });
 }
 
+function hasLocalFilesystemShape(candidate: string): boolean {
+  if (!isAbsolute(candidate) || hasIdentityControlCharacter(candidate)) return false;
+  if (process.platform === "win32") return /^[A-Za-z]:[\\/]/.test(candidate);
+  return !candidate.startsWith("//") && !candidate.includes("\\");
+}
+
+function observeRawTraversal(
+  candidate: string,
+  allowRelative: boolean,
+  observations: RawTraversalObservation[],
+): boolean {
+  const snapshot = captureRawTraversal(candidate, allowRelative);
+  if (snapshot === null) return false;
+  observations.push({ candidate, allowRelative, snapshot });
+  return true;
+}
+
 /**
  * A UNC or Win32 device path handed back by a host is not a local read: touching
  * `\\<host>\share` makes Windows open an SMB connection, which is network egress from a product
@@ -764,13 +787,7 @@ function sameRawTraversal(
  * the shape before any filesystem call can see it.
  */
 export function isLocalFilesystemPath(candidate: string): boolean {
-  if (!isAbsolute(candidate) || hasIdentityControlCharacter(candidate)) return false;
-  if (process.platform === "win32") {
-    return /^[A-Za-z]:[\\/]/.test(candidate) && captureRawTraversal(candidate, false) !== null;
-  }
-  return !candidate.startsWith("//")
-    && !candidate.includes("\\")
-    && captureRawTraversal(candidate, false) !== null;
+  return hasLocalFilesystemShape(candidate) && captureRawTraversal(candidate, false) !== null;
 }
 
 /** `candidate` must be `root` itself or strictly inside it, comparing resolved forms. */
@@ -1785,10 +1802,14 @@ function lexicalPathIdentity(path: string): string {
   return process.platform === "win32" ? absolute.toLowerCase() : absolute;
 }
 
-function declaredFilesystemIdentity(value: unknown): string | null {
+function declaredFilesystemIdentity(
+  value: unknown,
+  observations: RawTraversalObservation[],
+): string | null {
   if (
     typeof value !== "string"
-    || !isLocalFilesystemPath(value)
+    || !hasLocalFilesystemShape(value)
+    || !observeRawTraversal(value, false, observations)
   ) return null;
   return lexicalPathIdentity(value);
 }
@@ -1822,12 +1843,12 @@ export function readClaudePluginMetadataInventory(
   claudeHome: string,
   afterObservation?: () => void,
 ): ClaudePluginMetadataInventory | null {
-  if (!isLocalFilesystemPath(claudeHome)) return null;
+  const traversalObservations: RawTraversalObservation[] = [];
+  if (!hasLocalFilesystemShape(claudeHome)) return null;
+  if (!observeRawTraversal(claudeHome, false, traversalObservations)) return null;
   if (hasIdentityControlCharacter(repositoryRoot)) return null;
   if (process.platform !== "win32" && repositoryRoot.includes("\\")) return null;
-  const homeTraversal = captureRawTraversal(claudeHome, false);
-  const repositoryTraversal = captureRawTraversal(repositoryRoot, true);
-  if (homeTraversal === null || repositoryTraversal === null) return null;
+  if (!observeRawTraversal(repositoryRoot, true, traversalObservations)) return null;
   const absoluteRepositoryRoot = resolve(repositoryRoot);
   if (!isLocalFilesystemPath(absoluteRepositoryRoot)) return null;
   const marketplacesPath = join(claudeHome, "plugins", "known_marketplaces.json");
@@ -1871,12 +1892,12 @@ export function readClaudePluginMetadataInventory(
           ? path
           : undefined;
     const directoryIdentity = sourceKind === "directory"
-      ? declaredFilesystemIdentity(sourceValue)
+      ? declaredFilesystemIdentity(sourceValue, traversalObservations)
       : null;
     const sourceIdentityValid = sourceKind === "directory"
       ? directoryIdentity !== null
       : isValidClaudeSourceIdentity(sourceKind, sourceValue);
-    const installLocationIdentity = declaredFilesystemIdentity(installLocation);
+    const installLocationIdentity = declaredFilesystemIdentity(installLocation, traversalObservations);
     if (
       name.trim().length === 0
       || entry === null
@@ -1946,10 +1967,10 @@ export function readClaudePluginMetadataInventory(
       const installedAt = entry?.["installedAt"];
       const lastUpdated = entry?.["lastUpdated"];
       const gitCommitSha = entry?.["gitCommitSha"];
-      const installIdentity = declaredFilesystemIdentity(installPath);
+      const installIdentity = declaredFilesystemIdentity(installPath, traversalObservations);
       const projectIdentity = projectPath === undefined
         ? null
-        : declaredFilesystemIdentity(projectPath);
+        : declaredFilesystemIdentity(projectPath, traversalObservations);
       if (
         entry === null
         || (scope !== "user" && scope !== "project" && scope !== "local")
@@ -1980,8 +2001,8 @@ export function readClaudePluginMetadataInventory(
   // Deterministic test seam for cross-file drift; production never supplies it.
   afterObservation?.();
 
-  if (!sameRawTraversal(claudeHome, false, homeTraversal)) return null;
-  if (!sameRawTraversal(repositoryRoot, true, repositoryTraversal)) return null;
+  if (!traversalObservations.every((observation) =>
+    sameRawTraversal(observation.candidate, observation.allowRelative, observation.snapshot))) return null;
 
   if (!sameOptionalObservation(
     marketplacesObservation,

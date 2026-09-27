@@ -29,7 +29,10 @@ import {
   type InstallReport,
   type SetupExecution,
 } from "../src/commands/install";
-import type { ClaudePluginMetadataInventory } from "@semantic-context/app-services";
+import {
+  readClaudePluginMetadataInventory,
+  type ClaudePluginMetadataInventory,
+} from "@semantic-context/app-services";
 
 const SEMCTX_SOURCE = "https://github.com/hoklims/semctx.git";
 // Absolute on every platform, and never touched on disk: the fake runtime answers all probes.
@@ -1323,6 +1326,76 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
       );
       expect(controlReport.ok).toBe(true);
       expect(controlReport.hosts.claude.status).toBe("planned");
+    }
+  });
+
+  test("apply revalidates declared traversal observations before Claude mutations", () => {
+    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "semctx-install-traversal-drift-")));
+    const project = join(root, "project");
+    const profile = join(root, "profile");
+    const plugins = join(profile, "plugins");
+    const erased = join(root, "erased");
+    const target = join(root, "target", "nested");
+    mkdirSync(project);
+    mkdirSync(plugins, { recursive: true });
+    mkdirSync(erased);
+    mkdirSync(target, { recursive: true });
+    const rawLocation = `${erased}${sep}..${sep}marketplace`;
+    writeFileSync(join(plugins, "known_marketplaces.json"), JSON.stringify({
+      "semctx-stable": {
+        source: { source: "github", repo: "hoklims/semctx", ref: "stable" },
+        installLocation: rawLocation,
+        lastUpdated: "2026-09-27T00:00:00Z",
+      },
+    }));
+    writeFileSync(join(plugins, "installed_plugins.json"), JSON.stringify({
+      version: 2,
+      plugins: {
+        "semctx@semctx-stable": [{
+          scope: "user",
+          installPath: `${erased}${sep}..${sep}cache`,
+          version: packageJson.version,
+        }],
+      },
+    }));
+    writeFileSync(join(profile, "settings.json"), JSON.stringify({
+      enabledPlugins: { "semctx@semctx-stable": true },
+    }));
+
+    try {
+      const positive = fakeRuntime({ codex: false, claude: true });
+      positive.readClaudePluginMetadata = () => readClaudePluginMetadataInventory(project, profile);
+      const positiveReport = executeInstall(
+        project,
+        parseArgs(["install", "--host", "claude", "--dry-run", "--skip-setup"]),
+        positive,
+      );
+      expect(positiveReport.ok).toBe(true);
+      expect(positiveReport.hosts.claude.status).toBe("planned");
+
+      let reads = 0;
+      const drifting = fakeRuntime({ codex: false, claude: true });
+      drifting.readClaudePluginMetadata = () => {
+        reads += 1;
+        return readClaudePluginMetadataInventory(project, profile, reads === 2 ? () => {
+          rmSync(erased, { recursive: true });
+          symlinkSync(target, erased, process.platform === "win32" ? "junction" : "dir");
+        } : undefined);
+      };
+      const report = executeInstall(
+        project,
+        parseArgs(["install", "--host", "claude", "--skip-setup"]),
+        drifting,
+      );
+      expect(reads).toBe(2);
+      expect(report.ok).toBe(false);
+      expect(report.hosts.claude.status).toBe("failed");
+      expect(drifting.commands.filter((command) =>
+        command[0] === "claude"
+        && command.some((token) => ["add", "install", "update", "enable", "remove"].includes(token))
+      )).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 
