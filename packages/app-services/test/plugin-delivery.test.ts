@@ -42,20 +42,21 @@ import {
 const MAIN_COMMIT = "1acf1f14a5fb76a66e9686ba284081c29dd838d8";
 const STABLE_COMMIT = "0173f8938facc1f1e91b25cba2275f838a1eba3a";
 const RELEASE_VERSION = "0.1.17";
+const PHYSICAL_TEMPORARY_ROOT = realpathSync.native(tmpdir());
 
-// Absolute on every platform, and never touched on disk: the fake dependencies answer all probes.
-const CODEX_HOME = join(tmpdir(), "semctx-fake-codex-delivery");
+// Absolute on every platform. Synthetic child trees are not created; fake probes provide their payloads.
+const CODEX_HOME = join(PHYSICAL_TEMPORARY_ROOT, "semctx-fake-codex-delivery");
 const CODEX_MARKETPLACE_ROOT = join(CODEX_HOME, ".tmp", "marketplaces", "semctx-stable");
 const CODEX_CACHE_ROOT = join(CODEX_HOME, "plugins", "cache", "semctx-stable", "semctx-control");
 const CODEX_CACHE_PATH = join(CODEX_CACHE_ROOT, RELEASE_VERSION);
-const CLAUDE_HOME = join(tmpdir(), "semctx-fake-claude-delivery");
+const CLAUDE_HOME = join(PHYSICAL_TEMPORARY_ROOT, "semctx-fake-claude-delivery");
 const CLAUDE_MARKETPLACE_ROOT = join(CLAUDE_HOME, "plugins", "marketplaces", "semctx-stable");
 const CLAUDE_CACHE_ROOT = join(CLAUDE_HOME, "plugins", "cache", "semctx-stable", "semctx");
 const CLAUDE_CACHE_PATH = join(CLAUDE_CACHE_ROOT, RELEASE_VERSION);
 
 const SEMCTX_SOURCE = "https://github.com/hoklims/semctx.git";
 /** Stands in for a user's own project: the diagnostic inspects it, it never authorises anything. */
-const CONSUMER_ROOT = join(tmpdir(), "semctx-consumer-project");
+const CONSUMER_ROOT = join(PHYSICAL_TEMPORARY_ROOT, "semctx-consumer-project");
 
 /** Every command the diagnostic is allowed to run. Anything else is a mutation of user state. */
 const READ_ONLY_QUERIES = [
@@ -783,7 +784,7 @@ describe("plugin delivery — the cache is proven by content, not by version str
 
 describe("plugin delivery — host-supplied paths are confined", () => {
   test("the same trusted home reached through a filesystem alias stays confined", () => {
-    const root = mkdtempSync(join(tmpdir(), "semctx-plugin-delivery-home-alias-"));
+    const root = mkdtempSync(join(PHYSICAL_TEMPORARY_ROOT, "semctx-plugin-delivery-home-alias-"));
     const home = join(root, "home");
     const alias = join(root, "home-alias");
     const marketplaceRoot = join(home, ".tmp", "marketplaces", "semctx-stable");
@@ -811,7 +812,7 @@ describe("plugin delivery — host-supplied paths are confined", () => {
   });
 
   test("rejects an outside candidate before inspecting its physical lineage", () => {
-    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "semctx-host-path-order-")));
+    const root = realpathSync.native(mkdtempSync(join(PHYSICAL_TEMPORARY_ROOT, "semctx-host-path-order-")));
     const home = join(root, "home");
     const inside = join(home, ".tmp", "marketplaces", "semctx-stable");
     const outside = join(root, "outside", ".tmp", "marketplaces", "semctx-stable");
@@ -867,7 +868,7 @@ describe("plugin delivery — host-supplied paths are confined", () => {
   });
 
   test("a look-alike marketplace root outside the host home is rejected", () => {
-    const elsewhere = join(tmpdir(), "semctx-not-codex-home", ".tmp", "marketplaces", "semctx-stable");
+    const elsewhere = join(PHYSICAL_TEMPORARY_ROOT, "semctx-not-codex-home", ".tmp", "marketplaces", "semctx-stable");
     const report = statusOf({ codexMarketplaces: codexMarketplaces({ root: elsewhere }) });
 
     // The tail matches the expected layout, but the tree is not the resolved Codex home.
@@ -884,7 +885,7 @@ describe("plugin delivery — host-supplied paths are confined", () => {
   });
 
   test("a marketplace junction escaping the host home is rejected before any read", () => {
-    const root = mkdtempSync(join(tmpdir(), "semctx-plugin-delivery-junction-"));
+    const root = mkdtempSync(join(PHYSICAL_TEMPORARY_ROOT, "semctx-plugin-delivery-junction-"));
     const home = join(root, "home");
     const external = join(root, "external");
     const marketplaceParent = join(home, ".tmp", "marketplaces");
@@ -919,7 +920,7 @@ describe("plugin delivery — host-supplied paths are confined", () => {
   });
 
   test("a nested plugin junction cannot move manifest and bundle reads outside the snapshot", () => {
-    const root = mkdtempSync(join(tmpdir(), "semctx-plugin-delivery-nested-junction-"));
+    const root = mkdtempSync(join(PHYSICAL_TEMPORARY_ROOT, "semctx-plugin-delivery-nested-junction-"));
     const home = join(root, "home");
     const marketplaceRoot = join(home, ".tmp", "marketplaces", "semctx-stable");
     const pluginsRoot = join(marketplaceRoot, "plugins");
@@ -1452,7 +1453,7 @@ describe("plugin delivery — the diagnostic is strictly read-only", () => {
     // routed through the same seam and are therefore observable here rather than invisible.
     const queries: string[][] = [];
     pluginDeliveryStatus(
-      { repositoryRoot: join(tmpdir(), "semctx-plugin-delivery-readonly"), version: RELEASE_VERSION },
+      { repositoryRoot: join(PHYSICAL_TEMPORARY_ROOT, "semctx-plugin-delivery-readonly"), version: RELEASE_VERSION },
       {
         runQuery(command) {
           queries.push([...command]);
@@ -1847,6 +1848,115 @@ function gitCalls(recorded: readonly RecordedQuery[]): string[] {
 }
 
 describe("plugin delivery — the attestation authority is canonical, not the inspected project", () => {
+  test("canonicalizes a local temporary alias while preserving project and host exclusions", () => {
+    const root = mkdtempSync(join(PHYSICAL_TEMPORARY_ROOT, "semctx-attestation-temp-alias-"));
+    const source = pathToFileURL(join(import.meta.dir, "..", "src", "plugin-delivery.ts")).href;
+    const invoke = (temporaryRoot: string, repositoryRoot: string, hostHome: string | null) => {
+      const program = `
+        const { pluginDeliveryStatus } = await import(${JSON.stringify(source)});
+        let calls = 0;
+        const report = pluginDeliveryStatus(
+          {
+            repositoryRoot: ${JSON.stringify(repositoryRoot)},
+            version: ${JSON.stringify(RELEASE_VERSION)},
+            hosts: [],
+            attest: true,
+          },
+          {
+            readRepositoryChannel: () => ({ commit: ${JSON.stringify(MAIN_COMMIT)}, originIsSemctx: false }),
+            resolveHostHome: () => ${JSON.stringify(hostHome)},
+            runQuery() {
+              calls += 1;
+              return { code: 1, out: "", err: "injected before network" };
+            },
+          },
+        );
+        process.stdout.write(JSON.stringify({ reasons: report.publicRelease.reasons, calls }));
+      `;
+      const child = Bun.spawnSync([process.execPath, "-e", program], {
+        env: { ...process.env, TEMP: temporaryRoot, TMP: temporaryRoot, TMPDIR: temporaryRoot },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(new TextDecoder().decode(child.stderr)).toBe("");
+      expect(child.exitCode).toBe(0);
+      return JSON.parse(new TextDecoder().decode(child.stdout)) as { reasons: string[]; calls: number };
+    };
+    const runAlias = (base: string, alias: string, repositoryRoot: string, hostHome: string | null) => {
+      mkdirSync(base, { recursive: true });
+      symlinkSync(base, alias, process.platform === "win32" ? "junction" : "dir");
+      return invoke(alias, repositoryRoot, hostHome);
+    };
+
+    try {
+      const ordinaryBase = join(root, "ordinary-base");
+      const ordinaryAlias = join(root, "ordinary-alias");
+      const ordinary = runAlias(ordinaryBase, ordinaryAlias, join(root, "consumer"), null);
+      expect(ordinary.reasons).toContain("PUBLIC_RELEASE_ATTESTATION_STORE_UNAVAILABLE");
+      expect(ordinary.reasons).not.toContain("PUBLIC_RELEASE_SCRATCH_LOCATION_REJECTED");
+      expect(ordinary.calls).toBe(1);
+      expect(readdirSync(ordinaryBase)).toEqual([]);
+
+      const project = join(root, "project");
+      const projectBase = join(project, "temporary");
+      const projectAlias = join(root, "project-alias");
+      const projectExcluded = runAlias(projectBase, projectAlias, project, null);
+      expect(projectExcluded.reasons).toContain("PUBLIC_RELEASE_SCRATCH_LOCATION_REJECTED");
+      expect(projectExcluded.calls).toBe(0);
+      expect(readdirSync(projectBase)).toEqual([]);
+
+      const home = join(root, "home");
+      const homeBase = join(home, "temporary");
+      const homeAlias = join(root, "home-alias");
+      const homeExcluded = runAlias(homeBase, homeAlias, join(root, "other-consumer"), home);
+      expect(homeExcluded.reasons).toContain("PUBLIC_RELEASE_SCRATCH_LOCATION_REJECTED");
+      expect(homeExcluded.calls).toBe(0);
+      expect(readdirSync(homeBase)).toEqual([]);
+
+      const safeBase = join(root, "safe-base");
+      const safeChild = join(safeBase, "child");
+      mkdirSync(safeChild, { recursive: true });
+      const safeTraversal = invoke(`${safeChild}${sep}..`, join(root, "safe-consumer"), null);
+      expect(safeTraversal.reasons).toContain("PUBLIC_RELEASE_ATTESTATION_STORE_UNAVAILABLE");
+      expect(safeTraversal.calls).toBe(1);
+      expect(readdirSync(safeBase)).toEqual(["child"]);
+
+      const traversalParent = join(root, "traversal-parent");
+      const traversalTarget = join(traversalParent, "target");
+      const traversalLink = join(traversalParent, "link");
+      const traversalBase = join(traversalParent, "temporary");
+      mkdirSync(traversalTarget, { recursive: true });
+      mkdirSync(traversalBase);
+      symlinkSync(traversalTarget, traversalLink, process.platform === "win32" ? "junction" : "dir");
+      const unsafeTraversal = invoke(
+        `${traversalLink}${sep}..${sep}${basename(traversalBase)}`,
+        join(root, "traversal-consumer"),
+        null,
+      );
+      expect(unsafeTraversal.reasons).toContain("PUBLIC_RELEASE_SCRATCH_LOCATION_REJECTED");
+      expect(unsafeTraversal.calls).toBe(0);
+      expect(readdirSync(traversalBase)).toEqual([]);
+
+      const exclusionParent = join(root, "exclusion-parent");
+      const exclusionTarget = join(exclusionParent, "target");
+      const exclusionLink = join(exclusionParent, "link");
+      const exclusionProject = join(exclusionParent, "project");
+      mkdirSync(exclusionTarget, { recursive: true });
+      mkdirSync(exclusionProject);
+      symlinkSync(exclusionTarget, exclusionLink, process.platform === "win32" ? "junction" : "dir");
+      const unsafeProject = invoke(
+        ordinaryAlias,
+        `${exclusionLink}${sep}..${sep}${basename(exclusionProject)}`,
+        null,
+      );
+      expect(unsafeProject.reasons).toContain("PUBLIC_RELEASE_SCRATCH_LOCATION_REJECTED");
+      expect(unsafeProject.calls).toBe(0);
+      expect(readdirSync(ordinaryBase)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("asks the canonical public repository and never the inspected project's remote", () => {
     const { report, recorded } = releaseOf();
 
@@ -1863,7 +1973,7 @@ describe("plugin delivery — the attestation authority is canonical, not the in
   });
 
   test("removes its scratch store when an internal query seam throws unexpectedly", () => {
-    const base = mkdtempSync(join(tmpdir(), "semctx-attestation-throw-"));
+    const base = mkdtempSync(join(PHYSICAL_TEMPORARY_ROOT, "semctx-attestation-throw-"));
     try {
       const source = pathToFileURL(join(import.meta.dir, "..", "src", "plugin-delivery.ts")).href;
       const program = `
@@ -2123,7 +2233,7 @@ describe("plugin delivery — activation is an independent dimension", () => {
 
 describe("plugin delivery — local artifacts are bounded before they are read", () => {
   test("refuses a POSIX backslash before any confined filesystem walk", () => {
-    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "semctx-backslash-root-")));
+    const root = realpathSync.native(mkdtempSync(join(PHYSICAL_TEMPORARY_ROOT, "semctx-backslash-root-")));
     const outside = resolve(root, "..", `${basename(root)}-outside.json`);
     const inside = join(root, "inside.json");
     writeFileSync(outside, "outside");
@@ -2169,7 +2279,7 @@ describe("plugin delivery — local artifacts are bounded before they are read",
   });
 
   test("an oversized manifest and an oversized bundle are refused on their metadata", () => {
-    const home = mkdtempSync(join(tmpdir(), "semctx-plugin-delivery-oversized-"));
+    const home = mkdtempSync(join(PHYSICAL_TEMPORARY_ROOT, "semctx-plugin-delivery-oversized-"));
     const codexMarketplaceRoot = join(home, ".tmp", "marketplaces", "semctx-stable");
     const claudeMarketplaceRoot = join(home, "plugins", "marketplaces", "semctx-stable");
     const codexCache = join(home, "plugins", "cache", "semctx-stable", "semctx-control", RELEASE_VERSION);
@@ -2227,7 +2337,7 @@ describe("plugin delivery — local artifacts are bounded before they are read",
     // Deterministically enlarge the same open file after fstat and before its first read. A
     // stat-then-read implementation would allocate or hash past the declared ceiling; the bounded
     // descriptor reader requests one extra byte and refuses the artifact instead.
-    const home = mkdtempSync(join(tmpdir(), "semctx-plugin-delivery-swap-"));
+    const home = mkdtempSync(join(PHYSICAL_TEMPORARY_ROOT, "semctx-plugin-delivery-swap-"));
     const swapped = join(home, "semctx.js");
     writeFileSync(swapped, "bundle semctx.js");
 
@@ -2248,7 +2358,7 @@ describe("plugin delivery — local artifacts are bounded before they are read",
 
 describe("Claude plugin metadata — declarative read-only inventory", () => {
   test("honours an absolute CLAUDE_CONFIG_DIR and refuses relative or network roots", () => {
-    const physicalTemporaryRoot = realpathSync.native(tmpdir());
+    const physicalTemporaryRoot = PHYSICAL_TEMPORARY_ROOT;
     const configured = join(physicalTemporaryRoot, "claude-config-root");
     expect(resolveClaudePluginHome(configured, join(physicalTemporaryRoot, "ignored-home"))).toBe(resolve(configured));
     const nonBreakingSpace = `${configured}\u00a0`;
@@ -2277,7 +2387,7 @@ describe("Claude plugin metadata — declarative read-only inventory", () => {
   });
 
   test("validates raw home traversal before normalization erases unsafe components", () => {
-    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "semctx-claude-raw-home-")));
+    const root = realpathSync.native(mkdtempSync(join(PHYSICAL_TEMPORARY_ROOT, "semctx-claude-raw-home-")));
     const profile = join(root, "profile");
     const safe = join(root, "safe");
     const target = join(root, "target", "nested");
@@ -2316,7 +2426,7 @@ describe("Claude plugin metadata — declarative read-only inventory", () => {
   function fixture(): { home: string; project: string; marketplace: string; installed: string } {
     // macOS exposes tmpdir() through /var -> /private/var. The production reader correctly rejects
     // a linked root, so fixtures must pass the physical directory they actually own.
-    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "semctx-claude-metadata-")));
+    const root = realpathSync.native(mkdtempSync(join(PHYSICAL_TEMPORARY_ROOT, "semctx-claude-metadata-")));
     const home = join(root, ".claude");
     const project = join(root, "project");
     const plugins = join(home, "plugins");
@@ -2471,12 +2581,12 @@ describe("Claude plugin metadata — declarative read-only inventory", () => {
       },
       {
         source: { source: "github", repo: "hoklims/semctx\0" },
-        installLocation: join(tmpdir(), "marketplace"),
+        installLocation: join(PHYSICAL_TEMPORARY_ROOT, "marketplace"),
         lastUpdated: "2026-09-26T00:00:00Z",
       },
       {
         source: { source: "git", url: "https://github.com/hoklims/sem\nctx.git" },
-        installLocation: join(tmpdir(), "marketplace"),
+        installLocation: join(PHYSICAL_TEMPORARY_ROOT, "marketplace"),
         lastUpdated: "2026-09-26T00:00:00Z",
       },
     ]) {
@@ -2669,7 +2779,7 @@ describe("Claude plugin metadata — declarative read-only inventory", () => {
   });
 
   test("a fresh physical profile is empty, creates nothing, and rejects an absent-parent link swap", () => {
-    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "semctx-claude-fresh-profile-")));
+    const root = realpathSync.native(mkdtempSync(join(PHYSICAL_TEMPORARY_ROOT, "semctx-claude-fresh-profile-")));
     const home = join(root, ".claude");
     const project = join(root, "project");
     mkdirSync(home);
@@ -2744,7 +2854,7 @@ describe("Claude plugin metadata — declarative read-only inventory", () => {
   });
 
   test("rejects nonlocal repository shapes before any filesystem inspection", () => {
-    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "semctx-repository-shape-")));
+    const root = realpathSync.native(mkdtempSync(join(PHYSICAL_TEMPORARY_ROOT, "semctx-repository-shape-")));
     const home = join(root, "profile");
     const project = join(root, "project");
     mkdirSync(home);
@@ -2779,7 +2889,7 @@ describe("Claude plugin metadata — declarative read-only inventory", () => {
   });
 
   test("fails closed on Bun 1.4 POSIX backslash paths while normal physical profiles remain readable", () => {
-    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "semctx-claude-separator-")));
+    const root = realpathSync.native(mkdtempSync(join(PHYSICAL_TEMPORARY_ROOT, "semctx-claude-separator-")));
     const project = join(root, "project");
     const ordinaryProfile = join(root, "profile");
     const home = process.platform === "win32" ? ordinaryProfile : `${ordinaryProfile}\\literal`;
@@ -2957,7 +3067,7 @@ describe("Claude plugin metadata — declarative read-only inventory", () => {
     for (const source of [
       { source: "github", repo: "hoklims/semctx", ref: "stable" },
       { source: "git", url: "https://github.com/hoklims/semctx.git", ref: "stable" },
-      { source: "directory", path: join(realpathSync.native(tmpdir()), "semctx-local-marketplace") },
+      { source: "directory", path: join(PHYSICAL_TEMPORARY_ROOT, "semctx-local-marketplace") },
     ]) {
       exerciseField((value, rawPath) => {
         writeFileSync(value.marketplace, JSON.stringify({
@@ -3110,7 +3220,7 @@ describe("plugin delivery — the three delivery states over real artifacts", ()
     bundle: (name: string) => string,
     body: (home: string, paths: ReturnType<typeof materialise>) => void,
   ): void {
-    const home = mkdtempSync(join(tmpdir(), "semctx-delivery-states-"));
+    const home = mkdtempSync(join(PHYSICAL_TEMPORARY_ROOT, "semctx-delivery-states-"));
     try {
       body(home, materialise(home, bundle));
     } finally {
