@@ -1186,12 +1186,12 @@ function evaluateHost(
   if (report.installed.enabled === false) reasons.push("PLUGIN_DISABLED");
   else if (report.installed.enabled === null) reasons.push("PLUGIN_ENABLEMENT_UNKNOWN");
 
-  const hostVersion = safeText(installedEntry?.["version"]);
+  const rawHostVersion = rawText(installedEntry?.["version"]);
   // `source.path` is the approved marketplace snapshot, never the executed cache entry.
   const reportedCachePath = host === "codex"
-    ? (marketplaceRoot === null || hostVersion === null
+    ? (marketplaceRoot === null || rawHostVersion === null
       ? null
-      : codexCacheEntryFromMarketplaceRoot(marketplaceRoot, hostVersion, home))
+      : codexCacheEntryFromMarketplaceRoot(marketplaceRoot, rawHostVersion, home))
     : rawText(installedEntry?.["installPath"]);
   const cachePath = acceptHostPath(reportedCachePath, home);
   if (reportedCachePath !== null && cachePath === null) reasons.push("HOST_PATH_REJECTED");
