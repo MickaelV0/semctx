@@ -53,6 +53,24 @@ const CODEX_OBSOLETE_CACHE_PATH = join(CODEX_CACHE_ROOT, "0.1.17");
 const CODEX_ACTIVE_CACHE_LOCK =
   "failed to back up plugin cache entry: Accès refusé. (os error 5)";
 
+function assertClaudeVersionShimReady(executable: string): void {
+  const startedAt = performance.now();
+  const child = Bun.spawnSync([executable, "--version"], {
+    stdout: "pipe",
+    stderr: "pipe",
+    timeout: 10_000,
+  });
+  const observation = {
+    elapsedMs: Math.round(performance.now() - startedAt),
+    exitCode: child.exitCode,
+    stdout: new TextDecoder().decode(child.stdout).trim(),
+    stderr: new TextDecoder().decode(child.stderr),
+  };
+  if (observation.exitCode !== 0 || observation.stdout !== "2.1.229" || observation.stderr !== "") {
+    throw new Error(`compiled Claude fixture did not become ready: ${JSON.stringify(observation)}`);
+  }
+}
+
 function bundleDigests(
   overrides: Record<string, CodexBundleProbe> = {},
 ): Record<string, CodexBundleProbe> {
@@ -816,6 +834,7 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
       writeFileSync(join(bin, "claude"), `#!/bin/sh\n"${process.execPath}" "${script}" "$@"\n`);
       chmodSync(join(bin, "claude"), 0o755);
     }
+    assertClaudeVersionShimReady(join(bin, process.platform === "win32" ? "claude.exe" : "claude"));
     const environment: Record<string, string | undefined> = { ...process.env };
     environment["PATH"] = `${bin}${delimiter}${process.env["PATH"] ?? ""}`;
     environment["CLAUDE_CONFIG_DIR"] = profile;
@@ -1038,6 +1057,7 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
       writeFileSync(join(bin, "claude"), `#!/bin/sh\n"${process.execPath}" "${script}" "$@"\n`);
       chmodSync(join(bin, "claude"), 0o755);
     }
+    assertClaudeVersionShimReady(join(bin, process.platform === "win32" ? "claude.exe" : "claude"));
     const environment: Record<string, string | undefined> = { ...process.env };
     environment["PATH"] = `${bin}${delimiter}${process.env["PATH"] ?? ""}`;
     environment["CLAUDE_CONFIG_DIR"] = profile;
