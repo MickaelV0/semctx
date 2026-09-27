@@ -69,6 +69,14 @@ inventory probe up front, so a plan can already be known-failed; the recovery st
 blindly re-running without `--dry-run` when a requested host or the workspace step has already
 failed or conflicted.
 
+Claude metadata is read from the exact absolute `CLAUDE_CONFIG_DIR` when it is set; Semctx never
+renames that profile or guesses another location. Bun 1.4 cannot safely inspect a legal POSIX path
+component containing a literal backslash because its filesystem compatibility layer interprets the
+character as a separator. For that path shape, install refuses the plan and `plugin-status` reports
+the inventory as unknown instead of claiming an empty profile. Select a physical profile path
+without a literal backslash; Semctx does not rename, copy, or reopen the untrusted files through
+another process.
+
 ## `setup`
 
 Idempotently create or preserve configuration and authored semantic files, index the repository,
@@ -439,12 +447,13 @@ Exit status follows `delivery`, the dimension a caller can act on: 0 for `UP_TO_
 `UPDATE_AVAILABLE`, 3 for `UNKNOWN`.
 
 The command never installs, updates, upgrades, removes, enables or promotes anything and never
-advances `stable`. Semctx itself writes neither the inspected project nor host trees, but the
-official host inventory commands it invokes may keep host-owned process bookkeeping (Claude
-currently records `.in_use` markers). Its two modes differ in exactly one respect: **by default it
-performs no network operation at all** — host inventory queries and local reads only — while
-**`--attest` fetches** the canonical public release into a throwaway store outside your project and
-deletes it afterwards. That transfer is real, and it happens only when you ask for it by name.
+advances `stable`. Semctx itself writes neither the inspected project nor host trees. For Codex it
+uses the current read-only marketplace and plugin list queries; for Claude it reads bounded
+declarative metadata directly and does not start Claude's inventory commands or create their profile
+bookkeeping. Its two modes differ in exactly one respect: **by default it performs no network
+operation at all** — Codex inventory queries and local reads only — while **`--attest` fetches** the
+canonical public release into a throwaway store outside your project and deletes it afterwards.
+That transfer is real, and it happens only when you ask for it by name.
 
 ## `status`
 

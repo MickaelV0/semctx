@@ -74,11 +74,12 @@ function renderHost(host: PluginDeliveryHost, state: HostPluginDeliveryV2): void
 /**
  * `semctx plugin-status` — cross-host plugin delivery report, read-only with respect to delivery state.
  *
- * By default it runs host `list` queries and local reads only, with no network operation at all.
+ * By default it runs Codex `list` queries and reads Claude's declarative metadata locally, with no
+ * network operation and without invoking Claude's plugin inventory commands.
  * `--attest` adds one: it fetches the canonical public release into a throwaway store outside the
  * project and deletes it afterwards. Nothing is ever added, updated, upgraded, removed, enabled or
  * promoted, Semctx itself writes neither the inspected project nor host trees, and the public
- * `stable` channel is never advanced. A queried host may keep its own process-usage bookkeeping.
+ * `stable` channel is never advanced.
  */
 export function runPluginStatus(root: string, args: ParsedArgs): number {
   const report = pluginDeliveryStatus({
