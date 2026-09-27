@@ -56,18 +56,28 @@ The JSON report contains `ok`, CLI `version`, selected mode, per-host steps/stat
 status, and restart/recovery actions. Exit 0 means at least one requested or auto-detected host is
 ready and the workspace step did not fail.
 
+Host detection only looks up the executable on PATH. Each detected host has `version: null` when
+its version has not been observed; Semctx does not start a host merely to ask for its version.
+
 A successful report describes the **installed** version, which is what the next task will resolve —
 not the version a session already running has loaded. `restartRequired` marks that gap. When work is
 left for later, `cleanupDeferred` is the boolean synthesis and `deferrals` lists each obligation
 (`kind`, `detail`, and whether a background retry was `scheduled`); several can coexist.
 
-A host whose CLI rejects the initial marketplace/plugin inventory query with a recognized
-command-parser diagnostic (for example `error: unexpected argument 'marketplace' found`) fails with
-the additive `interfaceUnsupported: true`, and the recovery step names the host CLI upgrade instead
-of the generic "resolve the command error" message. `--dry-run` performs the same read-only
-inventory probe up front, so a plan can already be known-failed; the recovery step never recommends
-blindly re-running without `--dry-run` when a requested host or the workspace step has already
-failed or conflicted.
+Codex inventory is read from `CODEX_HOME/config.toml`, approved project configuration and physical
+marketplace/cache metadata. Claude inventory is read from its declarative JSON metadata. Neither
+host CLI is started during preflight. Malformed, linked, unsupported or changing metadata refuses
+the plan. Native host command compatibility remains unobserved until apply; a native failure keeps
+repository setup skipped and its recovery error visible.
+
+The declarative Codex view describes the bare plugin CLI invocation controlled by Semctx. It does
+not reconstruct a desktop app's cloud policy or session flags. Relevant system/legacy settings,
+nonempty marketplace requirements, selected profiles, unresolved managed preferences and relevant
+ancestor project overrides refuse this view rather than disappear from the effective inventory.
+
+Codex's active `local` cache directory is distinct from its declared plugin version. Diagnostics
+retain its actual path; stable installation reports an explicit development-override conflict and
+does not replace that cache.
 
 Claude metadata is read from the exact absolute `CLAUDE_CONFIG_DIR` when it is set; Semctx never
 renames that profile or guesses another location. Bun 1.4 cannot safely inspect a legal POSIX path
@@ -408,6 +418,9 @@ commit and version when `origin` is provably `hoklims/semctx`, but that `local-m
 informational: it cannot prove no newer public release exists, so it never licenses `UP_TO_DATE`.
 A partial clone is refused there rather than allowed to answer a local read with a promisor fetch,
 and replacement objects are ignored.
+
+Default host inventory and detection never start Codex or Claude Code. They read bounded,
+link-free declarative metadata and keep unavailable evidence `UNKNOWN`.
 
 `--attest` closes that gap against a canonical authority — `https://github.com/hoklims/semctx.git`,
 a constant of the build, not your `origin`. It runs in a throwaway repository outside your project,

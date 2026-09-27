@@ -9,6 +9,24 @@ GitHub Release advance together through the tag-driven lockstep workflow documen
 
 ## [Unreleased]
 
+## [0.3.7] - 2026-09-28
+
+### Fixed
+
+- Codex preflight and plugin diagnostics read layered TOML and physical plugin metadata without
+  starting Codex. Native version and inventory commands create profile bookkeeping even when used
+  only for inspection; they are no longer invoked during dry-run or default plugin status.
+- Every effective marketplace is validated using the supported manifest priority. Malformed or
+  linked configuration, unsafe local sources, raw metadata drift and directory identity changes
+  fail closed before installation. A local source cannot impersonate the official Git marketplace.
+- Active cache directory and declared version remain distinct. A local development override is
+  reported as a conflict for stable installation and retains its actual path in diagnostics.
+
+### Changed
+
+- Host detection uses a read-only PATH lookup. Install JSON reports `version: null` for an
+  executable whose version has not been observed, rather than launching it to infer the version.
+
 ## [0.3.6] - 2026-09-27
 
 ### Fixed
