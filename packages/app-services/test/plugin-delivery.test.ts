@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
 import {
   mkdirSync,
   mkdtempSync,
@@ -805,6 +806,41 @@ describe("plugin delivery — host-supplied paths are confined", () => {
       expect(report.hosts.codex.installed.path).not.toBeNull();
       expect(report.hosts.codex.reasons).not.toContain("HOST_PATH_REJECTED");
     } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects an outside candidate before inspecting its physical lineage", () => {
+    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "semctx-host-path-order-")));
+    const home = join(root, "home");
+    const inside = join(home, ".tmp", "marketplaces", "semctx-stable");
+    const outside = join(root, "outside", ".tmp", "marketplaces", "semctx-stable");
+    mkdirSync(inside, { recursive: true });
+    mkdirSync(outside, { recursive: true });
+    const calls: string[] = [];
+    const original = fs.lstatSync;
+    const probe = spyOn(fs, "lstatSync").mockImplementation(((path, options) => {
+      calls.push(String(path));
+      return original(path, options as never);
+    }) as typeof fs.lstatSync);
+    try {
+      const rejected = statusOf({
+        hostHomes: { codex: home },
+        codexMarketplaces: codexMarketplaces({ root: outside }),
+      });
+      expect(rejected.hosts.codex.snapshot.path).toBeNull();
+      expect(calls.some((path) => path === outside || path.startsWith(outside + sep))).toBe(false);
+
+      calls.length = 0;
+      const accepted = statusOf({
+        hostHomes: { codex: home },
+        codexMarketplaces: codexMarketplaces({ root: inside }),
+        snapshots: { [inside]: {} },
+      });
+      expect(accepted.hosts.codex.snapshot.path).not.toBeNull();
+      expect(calls.some((path) => path === inside || path.startsWith(inside + sep))).toBe(true);
+    } finally {
+      probe.mockRestore();
       rmSync(root, { recursive: true, force: true });
     }
   });
@@ -2092,8 +2128,18 @@ describe("plugin delivery — local artifacts are bounded before they are read",
     const inside = join(root, "inside.json");
     writeFileSync(outside, "outside");
     writeFileSync(inside, "inside");
+    const calls: string[] = [];
+    const original = fs.lstatSync;
+    const probe = spyOn(fs, "lstatSync").mockImplementation(((path, options) => {
+      calls.push(String(path));
+      return original(path, options as never);
+    }) as typeof fs.lstatSync);
     try {
+      expect(readConfinedFile(outside, root, 64)).toBeNull();
+      expect(calls.some((path) => path === outside || path.startsWith(outside + sep))).toBe(false);
+      calls.length = 0;
       expect(readConfinedFile(inside, root, 64)?.toString("utf8")).toBe("inside");
+      expect(calls.some((path) => path === inside)).toBe(true);
       const ambiguous = `${root}/..\\${basename(outside)}`;
       expect(readConfinedFile(ambiguous, root, 64)).toBeNull();
       expect(readConfinedFile(`${inside}${sep}.${sep}`, root, 64)).toBeNull();
@@ -2104,7 +2150,19 @@ describe("plugin delivery — local artifacts are bounded before they are read",
         root,
         64,
       )?.toString("utf8")).toBe("inside");
+
+      const linkedRoot = join(root, "linked-root");
+      const other = join(root, "other");
+      mkdirSync(other);
+      symlinkSync(other, linkedRoot, process.platform === "win32" ? "junction" : "dir");
+      expect(readConfinedFile(inside, `${linkedRoot}${sep}..${sep}`, 64)).toBeNull();
+
+      const fileRoot = join(root, "file-root");
+      writeFileSync(fileRoot, "not a directory");
+      expect(readConfinedFile(inside, `${fileRoot}${sep}..${sep}`, 64)).toBeNull();
+      expect(readConfinedFile(inside, `${safe}${sep}..${sep}`, 64)?.toString("utf8")).toBe("inside");
     } finally {
+      probe.mockRestore();
       rmSync(root, { recursive: true, force: true });
       rmSync(outside, { force: true });
     }
@@ -2684,6 +2742,41 @@ describe("Claude plugin metadata — declarative read-only inventory", () => {
     }
   });
 
+  test("rejects nonlocal repository shapes before any filesystem inspection", () => {
+    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "semctx-repository-shape-")));
+    const home = join(root, "profile");
+    const project = join(root, "project");
+    mkdirSync(home);
+    mkdirSync(join(project, "subdir"), { recursive: true });
+    const calls: string[] = [];
+    const original = fs.lstatSync;
+    const probe = spyOn(fs, "lstatSync").mockImplementation(((path, options) => {
+      calls.push(String(path));
+      return original(path, options as never);
+    }) as typeof fs.lstatSync);
+    const invalid = process.platform === "win32"
+      ? ["\\\\audit.invalid\\share", "\\\\?\\C:\\device", "\\root-relative", "/root-relative", "C:drive-relative"]
+      : ["\\\\audit.invalid\\share", "relative\\backslash"];
+    try {
+      for (const repositoryRoot of invalid) {
+        calls.length = 0;
+        expect(readClaudePluginMetadataInventory(repositoryRoot, home)).toBeNull();
+        expect(calls).toEqual([]);
+      }
+
+      calls.length = 0;
+      const relativeProject = relative(process.cwd(), project);
+      expect(readClaudePluginMetadataInventory(
+        join(relativeProject, "subdir", ".."),
+        home,
+      )).not.toBeNull();
+      expect(calls.length).toBeGreaterThan(0);
+    } finally {
+      probe.mockRestore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("fails closed on Bun 1.4 POSIX backslash paths while normal physical profiles remain readable", () => {
     const root = realpathSync.native(mkdtempSync(join(tmpdir(), "semctx-claude-separator-")));
     const project = join(root, "project");
@@ -2821,20 +2914,40 @@ describe("Claude plugin metadata — declarative read-only inventory", () => {
     const exercise = (
       configure: (value: ReturnType<typeof fixture>, rawPath: string) => void,
     ): void => {
+      for (const dotted of [false, true]) {
+        const value = fixture();
+        const root = resolve(value.home, "..");
+        const erased = join(root, "erased");
+        const target = join(root, "target", "nested");
+        mkdirSync(erased);
+        mkdirSync(target, { recursive: true });
+        const rawPath = dotted
+          ? `${erased}${sep}..${sep}declared-target`
+          : join(erased, "declared-target");
+        try {
+          configure(value, rawPath);
+          expect(readClaudePluginMetadataInventory(value.project, value.home)).not.toBeNull();
+          expect(readClaudePluginMetadataInventory(value.project, value.home, () => {
+            rmSync(erased, { recursive: true });
+            symlinkSync(target, erased, process.platform === "win32" ? "junction" : "dir");
+          })).toBeNull();
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
+      }
+    };
+
+    const exerciseField = (
+      configure: (value: ReturnType<typeof fixture>, rawPath: string) => void,
+    ): void => {
+      exercise(configure);
       const value = fixture();
       const root = resolve(value.home, "..");
-      const erased = join(root, "erased");
-      const target = join(root, "target", "nested");
-      mkdirSync(erased);
-      mkdirSync(target, { recursive: true });
-      const rawPath = `${erased}${sep}..${sep}declared-target`;
+      const rawPath = join(root, "declared-regular-file");
+      writeFileSync(rawPath, "not a directory");
       try {
         configure(value, rawPath);
-        expect(readClaudePluginMetadataInventory(value.project, value.home)).not.toBeNull();
-        expect(readClaudePluginMetadataInventory(value.project, value.home, () => {
-          rmSync(erased, { recursive: true });
-          symlinkSync(target, erased, process.platform === "win32" ? "junction" : "dir");
-        })).toBeNull();
+        expect(readClaudePluginMetadataInventory(value.project, value.home)).toBeNull();
       } finally {
         rmSync(root, { recursive: true, force: true });
       }
@@ -2845,7 +2958,7 @@ describe("Claude plugin metadata — declarative read-only inventory", () => {
       { source: "git", url: "https://github.com/hoklims/semctx.git", ref: "stable" },
       { source: "directory", path: join(tmpdir(), "semctx-local-marketplace") },
     ]) {
-      exercise((value, rawPath) => {
+      exerciseField((value, rawPath) => {
         writeFileSync(value.marketplace, JSON.stringify({
           "semctx-stable": {
             source,
@@ -2856,7 +2969,17 @@ describe("Claude plugin metadata — declarative read-only inventory", () => {
       });
     }
 
-    exercise((value, rawPath) => {
+    exerciseField((value, rawPath) => {
+      writeFileSync(value.marketplace, JSON.stringify({
+        "semctx-stable": {
+          source: { source: "directory", path: rawPath },
+          installLocation: join(value.home, "plugins", "marketplaces", "semctx-stable"),
+          lastUpdated: "2026-09-27T00:00:00Z",
+        },
+      }));
+    });
+
+    exerciseField((value, rawPath) => {
       writeFileSync(value.installed, JSON.stringify({
         version: 2,
         plugins: {
@@ -2869,15 +2992,13 @@ describe("Claude plugin metadata — declarative read-only inventory", () => {
       }));
     });
 
-    exercise((value, _rawPath) => {
-      const root = resolve(value.project, "..");
-      const rawProject = `${join(root, "erased")}${sep}..${sep}project`;
+    exerciseField((value, rawPath) => {
       writeFileSync(value.installed, JSON.stringify({
         version: 2,
         plugins: {
           "semctx@semctx-stable": [{
-            scope: "project",
-            projectPath: rawProject,
+            scope: "user",
+            projectPath: rawPath,
             installPath: join(value.home, "plugins", "cache", "semctx", RELEASE_VERSION),
             version: RELEASE_VERSION,
           }],

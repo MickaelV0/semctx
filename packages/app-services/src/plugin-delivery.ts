@@ -686,12 +686,14 @@ interface RawTraversalEntry {
 interface RawTraversalObservation {
   candidate: string;
   allowRelative: boolean;
+  endpointKind: "any" | "directory";
   snapshot: readonly RawTraversalEntry[];
 }
 
 function captureRawTraversal(
   candidate: string,
   allowRelative: boolean,
+  endpointKind: "any" | "directory" = "any",
 ): RawTraversalEntry[] | null {
   const parsed = parse(candidate);
   const absolute = isAbsolute(candidate);
@@ -702,9 +704,6 @@ function captureRawTraversal(
   const hasTrailingSeparator = process.platform === "win32"
     ? /[\\/]$/.test(candidate)
     : candidate.endsWith("/");
-  if (!hasTrailingSeparator && !components.some((component) => component === "." || component === "..")) {
-    return [];
-  }
 
   let current = absolute ? parsed.root : process.cwd();
   const observations: RawTraversalEntry[] = [];
@@ -726,6 +725,7 @@ function captureRawTraversal(
   if (components.length === 0) {
     return observe(current, true, false) ? observations : null;
   }
+  let parentComponentsRemaining = components.filter((component) => component === "..").length;
   for (let index = 0; index < components.length; index += 1) {
     const component = components[index] ?? "";
     if (component === ".") {
@@ -733,13 +733,17 @@ function captureRawTraversal(
       continue;
     }
     if (component === "..") {
+      parentComponentsRemaining -= 1;
       if (!observe(current, true, false)) return null;
       current = dirname(current);
       continue;
     }
     current = join(current, component);
-    const requireDirectory = index < components.length - 1 || hasTrailingSeparator;
-    if (!observe(current, requireDirectory, index === components.length - 1 && !requireDirectory)) return null;
+    const requireDirectory = index < components.length - 1
+      || hasTrailingSeparator
+      || endpointKind === "directory";
+    if (!observe(current, requireDirectory, parentComponentsRemaining === 0)) return null;
+    if (observations.at(-1)?.exists === false) return observations;
   }
   return observations;
 }
@@ -747,9 +751,10 @@ function captureRawTraversal(
 function sameRawTraversal(
   candidate: string,
   allowRelative: boolean,
+  endpointKind: "any" | "directory",
   before: readonly RawTraversalEntry[],
 ): boolean {
-  const after = captureRawTraversal(candidate, allowRelative);
+  const after = captureRawTraversal(candidate, allowRelative, endpointKind);
   return after !== null
     && after.length === before.length
     && before.every((entry, index) => {
@@ -769,14 +774,24 @@ function hasLocalFilesystemShape(candidate: string): boolean {
   return !candidate.startsWith("//") && !candidate.includes("\\");
 }
 
+function hasLocalRepositoryRootShape(candidate: string): boolean {
+  if (hasIdentityControlCharacter(candidate)) return false;
+  if (isAbsolute(candidate)) return hasLocalFilesystemShape(candidate);
+  if (process.platform === "win32") {
+    return !/^[\\/]/.test(candidate) && !/^[A-Za-z]:/.test(candidate);
+  }
+  return !candidate.includes("\\");
+}
+
 function observeRawTraversal(
   candidate: string,
   allowRelative: boolean,
+  endpointKind: "any" | "directory",
   observations: RawTraversalObservation[],
 ): boolean {
-  const snapshot = captureRawTraversal(candidate, allowRelative);
+  const snapshot = captureRawTraversal(candidate, allowRelative, endpointKind);
   if (snapshot === null) return false;
-  observations.push({ candidate, allowRelative, snapshot });
+  observations.push({ candidate, allowRelative, endpointKind, snapshot });
   return true;
 }
 
@@ -819,19 +834,23 @@ function isWithinTrustedRoot(candidate: string, root: string): boolean {
  */
 function acceptHostPath(candidate: string | null, home: string | null): string | null {
   if (candidate === null || home === null) return null;
-  if (!isLocalFilesystemPath(candidate) || !isLocalFilesystemPath(home)) return null;
+  if (!hasLocalFilesystemShape(candidate) || !hasLocalFilesystemShape(home)) return null;
 
   const resolvedCandidate = resolve(candidate);
   const resolvedHome = resolve(home);
   // Dependency-injected tests use virtual paths. Real host paths, however, must be canonicalized so
   // a junction or symlink cannot escape the lexical home after this check. Probe only the trusted
   // home first; never touch the complete untrusted candidate to decide whether it exists.
+  let canonicalHome: string;
   try {
-    lstatSync(resolvedHome);
+    canonicalHome = realpathSync.native(resolvedHome);
   } catch {
-    return isWithin(resolvedCandidate, resolvedHome) ? resolvedCandidate : null;
+    if (!isWithin(resolvedCandidate, resolvedHome)) return null;
+    return captureRawTraversal(candidate, false) === null ? null : resolvedCandidate;
   }
-  return walkExistingPathWithoutLinks(resolvedCandidate, resolvedHome, "any")?.path ?? null;
+  if (!isWithin(resolvedCandidate, resolvedHome) && !isWithin(resolvedCandidate, canonicalHome)) return null;
+  if (captureRawTraversal(candidate, false) === null) return null;
+  return walkExistingPathWithoutLinks(resolvedCandidate, canonicalHome, "any")?.path ?? null;
 }
 
 /**
@@ -1641,7 +1660,11 @@ interface ConfinedPath {
  */
 function walkExistingPathWithoutLinks(candidate: string, root: string, kind: PathKind): ConfinedPath | null {
   try {
-    if (!isLocalFilesystemPath(candidate) || !isLocalFilesystemPath(root)) return null;
+    if (!hasLocalFilesystemShape(candidate) || !hasLocalFilesystemShape(root)) return null;
+    // The root is trusted enough to inspect, but its raw spelling still matters: resolving first
+    // would erase a linked or non-directory component followed by `..`. Validate that lineage
+    // before canonicalization. Candidate inspection remains deferred until containment is proven.
+    if (captureRawTraversal(root, false) === null) return null;
     const resolvedRoot = resolve(root);
     const resolvedCandidate = resolve(candidate);
     const canonicalRoot = realpathSync.native(resolvedRoot);
@@ -1654,6 +1677,7 @@ function walkExistingPathWithoutLinks(candidate: string, root: string, kind: Pat
         ? relative(canonicalRoot, resolvedCandidate)
         : null;
     if (suffix === null) return null;
+    if (captureRawTraversal(candidate, false) === null) return null;
     const segments = suffix === "" ? [] : suffix.split(/[\\/]/).filter(Boolean);
     let current = canonicalRoot;
     let stats = lstatSync(current);
@@ -1809,7 +1833,7 @@ function declaredFilesystemIdentity(
   if (
     typeof value !== "string"
     || !hasLocalFilesystemShape(value)
-    || !observeRawTraversal(value, false, observations)
+    || !observeRawTraversal(value, false, "directory", observations)
   ) return null;
   return lexicalPathIdentity(value);
 }
@@ -1845,10 +1869,9 @@ export function readClaudePluginMetadataInventory(
 ): ClaudePluginMetadataInventory | null {
   const traversalObservations: RawTraversalObservation[] = [];
   if (!hasLocalFilesystemShape(claudeHome)) return null;
-  if (!observeRawTraversal(claudeHome, false, traversalObservations)) return null;
-  if (hasIdentityControlCharacter(repositoryRoot)) return null;
-  if (process.platform !== "win32" && repositoryRoot.includes("\\")) return null;
-  if (!observeRawTraversal(repositoryRoot, true, traversalObservations)) return null;
+  if (!hasLocalRepositoryRootShape(repositoryRoot)) return null;
+  if (!observeRawTraversal(claudeHome, false, "directory", traversalObservations)) return null;
+  if (!observeRawTraversal(repositoryRoot, true, "directory", traversalObservations)) return null;
   const absoluteRepositoryRoot = resolve(repositoryRoot);
   if (!isLocalFilesystemPath(absoluteRepositoryRoot)) return null;
   const marketplacesPath = join(claudeHome, "plugins", "known_marketplaces.json");
@@ -2002,7 +2025,12 @@ export function readClaudePluginMetadataInventory(
   afterObservation?.();
 
   if (!traversalObservations.every((observation) =>
-    sameRawTraversal(observation.candidate, observation.allowRelative, observation.snapshot))) return null;
+    sameRawTraversal(
+      observation.candidate,
+      observation.allowRelative,
+      observation.endpointKind,
+      observation.snapshot,
+    ))) return null;
 
   if (!sameOptionalObservation(
     marketplacesObservation,

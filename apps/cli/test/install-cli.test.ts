@@ -1340,7 +1340,7 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
     mkdirSync(plugins, { recursive: true });
     mkdirSync(erased);
     mkdirSync(target, { recursive: true });
-    const rawLocation = `${erased}${sep}..${sep}marketplace`;
+    const rawLocation = join(erased, "marketplace");
     writeFileSync(join(plugins, "known_marketplaces.json"), JSON.stringify({
       "semctx-stable": {
         source: { source: "github", repo: "hoklims/semctx", ref: "stable" },
@@ -1353,7 +1353,7 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
       plugins: {
         "semctx@semctx-stable": [{
           scope: "user",
-          installPath: `${erased}${sep}..${sep}cache`,
+          installPath: join(erased, "cache"),
           version: packageJson.version,
         }],
       },
