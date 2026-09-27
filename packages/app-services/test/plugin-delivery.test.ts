@@ -2248,30 +2248,31 @@ describe("plugin delivery — local artifacts are bounded before they are read",
 
 describe("Claude plugin metadata — declarative read-only inventory", () => {
   test("honours an absolute CLAUDE_CONFIG_DIR and refuses relative or network roots", () => {
-    const configured = join(tmpdir(), "claude-config-root");
-    expect(resolveClaudePluginHome(configured, join(tmpdir(), "ignored-home"))).toBe(resolve(configured));
+    const physicalTemporaryRoot = realpathSync.native(tmpdir());
+    const configured = join(physicalTemporaryRoot, "claude-config-root");
+    expect(resolveClaudePluginHome(configured, join(physicalTemporaryRoot, "ignored-home"))).toBe(resolve(configured));
     const nonBreakingSpace = `${configured}\u00a0`;
-    expect(resolveClaudePluginHome(nonBreakingSpace, join(tmpdir(), "ignored-home"))).toBe(
+    expect(resolveClaudePluginHome(nonBreakingSpace, join(physicalTemporaryRoot, "ignored-home"))).toBe(
       resolve(nonBreakingSpace),
     );
-    expect(resolveClaudePluginHome("relative-profile", join(tmpdir(), "ignored-home"))).toBeNull();
-    expect(resolveClaudePluginHome("   ", join(tmpdir(), "ignored-home"))).toBeNull();
-    expect(resolveClaudePluginHome("\\\\server\\share", join(tmpdir(), "ignored-home"))).toBeNull();
+    expect(resolveClaudePluginHome("relative-profile", join(physicalTemporaryRoot, "ignored-home"))).toBeNull();
+    expect(resolveClaudePluginHome("   ", join(physicalTemporaryRoot, "ignored-home"))).toBeNull();
+    expect(resolveClaudePluginHome("\\\\server\\share", join(physicalTemporaryRoot, "ignored-home"))).toBeNull();
     if (process.platform === "win32") {
-      expect(resolveClaudePluginHome("\\other-project", join(tmpdir(), "ignored-home"))).toBeNull();
-      expect(resolveClaudePluginHome("/other-project", join(tmpdir(), "ignored-home"))).toBeNull();
-      expect(resolveClaudePluginHome("C:other-project", join(tmpdir(), "ignored-home"))).toBeNull();
-      expect(resolveClaudePluginHome("C:\\physical\\profile", join(tmpdir(), "ignored-home")))
+      expect(resolveClaudePluginHome("\\other-project", join(physicalTemporaryRoot, "ignored-home"))).toBeNull();
+      expect(resolveClaudePluginHome("/other-project", join(physicalTemporaryRoot, "ignored-home"))).toBeNull();
+      expect(resolveClaudePluginHome("C:other-project", join(physicalTemporaryRoot, "ignored-home"))).toBeNull();
+      expect(resolveClaudePluginHome("C:\\physical\\profile", join(physicalTemporaryRoot, "ignored-home")))
         .toBe(resolve("C:\\physical\\profile"));
     } else {
-      expect(resolveClaudePluginHome("/other-project", join(tmpdir(), "ignored-home")))
+      expect(resolveClaudePluginHome("/other-project", join(physicalTemporaryRoot, "ignored-home")))
         .toBe("/other-project");
     }
-    expect(resolveClaudePluginHome("", join(tmpdir(), "user-home"))).toBe(
-      resolve(join(tmpdir(), "user-home", ".claude")),
+    expect(resolveClaudePluginHome("", join(physicalTemporaryRoot, "user-home"))).toBe(
+      resolve(join(physicalTemporaryRoot, "user-home", ".claude")),
     );
-    expect(resolveClaudePluginHome(undefined, join(tmpdir(), "user-home"))).toBe(
-      resolve(join(tmpdir(), "user-home", ".claude")),
+    expect(resolveClaudePluginHome(undefined, join(physicalTemporaryRoot, "user-home"))).toBe(
+      resolve(join(physicalTemporaryRoot, "user-home", ".claude")),
     );
   });
 
@@ -2956,7 +2957,7 @@ describe("Claude plugin metadata — declarative read-only inventory", () => {
     for (const source of [
       { source: "github", repo: "hoklims/semctx", ref: "stable" },
       { source: "git", url: "https://github.com/hoklims/semctx.git", ref: "stable" },
-      { source: "directory", path: join(tmpdir(), "semctx-local-marketplace") },
+      { source: "directory", path: join(realpathSync.native(tmpdir()), "semctx-local-marketplace") },
     ]) {
       exerciseField((value, rawPath) => {
         writeFileSync(value.marketplace, JSON.stringify({
