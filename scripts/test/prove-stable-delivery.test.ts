@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import {
@@ -90,6 +90,8 @@ const WITNESS_FROM_COMMIT: Record<string, string> = Object.fromEntries(
   PLUGIN_RUNTIME_BUNDLES.map((bundle) => [bundle, sha256Hex(`committed:${bundle}`)]),
 );
 
+const PHYSICAL_TEMPORARY_ROOT = realpathSync.native(tmpdir());
+
 /**
  * Live-orchestration fixtures are *native* paths. The Codex cache entry is derived by the shared
  * delivery authority (`codexCacheEntryFromMarketplaceRoot`), which resolves against the running
@@ -97,10 +99,10 @@ const WITNESS_FROM_COMMIT: Record<string, string> = Object.fromEntries(
  * produces. The purely lexical checks below keep their explicit `"linux"` / `"win32"` platform and
  * literal strings; only the orchestration fixtures follow the host.
  */
-const SANDBOX = resolve("/tmp/semctx-delivery-sandbox");
+const SANDBOX = join(PHYSICAL_TEMPORARY_ROOT, "semctx-delivery-sandbox");
 const CHECKOUT = resolve("/checkout");
-const FOREIGN = resolve("/tmp/foreign-repository");
-const PROOF_OUTPUT = join(resolve("/tmp/delivery-proof"), "stable-delivery-proof.json");
+const FOREIGN = join(PHYSICAL_TEMPORARY_ROOT, "foreign-repository");
+const PROOF_OUTPUT = join(PHYSICAL_TEMPORARY_ROOT, "delivery-proof", "stable-delivery-proof.json");
 const MAINTAINER_HOME = resolve("/home/maintainer");
 const REAL_CODEX_HOME = join(MAINTAINER_HOME, ".codex");
 const REAL_CLAUDE_HOME = join(MAINTAINER_HOME, ".claude");
@@ -1665,7 +1667,7 @@ afterEach(() => {
 });
 
 function temporaryRoot(): string {
-  const directory = mkdtempSync(join(tmpdir(), "semctx-delivery-proof-"));
+  const directory = mkdtempSync(join(PHYSICAL_TEMPORARY_ROOT, "semctx-delivery-proof-"));
   temporaryDirectories.push(directory);
   return directory;
 }
