@@ -1,7 +1,9 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
 import {
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   readdirSync,
   realpathSync,
   rmSync,
@@ -10,15 +12,18 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   PLUGIN_DELIVERY_MAX_BUNDLE_BYTES,
   PLUGIN_DELIVERY_MAX_MANIFEST_BYTES,
   PLUGIN_DELIVERY_RELEASE_URL,
   PLUGIN_RUNTIME_BUNDLES,
+  isCanonicalClaudeMarketplaceSource,
   isHostInterfaceUnsupportedFailure,
   pluginDeliveryStatus,
+  readClaudePluginMetadataInventory,
+  resolveClaudePluginHome,
   readConfinedFile,
   type InstalledPayloadProbe,
   type MarketplaceSnapshotProbe,
@@ -37,20 +42,21 @@ import {
 const MAIN_COMMIT = "1acf1f14a5fb76a66e9686ba284081c29dd838d8";
 const STABLE_COMMIT = "0173f8938facc1f1e91b25cba2275f838a1eba3a";
 const RELEASE_VERSION = "0.1.17";
+const PHYSICAL_TEMPORARY_ROOT = realpathSync.native(tmpdir());
 
-// Absolute on every platform, and never touched on disk: the fake dependencies answer all probes.
-const CODEX_HOME = join(tmpdir(), "semctx-fake-codex-delivery");
+// Absolute on every platform. Synthetic child trees are not created; fake probes provide their payloads.
+const CODEX_HOME = join(PHYSICAL_TEMPORARY_ROOT, "semctx-fake-codex-delivery");
 const CODEX_MARKETPLACE_ROOT = join(CODEX_HOME, ".tmp", "marketplaces", "semctx-stable");
 const CODEX_CACHE_ROOT = join(CODEX_HOME, "plugins", "cache", "semctx-stable", "semctx-control");
 const CODEX_CACHE_PATH = join(CODEX_CACHE_ROOT, RELEASE_VERSION);
-const CLAUDE_HOME = join(tmpdir(), "semctx-fake-claude-delivery");
+const CLAUDE_HOME = join(PHYSICAL_TEMPORARY_ROOT, "semctx-fake-claude-delivery");
 const CLAUDE_MARKETPLACE_ROOT = join(CLAUDE_HOME, "plugins", "marketplaces", "semctx-stable");
 const CLAUDE_CACHE_ROOT = join(CLAUDE_HOME, "plugins", "cache", "semctx-stable", "semctx");
 const CLAUDE_CACHE_PATH = join(CLAUDE_CACHE_ROOT, RELEASE_VERSION);
 
 const SEMCTX_SOURCE = "https://github.com/hoklims/semctx.git";
 /** Stands in for a user's own project: the diagnostic inspects it, it never authorises anything. */
-const CONSUMER_ROOT = join(tmpdir(), "semctx-consumer-project");
+const CONSUMER_ROOT = join(PHYSICAL_TEMPORARY_ROOT, "semctx-consumer-project");
 
 /** Every command the diagnostic is allowed to run. Anything else is a mutation of user state. */
 const READ_ONLY_QUERIES = [
@@ -96,6 +102,7 @@ interface FakeOptions {
   queryOutcomes?: Record<string, Partial<{ code: number; out: string; err: string; timedOut: boolean; truncated: boolean }>>;
   repositoryChannel?: ReturnType<PluginDeliveryDependencies["readRepositoryChannel"]>;
   sessions?: Partial<Record<PluginDeliveryHost, ReturnType<PluginDeliveryDependencies["observeSessionVersion"]>>>;
+  claudeMetadata?: ReturnType<NonNullable<PluginDeliveryDependencies["readClaudePluginMetadata"]>>;
   failQuery?: string;
 }
 
@@ -212,6 +219,11 @@ function fakeDependencies(
 
   return {
     queries,
+    ...(Object.prototype.hasOwnProperty.call(options, "claudeMetadata")
+      ? {
+          readClaudePluginMetadata: () => options.claudeMetadata ?? null,
+        }
+      : {}),
     runQuery(command, _cwd) {
       const argv = [...command];
       queries.push(argv);
@@ -365,7 +377,241 @@ describe("isHostInterfaceUnsupportedFailure — closed recognition, shared with 
   });
 });
 
+test("Claude Git source normalization preserves identities across large slash runs", () => {
+  const slashRun = "/".repeat(100_000);
+  expect(isCanonicalClaudeMarketplaceSource(
+    "git",
+    `https://github.com/hoklims/semctx.git${slashRun}`,
+  )).toBe(true);
+  expect(isCanonicalClaudeMarketplaceSource(
+    "git",
+    `https://github.com/hoklims/semctx${slashRun}x`,
+  )).toBe(false);
+  expect(isCanonicalClaudeMarketplaceSource("github", "hoklims/semctx")).toBe(true);
+  expect(isCanonicalClaudeMarketplaceSource("git", "hoklims/semctx")).toBe(false);
+}, 30_000);
+
 describe("plugin delivery — five distinct layers", () => {
+  test("uses declarative Claude metadata without launching Claude plugin inventory commands", () => {
+    const dependencies = fakeDependencies({
+      scope: "claude",
+      claudeMetadata: {
+        marketplaces: claudeMarketplaces() as Record<string, unknown>[],
+        plugins: claudePlugins() as Record<string, unknown>[],
+        settingsValid: true,
+        effectiveEnablement: {},
+      },
+    });
+    const report = pluginDeliveryStatus(
+      { repositoryRoot: "/work/project", version: RELEASE_VERSION, scope: "claude" },
+      dependencies,
+    );
+
+    expect(report.hosts.claude.installed.installed).toBe(true);
+    expect(dependencies.queries.filter((command) => command[0] === "claude")).toEqual([
+      ["claude", "--version"],
+    ]);
+  });
+
+  test("declarative local sources never impersonate the canonical Git marketplace", () => {
+    const directoryReport = statusOf({
+      scope: "claude",
+      claudeMetadata: {
+        marketplaces: [{
+          name: "semctx-stable",
+          sourceKind: "directory",
+          path: "hoklims/semctx",
+          ref: "stable",
+          installLocation: CLAUDE_MARKETPLACE_ROOT,
+        }],
+        plugins: claudePlugins() as Record<string, unknown>[],
+        settingsValid: true,
+        effectiveEnablement: {},
+      },
+    });
+
+    expect(directoryReport.hosts.claude.marketplace.source).toBe("hoklims/semctx");
+    expect(directoryReport.hosts.claude.marketplace.matchesSemctx).toBe(false);
+    expect(directoryReport.hosts.claude.reasons).toContain("MARKETPLACE_SOURCE_MISMATCH");
+
+    const relativeGitReport = statusOf({
+      scope: "claude",
+      claudeMetadata: {
+        marketplaces: [{
+          name: "semctx-stable",
+          sourceKind: "git",
+          repo: "hoklims/semctx",
+          ref: "stable",
+          installLocation: CLAUDE_MARKETPLACE_ROOT,
+        }],
+        plugins: claudePlugins() as Record<string, unknown>[],
+        settingsValid: true,
+        effectiveEnablement: {},
+      },
+    });
+    expect(relativeGitReport.hosts.claude.marketplace.matchesSemctx).toBe(false);
+    expect(relativeGitReport.hosts.claude.reasons).toContain("MARKETPLACE_SOURCE_MISMATCH");
+
+    for (const marketplace of [
+      { name: "semctx-stable", sourceKind: "github", repo: "hoklims/semctx\0" },
+      { name: "semctx-stable", sourceKind: "git", repo: "https://github.com/hoklims/sem\nctx.git" },
+    ]) {
+      const malformedReport = statusOf({
+        scope: "claude",
+        claudeMetadata: {
+          marketplaces: [marketplace],
+          plugins: claudePlugins() as Record<string, unknown>[],
+          settingsValid: true,
+          effectiveEnablement: {},
+        },
+      });
+      expect(malformedReport.hosts.claude.marketplace.matchesSemctx).toBe(false);
+      expect(malformedReport.hosts.claude.reasons).toContain("MARKETPLACE_SOURCE_MISMATCH");
+    }
+  });
+
+  test("uses raw Claude filesystem identities for snapshot and cache reads", () => {
+    const suffixes = process.platform === "win32" ? ["\u00a0"] : [" ", "\u00a0"];
+    for (const suffix of suffixes) {
+      const rawMarketplace = `${CLAUDE_MARKETPLACE_ROOT}${suffix}`;
+      const rawCache = `${CLAUDE_CACHE_PATH}${suffix}`;
+      const report = statusOf({
+        scope: "claude",
+        claudeMetadata: {
+          marketplaces: [{
+            name: "semctx-stable",
+            sourceKind: "github",
+            repo: "hoklims/semctx",
+            ref: "stable",
+            installLocation: rawMarketplace,
+          }],
+          plugins: [{
+            id: "semctx@semctx-stable",
+            scope: "user",
+            enabled: true,
+            version: RELEASE_VERSION,
+            installPath: rawCache,
+          }],
+          settingsValid: true,
+          effectiveEnablement: {},
+        },
+        snapshots: {
+          [rawMarketplace]: {},
+          [CLAUDE_MARKETPLACE_ROOT]: {},
+        },
+        installed: {
+          [rawCache]: { version: "0.1.16" },
+          [CLAUDE_CACHE_PATH]: {},
+        },
+      });
+
+      expect(report.hosts.claude.installed.version).toBe("0.1.16");
+      expect(report.hosts.claude.verdict).toBe("UPDATE_AVAILABLE");
+      expect(report.hosts.claude.reasons).toContain("INSTALLED_CACHE_BEHIND_SNAPSHOT");
+    }
+  });
+
+  test("Codex cache lookup validates the raw version identity before reading a payload", () => {
+    const inspect = (rawVersion: string) => {
+      const dependencies = fakeDependencies({
+        scope: "codex",
+        codexPlugins: codexPlugins({ version: rawVersion }),
+      });
+      const payloadReads: string[] = [];
+      dependencies.readInstalledPayload = (_host, path) => {
+        payloadReads.push(path);
+        return installedProbe();
+      };
+      const report = pluginDeliveryStatus(
+        { repositoryRoot: "/work/project", version: RELEASE_VERSION, scope: "codex" },
+        dependencies,
+      );
+      return {
+        rawVersion,
+        payloadReads,
+        path: report.hosts.codex.installed.path,
+        version: report.hosts.codex.installed.version,
+        verdict: report.hosts.codex.verdict,
+        reasons: report.hosts.codex.reasons,
+      };
+    };
+
+    expect(["0.1.17 ", "0.1.17\u00a0", "0.1.17\n", "0.1.17"].map(inspect)).toEqual([
+      {
+        rawVersion: "0.1.17 ",
+        payloadReads: [],
+        path: null,
+        version: null,
+        verdict: "UNKNOWN",
+        reasons: ["INSTALLED_CACHE_UNREADABLE"],
+      },
+      {
+        rawVersion: "0.1.17\u00a0",
+        payloadReads: [],
+        path: null,
+        version: null,
+        verdict: "UNKNOWN",
+        reasons: ["INSTALLED_CACHE_UNREADABLE"],
+      },
+      {
+        rawVersion: "0.1.17\n",
+        payloadReads: [],
+        path: null,
+        version: null,
+        verdict: "UNKNOWN",
+        reasons: ["INSTALLED_CACHE_UNREADABLE"],
+      },
+      {
+        rawVersion: "0.1.17",
+        payloadReads: [CODEX_CACHE_PATH],
+        path: CODEX_CACHE_PATH,
+        version: RELEASE_VERSION,
+        verdict: "UP_TO_DATE",
+        reasons: [],
+      },
+    ]);
+  });
+
+  test("legacy Claude marketplace shapes use the shared raw source matcher", () => {
+    for (const marketplace of [
+      { name: "semctx-stable", source: "git", repo: "hoklims/semctx" },
+      { name: "semctx-stable", source: "future", repo: "hoklims/semctx" },
+      { name: "semctx-stable", repo: "hoklims/semctx " },
+      { name: "semctx-stable", source: null, repo: "hoklims/semctx" },
+      { name: "semctx-stable", source: "", repo: "hoklims/semctx" },
+      { name: "semctx-stable", source: 7, repo: "hoklims/semctx" },
+      { name: "semctx-stable", source: "github\n", repo: "hoklims/semctx" },
+      { name: "semctx-stable", sourceKind: "github", source: "git", repo: "hoklims/semctx" },
+    ]) {
+      const report = statusOf({ scope: "claude", claudeMarketplaces: [marketplace] });
+      expect(report.hosts.claude.marketplace.matchesSemctx).toBe(false);
+      expect(report.hosts.claude.verdict).toBe("UNKNOWN");
+      expect(report.hosts.claude.reasons).toContain("MARKETPLACE_SOURCE_MISMATCH");
+    }
+
+    const documentedLegacy = statusOf({
+      scope: "claude",
+      claudeMarketplaces: [{ name: "semctx-stable", repo: "hoklims/semctx", ref: "stable" }],
+    });
+    expect(documentedLegacy.hosts.claude.marketplace.matchesSemctx).toBe(true);
+    const documentedLegacyGit = statusOf({
+      scope: "claude",
+      claudeMarketplaces: [{ name: "semctx-stable", repo: SEMCTX_SOURCE, ref: "stable" }],
+    });
+    expect(documentedLegacyGit.hosts.claude.marketplace.matchesSemctx).toBe(true);
+    const matchingDualKind = statusOf({
+      scope: "claude",
+      claudeMarketplaces: [{
+        name: "semctx-stable",
+        sourceKind: "github",
+        source: "github",
+        repo: "hoklims/semctx",
+        ref: "stable",
+      }],
+    });
+    expect(matchingDualKind.hosts.claude.marketplace.matchesSemctx).toBe(true);
+  });
+
   test("emits a versioned, deterministic contract envelope", () => {
     const report = statusOf();
 
@@ -599,7 +845,7 @@ describe("plugin delivery — the cache is proven by content, not by version str
 
 describe("plugin delivery — host-supplied paths are confined", () => {
   test("the same trusted home reached through a filesystem alias stays confined", () => {
-    const root = mkdtempSync(join(tmpdir(), "semctx-plugin-delivery-home-alias-"));
+    const root = mkdtempSync(join(PHYSICAL_TEMPORARY_ROOT, "semctx-plugin-delivery-home-alias-"));
     const home = join(root, "home");
     const alias = join(root, "home-alias");
     const marketplaceRoot = join(home, ".tmp", "marketplaces", "semctx-stable");
@@ -626,6 +872,41 @@ describe("plugin delivery — host-supplied paths are confined", () => {
     }
   });
 
+  test("rejects an outside candidate before inspecting its physical lineage", () => {
+    const root = realpathSync.native(mkdtempSync(join(PHYSICAL_TEMPORARY_ROOT, "semctx-host-path-order-")));
+    const home = join(root, "home");
+    const inside = join(home, ".tmp", "marketplaces", "semctx-stable");
+    const outside = join(root, "outside", ".tmp", "marketplaces", "semctx-stable");
+    mkdirSync(inside, { recursive: true });
+    mkdirSync(outside, { recursive: true });
+    const calls: string[] = [];
+    const original = fs.lstatSync;
+    const probe = spyOn(fs, "lstatSync").mockImplementation(((path, options) => {
+      calls.push(String(path));
+      return original(path, options as never);
+    }) as typeof fs.lstatSync);
+    try {
+      const rejected = statusOf({
+        hostHomes: { codex: home },
+        codexMarketplaces: codexMarketplaces({ root: outside }),
+      });
+      expect(rejected.hosts.codex.snapshot.path).toBeNull();
+      expect(calls.some((path) => path === outside || path.startsWith(outside + sep))).toBe(false);
+
+      calls.length = 0;
+      const accepted = statusOf({
+        hostHomes: { codex: home },
+        codexMarketplaces: codexMarketplaces({ root: inside }),
+        snapshots: { [inside]: {} },
+      });
+      expect(accepted.hosts.codex.snapshot.path).not.toBeNull();
+      expect(calls.some((path) => path === inside || path.startsWith(inside + sep))).toBe(true);
+    } finally {
+      probe.mockRestore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("a UNC marketplace root is rejected before any filesystem read", () => {
     const report = statusOf({
       codexMarketplaces: codexMarketplaces({ root: "\\\\10.0.0.5\\pwn\\.tmp\\marketplaces\\semctx-stable" }),
@@ -648,7 +929,7 @@ describe("plugin delivery — host-supplied paths are confined", () => {
   });
 
   test("a look-alike marketplace root outside the host home is rejected", () => {
-    const elsewhere = join(tmpdir(), "semctx-not-codex-home", ".tmp", "marketplaces", "semctx-stable");
+    const elsewhere = join(PHYSICAL_TEMPORARY_ROOT, "semctx-not-codex-home", ".tmp", "marketplaces", "semctx-stable");
     const report = statusOf({ codexMarketplaces: codexMarketplaces({ root: elsewhere }) });
 
     // The tail matches the expected layout, but the tree is not the resolved Codex home.
@@ -665,7 +946,7 @@ describe("plugin delivery — host-supplied paths are confined", () => {
   });
 
   test("a marketplace junction escaping the host home is rejected before any read", () => {
-    const root = mkdtempSync(join(tmpdir(), "semctx-plugin-delivery-junction-"));
+    const root = mkdtempSync(join(PHYSICAL_TEMPORARY_ROOT, "semctx-plugin-delivery-junction-"));
     const home = join(root, "home");
     const external = join(root, "external");
     const marketplaceParent = join(home, ".tmp", "marketplaces");
@@ -700,7 +981,7 @@ describe("plugin delivery — host-supplied paths are confined", () => {
   });
 
   test("a nested plugin junction cannot move manifest and bundle reads outside the snapshot", () => {
-    const root = mkdtempSync(join(tmpdir(), "semctx-plugin-delivery-nested-junction-"));
+    const root = mkdtempSync(join(PHYSICAL_TEMPORARY_ROOT, "semctx-plugin-delivery-nested-junction-"));
     const home = join(root, "home");
     const marketplaceRoot = join(home, ".tmp", "marketplaces", "semctx-stable");
     const pluginsRoot = join(marketplaceRoot, "plugins");
@@ -1169,6 +1450,41 @@ describe("plugin delivery — convergence guidance", () => {
     expect(report.hosts.claude.activation ?? "").toContain("/reload-plugins");
   });
 
+  test("never recommends a user enable command against a project or local disable override", () => {
+    const reportFor = (enablementScope: "user" | "project" | "local") => statusOf({
+      scope: "claude",
+      claudeMetadata: {
+        marketplaces: claudeMarketplaces() as Record<string, unknown>[],
+        plugins: claudePlugins({ enabled: false, enablementScope }) as Record<string, unknown>[],
+        settingsValid: true,
+        effectiveEnablement: {
+          "semctx@semctx-stable": { enabled: false, scope: enablementScope },
+        },
+      },
+    });
+    for (const scope of ["project", "local"] as const) {
+      const report = reportFor(scope);
+      expect(report.hosts.claude.installed.enabled).toBe(false);
+      expect(report.hosts.claude.reasons).toContain("PLUGIN_DISABLED");
+      expect(report.hosts.claude.convergence).not.toContainEqual([
+        "claude",
+        "plugin",
+        "enable",
+        "semctx@semctx-stable",
+        "--scope",
+        "user",
+      ]);
+    }
+    expect(reportFor("user").hosts.claude.convergence).toContainEqual([
+      "claude",
+      "plugin",
+      "enable",
+      "semctx@semctx-stable",
+      "--scope",
+      "user",
+    ]);
+  });
+
   test("a converged host proposes no convergence command", () => {
     const report = statusOf();
 
@@ -1198,7 +1514,7 @@ describe("plugin delivery — the diagnostic is strictly read-only", () => {
     // routed through the same seam and are therefore observable here rather than invisible.
     const queries: string[][] = [];
     pluginDeliveryStatus(
-      { repositoryRoot: join(tmpdir(), "semctx-plugin-delivery-readonly"), version: RELEASE_VERSION },
+      { repositoryRoot: join(PHYSICAL_TEMPORARY_ROOT, "semctx-plugin-delivery-readonly"), version: RELEASE_VERSION },
       {
         runQuery(command) {
           queries.push([...command]);
@@ -1593,6 +1909,228 @@ function gitCalls(recorded: readonly RecordedQuery[]): string[] {
 }
 
 describe("plugin delivery — the attestation authority is canonical, not the inspected project", () => {
+  test("default attestation excludes a configured Claude home even when inventory refuses its alias", () => {
+    const root = mkdtempSync(join(PHYSICAL_TEMPORARY_ROOT, "semctx-attestation-claude-home-alias-"));
+    const physicalHome = join(root, "profile");
+    const alias = join(root, "profile-alias");
+    const outside = join(root, "outside");
+    const project = join(root, "project");
+    mkdirSync(physicalHome);
+    mkdirSync(outside);
+    mkdirSync(project);
+    symlinkSync(physicalHome, alias, process.platform === "win32" ? "junction" : "dir");
+    const previous = {
+      claude: process.env["CLAUDE_CONFIG_DIR"],
+      temp: process.env["TEMP"],
+      tmp: process.env["TMP"],
+      tmpdir: process.env["TMPDIR"],
+    };
+    const attempts: string[] = [];
+    const queries: string[][] = [];
+    const probe = spyOn(fs, "mkdtempSync").mockImplementation(((prefix) => {
+      attempts.push(String(prefix));
+      throw new Error("injected before scratch creation");
+    }) as typeof fs.mkdtempSync);
+    const restore = (name: string, value: string | undefined): void => {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    };
+    const status = (temporaryRoot: string): PluginDeliveryReportV2 => {
+      process.env["TEMP"] = temporaryRoot;
+      process.env["TMP"] = temporaryRoot;
+      process.env["TMPDIR"] = temporaryRoot;
+      return pluginDeliveryStatus(
+        { repositoryRoot: project, version: RELEASE_VERSION, hosts: [], attest: true },
+        {
+          runQuery(command) {
+            queries.push([...command]);
+            return { code: 1, out: "", err: "unexpected query" };
+          },
+          readRepositoryChannel: () => ({ commit: MAIN_COMMIT, originIsSemctx: false }),
+        },
+      );
+    };
+
+    try {
+      process.env["CLAUDE_CONFIG_DIR"] = alias;
+      expect(resolveClaudePluginHome(alias)).toBeNull();
+
+      const blocked = status(physicalHome);
+      expect(blocked.publicRelease.reasons).toContain("PUBLIC_RELEASE_SCRATCH_LOCATION_REJECTED");
+      expect(attempts).toEqual([]);
+      expect(queries).toEqual([]);
+      expect(readdirSync(physicalHome)).toEqual([]);
+
+      const allowed = status(outside);
+      expect(allowed.publicRelease.reasons).toContain("PUBLIC_RELEASE_ATTESTATION_STORE_UNAVAILABLE");
+      expect(attempts).toEqual([join(outside, "semctx-attestation-")]);
+      expect(queries).toEqual([]);
+      expect(readdirSync(outside)).toEqual([]);
+    } finally {
+      probe.mockRestore();
+      restore("CLAUDE_CONFIG_DIR", previous.claude);
+      restore("TEMP", previous.temp);
+      restore("TMP", previous.tmp);
+      restore("TMPDIR", previous.tmpdir);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("canonicalizes a local temporary alias while preserving project and host exclusions", () => {
+    const root = mkdtempSync(join(PHYSICAL_TEMPORARY_ROOT, "semctx-attestation-temp-alias-"));
+    const source = pathToFileURL(join(import.meta.dir, "..", "src", "plugin-delivery.ts")).href;
+    const invoke = (temporaryRoot: string, repositoryRoot: string, hostHome: string | null) => {
+      const program = `
+        const { pluginDeliveryStatus } = await import(${JSON.stringify(source)});
+        let calls = 0;
+        const report = pluginDeliveryStatus(
+          {
+            repositoryRoot: ${JSON.stringify(repositoryRoot)},
+            version: ${JSON.stringify(RELEASE_VERSION)},
+            hosts: [],
+            attest: true,
+          },
+          {
+            readRepositoryChannel: () => ({ commit: ${JSON.stringify(MAIN_COMMIT)}, originIsSemctx: false }),
+            resolveHostHome: () => ${JSON.stringify(hostHome)},
+            runQuery() {
+              calls += 1;
+              return { code: 1, out: "", err: "injected before network" };
+            },
+          },
+        );
+        process.stdout.write(JSON.stringify({ reasons: report.publicRelease.reasons, calls }));
+      `;
+      const child = Bun.spawnSync([process.execPath, "-e", program], {
+        env: { ...process.env, TEMP: temporaryRoot, TMP: temporaryRoot, TMPDIR: temporaryRoot },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(new TextDecoder().decode(child.stderr)).toBe("");
+      expect(child.exitCode).toBe(0);
+      return JSON.parse(new TextDecoder().decode(child.stdout)) as { reasons: string[]; calls: number };
+    };
+    const runAlias = (base: string, alias: string, repositoryRoot: string, hostHome: string | null) => {
+      mkdirSync(base, { recursive: true });
+      symlinkSync(base, alias, process.platform === "win32" ? "junction" : "dir");
+      return invoke(alias, repositoryRoot, hostHome);
+    };
+
+    try {
+      const ordinaryBase = join(root, "ordinary-base");
+      const ordinaryAlias = join(root, "ordinary-alias");
+      const ordinary = runAlias(ordinaryBase, ordinaryAlias, join(root, "consumer"), null);
+      expect(ordinary.reasons).toContain("PUBLIC_RELEASE_ATTESTATION_STORE_UNAVAILABLE");
+      expect(ordinary.reasons).not.toContain("PUBLIC_RELEASE_SCRATCH_LOCATION_REJECTED");
+      expect(ordinary.calls).toBe(1);
+      expect(readdirSync(ordinaryBase)).toEqual([]);
+
+      const project = join(root, "project");
+      const projectBase = join(project, "temporary");
+      const projectAlias = join(root, "project-alias");
+      const projectExcluded = runAlias(projectBase, projectAlias, project, null);
+      expect(projectExcluded.reasons).toContain("PUBLIC_RELEASE_SCRATCH_LOCATION_REJECTED");
+      expect(projectExcluded.calls).toBe(0);
+      expect(readdirSync(projectBase)).toEqual([]);
+
+      const home = join(root, "home");
+      const homeBase = join(home, "temporary");
+      const homeAlias = join(root, "home-alias");
+      const homeExcluded = runAlias(homeBase, homeAlias, join(root, "other-consumer"), home);
+      expect(homeExcluded.reasons).toContain("PUBLIC_RELEASE_SCRATCH_LOCATION_REJECTED");
+      expect(homeExcluded.calls).toBe(0);
+      expect(readdirSync(homeBase)).toEqual([]);
+
+      const safeBase = join(root, "safe-base");
+      const safeChild = join(safeBase, "child");
+      mkdirSync(safeChild, { recursive: true });
+      const safeTraversal = invoke(`${safeChild}${sep}..`, join(root, "safe-consumer"), null);
+      expect(safeTraversal.reasons).toContain("PUBLIC_RELEASE_ATTESTATION_STORE_UNAVAILABLE");
+      expect(safeTraversal.calls).toBe(1);
+      expect(readdirSync(safeBase)).toEqual(["child"]);
+
+      const traversalParent = join(root, "traversal-parent");
+      const traversalTarget = join(traversalParent, "target");
+      const traversalLink = join(traversalParent, "link");
+      const traversalBase = join(traversalParent, "temporary");
+      mkdirSync(traversalTarget, { recursive: true });
+      mkdirSync(traversalBase);
+      symlinkSync(traversalTarget, traversalLink, process.platform === "win32" ? "junction" : "dir");
+      const unsafeTraversal = invoke(
+        `${traversalLink}${sep}..${sep}${basename(traversalBase)}`,
+        join(root, "traversal-consumer"),
+        null,
+      );
+      expect(unsafeTraversal.reasons).toContain("PUBLIC_RELEASE_SCRATCH_LOCATION_REJECTED");
+      expect(unsafeTraversal.calls).toBe(0);
+      expect(readdirSync(traversalBase)).toEqual([]);
+
+      const exclusionParent = join(root, "exclusion-parent");
+      const exclusionTarget = join(exclusionParent, "target");
+      const exclusionLink = join(exclusionParent, "link");
+      const exclusionProject = join(exclusionParent, "project");
+      mkdirSync(exclusionTarget, { recursive: true });
+      mkdirSync(exclusionProject);
+      symlinkSync(exclusionTarget, exclusionLink, process.platform === "win32" ? "junction" : "dir");
+      const unsafeProject = invoke(
+        ordinaryAlias,
+        `${exclusionLink}${sep}..${sep}${basename(exclusionProject)}`,
+        null,
+      );
+      expect(unsafeProject.reasons).toContain("PUBLIC_RELEASE_SCRATCH_LOCATION_REJECTED");
+      expect(unsafeProject.calls).toBe(0);
+      expect(readdirSync(ordinaryBase)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects a repository temporary base for absolute and equivalent relative roots", () => {
+    const repository = realpathSync.native(process.cwd());
+    const source = pathToFileURL(join(import.meta.dir, "..", "src", "plugin-delivery.ts")).href;
+    const invoke = (repositoryRoot: string) => {
+      const program = `
+        const { pluginDeliveryStatus } = await import(${JSON.stringify(source)});
+        let calls = 0;
+        const report = pluginDeliveryStatus(
+          {
+            repositoryRoot: ${JSON.stringify(repositoryRoot)},
+            version: ${JSON.stringify(RELEASE_VERSION)},
+            hosts: [],
+            attest: true,
+          },
+          {
+            readRepositoryChannel: () => ({ commit: ${JSON.stringify(MAIN_COMMIT)}, originIsSemctx: false }),
+            resolveHostHome: () => null,
+            runQuery() {
+              calls += 1;
+              return { code: 1, out: "", err: "injected before network" };
+            },
+          },
+        );
+        process.stdout.write(JSON.stringify({ reasons: report.publicRelease.reasons, calls }));
+      `;
+      const child = Bun.spawnSync([process.execPath, "-e", program], {
+        cwd: repository,
+        env: { ...process.env, TEMP: repository, TMP: repository, TMPDIR: repository },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(new TextDecoder().decode(child.stderr)).toBe("");
+      expect(child.exitCode).toBe(0);
+      return JSON.parse(new TextDecoder().decode(child.stdout)) as { reasons: string[]; calls: number };
+    };
+
+    const before = readdirSync(repository).filter((name) => name.startsWith("semctx-attestation-"));
+    for (const root of [repository, ".", `packages${sep}..`]) {
+      const outcome = invoke(root);
+      expect(outcome.reasons).toContain("PUBLIC_RELEASE_SCRATCH_LOCATION_REJECTED");
+      expect(outcome.calls).toBe(0);
+    }
+    const after = readdirSync(repository).filter((name) => name.startsWith("semctx-attestation-"));
+    expect(after).toEqual(before);
+  });
+
   test("asks the canonical public repository and never the inspected project's remote", () => {
     const { report, recorded } = releaseOf();
 
@@ -1609,7 +2147,7 @@ describe("plugin delivery — the attestation authority is canonical, not the in
   });
 
   test("removes its scratch store when an internal query seam throws unexpectedly", () => {
-    const base = mkdtempSync(join(tmpdir(), "semctx-attestation-throw-"));
+    const base = mkdtempSync(join(PHYSICAL_TEMPORARY_ROOT, "semctx-attestation-throw-"));
     try {
       const source = pathToFileURL(join(import.meta.dir, "..", "src", "plugin-delivery.ts")).href;
       const program = `
@@ -1868,8 +2406,54 @@ describe("plugin delivery — activation is an independent dimension", () => {
 });
 
 describe("plugin delivery — local artifacts are bounded before they are read", () => {
+  test("refuses a POSIX backslash before any confined filesystem walk", () => {
+    const root = realpathSync.native(mkdtempSync(join(PHYSICAL_TEMPORARY_ROOT, "semctx-backslash-root-")));
+    const outside = resolve(root, "..", `${basename(root)}-outside.json`);
+    const inside = join(root, "inside.json");
+    writeFileSync(outside, "outside");
+    writeFileSync(inside, "inside");
+    const calls: string[] = [];
+    const original = fs.lstatSync;
+    const probe = spyOn(fs, "lstatSync").mockImplementation(((path, options) => {
+      calls.push(String(path));
+      return original(path, options as never);
+    }) as typeof fs.lstatSync);
+    try {
+      expect(readConfinedFile(outside, root, 64)).toBeNull();
+      expect(calls.some((path) => path === outside || path.startsWith(outside + sep))).toBe(false);
+      calls.length = 0;
+      expect(readConfinedFile(inside, root, 64)?.toString("utf8")).toBe("inside");
+      expect(calls.some((path) => path === inside)).toBe(true);
+      const ambiguous = `${root}/..\\${basename(outside)}`;
+      expect(readConfinedFile(ambiguous, root, 64)).toBeNull();
+      expect(readConfinedFile(`${inside}${sep}.${sep}`, root, 64)).toBeNull();
+      const safe = join(root, "safe");
+      mkdirSync(safe);
+      expect(readConfinedFile(
+        `${safe}${sep}..${sep}${basename(inside)}`,
+        root,
+        64,
+      )?.toString("utf8")).toBe("inside");
+
+      const linkedRoot = join(root, "linked-root");
+      const other = join(root, "other");
+      mkdirSync(other);
+      symlinkSync(other, linkedRoot, process.platform === "win32" ? "junction" : "dir");
+      expect(readConfinedFile(inside, `${linkedRoot}${sep}..${sep}`, 64)).toBeNull();
+
+      const fileRoot = join(root, "file-root");
+      writeFileSync(fileRoot, "not a directory");
+      expect(readConfinedFile(inside, `${fileRoot}${sep}..${sep}`, 64)).toBeNull();
+      expect(readConfinedFile(inside, `${safe}${sep}..${sep}`, 64)?.toString("utf8")).toBe("inside");
+    } finally {
+      probe.mockRestore();
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { force: true });
+    }
+  });
+
   test("an oversized manifest and an oversized bundle are refused on their metadata", () => {
-    const home = mkdtempSync(join(tmpdir(), "semctx-plugin-delivery-oversized-"));
+    const home = mkdtempSync(join(PHYSICAL_TEMPORARY_ROOT, "semctx-plugin-delivery-oversized-"));
     const codexMarketplaceRoot = join(home, ".tmp", "marketplaces", "semctx-stable");
     const claudeMarketplaceRoot = join(home, "plugins", "marketplaces", "semctx-stable");
     const codexCache = join(home, "plugins", "cache", "semctx-stable", "semctx-control", RELEASE_VERSION);
@@ -1927,7 +2511,7 @@ describe("plugin delivery — local artifacts are bounded before they are read",
     // Deterministically enlarge the same open file after fstat and before its first read. A
     // stat-then-read implementation would allocate or hash past the declared ceiling; the bounded
     // descriptor reader requests one extra byte and refuses the artifact instead.
-    const home = mkdtempSync(join(tmpdir(), "semctx-plugin-delivery-swap-"));
+    const home = mkdtempSync(join(PHYSICAL_TEMPORARY_ROOT, "semctx-plugin-delivery-swap-"));
     const swapped = join(home, "semctx.js");
     writeFileSync(swapped, "bundle semctx.js");
 
@@ -1943,6 +2527,769 @@ describe("plugin delivery — local artifacts are bounded before they are read",
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
+  });
+});
+
+describe("Claude plugin metadata — declarative read-only inventory", () => {
+  test("honours an absolute CLAUDE_CONFIG_DIR and refuses relative or network roots", () => {
+    const physicalTemporaryRoot = PHYSICAL_TEMPORARY_ROOT;
+    const configured = join(physicalTemporaryRoot, "claude-config-root");
+    expect(resolveClaudePluginHome(configured, join(physicalTemporaryRoot, "ignored-home"))).toBe(resolve(configured));
+    const nonBreakingSpace = `${configured}\u00a0`;
+    expect(resolveClaudePluginHome(nonBreakingSpace, join(physicalTemporaryRoot, "ignored-home"))).toBe(
+      resolve(nonBreakingSpace),
+    );
+    expect(resolveClaudePluginHome("relative-profile", join(physicalTemporaryRoot, "ignored-home"))).toBeNull();
+    expect(resolveClaudePluginHome("   ", join(physicalTemporaryRoot, "ignored-home"))).toBeNull();
+    expect(resolveClaudePluginHome("\\\\server\\share", join(physicalTemporaryRoot, "ignored-home"))).toBeNull();
+    if (process.platform === "win32") {
+      expect(resolveClaudePluginHome("\\other-project", join(physicalTemporaryRoot, "ignored-home"))).toBeNull();
+      expect(resolveClaudePluginHome("/other-project", join(physicalTemporaryRoot, "ignored-home"))).toBeNull();
+      expect(resolveClaudePluginHome("C:other-project", join(physicalTemporaryRoot, "ignored-home"))).toBeNull();
+      expect(resolveClaudePluginHome("C:\\physical\\profile", join(physicalTemporaryRoot, "ignored-home")))
+        .toBe(resolve("C:\\physical\\profile"));
+    } else {
+      expect(resolveClaudePluginHome("/other-project", join(physicalTemporaryRoot, "ignored-home")))
+        .toBe("/other-project");
+    }
+    expect(resolveClaudePluginHome("", join(physicalTemporaryRoot, "user-home"))).toBe(
+      resolve(join(physicalTemporaryRoot, "user-home", ".claude")),
+    );
+    expect(resolveClaudePluginHome(undefined, join(physicalTemporaryRoot, "user-home"))).toBe(
+      resolve(join(physicalTemporaryRoot, "user-home", ".claude")),
+    );
+  });
+
+  test("validates raw home traversal before normalization erases unsafe components", () => {
+    const root = realpathSync.native(mkdtempSync(join(PHYSICAL_TEMPORARY_ROOT, "semctx-claude-raw-home-")));
+    const profile = join(root, "profile");
+    const safe = join(root, "safe");
+    const target = join(root, "target", "nested");
+    const linked = join(root, "linked");
+    const regular = join(root, "regular");
+    const project = join(root, "project");
+    mkdirSync(profile);
+    mkdirSync(safe);
+    mkdirSync(target, { recursive: true });
+    mkdirSync(project);
+    symlinkSync(target, linked, process.platform === "win32" ? "junction" : "dir");
+    writeFileSync(regular, "not a directory");
+    const through = (component: string): string => `${component}${sep}..${sep}profile`;
+    const safeHome = through(safe);
+    try {
+      expect(resolveClaudePluginHome(through(linked))).toBeNull();
+      expect(resolveClaudePluginHome(through(regular))).toBeNull();
+      expect(readClaudePluginMetadataInventory(project, through(linked))).toBeNull();
+      expect(readClaudePluginMetadataInventory(project, through(regular))).toBeNull();
+      expect(resolveClaudePluginHome(safeHome)).toBe(safeHome);
+      expect(readClaudePluginMetadataInventory(project, safeHome)).toEqual({
+        marketplaces: [],
+        plugins: [],
+        settingsValid: true,
+        effectiveEnablement: {},
+      });
+      expect(readClaudePluginMetadataInventory(project, safeHome, () => {
+        rmSync(safe, { recursive: true });
+        symlinkSync(target, safe, process.platform === "win32" ? "junction" : "dir");
+      })).toBeNull();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  function fixture(): { home: string; project: string; marketplace: string; installed: string } {
+    // macOS exposes tmpdir() through /var -> /private/var. The production reader correctly rejects
+    // a linked root, so fixtures must pass the physical directory they actually own.
+    const root = realpathSync.native(mkdtempSync(join(PHYSICAL_TEMPORARY_ROOT, "semctx-claude-metadata-")));
+    const home = join(root, ".claude");
+    const project = join(root, "project");
+    const plugins = join(home, "plugins");
+    mkdirSync(plugins, { recursive: true });
+    mkdirSync(join(project, ".claude"), { recursive: true });
+    const marketplace = join(plugins, "known_marketplaces.json");
+    const installed = join(plugins, "installed_plugins.json");
+    writeFileSync(marketplace, JSON.stringify({
+      "semctx-stable": {
+        source: { source: "github", repo: "hoklims/semctx", ref: "stable" },
+        installLocation: join(plugins, "marketplaces", "semctx-stable"),
+        lastUpdated: "2026-09-26T00:00:00Z",
+      },
+    }));
+    writeFileSync(installed, JSON.stringify({
+      version: 2,
+      plugins: {
+        "semctx@semctx-stable": [{
+          scope: "user",
+          installPath: join(plugins, "cache", "semctx-stable", "semctx", RELEASE_VERSION),
+          version: RELEASE_VERSION,
+        }],
+      },
+    }));
+    writeFileSync(join(home, "settings.json"), JSON.stringify({
+      enabledPlugins: { "semctx@semctx-stable": true },
+    }));
+    return { home, project, marketplace, installed };
+  }
+
+  test("projects the pinned Claude metadata shape without changing profile bytes", () => {
+    const value = fixture();
+    const before = [value.marketplace, value.installed, join(value.home, "settings.json")]
+      .map((path) => readFileSync(path));
+    try {
+      const inventory = readClaudePluginMetadataInventory(value.project, value.home);
+      expect(inventory?.marketplaces).toEqual([{
+        name: "semctx-stable",
+        sourceKind: "github",
+        repo: "hoklims/semctx",
+        ref: "stable",
+        installLocation: join(value.home, "plugins", "marketplaces", "semctx-stable"),
+      }]);
+      expect(inventory?.plugins).toEqual([{
+        id: "semctx@semctx-stable",
+        scope: "user",
+        enabled: true,
+        enablementScope: "user",
+        version: RELEASE_VERSION,
+        installPath: join(value.home, "plugins", "cache", "semctx-stable", "semctx", RELEASE_VERSION),
+      }]);
+      const after = [value.marketplace, value.installed, join(value.home, "settings.json")]
+        .map((path) => readFileSync(path));
+      expect(after).toEqual(before);
+    } finally {
+      rmSync(join(value.home, ".."), { recursive: true, force: true });
+    }
+  });
+
+  test("projects every native marketplace source form and rejects unknown or incomplete entries", () => {
+    const sources = [
+      {
+        kind: "github",
+        source: { source: "github", repo: "hoklims/semctx", ref: "stable" },
+        value: "hoklims/semctx",
+      },
+      {
+        kind: "git",
+        source: { source: "git", url: "https://github.com/hoklims/semctx.git", ref: "stable" },
+        value: "https://github.com/hoklims/semctx.git",
+      },
+    ] as const;
+    for (const scenario of sources) {
+      const value = fixture();
+      try {
+        writeFileSync(value.marketplace, JSON.stringify({
+          "semctx-stable": {
+            source: scenario.source,
+            installLocation: join(value.home, "plugins", "marketplaces", "semctx-stable"),
+            lastUpdated: "2026-09-26T00:00:00Z",
+          },
+        }));
+        const inventory = readClaudePluginMetadataInventory(value.project, value.home);
+        expect(inventory?.marketplaces[0]?.["repo"]).toBe(scenario.value);
+        expect(inventory?.marketplaces[0]?.["sourceKind"]).toBe(scenario.kind);
+      } finally {
+        rmSync(join(value.home, ".."), { recursive: true, force: true });
+      }
+    }
+
+    for (const source of [
+      { source: "github", repo: "hoklims/semctx", ref: "stable" },
+      { source: "git", url: "https://github.com/hoklims/semctx.git", ref: "stable" },
+    ]) {
+      const value = fixture();
+      try {
+        for (const installLocation of [
+          "\0",
+          "relative-marketplace",
+          `${value.home}\nmarketplace`,
+          ...(process.platform === "win32" ? ["\\other", "/other", "C:other"] : []),
+        ]) {
+          writeFileSync(value.marketplace, JSON.stringify({
+            "semctx-stable": {
+              source,
+              installLocation,
+              lastUpdated: "2026-09-26T00:00:00Z",
+            },
+          }));
+          expect(readClaudePluginMetadataInventory(value.project, value.home)).toBeNull();
+        }
+      } finally {
+        rmSync(join(value.home, ".."), { recursive: true, force: true });
+      }
+    }
+
+    const directory = fixture();
+    try {
+      const directoryPath = join(directory.home, "local-marketplace");
+      writeFileSync(directory.marketplace, JSON.stringify({
+        "semctx-stable": {
+          source: { source: "directory", path: directoryPath },
+          installLocation: join(directory.home, "plugins", "marketplaces", "semctx-stable"),
+          lastUpdated: "2026-09-26T00:00:00Z",
+        },
+      }));
+      expect(readClaudePluginMetadataInventory(directory.project, directory.home)?.marketplaces[0])
+        .toEqual({
+          name: "semctx-stable",
+          sourceKind: "directory",
+          path: directoryPath,
+          installLocation: join(directory.home, "plugins", "marketplaces", "semctx-stable"),
+        });
+    } finally {
+      rmSync(join(directory.home, ".."), { recursive: true, force: true });
+    }
+
+    for (const entry of [
+      {
+        source: { source: "future", repo: "hoklims/semctx" },
+        installLocation: "C:/fixture",
+        lastUpdated: "2026-09-26T00:00:00Z",
+      },
+      {
+        source: { source: "github", repo: "hoklims/semctx" },
+        installLocation: "C:/fixture",
+      },
+      {
+        source: { source: "directory", path: "hoklims/semctx" },
+        installLocation: "C:/fixture",
+        lastUpdated: "2026-09-26T00:00:00Z",
+      },
+      {
+        source: { source: "github", repo: "hoklims/semctx\0" },
+        installLocation: join(PHYSICAL_TEMPORARY_ROOT, "marketplace"),
+        lastUpdated: "2026-09-26T00:00:00Z",
+      },
+      {
+        source: { source: "git", url: "https://github.com/hoklims/sem\nctx.git" },
+        installLocation: join(PHYSICAL_TEMPORARY_ROOT, "marketplace"),
+        lastUpdated: "2026-09-26T00:00:00Z",
+      },
+    ]) {
+      const value = fixture();
+      try {
+        writeFileSync(value.marketplace, JSON.stringify({ "semctx-stable": entry }));
+        expect(readClaudePluginMetadataInventory(value.project, value.home)).toBeNull();
+      } finally {
+        rmSync(join(value.home, ".."), { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("matches native optional installed fields while refusing present fields of the wrong type", () => {
+    const value = fixture();
+    const writeEntry = (entry: Record<string, unknown>): void => writeFileSync(
+      value.installed,
+      JSON.stringify({ version: 2, plugins: { "semctx@semctx-stable": [entry] } }),
+    );
+    const base = {
+      scope: "user",
+      installPath: join(value.home, "plugins", "cache", "semctx-stable", "semctx", RELEASE_VERSION),
+    };
+    try {
+      writeEntry(base);
+      expect(readClaudePluginMetadataInventory(value.project, value.home)?.plugins[0]?.["version"])
+        .toBeUndefined();
+      writeEntry({ ...base, installedAt: "2026-09-26T00:00:00Z" });
+      expect(readClaudePluginMetadataInventory(value.project, value.home)).not.toBeNull();
+      for (const malformed of [
+        { ...base, version: 7 },
+        { ...base, installedAt: 7 },
+        { ...base, lastUpdated: 7 },
+        { ...base, gitCommitSha: 7 },
+      ]) {
+        writeEntry(malformed);
+        expect(readClaudePluginMetadataInventory(value.project, value.home)).toBeNull();
+      }
+    } finally {
+      rmSync(join(value.home, ".."), { recursive: true, force: true });
+    }
+  });
+
+  test("rejects malformed declared paths before filtering another project's registration", () => {
+    const value = fixture();
+    const writeEntry = (entry: Record<string, unknown>): void => writeFileSync(
+      value.installed,
+      JSON.stringify({ version: 2, plugins: { "semctx@semctx-stable": [entry] } }),
+    );
+    const installPath = join(value.home, "plugins", "cache", "semctx-stable", "semctx", RELEASE_VERSION);
+    try {
+      for (const projectPath of ["\0", "relative-project", `${value.project}\nchild`]) {
+        writeEntry({ scope: "project", projectPath, installPath, version: RELEASE_VERSION });
+        expect(readClaudePluginMetadataInventory(value.project, value.home)).toBeNull();
+        writeEntry({ scope: "user", projectPath, installPath, version: RELEASE_VERSION });
+        expect(readClaudePluginMetadataInventory(value.project, value.home)).toBeNull();
+      }
+      if (process.platform === "win32") {
+        for (const projectPath of ["\\other-project", "/other-project", "C:other-project"]) {
+          writeEntry({ scope: "project", projectPath, installPath, version: RELEASE_VERSION });
+          expect(readClaudePluginMetadataInventory(value.project, value.home)).toBeNull();
+        }
+      }
+      for (const malformedInstallPath of ["\0", "relative-cache", `${installPath}\nchild`]) {
+        writeEntry({ scope: "user", installPath: malformedInstallPath, version: RELEASE_VERSION });
+        expect(readClaudePluginMetadataInventory(value.project, value.home)).toBeNull();
+      }
+      if (process.platform !== "win32") {
+        writeEntry({ scope: "user", installPath: `${installPath}\\child`, version: RELEASE_VERSION });
+        expect(readClaudePluginMetadataInventory(value.project, value.home)).toBeNull();
+      }
+      if (process.platform === "win32") {
+        for (const malformedInstallPath of ["\\cache", "/cache", "C:cache"]) {
+          writeEntry({ scope: "user", installPath: malformedInstallPath, version: RELEASE_VERSION });
+          expect(readClaudePluginMetadataInventory(value.project, value.home)).toBeNull();
+        }
+      }
+
+      writeEntry({
+        scope: "local",
+        projectPath: join(value.project, "..", "other-project"),
+        installPath,
+        version: RELEASE_VERSION,
+      });
+      expect(readClaudePluginMetadataInventory(value.project, value.home)).toEqual({
+        marketplaces: [{
+          name: "semctx-stable",
+          sourceKind: "github",
+          repo: "hoklims/semctx",
+          ref: "stable",
+          installLocation: join(value.home, "plugins", "marketplaces", "semctx-stable"),
+        }],
+        plugins: [],
+        settingsValid: true,
+        effectiveEnablement: { "semctx@semctx-stable": { enabled: true, scope: "user" } },
+      });
+
+      writeEntry({
+        scope: "user",
+        projectPath: value.project,
+        installPath,
+        version: RELEASE_VERSION,
+      });
+      expect(readClaudePluginMetadataInventory(value.project, value.home)?.plugins[0])
+        .toMatchObject({ scope: "user", projectPath: value.project });
+    } finally {
+      rmSync(join(value.home, ".."), { recursive: true, force: true });
+    }
+  });
+
+  test("accepts native Windows separators and refuses unsupported POSIX backslashes", () => {
+    const value = fixture();
+    const installPath = join(value.home, "plugins", "cache", "semctx-stable", "semctx", RELEASE_VERSION);
+    const declaredProject = process.platform === "win32"
+      ? value.project
+      : `${resolve(value.project, "..")}\\project`;
+    try {
+      writeFileSync(value.installed, JSON.stringify({
+        version: 2,
+        plugins: {
+          "semctx@semctx-stable": [{
+            scope: "project",
+            projectPath: declaredProject,
+            installPath,
+            version: RELEASE_VERSION,
+          }],
+        },
+      }));
+      const inventory = readClaudePluginMetadataInventory(value.project, value.home);
+      if (process.platform === "win32") expect(inventory?.plugins).toHaveLength(1);
+      else expect(inventory).toBeNull();
+    } finally {
+      rmSync(join(value.home, ".."), { recursive: true, force: true });
+    }
+  });
+
+  test("keeps enablement unknown when settings are absent or malformed", () => {
+    for (const settings of [null, "{not-json"]) {
+      const value = fixture();
+      try {
+        const path = join(value.home, "settings.json");
+        rmSync(path, { force: true });
+        if (settings !== null) writeFileSync(path, settings);
+        const inventory = readClaudePluginMetadataInventory(value.project, value.home);
+        expect(inventory?.plugins[0]?.["enabled"]).toBeUndefined();
+      } finally {
+        rmSync(join(value.home, ".."), { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("treats proven missing registries as empty and refuses malformed, linked or drifting metadata", () => {
+    const missing = fixture();
+    try {
+      rmSync(missing.installed);
+      expect(readClaudePluginMetadataInventory(missing.project, missing.home)?.plugins).toEqual([]);
+    } finally {
+      rmSync(join(missing.home, ".."), { recursive: true, force: true });
+    }
+
+    const malformed = fixture();
+    try {
+      writeFileSync(malformed.installed, JSON.stringify({ version: 2, plugins: [] }));
+      expect(readClaudePluginMetadataInventory(malformed.project, malformed.home)).toBeNull();
+    } finally {
+      rmSync(join(malformed.home, ".."), { recursive: true, force: true });
+    }
+
+    const linked = fixture();
+    try {
+      const outside = join(linked.home, "..", "outside-plugins");
+      mkdirSync(outside);
+      writeFileSync(join(outside, "known_marketplaces.json"), readFileSync(linked.marketplace));
+      writeFileSync(join(outside, "installed_plugins.json"), readFileSync(linked.installed));
+      rmSync(join(linked.home, "plugins"), { recursive: true });
+      symlinkSync(outside, join(linked.home, "plugins"), process.platform === "win32" ? "junction" : "dir");
+      expect(readClaudePluginMetadataInventory(linked.project, linked.home)).toBeNull();
+    } finally {
+      rmSync(join(linked.home, ".."), { recursive: true, force: true });
+    }
+
+    const drifting = fixture();
+    try {
+      expect(readClaudePluginMetadataInventory(drifting.project, drifting.home, () => {
+        writeFileSync(drifting.installed, JSON.stringify({ version: 2, plugins: {} }));
+      })).toBeNull();
+    } finally {
+      rmSync(join(drifting.home, ".."), { recursive: true, force: true });
+    }
+  });
+
+  test("a fresh physical profile is empty, creates nothing, and rejects an absent-parent link swap", () => {
+    const root = realpathSync.native(mkdtempSync(join(PHYSICAL_TEMPORARY_ROOT, "semctx-claude-fresh-profile-")));
+    const home = join(root, ".claude");
+    const project = join(root, "project");
+    mkdirSync(home);
+    mkdirSync(project);
+    try {
+      expect(readClaudePluginMetadataInventory(project, home)).toEqual({
+        marketplaces: [],
+        plugins: [],
+        settingsValid: true,
+        effectiveEnablement: {},
+      });
+      expect(readdirSync(home)).toEqual([]);
+
+      const outside = join(root, "outside");
+      mkdirSync(outside);
+      writeFileSync(join(outside, "known_marketplaces.json"), "{}");
+      writeFileSync(join(outside, "installed_plugins.json"), '{"version":2,"plugins":{}}');
+      const swapped = readClaudePluginMetadataInventory(project, home, () => {
+        symlinkSync(outside, join(home, "plugins"), process.platform === "win32" ? "junction" : "dir");
+      });
+      expect(swapped).toBeNull();
+
+      const linkedParent = join(root, "linked-parent");
+      symlinkSync(outside, linkedParent, process.platform === "win32" ? "junction" : "dir");
+      expect(readClaudePluginMetadataInventory(project, join(linkedParent, "missing-profile")))
+        .toBeNull();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("validates repository-root controls before resolving relative segments", () => {
+    const value = fixture();
+    try {
+      for (const control of ["\0", "\n", "\u007f"]) {
+        expect(readClaudePluginMetadataInventory(
+          `${value.project}/invalid${control}/..`,
+          value.home,
+        )).toBeNull();
+      }
+      if (process.platform !== "win32") {
+        expect(readClaudePluginMetadataInventory(
+          `${value.project}/unsupported\\component/..`,
+          value.home,
+        )).toBeNull();
+      }
+      mkdirSync(join(value.project, "subdir"));
+      const relativeProject = relative(process.cwd(), value.project);
+      expect(readClaudePluginMetadataInventory(
+        join(relativeProject, "subdir", ".."),
+        value.home,
+      )).not.toBeNull();
+
+      const root = resolve(value.project, "..");
+      const target = join(root, "target", "nested");
+      const linked = join(root, "linked-project");
+      const regular = join(root, "regular-project");
+      mkdirSync(target, { recursive: true });
+      symlinkSync(target, linked, process.platform === "win32" ? "junction" : "dir");
+      writeFileSync(regular, "not a directory");
+      expect(readClaudePluginMetadataInventory(
+        `${linked}${sep}..${sep}project`,
+        value.home,
+      )).toBeNull();
+      expect(readClaudePluginMetadataInventory(
+        `${regular}${sep}..${sep}project`,
+        value.home,
+      )).toBeNull();
+    } finally {
+      rmSync(join(value.home, ".."), { recursive: true, force: true });
+    }
+  });
+
+  test("rejects nonlocal repository shapes before any filesystem inspection", () => {
+    const root = realpathSync.native(mkdtempSync(join(PHYSICAL_TEMPORARY_ROOT, "semctx-repository-shape-")));
+    const home = join(root, "profile");
+    const project = join(root, "project");
+    mkdirSync(home);
+    mkdirSync(join(project, "subdir"), { recursive: true });
+    const calls: string[] = [];
+    const original = fs.lstatSync;
+    const probe = spyOn(fs, "lstatSync").mockImplementation(((path, options) => {
+      calls.push(String(path));
+      return original(path, options as never);
+    }) as typeof fs.lstatSync);
+    const invalid = process.platform === "win32"
+      ? ["\\\\audit.invalid\\share", "\\\\?\\C:\\device", "\\root-relative", "/root-relative", "C:drive-relative"]
+      : ["\\\\audit.invalid\\share", "relative\\backslash"];
+    try {
+      for (const repositoryRoot of invalid) {
+        calls.length = 0;
+        expect(readClaudePluginMetadataInventory(repositoryRoot, home)).toBeNull();
+        expect(calls).toEqual([]);
+      }
+
+      calls.length = 0;
+      const relativeProject = relative(process.cwd(), project);
+      expect(readClaudePluginMetadataInventory(
+        join(relativeProject, "subdir", ".."),
+        home,
+      )).not.toBeNull();
+      expect(calls.length).toBeGreaterThan(0);
+    } finally {
+      probe.mockRestore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("fails closed on Bun 1.4 POSIX backslash paths while normal physical profiles remain readable", () => {
+    const root = realpathSync.native(mkdtempSync(join(PHYSICAL_TEMPORARY_ROOT, "semctx-claude-separator-")));
+    const project = join(root, "project");
+    const ordinaryProfile = join(root, "profile");
+    const home = process.platform === "win32" ? ordinaryProfile : `${ordinaryProfile}\\literal`;
+    const plugins = join(home, "plugins");
+    const installed = join(plugins, "installed_plugins.json");
+    mkdirSync(project);
+    mkdirSync(plugins, { recursive: true });
+    writeFileSync(join(home, "settings.json"), "{}");
+    writeFileSync(installed, "{not-json");
+    const malformedBefore = readFileSync(installed);
+    try {
+      expect(readClaudePluginMetadataInventory(project, home)).toBeNull();
+      expect(readFileSync(installed)).toEqual(malformedBefore);
+
+      writeFileSync(installed, '{"version":2,"plugins":{}}');
+      if (process.platform !== "win32") {
+        expect(readClaudePluginMetadataInventory(project, home)).toBeNull();
+      }
+      mkdirSync(ordinaryProfile, { recursive: true });
+      writeFileSync(join(ordinaryProfile, "settings.json"), "{}");
+      expect(readClaudePluginMetadataInventory(project, ordinaryProfile)).toEqual({
+        marketplaces: [],
+        plugins: [],
+        settingsValid: true,
+        effectiveEnablement: {},
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      if (process.platform !== "win32") rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("uses only the selected project's project and local enablement scopes", () => {
+    const value = fixture();
+    try {
+      writeFileSync(value.installed, JSON.stringify({
+        version: 2,
+        plugins: {
+          "semctx@semctx-stable": [
+            {
+              scope: "project",
+              projectPath: value.project,
+              installPath: join(value.home, "plugins", "cache", "semctx-stable", "semctx", RELEASE_VERSION),
+              version: RELEASE_VERSION,
+            },
+            {
+              scope: "local",
+              projectPath: join(value.project, "..", "other"),
+              installPath: join(value.home, "plugins", "cache", "semctx-stable", "semctx", RELEASE_VERSION),
+              version: RELEASE_VERSION,
+            },
+          ],
+        },
+      }));
+      writeFileSync(join(value.project, ".claude", "settings.json"), JSON.stringify({
+        enabledPlugins: { "semctx@semctx-stable": false },
+      }));
+      const inventory = readClaudePluginMetadataInventory(value.project, value.home);
+      expect(inventory?.plugins).toHaveLength(1);
+      expect(inventory?.plugins[0]).toMatchObject({ scope: "project", enabled: false });
+    } finally {
+      rmSync(join(value.home, ".."), { recursive: true, force: true });
+    }
+  });
+
+  test("matches Claude's user then project then local enablement precedence", () => {
+    const scenarios = [
+      { user: true, project: undefined, local: undefined, expected: true },
+      { user: true, project: false, local: undefined, expected: false },
+      { user: true, project: true, local: false, expected: false },
+      { user: false, project: true, local: undefined, expected: true },
+    ] as const;
+    for (const scenario of scenarios) {
+      const value = fixture();
+      try {
+        const id = "semctx@semctx-stable";
+        writeFileSync(join(value.home, "settings.json"), JSON.stringify({
+          enabledPlugins: { [id]: scenario.user },
+        }));
+        if (scenario.project !== undefined) {
+          writeFileSync(join(value.project, ".claude", "settings.json"), JSON.stringify({
+            enabledPlugins: { [id]: scenario.project },
+          }));
+        }
+        if (scenario.local !== undefined) {
+          writeFileSync(join(value.project, ".claude", "settings.local.json"), JSON.stringify({
+            enabledPlugins: { [id]: scenario.local },
+          }));
+        }
+        const inventory = readClaudePluginMetadataInventory(value.project, value.home);
+        expect(inventory?.plugins[0]?.["enabled"]).toBe(scenario.expected);
+        const expectedScope = scenario.local !== undefined
+          ? "local"
+          : scenario.project !== undefined ? "project" : "user";
+        expect(inventory?.plugins[0]?.["enablementScope"]).toBe(expectedScope);
+      } finally {
+        rmSync(join(value.home, ".."), { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("a malformed higher-precedence settings file makes enablement unknown", () => {
+    const value = fixture();
+    try {
+      writeFileSync(join(value.project, ".claude", "settings.json"), "{not-json");
+      const inventory = readClaudePluginMetadataInventory(value.project, value.home);
+      expect(inventory?.plugins[0]?.["enabled"]).toBeUndefined();
+      expect(inventory?.settingsValid).toBe(false);
+    } finally {
+      rmSync(join(value.home, ".."), { recursive: true, force: true });
+    }
+  });
+
+  test("revalidates every settings layer before returning effective enablement", () => {
+    const value = fixture();
+    try {
+      const projectSettings = join(value.project, ".claude", "settings.json");
+      writeFileSync(projectSettings, JSON.stringify({
+        enabledPlugins: { "semctx@semctx-stable": true },
+      }));
+      const inventory = readClaudePluginMetadataInventory(value.project, value.home, () => {
+        writeFileSync(projectSettings, JSON.stringify({
+          enabledPlugins: { "semctx@semctx-stable": false },
+        }));
+      });
+      expect(inventory).toBeNull();
+    } finally {
+      rmSync(join(value.home, ".."), { recursive: true, force: true });
+    }
+  });
+
+  test("revalidates every declared traversal observation before returning inventory", () => {
+    const exercise = (
+      configure: (value: ReturnType<typeof fixture>, rawPath: string) => void,
+    ): void => {
+      for (const dotted of [false, true]) {
+        const value = fixture();
+        const root = resolve(value.home, "..");
+        const erased = join(root, "erased");
+        const target = join(root, "target", "nested");
+        mkdirSync(erased);
+        mkdirSync(target, { recursive: true });
+        const rawPath = dotted
+          ? `${erased}${sep}..${sep}declared-target`
+          : join(erased, "declared-target");
+        try {
+          configure(value, rawPath);
+          expect(readClaudePluginMetadataInventory(value.project, value.home)).not.toBeNull();
+          expect(readClaudePluginMetadataInventory(value.project, value.home, () => {
+            rmSync(erased, { recursive: true });
+            symlinkSync(target, erased, process.platform === "win32" ? "junction" : "dir");
+          })).toBeNull();
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
+      }
+    };
+
+    const exerciseField = (
+      configure: (value: ReturnType<typeof fixture>, rawPath: string) => void,
+    ): void => {
+      exercise(configure);
+      const value = fixture();
+      const root = resolve(value.home, "..");
+      const rawPath = join(root, "declared-regular-file");
+      writeFileSync(rawPath, "not a directory");
+      try {
+        configure(value, rawPath);
+        expect(readClaudePluginMetadataInventory(value.project, value.home)).toBeNull();
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    };
+
+    for (const source of [
+      { source: "github", repo: "hoklims/semctx", ref: "stable" },
+      { source: "git", url: "https://github.com/hoklims/semctx.git", ref: "stable" },
+      { source: "directory", path: join(PHYSICAL_TEMPORARY_ROOT, "semctx-local-marketplace") },
+    ]) {
+      exerciseField((value, rawPath) => {
+        writeFileSync(value.marketplace, JSON.stringify({
+          "semctx-stable": {
+            source,
+            installLocation: rawPath,
+            lastUpdated: "2026-09-27T00:00:00Z",
+          },
+        }));
+      });
+    }
+
+    exerciseField((value, rawPath) => {
+      writeFileSync(value.marketplace, JSON.stringify({
+        "semctx-stable": {
+          source: { source: "directory", path: rawPath },
+          installLocation: join(value.home, "plugins", "marketplaces", "semctx-stable"),
+          lastUpdated: "2026-09-27T00:00:00Z",
+        },
+      }));
+    });
+
+    exerciseField((value, rawPath) => {
+      writeFileSync(value.installed, JSON.stringify({
+        version: 2,
+        plugins: {
+          "semctx@semctx-stable": [{
+            scope: "user",
+            installPath: rawPath,
+            version: RELEASE_VERSION,
+          }],
+        },
+      }));
+    });
+
+    exerciseField((value, rawPath) => {
+      writeFileSync(value.installed, JSON.stringify({
+        version: 2,
+        plugins: {
+          "semctx@semctx-stable": [{
+            scope: "user",
+            projectPath: rawPath,
+            installPath: join(value.home, "plugins", "cache", "semctx", RELEASE_VERSION),
+            version: RELEASE_VERSION,
+          }],
+        },
+      }));
+    });
   });
 });
 
@@ -2047,7 +3394,7 @@ describe("plugin delivery — the three delivery states over real artifacts", ()
     bundle: (name: string) => string,
     body: (home: string, paths: ReturnType<typeof materialise>) => void,
   ): void {
-    const home = mkdtempSync(join(tmpdir(), "semctx-delivery-states-"));
+    const home = mkdtempSync(join(PHYSICAL_TEMPORARY_ROOT, "semctx-delivery-states-"));
     try {
       body(home, materialise(home, bundle));
     } finally {

@@ -14,7 +14,7 @@ import {
   type Dirent,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 
 /**
  * Cross-host plugin delivery observability.
@@ -29,14 +29,14 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
  *
  * The whole surface is read-only with respect to plugin delivery state: it never adds, updates,
  * upgrades, removes, enables or promotes anything, and Semctx itself never writes inside the
- * inspected project or a host's tree. A host inventory command may maintain its own operational
- * bookkeeping (Claude currently records `.in_use` markers); that is host-owned process state, not a
- * plugin delivery mutation. Any unavailable, malformed, or partial evidence produces an explicit
- * `UNKNOWN`, never an optimistic `UP_TO_DATE`.
+ * inspected project or a host's tree. Claude inventory is read from its declarative metadata,
+ * because starting its CLI for a nominal list query writes profile bookkeeping. Any unavailable,
+ * malformed, or partial evidence produces an explicit `UNKNOWN`, never an optimistic
+ * `UP_TO_DATE`.
  *
  * Two modes, and they differ in exactly one respect:
  *
- * - **default** — host `list` queries and local reads only. No network operation of any kind.
+ * - **default** — Codex `list` queries plus local declarative Claude reads. No network operation.
  * - **`--attest`** — additionally resolves and *fetches* the canonical public release into a
  *   throwaway store outside the project, then deletes it. This is a real network transfer, opt-in
  *   by name, and it is the only one. Saying "never fetches" of the whole command would be false;
@@ -293,6 +293,19 @@ export interface PluginDeliveryQueryOutcome {
   truncated?: boolean;
 }
 
+/** Claude's declarative plugin metadata, projected to the stable CLI inventory shape. */
+export interface ClaudePluginMetadataInventory {
+  marketplaces: Record<string, unknown>[];
+  plugins: Record<string, unknown>[];
+  /** False when any applicable settings layer is linked, unreadable or malformed. */
+  settingsValid: boolean;
+  /** Effective explicit setting after user -> project -> local precedence, including uninstalled ids. */
+  effectiveEnablement: Record<
+    string,
+    { enabled: boolean; scope: "user" | "project" | "local" }
+  >;
+}
+
 /** What a marketplace snapshot directory declares about the source it was resolved from. */
 export interface MarketplaceSnapshotProbe {
   /** Commit the host checked out for this marketplace; `null` when it cannot be proven. */
@@ -361,6 +374,12 @@ export interface PluginDeliveryDependencies {
     cwd: string,
     limits?: PluginDeliveryQueryLimits,
   ): PluginDeliveryQueryOutcome;
+  /**
+   * Read Claude's declarative metadata without launching Claude Code. The native `plugin list`
+   * commands maintain profile bookkeeping even when used only for diagnosis, so the production
+   * default uses this seam and treats unavailable metadata as unknown.
+   */
+  readClaudePluginMetadata?(repositoryRoot: string): ClaudePluginMetadataInventory | null;
   readMarketplaceSnapshot(host: PluginDeliveryHost, root: string): MarketplaceSnapshotProbe | null;
   readInstalledPayload(host: PluginDeliveryHost, path: string): InstalledPayloadProbe | null;
   readRepositoryChannel(repositoryRoot: string): RepositoryChannelProbe;
@@ -556,20 +575,231 @@ function safeText(value: unknown): string | null {
   return redactSecretParameters(withoutUserInfo);
 }
 
+function rawText(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function hasIdentityControlCharacter(value: string): boolean {
+  for (const character of value) {
+    const code = character.charCodeAt(0);
+    if (code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
+}
+
+function trimTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 0x2f) end -= 1;
+  return end === value.length ? value : value.slice(0, end);
+}
+
 function normalizeGitSource(value: unknown): string {
   if (typeof value !== "string") return "";
-  return value
+  const normalized = value
     .trim()
     .toLowerCase()
     .replace(/^git@github\.com:/, "https://github.com/")
-    .replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/@]*@/, "$1")
-    .replace(/\/+$/, "")
-    .replace(/\.git$/, "");
+    .replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/@]*@/, "$1");
+  return trimTrailingSlashes(normalized).replace(/\.git$/, "");
 }
 
 function isSemctxSource(value: unknown): boolean {
   const normalized = normalizeGitSource(value);
   return normalized === "hoklims/semctx" || normalized === "https://github.com/hoklims/semctx";
+}
+
+function isValidClaudeSourceIdentity(kind: unknown, value: unknown): value is string {
+  if (
+    typeof value !== "string"
+    || value.length === 0
+    || value.trim() !== value
+    || hasIdentityControlCharacter(value)
+  ) return false;
+  return kind === "github" || kind === "git";
+}
+
+function hasExplicitGitTransport(value: string): boolean {
+  return /^(?:https?|git|ssh):\/\//i.test(value)
+    || /^[^/@\s]+@[^:\s]+:/.test(value);
+}
+
+export function isCanonicalClaudeMarketplaceSource(kind: unknown, value: unknown): boolean {
+  if (!isValidClaudeSourceIdentity(kind, value)) return false;
+  if (kind === "github") return normalizeGitSource(value) === "hoklims/semctx";
+  if (kind !== "git") return false;
+  return hasExplicitGitTransport(value) && isSemctxSource(value);
+}
+
+interface ClaudeMarketplaceSourceFields {
+  sourceKind?: unknown;
+  source?: unknown;
+  repo?: unknown;
+  path?: unknown;
+}
+
+function claudeMarketplaceSourceIdentity(
+  marketplace: ClaudeMarketplaceSourceFields,
+): { kind: unknown; value: unknown } | null {
+  const hasSourceKind = Object.prototype.hasOwnProperty.call(marketplace, "sourceKind");
+  const hasSource = Object.prototype.hasOwnProperty.call(marketplace, "source");
+  if (hasSourceKind || hasSource) {
+    const sourceKind = hasSourceKind ? rawText(marketplace.sourceKind) : null;
+    const legacyKind = hasSource ? rawText(marketplace.source) : null;
+    if (hasSourceKind && sourceKind === null) return null;
+    if (hasSource && legacyKind === null) return null;
+    if (sourceKind !== null && legacyKind !== null && sourceKind !== legacyKind) return null;
+    const explicitKind = sourceKind ?? legacyKind;
+    if (explicitKind === null) return null;
+    return {
+      kind: explicitKind,
+      value: explicitKind === "directory" ? marketplace.path : marketplace.repo,
+    };
+  }
+  // Claude 2.1's older list shape omitted the kind and exposed only `repo`. Interpret exactly that
+  // shape as Git when it has an explicit transport, otherwise as GitHub shorthand. The shared raw
+  // matcher still rejects whitespace, controls, relative Git spellings and unknown kinds.
+  if (marketplace.path === undefined && marketplace.repo !== undefined) {
+    const kind = typeof marketplace.repo === "string" && hasExplicitGitTransport(marketplace.repo)
+      ? "git"
+      : "github";
+    return { kind, value: marketplace.repo };
+  }
+  return null;
+}
+
+export function isCanonicalClaudeMarketplaceRecord(
+  marketplace: ClaudeMarketplaceSourceFields,
+): boolean {
+  const identity = claudeMarketplaceSourceIdentity(marketplace);
+  return identity !== null
+    && isCanonicalClaudeMarketplaceSource(identity.kind, identity.value);
+}
+
+interface RawTraversalEntry {
+  path: string;
+  exists: boolean;
+  dev?: number;
+  ino?: number;
+  mode?: number;
+}
+
+interface RawTraversalObservation {
+  candidate: string;
+  allowRelative: boolean;
+  endpointKind: "any" | "directory";
+  snapshot: readonly RawTraversalEntry[];
+}
+
+function captureRawTraversal(
+  candidate: string,
+  allowRelative: boolean,
+  endpointKind: "any" | "directory" = "any",
+): RawTraversalEntry[] | null {
+  const parsed = parse(candidate);
+  const absolute = isAbsolute(candidate);
+  if (!absolute && !allowRelative) return null;
+  const tail = absolute ? candidate.slice(parsed.root.length) : candidate;
+  const separator = process.platform === "win32" ? /[\\/]/ : "/";
+  const components = tail.split(separator).filter((component) => component.length > 0);
+  const hasTrailingSeparator = process.platform === "win32"
+    ? /[\\/]$/.test(candidate)
+    : candidate.endsWith("/");
+
+  let current = absolute ? parsed.root : process.cwd();
+  const observations: RawTraversalEntry[] = [];
+  const observe = (path: string, requireDirectory: boolean, allowMissing: boolean): boolean => {
+    try {
+      const stats = lstatSync(path);
+      if (stats.isSymbolicLink() || (requireDirectory && !stats.isDirectory())) return false;
+      observations.push({ path, exists: true, dev: stats.dev, ino: stats.ino, mode: stats.mode });
+      return true;
+    } catch (cause) {
+      const missing = cause !== null && typeof cause === "object" && "code" in cause
+        && (cause as { code?: unknown }).code === "ENOENT";
+      if (!missing || !allowMissing) return false;
+      observations.push({ path, exists: false });
+      return true;
+    }
+  };
+
+  if (components.length === 0) {
+    return observe(current, true, false) ? observations : null;
+  }
+  let parentComponentsRemaining = components.filter((component) => component === "..").length;
+  for (let index = 0; index < components.length; index += 1) {
+    const component = components[index] ?? "";
+    if (component === ".") {
+      if (!observe(current, true, false)) return null;
+      continue;
+    }
+    if (component === "..") {
+      parentComponentsRemaining -= 1;
+      if (!observe(current, true, false)) return null;
+      current = dirname(current);
+      continue;
+    }
+    current = join(current, component);
+    const requireDirectory = index < components.length - 1
+      || hasTrailingSeparator
+      || endpointKind === "directory";
+    if (!observe(current, requireDirectory, parentComponentsRemaining === 0)) return null;
+    if (observations.at(-1)?.exists === false) return observations;
+  }
+  return observations;
+}
+
+function sameRawTraversal(
+  candidate: string,
+  allowRelative: boolean,
+  endpointKind: "any" | "directory",
+  before: readonly RawTraversalEntry[],
+): boolean {
+  const after = captureRawTraversal(candidate, allowRelative, endpointKind);
+  return after !== null
+    && after.length === before.length
+    && before.every((entry, index) => {
+      const current = after[index];
+      return current !== undefined
+        && current.path === entry.path
+        && current.exists === entry.exists
+        && current.dev === entry.dev
+        && current.ino === entry.ino
+        && current.mode === entry.mode;
+    });
+}
+
+function hasLocalFilesystemShape(candidate: string): boolean {
+  if (!isAbsolute(candidate) || hasIdentityControlCharacter(candidate)) return false;
+  if (process.platform === "win32") return /^[A-Za-z]:[\\/]/.test(candidate);
+  return !candidate.startsWith("//") && !candidate.includes("\\");
+}
+
+function hasExplicitTraversalSegment(candidate: string): boolean {
+  const parsed = parse(candidate);
+  const tail = candidate.slice(parsed.root.length);
+  const components = process.platform === "win32" ? tail.split(/[\\/]/) : tail.split("/");
+  return components.some((component) => component === "." || component === "..");
+}
+
+function hasLocalRepositoryRootShape(candidate: string): boolean {
+  if (hasIdentityControlCharacter(candidate)) return false;
+  if (isAbsolute(candidate)) return hasLocalFilesystemShape(candidate);
+  if (process.platform === "win32") {
+    return !/^[\\/]/.test(candidate) && !/^[A-Za-z]:/.test(candidate);
+  }
+  return !candidate.includes("\\");
+}
+
+function observeRawTraversal(
+  candidate: string,
+  allowRelative: boolean,
+  endpointKind: "any" | "directory",
+  observations: RawTraversalObservation[],
+): boolean {
+  const snapshot = captureRawTraversal(candidate, allowRelative, endpointKind);
+  if (snapshot === null) return false;
+  observations.push({ candidate, allowRelative, endpointKind, snapshot });
+  return true;
 }
 
 /**
@@ -579,8 +809,7 @@ function isSemctxSource(value: unknown): boolean {
  * the shape before any filesystem call can see it.
  */
 export function isLocalFilesystemPath(candidate: string): boolean {
-  if (!isAbsolute(candidate)) return false;
-  return !/^[\\/]{2}/.test(candidate) && !candidate.includes("\0");
+  return hasLocalFilesystemShape(candidate) && captureRawTraversal(candidate, false) !== null;
 }
 
 /** `candidate` must be `root` itself or strictly inside it, comparing resolved forms. */
@@ -612,19 +841,23 @@ function isWithinTrustedRoot(candidate: string, root: string): boolean {
  */
 function acceptHostPath(candidate: string | null, home: string | null): string | null {
   if (candidate === null || home === null) return null;
-  if (!isLocalFilesystemPath(candidate) || !isLocalFilesystemPath(home)) return null;
+  if (!hasLocalFilesystemShape(candidate) || !hasLocalFilesystemShape(home)) return null;
 
   const resolvedCandidate = resolve(candidate);
   const resolvedHome = resolve(home);
   // Dependency-injected tests use virtual paths. Real host paths, however, must be canonicalized so
   // a junction or symlink cannot escape the lexical home after this check. Probe only the trusted
   // home first; never touch the complete untrusted candidate to decide whether it exists.
+  let canonicalHome: string;
   try {
-    lstatSync(resolvedHome);
+    canonicalHome = realpathSync.native(resolvedHome);
   } catch {
-    return isWithin(resolvedCandidate, resolvedHome) ? resolvedCandidate : null;
+    if (!isWithin(resolvedCandidate, resolvedHome)) return null;
+    return captureRawTraversal(candidate, false) === null ? null : resolvedCandidate;
   }
-  return walkExistingPathWithoutLinks(resolvedCandidate, resolvedHome, "any")?.path ?? null;
+  if (!isWithin(resolvedCandidate, resolvedHome) && !isWithin(resolvedCandidate, canonicalHome)) return null;
+  if (captureRawTraversal(candidate, false) === null) return null;
+  return walkExistingPathWithoutLinks(resolvedCandidate, canonicalHome, "any")?.path ?? null;
 }
 
 /**
@@ -717,6 +950,11 @@ function readHostQueries(
   cwd: string,
   dependencies: PluginDeliveryDependencies,
 ): HostQueries | PluginDeliveryReason {
+  if (host === "claude" && dependencies.readClaudePluginMetadata !== undefined) {
+    const inventory = dependencies.readClaudePluginMetadata(cwd);
+    if (inventory === null) return "HOST_QUERY_FAILED";
+    return validateHostInventory(host, inventory.marketplaces, inventory.plugins);
+  }
   const limits = { timeoutMs: PLUGIN_DELIVERY_QUERY_TIMEOUT_MS, maxBytes: PLUGIN_DELIVERY_MAX_HOST_OUTPUT_BYTES };
   const marketplacesResult = dependencies.runQuery(
     [host, "plugin", "marketplace", "list", "--json"],
@@ -751,6 +989,14 @@ function readHostQueries(
     : plugins;
   if (!Array.isArray(marketplaceList) || !Array.isArray(pluginList)) return "HOST_OUTPUT_MALFORMED";
 
+  return validateHostInventory(host, marketplaceList, pluginList);
+}
+
+function validateHostInventory(
+  host: PluginDeliveryHost,
+  marketplaceList: unknown[],
+  pluginList: unknown[],
+): HostQueries | PluginDeliveryReason {
   // An unidentifiable entry might be Semctx: dropping it cannot prove absence.
   const marketplaceEntries = objectEntries(marketplaceList);
   const pluginEntries = objectEntries(pluginList);
@@ -878,19 +1124,24 @@ function evaluateHost(
   }
   report.marketplace.configured = true;
 
-  const hostSource = host === "codex"
-    ? safeText((marketplace["marketplaceSource"] as { source?: unknown } | undefined)?.source)
-    : safeText(marketplace["repo"]);
-  report.marketplace.source = hostSource;
-  report.marketplace.matchesSemctx = isSemctxSource(hostSource);
+  const claudeSourceIdentity = host === "claude"
+    ? claudeMarketplaceSourceIdentity(marketplace)
+    : null;
+  const rawHostSource = host === "codex"
+    ? rawText((marketplace["marketplaceSource"] as { source?: unknown } | undefined)?.source)
+    : rawText(claudeSourceIdentity?.value);
+  report.marketplace.source = safeText(rawHostSource);
+  report.marketplace.matchesSemctx = host === "claude"
+    ? isCanonicalClaudeMarketplaceRecord(marketplace)
+    : isSemctxSource(rawHostSource);
   if (report.marketplace.matchesSemctx !== true) reasons.push("MARKETPLACE_SOURCE_MISMATCH");
 
   const reportedRoot = host === "codex"
-    ? safeText(marketplace["root"])
-    : safeText(marketplace["installLocation"]);
+    ? rawText(marketplace["root"])
+    : rawText(marketplace["installLocation"]);
   const marketplaceRoot = acceptHostPath(reportedRoot, home);
   if (reportedRoot !== null && marketplaceRoot === null) reasons.push("HOST_PATH_REJECTED");
-  report.snapshot.path = marketplaceRoot;
+  report.snapshot.path = safeText(marketplaceRoot);
 
   const snapshot = marketplaceRoot === null
     ? null
@@ -930,20 +1181,21 @@ function evaluateHost(
   // Host JSON is untrusted, and a missing field is not proof of `false`: only a boolean the host
   // actually reported counts as known, everything else stays an unprovable `null`.
   const enabledRaw = installedEntry?.["enabled"];
+  const enablementScope = installedEntry?.["enablementScope"];
   report.installed.enabled = typeof enabledRaw === "boolean" ? enabledRaw : null;
   if (report.installed.enabled === false) reasons.push("PLUGIN_DISABLED");
   else if (report.installed.enabled === null) reasons.push("PLUGIN_ENABLEMENT_UNKNOWN");
 
-  const hostVersion = safeText(installedEntry?.["version"]);
+  const rawHostVersion = rawText(installedEntry?.["version"]);
   // `source.path` is the approved marketplace snapshot, never the executed cache entry.
   const reportedCachePath = host === "codex"
-    ? (marketplaceRoot === null || hostVersion === null
+    ? (marketplaceRoot === null || rawHostVersion === null
       ? null
-      : codexCacheEntryFromMarketplaceRoot(marketplaceRoot, hostVersion, home))
-    : safeText(installedEntry?.["installPath"]);
+      : codexCacheEntryFromMarketplaceRoot(marketplaceRoot, rawHostVersion, home))
+    : rawText(installedEntry?.["installPath"]);
   const cachePath = acceptHostPath(reportedCachePath, home);
   if (reportedCachePath !== null && cachePath === null) reasons.push("HOST_PATH_REJECTED");
-  report.installed.path = cachePath;
+  report.installed.path = safeText(cachePath);
 
   const payload = cachePath === null ? null : dependencies.readInstalledPayload(host, cachePath);
   const cacheVersion = safeText(payload?.version);
@@ -1018,9 +1270,12 @@ function evaluateHost(
   // the delivery authority proposes nothing to install: that is the fail-closed half.
   if (report.delivery === "UPDATE_AVAILABLE") {
     const enable = ENABLE_COMMAND[host];
+    const userEnableCanConverge = enablementScope !== "project" && enablementScope !== "local";
     report.convergence = [
       ...CONVERGENCE[host].map((entry) => [...entry]),
-      ...(report.installed.enabled === false && enable !== undefined ? [[...enable]] : []),
+      ...(report.installed.enabled === false && enable !== undefined && userEnableCanConverge
+        ? [[...enable]]
+        : []),
     ];
   }
   // Activation is an independent dimension, and it is required in two unrelated situations: a
@@ -1105,15 +1360,30 @@ export function pluginDeliveryStatus(
   // the Git reads too and the read-only guarantee is provable, not merely asserted.
   const runQuery = dependencies.runQuery ?? defaultRunQuery;
   const resolveHostHome = dependencies.resolveHostHome ?? defaultResolveHostHome;
+  const resolveAttestationExclusionHome = dependencies.resolveHostHome
+    ?? defaultResolveHostExclusionHome;
+  const readClaudePluginMetadata = dependencies.readClaudePluginMetadata
+    ?? (dependencies.runQuery === undefined
+      ? (root: string) => {
+          const home = resolveHostHome("claude");
+          return home === null ? null : readClaudePluginMetadataInventory(root, home);
+        }
+      : undefined);
   const resolved: PluginDeliveryDependencies = {
     runQuery,
+    ...(readClaudePluginMetadata === undefined ? {} : { readClaudePluginMetadata }),
     readMarketplaceSnapshot: dependencies.readMarketplaceSnapshot
       ?? ((host, root) => defaultReadMarketplaceSnapshot(host, root, runQuery)),
     readInstalledPayload: dependencies.readInstalledPayload ?? defaultReadInstalledPayload,
     readRepositoryChannel: dependencies.readRepositoryChannel
       ?? ((root) => defaultReadRepositoryChannel(root, runQuery)),
     resolvePublicRelease: dependencies.resolvePublicRelease
-      ?? ((root) => defaultResolvePublicRelease(root, runQuery, command.attest === true, resolveHostHome)),
+      ?? ((root) => defaultResolvePublicRelease(
+        root,
+        runQuery,
+        command.attest === true,
+        resolveAttestationExclusionHome,
+      )),
     observeSessionVersion: dependencies.observeSessionVersion ?? defaultObserveSessionVersion,
     resolveHostHome,
   };
@@ -1348,6 +1618,7 @@ function environmentFor(
 
 /** Both hosts keep their own root; nothing outside it is ever read. */
 function defaultResolveHostHome(host: PluginDeliveryHost): string | null {
+  if (host === "claude") return resolveClaudePluginHome(process.env["CLAUDE_CONFIG_DIR"]);
   let home: string;
   try {
     home = homedir();
@@ -1361,7 +1632,55 @@ function defaultResolveHostHome(host: PluginDeliveryHost): string | null {
       return isLocalFilesystemPath(candidate) ? resolve(candidate) : null;
     }
   }
-  return isLocalFilesystemPath(home) ? resolve(join(home, host === "codex" ? ".codex" : ".claude")) : null;
+  return isLocalFilesystemPath(home) ? resolve(join(home, ".codex")) : null;
+}
+
+/**
+ * Resolve the raw profile spelling that an attestation scratch directory must exclude.
+ *
+ * Inventory reads deliberately reject links and reparse points. Exclusion has the opposite safety
+ * obligation: retain an otherwise local alias so the scratch planner can compare both its lexical
+ * and canonical targets without weakening the inventory reader or following a network path.
+ */
+function defaultResolveHostExclusionHome(host: PluginDeliveryHost): string | null {
+  const configured = process.env[host === "claude" ? "CLAUDE_CONFIG_DIR" : "CODEX_HOME"];
+  if (configured !== undefined && configured.length > 0) {
+    if (configured.trim().length === 0 || !hasLocalFilesystemShape(configured)) return null;
+    return configured;
+  }
+  let home: string;
+  try {
+    home = homedir();
+  } catch {
+    return null;
+  }
+  if (!hasLocalFilesystemShape(home)) return null;
+  const separator = home.endsWith("/") || home.endsWith("\\") ? "" : sep;
+  const candidate = `${home}${separator}${host === "claude" ? ".claude" : ".codex"}`;
+  return hasLocalFilesystemShape(candidate) ? candidate : null;
+}
+
+/** Resolve Claude's exact profile root without starting Claude Code. */
+export function resolveClaudePluginHome(configured?: string, userHome?: string): string | null {
+  if (configured !== undefined) {
+    if (configured.length === 0) {
+      // Claude treats an empty override as absent; use the normal profile root below.
+    } else {
+      // Whitespace-only and relative overrides are invalid. Do not trim a valid absolute path:
+      // U+00A0 and ordinary spaces are legal filename characters and name a different profile.
+      if (configured.trim().length === 0 || !isLocalFilesystemPath(configured)) return null;
+      return configured;
+    }
+  }
+  let home = userHome;
+  if (home === undefined) {
+    try {
+      home = homedir();
+    } catch {
+      return null;
+    }
+  }
+  return isLocalFilesystemPath(home) ? resolve(join(home, ".claude")) : null;
 }
 
 type PathKind = "any" | "directory" | "file";
@@ -1380,6 +1699,11 @@ interface ConfinedPath {
  */
 function walkExistingPathWithoutLinks(candidate: string, root: string, kind: PathKind): ConfinedPath | null {
   try {
+    if (!hasLocalFilesystemShape(candidate) || !hasLocalFilesystemShape(root)) return null;
+    // The root is trusted enough to inspect, but its raw spelling still matters: resolving first
+    // would erase a linked or non-directory component followed by `..`. Validate that lineage
+    // before canonicalization. Candidate inspection remains deferred until containment is proven.
+    if (captureRawTraversal(root, false) === null) return null;
     const resolvedRoot = resolve(root);
     const resolvedCandidate = resolve(candidate);
     const canonicalRoot = realpathSync.native(resolvedRoot);
@@ -1392,6 +1716,7 @@ function walkExistingPathWithoutLinks(candidate: string, root: string, kind: Pat
         ? relative(canonicalRoot, resolvedCandidate)
         : null;
     if (suffix === null) return null;
+    if (captureRawTraversal(candidate, false) === null) return null;
     const segments = suffix === "" ? [] : suffix.split(/[\\/]/).filter(Boolean);
     let current = canonicalRoot;
     let stats = lstatSync(current);
@@ -1472,6 +1797,292 @@ export function readConfinedFile(
       }
     }
   }
+}
+
+function plainRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function decodeMetadataObject(bytes: Buffer | null): Record<string, unknown> | null {
+  if (bytes === null) return null;
+  const parsed = parseJsonValue(bytes.toString("utf8"));
+  return plainRecord(parsed);
+}
+
+type OptionalMetadataFile =
+  | { status: "absent" }
+  | { status: "unsafe" }
+  | { status: "ok"; bytes: Buffer };
+
+/** Distinguish a proven absent file from an unsafe path; `readConfinedFile` intentionally cannot. */
+function readOptionalMetadataFile(file: string, root: string): OptionalMetadataFile {
+  try {
+    const resolvedRoot = resolve(root);
+    const resolvedFile = resolve(file);
+    // Bun 1.4's POSIX `node:fs` compatibility layer treats a literal backslash as a separator.
+    // It therefore cannot safely prove either presence or absence for this legal POSIX filename.
+    // Refuse the observation rather than misreporting an empty profile or reopening it through an
+    // unconfined external process.
+    if (process.platform !== "win32" && resolvedFile.includes("\\")) {
+      return { status: "unsafe" };
+    }
+    if (!isWithin(resolvedFile, resolvedRoot)) return { status: "unsafe" };
+    const anchor = parse(resolvedRoot).root;
+    let current = anchor;
+    const components = relative(anchor, resolvedFile).split(sep).filter(Boolean);
+    for (let index = -1; index < components.length; index += 1) {
+      if (index >= 0) current = join(current, components[index] ?? "");
+      let stats;
+      try {
+        stats = lstatSync(current);
+      } catch (cause) {
+        return cause !== null && typeof cause === "object" && "code" in cause
+            && (cause as { code?: unknown }).code === "ENOENT"
+          ? { status: "absent" }
+          : { status: "unsafe" };
+      }
+      if (stats.isSymbolicLink()) return { status: "unsafe" };
+      const final = index === components.length - 1;
+      if (!final && !stats.isDirectory()) return { status: "unsafe" };
+      if (final && !stats.isFile()) return { status: "unsafe" };
+    }
+    const bytes = readConfinedFile(file, root, PLUGIN_DELIVERY_MAX_HOST_OUTPUT_BYTES);
+    return bytes === null ? { status: "unsafe" } : { status: "ok", bytes };
+  } catch {
+    return { status: "unsafe" };
+  }
+}
+
+function sameOptionalObservation(before: OptionalMetadataFile, after: OptionalMetadataFile): boolean {
+  if (before.status !== after.status) return false;
+  return before.status !== "ok" || (after.status === "ok" && before.bytes.equals(after.bytes));
+}
+
+function lexicalPathIdentity(path: string): string {
+  const absolute = resolve(path);
+  return process.platform === "win32" ? absolute.toLowerCase() : absolute;
+}
+
+function declaredFilesystemIdentity(
+  value: unknown,
+  observations: RawTraversalObservation[],
+): string | null {
+  if (
+    typeof value !== "string"
+    || !hasLocalFilesystemShape(value)
+    || !observeRawTraversal(value, false, "directory", observations)
+  ) return null;
+  return lexicalPathIdentity(value);
+}
+
+function enabledPluginsFromSettings(bytes: Buffer | null): Record<string, boolean> | null {
+  if (bytes === null) return null;
+  const settings = decodeMetadataObject(bytes);
+  if (settings === null) return null;
+  if (settings["enabledPlugins"] === undefined) return {};
+  const enabled = plainRecord(settings["enabledPlugins"]);
+  if (enabled === null) return null;
+  const result: Record<string, boolean> = {};
+  for (const [plugin, value] of Object.entries(enabled)) {
+    if (plugin.length === 0 || typeof value !== "boolean") return null;
+    result[plugin] = value;
+  }
+  return result;
+}
+
+/**
+ * Read Claude Code's pinned declarative plugin metadata without starting Claude Code.
+ *
+ * Inventory files and settings are confined, bounded, parsed once and re-read before the snapshot
+ * is returned. A link-free absent inventory file proves an empty corresponding registry, matching
+ * Claude Code 2.1.x on a fresh profile. Malformed, linked, oversized or drifting inventory returns
+ * `null`; unavailable settings leave enablement unknown. Project/local entries are considered only
+ * for the repository being inspected, so metadata can never direct this reader elsewhere.
+ */
+export function readClaudePluginMetadataInventory(
+  repositoryRoot: string,
+  claudeHome: string,
+  afterObservation?: () => void,
+): ClaudePluginMetadataInventory | null {
+  const traversalObservations: RawTraversalObservation[] = [];
+  if (!hasLocalFilesystemShape(claudeHome)) return null;
+  if (!hasLocalRepositoryRootShape(repositoryRoot)) return null;
+  if (!observeRawTraversal(claudeHome, false, "directory", traversalObservations)) return null;
+  if (!observeRawTraversal(repositoryRoot, true, "directory", traversalObservations)) return null;
+  const absoluteRepositoryRoot = resolve(repositoryRoot);
+  if (!isLocalFilesystemPath(absoluteRepositoryRoot)) return null;
+  const marketplacesPath = join(claudeHome, "plugins", "known_marketplaces.json");
+  const installedPath = join(claudeHome, "plugins", "installed_plugins.json");
+  const userSettingsPath = join(claudeHome, "settings.json");
+  const marketplacesObservation = readOptionalMetadataFile(marketplacesPath, claudeHome);
+  const installedObservation = readOptionalMetadataFile(installedPath, claudeHome);
+  const userSettingsObservation = readOptionalMetadataFile(userSettingsPath, claudeHome);
+  if (marketplacesObservation.status === "unsafe" || installedObservation.status === "unsafe") {
+    return null;
+  }
+  const marketplacesBytes = marketplacesObservation.status === "ok"
+    ? marketplacesObservation.bytes
+    : Buffer.from("{}");
+  const installedBytes = installedObservation.status === "ok"
+    ? installedObservation.bytes
+    : Buffer.from('{"version":2,"plugins":{}}');
+  const marketplaceRecord = decodeMetadataObject(marketplacesBytes);
+  const installedRecord = decodeMetadataObject(installedBytes);
+  if (marketplaceRecord === null || installedRecord === null) return null;
+  if (installedRecord["version"] !== 2) return null;
+  const pluginsRecord = plainRecord(installedRecord["plugins"]);
+  if (pluginsRecord === null) return null;
+
+  const marketplaces: Record<string, unknown>[] = [];
+  for (const [name, rawEntry] of Object.entries(marketplaceRecord)) {
+    const entry = plainRecord(rawEntry);
+    const source = plainRecord(entry?.["source"]);
+    const sourceKind = source?.["source"];
+    const repo = source?.["repo"];
+    const url = source?.["url"];
+    const path = source?.["path"];
+    const ref = source?.["ref"];
+    const installLocation = entry?.["installLocation"];
+    const lastUpdated = entry?.["lastUpdated"];
+    const sourceValue = sourceKind === "github"
+      ? repo
+      : sourceKind === "git"
+        ? url
+        : sourceKind === "directory"
+          ? path
+          : undefined;
+    const directoryIdentity = sourceKind === "directory"
+      ? declaredFilesystemIdentity(sourceValue, traversalObservations)
+      : null;
+    const sourceIdentityValid = sourceKind === "directory"
+      ? directoryIdentity !== null
+      : isValidClaudeSourceIdentity(sourceKind, sourceValue);
+    const installLocationIdentity = declaredFilesystemIdentity(installLocation, traversalObservations);
+    if (
+      name.trim().length === 0
+      || entry === null
+      || source === null
+      || (sourceKind !== "github" && sourceKind !== "git" && sourceKind !== "directory")
+      || !sourceIdentityValid
+      || installLocationIdentity === null
+      || typeof lastUpdated !== "string"
+      || (repo !== undefined && typeof repo !== "string")
+      || (url !== undefined && typeof url !== "string")
+      || (path !== undefined && typeof path !== "string")
+      || (ref !== undefined && typeof ref !== "string")
+    ) return null;
+    marketplaces.push({
+      name,
+      sourceKind,
+      ...(sourceKind === "directory" ? { path: sourceValue } : { repo: sourceValue }),
+      ...(typeof ref === "string" ? { ref } : {}),
+      installLocation,
+    });
+  }
+
+  const repositoryIdentity = lexicalPathIdentity(absoluteRepositoryRoot);
+  const projectSettingsPath = join(absoluteRepositoryRoot, ".claude", "settings.json");
+  const localSettingsPath = join(absoluteRepositoryRoot, ".claude", "settings.local.json");
+  const settingsObservations = [
+    { path: userSettingsPath, root: claudeHome, observation: userSettingsObservation },
+    {
+      path: projectSettingsPath,
+      root: absoluteRepositoryRoot,
+      observation: readOptionalMetadataFile(projectSettingsPath, absoluteRepositoryRoot),
+    },
+    {
+      path: localSettingsPath,
+      root: absoluteRepositoryRoot,
+      observation: readOptionalMetadataFile(localSettingsPath, absoluteRepositoryRoot),
+    },
+  ] as const;
+  const settingsLayers = settingsObservations.map(({ observation }) =>
+    observation.status === "absent"
+      ? {}
+      : observation.status === "ok"
+        ? enabledPluginsFromSettings(observation.bytes)
+        : null);
+  const settingsReliable = settingsLayers.every(
+    (layer): layer is Record<string, boolean> => layer !== null,
+  );
+  const effectiveEnablement: ClaudePluginMetadataInventory["effectiveEnablement"] = {};
+  if (settingsReliable) {
+    for (const [index, layer] of settingsLayers.entries()) {
+      const scope = (["user", "project", "local"] as const)[index];
+      if (scope === undefined) continue;
+      for (const [id, enabled] of Object.entries(layer)) {
+        effectiveEnablement[id] = { enabled, scope };
+      }
+    }
+  }
+  const plugins: Record<string, unknown>[] = [];
+  for (const [id, rawEntries] of Object.entries(pluginsRecord)) {
+    if (id.trim().length === 0 || !Array.isArray(rawEntries)) return null;
+    for (const rawEntry of rawEntries) {
+      const entry = plainRecord(rawEntry);
+      const scope = entry?.["scope"];
+      const installPath = entry?.["installPath"];
+      const version = entry?.["version"];
+      const projectPath = entry?.["projectPath"];
+      const installedAt = entry?.["installedAt"];
+      const lastUpdated = entry?.["lastUpdated"];
+      const gitCommitSha = entry?.["gitCommitSha"];
+      const installIdentity = declaredFilesystemIdentity(installPath, traversalObservations);
+      const projectIdentity = projectPath === undefined
+        ? null
+        : declaredFilesystemIdentity(projectPath, traversalObservations);
+      if (
+        entry === null
+        || (scope !== "user" && scope !== "project" && scope !== "local")
+        || installIdentity === null
+        || (version !== undefined && typeof version !== "string")
+        || (installedAt !== undefined && typeof installedAt !== "string")
+        || (lastUpdated !== undefined && typeof lastUpdated !== "string")
+        || (gitCommitSha !== undefined && typeof gitCommitSha !== "string")
+        || (projectPath !== undefined && projectIdentity === null)
+        || ((scope === "project" || scope === "local") && projectIdentity === null)
+      ) return null;
+      if (scope !== "user" && projectIdentity !== repositoryIdentity) continue;
+      const effective = effectiveEnablement[id];
+      plugins.push({
+        id,
+        scope,
+        installPath,
+        ...(typeof projectPath === "string" ? { projectPath } : {}),
+        ...(typeof version === "string" ? { version } : {}),
+        ...(effective === undefined ? {} : {
+          enabled: effective.enabled,
+          enablementScope: effective.scope,
+        }),
+      });
+    }
+  }
+
+  // Deterministic test seam for cross-file drift; production never supplies it.
+  afterObservation?.();
+
+  if (!traversalObservations.every((observation) =>
+    sameRawTraversal(
+      observation.candidate,
+      observation.allowRelative,
+      observation.endpointKind,
+      observation.snapshot,
+    ))) return null;
+
+  if (!sameOptionalObservation(
+    marketplacesObservation,
+    readOptionalMetadataFile(marketplacesPath, claudeHome),
+  )) return null;
+  if (!sameOptionalObservation(
+    installedObservation,
+    readOptionalMetadataFile(installedPath, claudeHome),
+  )) return null;
+  for (const { path, root, observation } of settingsObservations) {
+    if (!sameOptionalObservation(observation, readOptionalMetadataFile(path, root))) return null;
+  }
+  return { marketplaces, plugins, settingsValid: settingsReliable, effectiveEnablement };
 }
 
 /** Digest a confined file. A host cache is untrusted input, so the read is bounded throughout. */
@@ -1845,34 +2456,46 @@ function attestationScratchBase(
   }
   // Relative, UNC and device paths are rejected on their shape; a UNC base would additionally make
   // every write an SMB round trip, which is network egress from a path that claims to be local.
-  if (!isLocalFilesystemPath(base)) return null;
+  if (!hasLocalFilesystemShape(base)) return null;
+  if (hasExplicitTraversalSegment(base) && captureRawTraversal(base, false) === null) return null;
   const resolved = resolve(base);
   let canonical: string;
   try {
     canonical = realpathSync.native(resolved);
-    if (!isLocalFilesystemPath(canonical) || !lstatSync(canonical).isDirectory()) return null;
+    if (!hasLocalFilesystemShape(canonical) || !lstatSync(canonical).isDirectory()) return null;
   } catch {
     return null;
   }
 
   const excluded: string[] = [];
-  const exclude = (candidate: string): void => {
-    if (!isLocalFilesystemPath(candidate)) return;
+  const exclude = (candidate: string, allowRelative: boolean): boolean => {
+    if (allowRelative) {
+      if (!hasLocalRepositoryRootShape(candidate)) return false;
+      if (!isAbsolute(candidate) && captureRawTraversal(candidate, true, "directory") === null) return false;
+    } else if (!hasLocalFilesystemShape(candidate)) {
+      return true;
+    }
+    if (
+      isAbsolute(candidate)
+      && hasExplicitTraversalSegment(candidate)
+      && captureRawTraversal(candidate, false) === null
+    ) return false;
     const lexical = resolve(candidate);
     excluded.push(lexical);
     try {
       const actual = realpathSync.native(lexical);
-      if (isLocalFilesystemPath(actual)) excluded.push(actual);
+      if (hasLocalFilesystemShape(actual)) excluded.push(actual);
     } catch {
       // A missing exclusion still participates lexically; existing roots also contribute real paths.
     }
+    return true;
   };
-  exclude(inspectedRoot);
+  if (!exclude(inspectedRoot, true)) return null;
   for (const host of PLUGIN_DELIVERY_HOSTS) {
     const home = resolveHostHome(host);
     // Host homes are resolved read-only; a host that cannot be located simply contributes no
     // exclusion rather than blocking the attestation.
-    if (home !== null) exclude(home);
+    if (home !== null && !exclude(home, false)) return null;
   }
   for (const forbidden of excluded) {
     if (isWithin(resolved, forbidden) || isWithin(canonical, forbidden)) return null;

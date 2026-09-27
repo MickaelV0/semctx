@@ -46,10 +46,15 @@ export {
   PLUGIN_DELIVERY_SCHEMA_VERSION,
   PLUGIN_RUNTIME_BUNDLES,
   codexCacheEntryFromMarketplaceRoot,
+  isCanonicalClaudeMarketplaceRecord,
+  isCanonicalClaudeMarketplaceSource,
   isHostInterfaceUnsupportedFailure,
   pluginDeliveryStatus,
+  readClaudePluginMetadataInventory,
+  resolveClaudePluginHome,
 } from "./plugin-delivery";
 export type {
+  ClaudePluginMetadataInventory,
   HostInstalledStateV2,
   HostMarketplaceStateV2,
   HostPluginDeliveryV2,

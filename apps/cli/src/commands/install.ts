@@ -1,5 +1,11 @@
 import packageJson from "../../package.json";
-import { isHostInterfaceUnsupportedFailure } from "@semantic-context/app-services";
+import {
+  isCanonicalClaudeMarketplaceRecord,
+  isHostInterfaceUnsupportedFailure,
+  readClaudePluginMetadataInventory,
+  resolveClaudePluginHome,
+  type ClaudePluginMetadataInventory,
+} from "@semantic-context/app-services";
 import { isSemctxError, SemctxError } from "@semantic-context/core";
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
@@ -108,6 +114,8 @@ export interface InstallRuntime {
   codexHome(): string | null;
   /** Probe a plugin directory. `null` when it is not a readable directory. */
   readCodexPluginPayload(path: string): CodexPayloadProbe | null;
+  /** Declarative Claude inventory; production never launches Claude Code for an inventory probe. */
+  readClaudePluginMetadata?(root: string): ClaudePluginMetadataInventory | null;
 }
 
 interface InstallStep {
@@ -200,6 +208,8 @@ interface CodexPlugin {
 
 interface ClaudeMarketplace {
   name?: unknown;
+  source?: unknown;
+  sourceKind?: unknown;
   repo?: unknown;
   path?: unknown;
   ref?: unknown;
@@ -209,6 +219,7 @@ interface ClaudePlugin {
   id?: unknown;
   scope?: unknown;
   enabled?: unknown;
+  enablementScope?: unknown;
   version?: unknown;
 }
 
@@ -627,6 +638,14 @@ const DEFAULT_RUNTIME: InstallRuntime = {
   deferCodexCacheCleanup: defaultDeferCodexCacheCleanup,
   codexHome: defaultCodexHome,
   readCodexPluginPayload: defaultReadCodexPluginPayload,
+  readClaudePluginMetadata: (root) => {
+    try {
+      const home = resolveClaudePluginHome(process.env["CLAUDE_CONFIG_DIR"]);
+      return home === null ? null : readClaudePluginMetadataInventory(root, home);
+    } catch {
+      return null;
+    }
+  },
 };
 
 function hostReport(requested: boolean): HostInstallReport {
@@ -1006,6 +1025,10 @@ function isSemctxSource(value: unknown): boolean {
     || normalized === "https://github.com/hoklims/semctx";
 }
 
+function isCanonicalClaudeMarketplace(item: ClaudeMarketplace): boolean {
+  return isCanonicalClaudeMarketplaceRecord(item);
+}
+
 function installCodex(
   root: string,
   dryRun: boolean,
@@ -1029,7 +1052,6 @@ function installCodex(
     );
     return;
   }
-
   const named = marketplaces.find((item) => item.name === CODEX_MARKETPLACE);
   if (named !== undefined && !isSemctxSource(named.marketplaceSource?.source)) {
     report.status = "conflict";
@@ -1184,38 +1206,108 @@ function installClaude(
   runtime: InstallRuntime,
   report: HostInstallReport,
 ): void {
-  const marketplacesResult = runtime.run(
-    ["claude", "plugin", "marketplace", "list", "--json"],
-    root,
-  );
-  const pluginsResult = runtime.run(["claude", "plugin", "list", "--json"], root);
-  const marketplaces = parseJsonArray<ClaudeMarketplace>(marketplacesResult);
-  const plugins = parseJsonArray<ClaudePlugin>(pluginsResult);
+  const metadata = runtime.readClaudePluginMetadata?.(root);
+  const marketplacesResult = metadata === undefined
+    ? runtime.run(["claude", "plugin", "marketplace", "list", "--json"], root)
+    : null;
+  const pluginsResult = metadata === undefined
+    ? runtime.run(["claude", "plugin", "list", "--json"], root)
+    : null;
+  const marketplaces: ClaudeMarketplace[] | null = metadata === undefined
+    ? parseJsonArray<ClaudeMarketplace>(marketplacesResult as CommandResult)
+    : metadata === null ? null : metadata.marketplaces;
+  const plugins: ClaudePlugin[] | null = metadata === undefined
+    ? parseJsonArray<ClaudePlugin>(pluginsResult as CommandResult)
+    : metadata === null ? null : metadata.plugins;
   if (marketplaces === null || plugins === null) {
     report.status = "failed";
-    report.error = marketplaces === null
-      ? `cannot inspect Claude marketplaces: ${compactError(marketplacesResult)}`
-      : `cannot inspect Claude plugins: ${compactError(pluginsResult)}`;
-    report.interfaceUnsupported = isHostInterfaceUnsupportedFailure(
-      marketplaces === null ? marketplacesResult : pluginsResult,
+    report.error = metadata === null
+      ? "cannot inspect Claude declarative plugin metadata safely"
+      : marketplaces === null
+        ? `cannot inspect Claude marketplaces: ${compactError(marketplacesResult as CommandResult)}`
+        : `cannot inspect Claude plugins: ${compactError(pluginsResult as CommandResult)}`;
+    report.interfaceUnsupported = metadata === undefined && isHostInterfaceUnsupportedFailure(
+      marketplaces === null ? marketplacesResult as CommandResult : pluginsResult as CommandResult,
     );
+    return;
+  }
+  if (metadata !== undefined && metadata !== null && !metadata.settingsValid) {
+    report.status = "failed";
+    report.error = "cannot inspect Claude enablement safely: a settings layer is malformed, unreadable, or linked";
     return;
   }
 
   const named = marketplaces.find((item) => item.name === CLAUDE_MARKETPLACE);
-  if (named !== undefined && !isSemctxSource(named.repo) && !isSemctxSource(named.path)) {
+  if (named !== undefined && !isCanonicalClaudeMarketplace(named)) {
     report.status = "conflict";
     report.error = `Claude marketplace "${CLAUDE_MARKETPLACE}" already points to another source`;
     return;
   }
   const legacy = marketplaces.find(
     (item) => item.name === LEGACY_CLAUDE_MARKETPLACE
-      && (isSemctxSource(item.repo) || isSemctxSource(item.path)),
+      && isCanonicalClaudeMarketplace(item),
   );
+  const pluginId = `${CLAUDE_PLUGIN}@${CLAUDE_MARKETPLACE}`;
+  const applicableRegistrations = plugins.filter((item) => item.id === pluginId);
+  const effectiveEnablement = metadata?.effectiveEnablement[pluginId];
+  if (
+    metadata !== undefined
+    && metadata !== null
+    && applicableRegistrations.length > 0
+    && effectiveEnablement === undefined
+  ) {
+    report.status = "failed";
+    report.error = "cannot determine effective Claude plugin enablement from user, project, and local settings";
+    return;
+  }
+  if (metadata === undefined) {
+    const unknownRegistration = applicableRegistrations.find(
+      (item) => typeof item.enabled !== "boolean",
+    );
+    if (unknownRegistration !== undefined) {
+      report.status = "failed";
+      report.error = "cannot determine effective Claude plugin enablement from user, project, and local settings";
+      return;
+    }
+    const disabledOutsideUserScope = applicableRegistrations.find(
+      (item) => item.enabled === false && (
+        item.scope === "project"
+        || item.scope === "local"
+        || item.enablementScope === "project"
+        || item.enablementScope === "local"
+      ),
+    );
+    if (disabledOutsideUserScope !== undefined) {
+      report.status = "conflict";
+      report.error = "Claude plugin is disabled outside user scope; change the project or local"
+        + " settings override before installing or updating Semctx";
+      return;
+    }
+  }
+  if (
+    effectiveEnablement?.enabled === false
+    && (effectiveEnablement.scope === "project" || effectiveEnablement.scope === "local")
+  ) {
+    report.status = "conflict";
+    report.error = `Claude plugin is disabled by an explicit ${effectiveEnablement.scope} settings override;`
+      + " change that override before installing or updating Semctx";
+    return;
+  }
   const installedPlugin = plugins.find(
-    (item) => item.id === `${CLAUDE_PLUGIN}@${CLAUDE_MARKETPLACE}` && item.scope === "user",
+    (item) => item.id === pluginId && item.scope === "user",
   );
   const installed = installedPlugin !== undefined;
+  if (
+    metadata === undefined
+    &&
+    installedPlugin?.enabled === false
+    && (installedPlugin.enablementScope === "project" || installedPlugin.enablementScope === "local")
+  ) {
+    report.status = "conflict";
+    report.error = `Claude plugin is disabled by an explicit ${installedPlugin.enablementScope} settings override;`
+      + " change that override before installing or updating Semctx";
+    return;
+  }
 
   if (named === undefined) {
     if (!runMutation(
@@ -1246,7 +1338,10 @@ function installClaude(
     pluginCommand,
     dryRun,
   )) return;
-  if (installedPlugin?.enabled === false && !runMutation(
+  const shouldEnableUser = metadata === undefined
+    ? installedPlugin?.enabled === false
+    : effectiveEnablement?.enabled === false && effectiveEnablement.scope === "user";
+  if (shouldEnableUser && !runMutation(
     runtime,
     root,
     report,
@@ -1274,11 +1369,16 @@ function verifyClaudeInstall(
   report: HostInstallReport,
 ): boolean {
   const command = ["claude", "plugin", "list", "--json"];
-  const result = runtime.run(command, root);
-  const plugins = parseJsonArray<ClaudePlugin>(result);
+  const metadata = runtime.readClaudePluginMetadata?.(root);
+  const result = metadata === undefined ? runtime.run(command, root) : null;
+  const plugins: ClaudePlugin[] | null = metadata === undefined
+    ? parseJsonArray<ClaudePlugin>(result as CommandResult)
+    : metadata === null ? null : metadata.plugins;
   let error: string | undefined;
   if (plugins === null) {
-    error = `cannot inspect final Claude plugin state: ${compactError(result)}`;
+    error = metadata === null
+      ? "cannot inspect final Claude declarative plugin metadata safely"
+      : `cannot inspect final Claude plugin state: ${compactError(result as CommandResult)}`;
   } else {
     const installed = plugins.find(
       (item) => item.id === `${CLAUDE_PLUGIN}@${CLAUDE_MARKETPLACE}`
@@ -1439,6 +1539,25 @@ export function executeInstall(
     codex: hostReport(selected(selection, "codex")),
     claude: hostReport(selected(selection, "claude")),
   });
+  const inspectHosts = (inspectionDryRun: boolean): Record<Host, HostInstallReport> => {
+    const inspected = newHostReports();
+    for (const host of ["codex", "claude"] as const) {
+      const report = inspected[host];
+      if (!report.requested) continue;
+      if (!detectHost(host, root, selection, runtime, report)) continue;
+      if (host === "codex") installCodex(root, inspectionDryRun, runtime, report);
+      else installClaude(root, inspectionDryRun, runtime, report);
+    }
+    return inspected;
+  };
+  const hostsAdmissible = (candidate: Record<Host, HostInstallReport>): boolean => {
+    const requested = (Object.keys(candidate) as Host[])
+      .map((host) => candidate[host])
+      .filter((report) => report.requested);
+    return requested.every(
+      (report) => hostOk(report) || (selection === "auto" && report.status === "not-detected"),
+    ) && requested.some(hostOk);
+  };
   let hosts = newHostReports();
 
   // Workspace conflicts are deterministic and repository-local. Refuse them before any host
@@ -1462,20 +1581,8 @@ export function executeInstall(
 
   // Aggregate every requested host's read-only inventory and plan before the first host mutation.
   // A known conflict on host B must not leave host A installed.
-  for (const host of ["codex", "claude"] as const) {
-    const report = hosts[host];
-    if (!report.requested) continue;
-    if (!detectHost(host, root, selection, runtime, report)) continue;
-    if (host === "codex") installCodex(root, true, runtime, report);
-    else installClaude(root, true, runtime, report);
-  }
-
-  const plannedReports = (Object.keys(hosts) as Host[])
-    .map((host) => hosts[host])
-    .filter((report) => report.requested);
-  const planAdmissible = plannedReports.every(
-    (report) => hostOk(report) || (selection === "auto" && report.status === "not-detected"),
-  ) && plannedReports.some(hostOk);
+  hosts = inspectHosts(true);
+  const planAdmissible = hostsAdmissible(hosts);
   if (!planAdmissible || dryRun) {
     const ok = planAdmissible;
     return {
@@ -1489,14 +1596,23 @@ export function executeInstall(
     };
   }
 
-  hosts = newHostReports();
-  for (const host of ["codex", "claude"] as const) {
-    const report = hosts[host];
-    if (!report.requested) continue;
-    if (!detectHost(host, root, selection, runtime, report)) continue;
-    if (host === "codex") installCodex(root, false, runtime, report);
-    else installClaude(root, false, runtime, report);
+  // Re-read every requested host at the apply boundary before any native mutation. Each host is
+  // still read again in `inspectHosts(false)` immediately before its own mutations; this aggregate
+  // pass prevents host A from changing the machine before host B can refuse changed or unsafe state.
+  hosts = inspectHosts(true);
+  if (!hostsAdmissible(hosts)) {
+    return {
+      ok: false,
+      version: packageJson.version,
+      dryRun,
+      selection,
+      hosts,
+      workspace: workspacePreflight,
+      next: nextSteps(hosts, workspacePreflight, dryRun),
+    };
   }
+
+  hosts = inspectHosts(false);
 
   const requestedReports = (Object.keys(hosts) as Host[])
     .map((host) => hosts[host])
