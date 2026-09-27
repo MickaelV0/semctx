@@ -2,9 +2,11 @@ import packageJson from "../../package.json";
 import {
   isCanonicalClaudeMarketplaceRecord,
   isHostInterfaceUnsupportedFailure,
+  readCodexPluginMetadataInventory,
   readClaudePluginMetadataInventory,
   resolveClaudePluginHome,
   type ClaudePluginMetadataInventory,
+  type CodexPluginMetadataInventory,
 } from "@semantic-context/app-services";
 import { isSemctxError, SemctxError } from "@semantic-context/core";
 import { Buffer } from "node:buffer";
@@ -114,8 +116,12 @@ export interface InstallRuntime {
   codexHome(): string | null;
   /** Probe a plugin directory. `null` when it is not a readable directory. */
   readCodexPluginPayload(path: string): CodexPayloadProbe | null;
+  /** Declarative Codex inventory; production never starts Codex during preflight. */
+  readCodexPluginMetadata?(root: string): CodexPluginMetadataInventory | null;
   /** Declarative Claude inventory; production never launches Claude Code for an inventory probe. */
   readClaudePluginMetadata?(root: string): ClaudePluginMetadataInventory | null;
+  /** Read-only PATH lookup. A host CLI can write to its profile even for `--version`. */
+  findHostExecutable?(host: Host): string | null;
 }
 
 interface InstallStep {
@@ -144,7 +150,7 @@ interface HostInstallReport {
   requested: boolean;
   detected: boolean;
   status: HostInstallStatus;
-  version?: string;
+  version?: string | null;
   restartRequired: boolean;
   /** Boolean synthesis of `deferrals`. */
   cleanupDeferred?: boolean;
@@ -201,6 +207,7 @@ interface CodexPlugin {
   installed?: unknown;
   enabled?: unknown;
   version?: unknown;
+  cacheDirectory?: unknown;
   source?: {
     path?: unknown;
   };
@@ -638,6 +645,12 @@ const DEFAULT_RUNTIME: InstallRuntime = {
   deferCodexCacheCleanup: defaultDeferCodexCacheCleanup,
   codexHome: defaultCodexHome,
   readCodexPluginPayload: defaultReadCodexPluginPayload,
+  readCodexPluginMetadata: (root) => {
+    const configured = process.env["CODEX_HOME"];
+    const home = configured !== undefined && configured.length > 0 ? configured : defaultCodexHome();
+    return home === null ? null : readCodexPluginMetadataInventory(root, home);
+  },
+  findHostExecutable: (host) => Bun.which(host),
   readClaudePluginMetadata: (root) => {
     try {
       const home = resolveClaudePluginHome(process.env["CLAUDE_CONFIG_DIR"]);
@@ -1035,25 +1048,34 @@ function installCodex(
   runtime: InstallRuntime,
   report: HostInstallReport,
 ): void {
-  const marketplacesResult = runtime.run(
-    ["codex", "plugin", "marketplace", "list", "--json"],
-    root,
-  );
-  const pluginsResult = runtime.run(["codex", "plugin", "list", "--json"], root);
-  const marketplaces = parseCodexMarketplaces(marketplacesResult);
-  const plugins = parseCodexPlugins(pluginsResult);
+  const metadata = runtime.readCodexPluginMetadata?.(root);
+  const marketplacesResult = metadata === undefined
+    ? runtime.run(["codex", "plugin", "marketplace", "list", "--json"], root)
+    : null;
+  const pluginsResult = metadata === undefined
+    ? runtime.run(["codex", "plugin", "list", "--json"], root)
+    : null;
+  const marketplaces = metadata === undefined
+    ? parseCodexMarketplaces(marketplacesResult as CommandResult)
+    : metadata === null ? null : metadata.marketplaces as CodexMarketplace[];
+  const plugins = metadata === undefined
+    ? parseCodexPlugins(pluginsResult as CommandResult)
+    : metadata === null ? null : metadata.plugins as CodexPlugin[];
   if (marketplaces === null || plugins === null) {
     report.status = "failed";
-    report.error = marketplaces === null
-      ? `cannot inspect Codex marketplaces: ${compactError(marketplacesResult)}`
-      : `cannot inspect Codex plugins: ${compactError(pluginsResult)}`;
-    report.interfaceUnsupported = isHostInterfaceUnsupportedFailure(
-      marketplaces === null ? marketplacesResult : pluginsResult,
+    report.error = metadata === null
+      ? "cannot inspect Codex declarative plugin metadata safely"
+      : marketplaces === null
+        ? `cannot inspect Codex marketplaces: ${compactError(marketplacesResult as CommandResult)}`
+        : `cannot inspect Codex plugins: ${compactError(pluginsResult as CommandResult)}`;
+    report.interfaceUnsupported = metadata === undefined && isHostInterfaceUnsupportedFailure(
+      marketplaces === null ? marketplacesResult as CommandResult : pluginsResult as CommandResult,
     );
     return;
   }
   const named = marketplaces.find((item) => item.name === CODEX_MARKETPLACE);
-  if (named !== undefined && !isSemctxSource(named.marketplaceSource?.source)) {
+  if (named !== undefined && (named.marketplaceSource?.sourceType !== "git"
+    || !isSemctxSource(named.marketplaceSource?.source))) {
     report.status = "conflict";
     report.error = `Codex marketplace "${CODEX_MARKETPLACE}" already points to another source`;
     return;
@@ -1061,12 +1083,18 @@ function installCodex(
 
   const legacyMarketplaces = marketplaces.filter(
     (item) => LEGACY_CODEX_MARKETPLACES.some((name) => item.name === name)
+      && item.marketplaceSource?.sourceType === "git"
       && isSemctxSource(item.marketplaceSource?.source),
   );
   const existing = plugins.find(
     (item) => item.pluginId === `${CODEX_PLUGIN}@${CODEX_MARKETPLACE}` && item.installed === true,
   );
   const installedNew = existing !== undefined;
+  if (existing?.cacheDirectory === "local") {
+    report.status = "conflict";
+    report.error = "Codex's local Semctx development cache overrides the stable plugin; resolve the local override before installing stable";
+    return;
+  }
   /** What was on disk before the update — the only cache entry we can know to be obsolete after it. */
   const previousVersion = typeof existing?.version === "string" ? existing.version : undefined;
 
@@ -1402,6 +1430,18 @@ function detectHost(
   runtime: InstallRuntime,
   report: HostInstallReport,
 ): boolean {
+  if (runtime.findHostExecutable !== undefined) {
+    if (runtime.findHostExecutable(host) !== null) {
+      report.detected = true;
+      report.version = null;
+      return true;
+    }
+    report.status = requestedExplicitly(selection, host) ? "missing" : "not-detected";
+    report.error = requestedExplicitly(selection, host)
+      ? `${host} is not available on PATH`
+      : undefined;
+    return false;
+  }
   const probe = runtime.run([host, "--version"], root);
   if (probe.code === 0) {
     report.detected = true;
@@ -1510,13 +1550,17 @@ function nextSteps(
       next.push(`install or update ${label}, then re-run with --host ${host}`);
     } else if (report.status === "conflict") {
       next.push(
-        `resolve the ${label} marketplace conflict with '${host} plugin marketplace list --json', then re-run`,
+        host === "codex" && report.error?.startsWith("Codex's local Semctx development cache")
+          ? "resolve the local Semctx development override in Codex's plugin cache, then re-run the stable installation"
+          : `resolve the ${label} marketplace conflict with '${host} plugin marketplace list --json', then re-run`,
       );
     } else if (report.status === "failed") {
       next.push(
         report.interfaceUnsupported === true
           ? `${label}'s CLI does not support the plugin commands semctx needs; update ${label} to a`
             + " version with plugin support, then re-run"
+          : host === "codex" && report.error === "cannot inspect Codex declarative plugin metadata safely"
+            ? "inspect Codex config.toml, system or managed policy, selected profiles, project overrides, marketplace manifests and plugin cache; resolve unsupported, malformed or linked metadata before retrying"
           : `resolve the ${label} command error above, then re-run`,
       );
     }

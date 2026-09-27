@@ -50,10 +50,12 @@ export {
   isCanonicalClaudeMarketplaceSource,
   isHostInterfaceUnsupportedFailure,
   pluginDeliveryStatus,
+  readCodexPluginMetadataInventory,
   readClaudePluginMetadataInventory,
   resolveClaudePluginHome,
 } from "./plugin-delivery";
 export type {
+  CodexPluginMetadataInventory,
   ClaudePluginMetadataInventory,
   HostInstalledStateV2,
   HostMarketplaceStateV2,

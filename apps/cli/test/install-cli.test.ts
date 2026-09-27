@@ -31,6 +31,7 @@ import {
 } from "../src/commands/install";
 import {
   readClaudePluginMetadataInventory,
+  type CodexPluginMetadataInventory,
   type ClaudePluginMetadataInventory,
 } from "@semantic-context/app-services";
 
@@ -118,6 +119,7 @@ interface FakeOptions {
   setup?: SetupExecution;
   preflight?: SetupExecution;
   claudeMetadata?: ClaudePluginMetadataInventory | null;
+  codexMetadata?: CodexPluginMetadataInventory | null;
   /** Per-command outcome overrides, keyed by the joined argv, applied before any hardcoded branch. */
   queryOutcomes?: Record<string, Partial<CommandResult>>;
 }
@@ -151,6 +153,9 @@ function fakeRuntime(
       ? {
           readClaudePluginMetadata: () => options.claudeMetadata ?? null,
         }
+      : {}),
+    ...(Object.prototype.hasOwnProperty.call(options, "codexMetadata")
+      ? { readCodexPluginMetadata: () => options.codexMetadata ?? null }
       : {}),
     run(command, _cwd) {
       const argv = [...command];
@@ -796,6 +801,84 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  test("Codex dry-run never starts the host CLI and leaves fresh or malformed profiles intact", () => {
+    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "semctx-install-readonly-codex-")));
+    const profile = join(root, "profile");
+    const bin = join(root, "bin");
+    const unexpected = join(root, "unexpected-codex-invocation");
+    mkdirSync(profile);
+    mkdirSync(bin);
+    const script = join(bin, "codex-shim.js");
+    writeFileSync(script,
+      `require("node:fs").writeFileSync(${JSON.stringify(unexpected)}, "called"); process.exit(9);\n`);
+    if (process.platform === "win32") {
+      const compiled = Bun.spawnSync(
+        [process.execPath, "build", "--compile", script, "--outfile", join(bin, "codex.exe")],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      expect(compiled.exitCode).toBe(0);
+    } else {
+      writeFileSync(join(bin, "codex"), `#!/bin/sh\n"${process.execPath}" "${script}" "$@"\n`);
+      chmodSync(join(bin, "codex"), 0o755);
+    }
+    const environment = fixtureEnvironmentWithPath(bin);
+    environment["CODEX_HOME"] = profile;
+    environment["HOME"] = join(root, "home");
+    environment["USERPROFILE"] = environment["HOME"];
+    const entrypoint = resolve(import.meta.dir, "../src/index.ts");
+    const run = () => Bun.spawnSync([
+      process.execPath, entrypoint, "install", "--host", "codex", "--dry-run", "--skip-setup", "--json",
+    ], { env: environment, stdout: "pipe", stderr: "pipe" });
+    try {
+      const fresh = run();
+      expect(fresh.exitCode).toBe(0);
+      expect((JSON.parse(new TextDecoder().decode(fresh.stdout)) as InstallReport).hosts.codex.status)
+        .toBe("planned");
+      expect((JSON.parse(new TextDecoder().decode(fresh.stdout)) as InstallReport).hosts.codex.version)
+        .toBeNull();
+      expect(existsSync(unexpected)).toBe(false);
+      expect(readdirSync(profile)).toEqual([]);
+
+      const config = join(profile, "config.toml");
+      writeFileSync(config, "[plugins.'semctx-control@semctx-stable'\n");
+      const malformed = run();
+      expect(malformed.exitCode).toBe(1);
+      expect((JSON.parse(new TextDecoder().decode(malformed.stdout)) as InstallReport).hosts.codex.error)
+        .toContain("declarative plugin metadata safely");
+      expect(existsSync(unexpected)).toBe(false);
+      expect(readdirSync(profile)).toEqual(["config.toml"]);
+      expect(readFileSync(config, "utf8")).toBe("[plugins.'semctx-control@semctx-stable'\n");
+
+      const foreign = `[marketplaces.semctx-stable]\nsource_type = 'git'\nsource = 'someone/else'\n`;
+      writeFileSync(config, foreign);
+      const manifestRoot = join(profile, ".tmp", "marketplaces", "semctx-stable", ".agents", "plugins");
+      mkdirSync(manifestRoot, { recursive: true });
+      writeFileSync(join(manifestRoot, "marketplace.json"), JSON.stringify({ name: "semctx-stable", plugins: [] }));
+      const conflict = run();
+      expect(conflict.exitCode).toBe(1);
+      expect((JSON.parse(new TextDecoder().decode(conflict.stdout)) as InstallReport).hosts.codex.status)
+        .toBe("conflict");
+      expect(existsSync(unexpected)).toBe(false);
+      expect(readFileSync(config, "utf8")).toBe(foreign);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a local Codex development cache conflicts explicitly before stable installation", () => {
+    const runtime = fakeRuntime({ codexMetadata: {
+      marketplaces: [{ name: "semctx-stable", marketplaceSource: { sourceType: "git", source: SEMCTX_SOURCE } }],
+      plugins: [{ pluginId: "semctx-control@semctx-stable", installed: true, enabled: true,
+        version: "0.3.4", cacheDirectory: "local" }],
+    } });
+    const report = executeInstall("C:\\work\\project",
+      parseArgs(["install", "--host", "codex", "--dry-run", "--skip-setup"]), runtime);
+    expect(report.ok).toBe(false);
+    expect(report.hosts.codex.status).toBe("conflict");
+    expect(report.hosts.codex.error).toContain("local Semctx development cache overrides");
+    expect(runtime.commands.filter((command) => command[0] === "codex")).toEqual([["codex", "--version"]]);
   });
 
   test("malformed Claude project identity blocks dry-run and apply before every mutation", () => {
