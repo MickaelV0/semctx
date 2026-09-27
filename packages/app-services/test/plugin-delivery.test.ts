@@ -511,6 +511,67 @@ describe("plugin delivery — five distinct layers", () => {
     }
   });
 
+  test("Codex cache lookup validates the raw version identity before reading a payload", () => {
+    const inspect = (rawVersion: string) => {
+      const dependencies = fakeDependencies({
+        scope: "codex",
+        codexPlugins: codexPlugins({ version: rawVersion }),
+      });
+      const payloadReads: string[] = [];
+      dependencies.readInstalledPayload = (_host, path) => {
+        payloadReads.push(path);
+        return installedProbe();
+      };
+      const report = pluginDeliveryStatus(
+        { repositoryRoot: "/work/project", version: RELEASE_VERSION, scope: "codex" },
+        dependencies,
+      );
+      return {
+        rawVersion,
+        payloadReads,
+        path: report.hosts.codex.installed.path,
+        version: report.hosts.codex.installed.version,
+        verdict: report.hosts.codex.verdict,
+        reasons: report.hosts.codex.reasons,
+      };
+    };
+
+    expect(["0.1.17 ", "0.1.17\u00a0", "0.1.17\n", "0.1.17"].map(inspect)).toEqual([
+      {
+        rawVersion: "0.1.17 ",
+        payloadReads: [],
+        path: null,
+        version: null,
+        verdict: "UNKNOWN",
+        reasons: ["INSTALLED_CACHE_UNREADABLE"],
+      },
+      {
+        rawVersion: "0.1.17\u00a0",
+        payloadReads: [],
+        path: null,
+        version: null,
+        verdict: "UNKNOWN",
+        reasons: ["INSTALLED_CACHE_UNREADABLE"],
+      },
+      {
+        rawVersion: "0.1.17\n",
+        payloadReads: [],
+        path: null,
+        version: null,
+        verdict: "UNKNOWN",
+        reasons: ["INSTALLED_CACHE_UNREADABLE"],
+      },
+      {
+        rawVersion: "0.1.17",
+        payloadReads: [CODEX_CACHE_PATH],
+        path: CODEX_CACHE_PATH,
+        version: RELEASE_VERSION,
+        verdict: "UP_TO_DATE",
+        reasons: [],
+      },
+    ]);
+  });
+
   test("legacy Claude marketplace shapes use the shared raw source matcher", () => {
     for (const marketplace of [
       { name: "semctx-stable", source: "git", repo: "hoklims/semctx" },
