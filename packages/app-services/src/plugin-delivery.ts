@@ -2436,9 +2436,18 @@ function attestationScratchBase(
   }
 
   const excluded: string[] = [];
-  const exclude = (candidate: string): boolean => {
-    if (!hasLocalFilesystemShape(candidate)) return true;
-    if (hasExplicitTraversalSegment(candidate) && captureRawTraversal(candidate, false) === null) return false;
+  const exclude = (candidate: string, allowRelative: boolean): boolean => {
+    if (allowRelative) {
+      if (!hasLocalRepositoryRootShape(candidate)) return false;
+      if (!isAbsolute(candidate) && captureRawTraversal(candidate, true, "directory") === null) return false;
+    } else if (!hasLocalFilesystemShape(candidate)) {
+      return true;
+    }
+    if (
+      isAbsolute(candidate)
+      && hasExplicitTraversalSegment(candidate)
+      && captureRawTraversal(candidate, false) === null
+    ) return false;
     const lexical = resolve(candidate);
     excluded.push(lexical);
     try {
@@ -2449,12 +2458,12 @@ function attestationScratchBase(
     }
     return true;
   };
-  if (!exclude(inspectedRoot)) return null;
+  if (!exclude(inspectedRoot, true)) return null;
   for (const host of PLUGIN_DELIVERY_HOSTS) {
     const home = resolveHostHome(host);
     // Host homes are resolved read-only; a host that cannot be located simply contributes no
     // exclusion rather than blocking the attestation.
-    if (home !== null && !exclude(home)) return null;
+    if (home !== null && !exclude(home, false)) return null;
   }
   for (const forbidden of excluded) {
     if (isWithin(resolved, forbidden) || isWithin(canonical, forbidden)) return null;

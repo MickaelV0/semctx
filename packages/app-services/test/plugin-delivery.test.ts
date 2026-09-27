@@ -1957,6 +1957,52 @@ describe("plugin delivery — the attestation authority is canonical, not the in
     }
   });
 
+  test("rejects a repository temporary base for absolute and equivalent relative roots", () => {
+    const repository = realpathSync.native(process.cwd());
+    const source = pathToFileURL(join(import.meta.dir, "..", "src", "plugin-delivery.ts")).href;
+    const invoke = (repositoryRoot: string) => {
+      const program = `
+        const { pluginDeliveryStatus } = await import(${JSON.stringify(source)});
+        let calls = 0;
+        const report = pluginDeliveryStatus(
+          {
+            repositoryRoot: ${JSON.stringify(repositoryRoot)},
+            version: ${JSON.stringify(RELEASE_VERSION)},
+            hosts: [],
+            attest: true,
+          },
+          {
+            readRepositoryChannel: () => ({ commit: ${JSON.stringify(MAIN_COMMIT)}, originIsSemctx: false }),
+            resolveHostHome: () => null,
+            runQuery() {
+              calls += 1;
+              return { code: 1, out: "", err: "injected before network" };
+            },
+          },
+        );
+        process.stdout.write(JSON.stringify({ reasons: report.publicRelease.reasons, calls }));
+      `;
+      const child = Bun.spawnSync([process.execPath, "-e", program], {
+        cwd: repository,
+        env: { ...process.env, TEMP: repository, TMP: repository, TMPDIR: repository },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(new TextDecoder().decode(child.stderr)).toBe("");
+      expect(child.exitCode).toBe(0);
+      return JSON.parse(new TextDecoder().decode(child.stdout)) as { reasons: string[]; calls: number };
+    };
+
+    const before = readdirSync(repository).filter((name) => name.startsWith("semctx-attestation-"));
+    for (const root of [repository, ".", `packages${sep}..`]) {
+      const outcome = invoke(root);
+      expect(outcome.reasons).toContain("PUBLIC_RELEASE_SCRATCH_LOCATION_REJECTED");
+      expect(outcome.calls).toBe(0);
+    }
+    const after = readdirSync(repository).filter((name) => name.startsWith("semctx-attestation-"));
+    expect(after).toEqual(before);
+  });
+
   test("asks the canonical public repository and never the inspected project's remote", () => {
     const { report, recorded } = releaseOf();
 
