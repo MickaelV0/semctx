@@ -1539,6 +1539,25 @@ export function executeInstall(
     codex: hostReport(selected(selection, "codex")),
     claude: hostReport(selected(selection, "claude")),
   });
+  const inspectHosts = (inspectionDryRun: boolean): Record<Host, HostInstallReport> => {
+    const inspected = newHostReports();
+    for (const host of ["codex", "claude"] as const) {
+      const report = inspected[host];
+      if (!report.requested) continue;
+      if (!detectHost(host, root, selection, runtime, report)) continue;
+      if (host === "codex") installCodex(root, inspectionDryRun, runtime, report);
+      else installClaude(root, inspectionDryRun, runtime, report);
+    }
+    return inspected;
+  };
+  const hostsAdmissible = (candidate: Record<Host, HostInstallReport>): boolean => {
+    const requested = (Object.keys(candidate) as Host[])
+      .map((host) => candidate[host])
+      .filter((report) => report.requested);
+    return requested.every(
+      (report) => hostOk(report) || (selection === "auto" && report.status === "not-detected"),
+    ) && requested.some(hostOk);
+  };
   let hosts = newHostReports();
 
   // Workspace conflicts are deterministic and repository-local. Refuse them before any host
@@ -1562,20 +1581,8 @@ export function executeInstall(
 
   // Aggregate every requested host's read-only inventory and plan before the first host mutation.
   // A known conflict on host B must not leave host A installed.
-  for (const host of ["codex", "claude"] as const) {
-    const report = hosts[host];
-    if (!report.requested) continue;
-    if (!detectHost(host, root, selection, runtime, report)) continue;
-    if (host === "codex") installCodex(root, true, runtime, report);
-    else installClaude(root, true, runtime, report);
-  }
-
-  const plannedReports = (Object.keys(hosts) as Host[])
-    .map((host) => hosts[host])
-    .filter((report) => report.requested);
-  const planAdmissible = plannedReports.every(
-    (report) => hostOk(report) || (selection === "auto" && report.status === "not-detected"),
-  ) && plannedReports.some(hostOk);
+  hosts = inspectHosts(true);
+  const planAdmissible = hostsAdmissible(hosts);
   if (!planAdmissible || dryRun) {
     const ok = planAdmissible;
     return {
@@ -1589,14 +1596,23 @@ export function executeInstall(
     };
   }
 
-  hosts = newHostReports();
-  for (const host of ["codex", "claude"] as const) {
-    const report = hosts[host];
-    if (!report.requested) continue;
-    if (!detectHost(host, root, selection, runtime, report)) continue;
-    if (host === "codex") installCodex(root, false, runtime, report);
-    else installClaude(root, false, runtime, report);
+  // Re-read every requested host at the apply boundary before any native mutation. Each host is
+  // still read again in `inspectHosts(false)` immediately before its own mutations; this aggregate
+  // pass prevents host A from changing the machine before host B can refuse changed or unsafe state.
+  hosts = inspectHosts(true);
+  if (!hostsAdmissible(hosts)) {
+    return {
+      ok: false,
+      version: packageJson.version,
+      dryRun,
+      selection,
+      hosts,
+      workspace: workspacePreflight,
+      next: nextSteps(hosts, workspacePreflight, dryRun),
+    };
   }
+
+  hosts = inspectHosts(false);
 
   const requestedReports = (Object.keys(hosts) as Host[])
     .map((host) => hosts[host])

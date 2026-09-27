@@ -1443,6 +1443,39 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
       || command.includes("enable"))).toBe(false);
   });
 
+  test("all-host apply revalidates every host before the first native mutation", () => {
+    const runtime = fakeRuntime({ codex: true, claude: true });
+    const validClaudeMetadata: ClaudePluginMetadataInventory = {
+      marketplaces: [],
+      plugins: [],
+      settingsValid: true,
+      effectiveEnablement: {},
+    };
+    let reads = 0;
+    runtime.readClaudePluginMetadata = () => {
+      reads += 1;
+      return reads === 1 ? validClaudeMetadata : null;
+    };
+
+    const report = executeInstall(
+      "C:\\work\\project",
+      parseArgs(["install", "--host", "all", "--skip-setup"]),
+      runtime,
+    );
+
+    const mutations = runtime.commands.filter((command) =>
+      command.some((token) => ["add", "install", "update", "upgrade", "remove", "enable"].includes(token))
+    );
+    expect(reads).toBe(2);
+    expect(report.ok).toBe(false);
+    expect(report.hosts.codex.status).toBe("planned");
+    expect(report.hosts.claude.status).toBe("failed");
+    expect(mutations).toEqual([]);
+    expect(runtime.setupRoots).toEqual([]);
+    expect(runtime.deferredCodexCleanups).toEqual([]);
+    expect(runtime.deferredCacheCleanups).toEqual([]);
+  });
+
   test("an ordinary inventory query failure keeps the generic remedy, not the host-CLI upgrade message", () => {
     const runtime = fakeRuntime({
       codex: true,
