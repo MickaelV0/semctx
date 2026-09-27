@@ -9,6 +9,25 @@ GitHub Release advance together through the tag-driven lockstep workflow documen
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-09-27
+
+### Fixed
+
+- Claude Code diagnostics and install planning read declarative metadata without launching its CLI,
+  so `plugin-status` and dry runs do not create first-use profile bookkeeping.
+- Multi-host installation completes fresh read-only validation for every requested host before the
+  first marketplace or plugin mutation, while retaining the per-host validation at apply time.
+- Host-reported filesystem identities remain raw until confinement and type checks complete. Linked
+  parents, unsafe traversal, ambiguous separators, whitespace-bearing cache paths and malformed
+  version segments fail closed instead of selecting a different file or directory.
+- Attestation scratch placement excludes both lexical and canonical project and host homes, including
+  local aliases that strict inventory reads correctly refuse.
+
+### Changed
+
+- Codex and Claude delivery status keeps installed, configured, loaded, approved and observed state
+  separate. Missing runtime evidence remains `UNKNOWN` and no trust or session activation is inferred.
+
 ## [0.3.5] - 2026-09-26
 
 ### Fixed
