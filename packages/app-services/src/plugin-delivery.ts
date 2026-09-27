@@ -1360,6 +1360,8 @@ export function pluginDeliveryStatus(
   // the Git reads too and the read-only guarantee is provable, not merely asserted.
   const runQuery = dependencies.runQuery ?? defaultRunQuery;
   const resolveHostHome = dependencies.resolveHostHome ?? defaultResolveHostHome;
+  const resolveAttestationExclusionHome = dependencies.resolveHostHome
+    ?? defaultResolveHostExclusionHome;
   const readClaudePluginMetadata = dependencies.readClaudePluginMetadata
     ?? (dependencies.runQuery === undefined
       ? (root: string) => {
@@ -1376,7 +1378,12 @@ export function pluginDeliveryStatus(
     readRepositoryChannel: dependencies.readRepositoryChannel
       ?? ((root) => defaultReadRepositoryChannel(root, runQuery)),
     resolvePublicRelease: dependencies.resolvePublicRelease
-      ?? ((root) => defaultResolvePublicRelease(root, runQuery, command.attest === true, resolveHostHome)),
+      ?? ((root) => defaultResolvePublicRelease(
+        root,
+        runQuery,
+        command.attest === true,
+        resolveAttestationExclusionHome,
+      )),
     observeSessionVersion: dependencies.observeSessionVersion ?? defaultObserveSessionVersion,
     resolveHostHome,
   };
@@ -1626,6 +1633,31 @@ function defaultResolveHostHome(host: PluginDeliveryHost): string | null {
     }
   }
   return isLocalFilesystemPath(home) ? resolve(join(home, ".codex")) : null;
+}
+
+/**
+ * Resolve the raw profile spelling that an attestation scratch directory must exclude.
+ *
+ * Inventory reads deliberately reject links and reparse points. Exclusion has the opposite safety
+ * obligation: retain an otherwise local alias so the scratch planner can compare both its lexical
+ * and canonical targets without weakening the inventory reader or following a network path.
+ */
+function defaultResolveHostExclusionHome(host: PluginDeliveryHost): string | null {
+  const configured = process.env[host === "claude" ? "CLAUDE_CONFIG_DIR" : "CODEX_HOME"];
+  if (configured !== undefined && configured.length > 0) {
+    if (configured.trim().length === 0 || !hasLocalFilesystemShape(configured)) return null;
+    return configured;
+  }
+  let home: string;
+  try {
+    home = homedir();
+  } catch {
+    return null;
+  }
+  if (!hasLocalFilesystemShape(home)) return null;
+  const separator = home.endsWith("/") || home.endsWith("\\") ? "" : sep;
+  const candidate = `${home}${separator}${host === "claude" ? ".claude" : ".codex"}`;
+  return hasLocalFilesystemShape(candidate) ? candidate : null;
 }
 
 /** Resolve Claude's exact profile root without starting Claude Code. */

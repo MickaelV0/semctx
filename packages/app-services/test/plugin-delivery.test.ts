@@ -1848,6 +1848,73 @@ function gitCalls(recorded: readonly RecordedQuery[]): string[] {
 }
 
 describe("plugin delivery — the attestation authority is canonical, not the inspected project", () => {
+  test("default attestation excludes a configured Claude home even when inventory refuses its alias", () => {
+    const root = mkdtempSync(join(PHYSICAL_TEMPORARY_ROOT, "semctx-attestation-claude-home-alias-"));
+    const physicalHome = join(root, "profile");
+    const alias = join(root, "profile-alias");
+    const outside = join(root, "outside");
+    const project = join(root, "project");
+    mkdirSync(physicalHome);
+    mkdirSync(outside);
+    mkdirSync(project);
+    symlinkSync(physicalHome, alias, process.platform === "win32" ? "junction" : "dir");
+    const previous = {
+      claude: process.env["CLAUDE_CONFIG_DIR"],
+      temp: process.env["TEMP"],
+      tmp: process.env["TMP"],
+      tmpdir: process.env["TMPDIR"],
+    };
+    const attempts: string[] = [];
+    const queries: string[][] = [];
+    const probe = spyOn(fs, "mkdtempSync").mockImplementation(((prefix) => {
+      attempts.push(String(prefix));
+      throw new Error("injected before scratch creation");
+    }) as typeof fs.mkdtempSync);
+    const restore = (name: string, value: string | undefined): void => {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    };
+    const status = (temporaryRoot: string): PluginDeliveryReportV2 => {
+      process.env["TEMP"] = temporaryRoot;
+      process.env["TMP"] = temporaryRoot;
+      process.env["TMPDIR"] = temporaryRoot;
+      return pluginDeliveryStatus(
+        { repositoryRoot: project, version: RELEASE_VERSION, hosts: [], attest: true },
+        {
+          runQuery(command) {
+            queries.push([...command]);
+            return { code: 1, out: "", err: "unexpected query" };
+          },
+          readRepositoryChannel: () => ({ commit: MAIN_COMMIT, originIsSemctx: false }),
+        },
+      );
+    };
+
+    try {
+      process.env["CLAUDE_CONFIG_DIR"] = alias;
+      expect(resolveClaudePluginHome(alias)).toBeNull();
+
+      const blocked = status(physicalHome);
+      expect(blocked.publicRelease.reasons).toContain("PUBLIC_RELEASE_SCRATCH_LOCATION_REJECTED");
+      expect(attempts).toEqual([]);
+      expect(queries).toEqual([]);
+      expect(readdirSync(physicalHome)).toEqual([]);
+
+      const allowed = status(outside);
+      expect(allowed.publicRelease.reasons).toContain("PUBLIC_RELEASE_ATTESTATION_STORE_UNAVAILABLE");
+      expect(attempts).toEqual([join(outside, "semctx-attestation-")]);
+      expect(queries).toEqual([]);
+      expect(readdirSync(outside)).toEqual([]);
+    } finally {
+      probe.mockRestore();
+      restore("CLAUDE_CONFIG_DIR", previous.claude);
+      restore("TEMP", previous.temp);
+      restore("TMP", previous.tmp);
+      restore("TMPDIR", previous.tmpdir);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("canonicalizes a local temporary alias while preserving project and host exclusions", () => {
     const root = mkdtempSync(join(PHYSICAL_TEMPORARY_ROOT, "semctx-attestation-temp-alias-"));
     const source = pathToFileURL(join(import.meta.dir, "..", "src", "plugin-delivery.ts")).href;
