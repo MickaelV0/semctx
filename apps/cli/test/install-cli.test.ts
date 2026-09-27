@@ -53,22 +53,21 @@ const CODEX_OBSOLETE_CACHE_PATH = join(CODEX_CACHE_ROOT, "0.1.17");
 const CODEX_ACTIVE_CACHE_LOCK =
   "failed to back up plugin cache entry: Accès refusé. (os error 5)";
 
-function assertClaudeVersionShimReady(executable: string): void {
-  const startedAt = performance.now();
-  const child = Bun.spawnSync([executable, "--version"], {
-    stdout: "pipe",
-    stderr: "pipe",
-    timeout: 10_000,
-  });
-  const observation = {
-    elapsedMs: Math.round(performance.now() - startedAt),
-    exitCode: child.exitCode,
-    stdout: new TextDecoder().decode(child.stdout).trim(),
-    stderr: new TextDecoder().decode(child.stderr),
-  };
-  if (observation.exitCode !== 0 || observation.stdout !== "2.1.229" || observation.stderr !== "") {
-    throw new Error(`compiled Claude fixture did not become ready: ${JSON.stringify(observation)}`);
+function fixtureEnvironmentWithPath(
+  directory: string,
+  source: Record<string, string | undefined> = process.env,
+): Record<string, string | undefined> {
+  const environment: Record<string, string | undefined> = {};
+  let inheritedPath = "";
+  for (const [name, value] of Object.entries(source)) {
+    if (name.toUpperCase() === "PATH") {
+      inheritedPath ||= value ?? "";
+    } else {
+      environment[name] = value;
+    }
   }
+  environment["PATH"] = `${directory}${delimiter}${inheritedPath}`;
+  return environment;
 }
 
 function bundleDigests(
@@ -314,6 +313,17 @@ function installWithLockedAdd(options: FakeOptions): ReturnType<typeof fakeRunti
 }
 
 describe("semctx install — no-brain host + repository bootstrap", () => {
+  test("fixture PATH replaces a Windows-style Path key instead of creating an ambiguous duplicate", () => {
+    const environment = fixtureEnvironmentWithPath("C:\\fixture-bin", {
+      Path: "C:\\system-bin",
+      CLAUDE_CONFIG_DIR: "C:\\profile",
+    });
+
+    expect(Object.keys(environment).filter((name) => name.toUpperCase() === "PATH")).toEqual(["PATH"]);
+    expect(environment["PATH"]).toBe(`C:\\fixture-bin${delimiter}C:\\system-bin`);
+    expect(environment["CLAUDE_CONFIG_DIR"]).toBe("C:\\profile");
+  });
+
   test("preserves a structured nonzero setup report instead of flattening it into stderr", () => {
     const report = {
       kind: "setup_conflict",
@@ -741,11 +751,7 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
       writeFileSync(join(bin, "claude"), `#!/bin/sh\n"${process.execPath}" "${script}" "$@"\n`);
       chmodSync(join(bin, "claude"), 0o755);
     }
-    const environment: Record<string, string | undefined> = {};
-    for (const [name, value] of Object.entries(process.env)) {
-      if (name.toUpperCase() !== "PATH") environment[name] = value;
-    }
-    environment["PATH"] = `${bin}${delimiter}${process.env["PATH"] ?? ""}`;
+    const environment = fixtureEnvironmentWithPath(bin);
     environment["CLAUDE_CONFIG_DIR"] = profile;
     const entrypoint = resolve(import.meta.dir, "../src/index.ts");
     try {
@@ -834,9 +840,7 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
       writeFileSync(join(bin, "claude"), `#!/bin/sh\n"${process.execPath}" "${script}" "$@"\n`);
       chmodSync(join(bin, "claude"), 0o755);
     }
-    assertClaudeVersionShimReady(join(bin, process.platform === "win32" ? "claude.exe" : "claude"));
-    const environment: Record<string, string | undefined> = { ...process.env };
-    environment["PATH"] = `${bin}${delimiter}${process.env["PATH"] ?? ""}`;
+    const environment = fixtureEnvironmentWithPath(bin);
     environment["CLAUDE_CONFIG_DIR"] = profile;
     const entrypoint = resolve(import.meta.dir, "../src/index.ts");
     const run = (
@@ -1057,9 +1061,7 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
       writeFileSync(join(bin, "claude"), `#!/bin/sh\n"${process.execPath}" "${script}" "$@"\n`);
       chmodSync(join(bin, "claude"), 0o755);
     }
-    assertClaudeVersionShimReady(join(bin, process.platform === "win32" ? "claude.exe" : "claude"));
-    const environment: Record<string, string | undefined> = { ...process.env };
-    environment["PATH"] = `${bin}${delimiter}${process.env["PATH"] ?? ""}`;
+    const environment = fixtureEnvironmentWithPath(bin);
     environment["CLAUDE_CONFIG_DIR"] = profile;
     const entrypoint = resolve(import.meta.dir, "../src/index.ts");
     try {
