@@ -14,7 +14,7 @@ import {
   type Dirent,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { isAbsolute, join, parse, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 
 /**
  * Cross-host plugin delivery observability.
@@ -675,6 +675,88 @@ export function isCanonicalClaudeMarketplaceRecord(
     && isCanonicalClaudeMarketplaceSource(identity.kind, identity.value);
 }
 
+interface RawTraversalEntry {
+  path: string;
+  exists: boolean;
+  dev?: number;
+  ino?: number;
+  mode?: number;
+}
+
+function captureRawTraversal(
+  candidate: string,
+  allowRelative: boolean,
+): RawTraversalEntry[] | null {
+  const parsed = parse(candidate);
+  const absolute = isAbsolute(candidate);
+  if (!absolute && !allowRelative) return null;
+  const tail = absolute ? candidate.slice(parsed.root.length) : candidate;
+  const separator = process.platform === "win32" ? /[\\/]/ : "/";
+  const components = tail.split(separator).filter((component) => component.length > 0);
+  const hasTrailingSeparator = process.platform === "win32"
+    ? /[\\/]$/.test(candidate)
+    : candidate.endsWith("/");
+  if (!hasTrailingSeparator && !components.some((component) => component === "." || component === "..")) {
+    return [];
+  }
+
+  let current = absolute ? parsed.root : process.cwd();
+  const observations: RawTraversalEntry[] = [];
+  const observe = (path: string, requireDirectory: boolean, allowMissing: boolean): boolean => {
+    try {
+      const stats = lstatSync(path);
+      if (stats.isSymbolicLink() || (requireDirectory && !stats.isDirectory())) return false;
+      observations.push({ path, exists: true, dev: stats.dev, ino: stats.ino, mode: stats.mode });
+      return true;
+    } catch (cause) {
+      const missing = cause !== null && typeof cause === "object" && "code" in cause
+        && (cause as { code?: unknown }).code === "ENOENT";
+      if (!missing || !allowMissing) return false;
+      observations.push({ path, exists: false });
+      return true;
+    }
+  };
+
+  if (components.length === 0) {
+    return observe(current, true, false) ? observations : null;
+  }
+  for (let index = 0; index < components.length; index += 1) {
+    const component = components[index] ?? "";
+    if (component === ".") {
+      if (!observe(current, true, false)) return null;
+      continue;
+    }
+    if (component === "..") {
+      if (!observe(current, true, false)) return null;
+      current = dirname(current);
+      continue;
+    }
+    current = join(current, component);
+    const requireDirectory = index < components.length - 1 || hasTrailingSeparator;
+    if (!observe(current, requireDirectory, index === components.length - 1 && !requireDirectory)) return null;
+  }
+  return observations;
+}
+
+function sameRawTraversal(
+  candidate: string,
+  allowRelative: boolean,
+  before: readonly RawTraversalEntry[],
+): boolean {
+  const after = captureRawTraversal(candidate, allowRelative);
+  return after !== null
+    && after.length === before.length
+    && before.every((entry, index) => {
+      const current = after[index];
+      return current !== undefined
+        && current.path === entry.path
+        && current.exists === entry.exists
+        && current.dev === entry.dev
+        && current.ino === entry.ino
+        && current.mode === entry.mode;
+    });
+}
+
 /**
  * A UNC or Win32 device path handed back by a host is not a local read: touching
  * `\\<host>\share` makes Windows open an SMB connection, which is network egress from a product
@@ -683,8 +765,12 @@ export function isCanonicalClaudeMarketplaceRecord(
  */
 export function isLocalFilesystemPath(candidate: string): boolean {
   if (!isAbsolute(candidate) || hasIdentityControlCharacter(candidate)) return false;
-  if (process.platform === "win32") return /^[A-Za-z]:[\\/]/.test(candidate);
-  return !candidate.startsWith("//") && !candidate.includes("\\");
+  if (process.platform === "win32") {
+    return /^[A-Za-z]:[\\/]/.test(candidate) && captureRawTraversal(candidate, false) !== null;
+  }
+  return !candidate.startsWith("//")
+    && !candidate.includes("\\")
+    && captureRawTraversal(candidate, false) !== null;
 }
 
 /** `candidate` must be `root` itself or strictly inside it, comparing resolved forms. */
@@ -1508,7 +1594,7 @@ export function resolveClaudePluginHome(configured?: string, userHome?: string):
       // Whitespace-only and relative overrides are invalid. Do not trim a valid absolute path:
       // U+00A0 and ordinary spaces are legal filename characters and name a different profile.
       if (configured.trim().length === 0 || !isLocalFilesystemPath(configured)) return null;
-      return resolve(configured);
+      return configured;
     }
   }
   let home = userHome;
@@ -1739,6 +1825,9 @@ export function readClaudePluginMetadataInventory(
   if (!isLocalFilesystemPath(claudeHome)) return null;
   if (hasIdentityControlCharacter(repositoryRoot)) return null;
   if (process.platform !== "win32" && repositoryRoot.includes("\\")) return null;
+  const homeTraversal = captureRawTraversal(claudeHome, false);
+  const repositoryTraversal = captureRawTraversal(repositoryRoot, true);
+  if (homeTraversal === null || repositoryTraversal === null) return null;
   const absoluteRepositoryRoot = resolve(repositoryRoot);
   if (!isLocalFilesystemPath(absoluteRepositoryRoot)) return null;
   const marketplacesPath = join(claudeHome, "plugins", "known_marketplaces.json");
@@ -1890,6 +1979,9 @@ export function readClaudePluginMetadataInventory(
 
   // Deterministic test seam for cross-file drift; production never supplies it.
   afterObservation?.();
+
+  if (!sameRawTraversal(claudeHome, false, homeTraversal)) return null;
+  if (!sameRawTraversal(repositoryRoot, true, repositoryTraversal)) return null;
 
   if (!sameOptionalObservation(
     marketplacesObservation,

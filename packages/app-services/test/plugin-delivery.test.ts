@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join, relative, resolve } from "node:path";
+import { basename, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   PLUGIN_DELIVERY_MAX_BUNDLE_BYTES,
@@ -2096,6 +2096,14 @@ describe("plugin delivery — local artifacts are bounded before they are read",
       expect(readConfinedFile(inside, root, 64)?.toString("utf8")).toBe("inside");
       const ambiguous = `${root}/..\\${basename(outside)}`;
       expect(readConfinedFile(ambiguous, root, 64)).toBeNull();
+      expect(readConfinedFile(`${inside}${sep}.${sep}`, root, 64)).toBeNull();
+      const safe = join(root, "safe");
+      mkdirSync(safe);
+      expect(readConfinedFile(
+        `${safe}${sep}..${sep}${basename(inside)}`,
+        root,
+        64,
+      )?.toString("utf8")).toBe("inside");
     } finally {
       rmSync(root, { recursive: true, force: true });
       rmSync(outside, { force: true });
@@ -2207,6 +2215,43 @@ describe("Claude plugin metadata — declarative read-only inventory", () => {
     expect(resolveClaudePluginHome(undefined, join(tmpdir(), "user-home"))).toBe(
       resolve(join(tmpdir(), "user-home", ".claude")),
     );
+  });
+
+  test("validates raw home traversal before normalization erases unsafe components", () => {
+    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "semctx-claude-raw-home-")));
+    const profile = join(root, "profile");
+    const safe = join(root, "safe");
+    const target = join(root, "target", "nested");
+    const linked = join(root, "linked");
+    const regular = join(root, "regular");
+    const project = join(root, "project");
+    mkdirSync(profile);
+    mkdirSync(safe);
+    mkdirSync(target, { recursive: true });
+    mkdirSync(project);
+    symlinkSync(target, linked, process.platform === "win32" ? "junction" : "dir");
+    writeFileSync(regular, "not a directory");
+    const through = (component: string): string => `${component}${sep}..${sep}profile`;
+    const safeHome = through(safe);
+    try {
+      expect(resolveClaudePluginHome(through(linked))).toBeNull();
+      expect(resolveClaudePluginHome(through(regular))).toBeNull();
+      expect(readClaudePluginMetadataInventory(project, through(linked))).toBeNull();
+      expect(readClaudePluginMetadataInventory(project, through(regular))).toBeNull();
+      expect(resolveClaudePluginHome(safeHome)).toBe(safeHome);
+      expect(readClaudePluginMetadataInventory(project, safeHome)).toEqual({
+        marketplaces: [],
+        plugins: [],
+        settingsValid: true,
+        effectiveEnablement: {},
+      });
+      expect(readClaudePluginMetadataInventory(project, safeHome, () => {
+        rmSync(safe, { recursive: true });
+        symlinkSync(target, safe, process.platform === "win32" ? "junction" : "dir");
+      })).toBeNull();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   function fixture(): { home: string; project: string; marketplace: string; installed: string } {
@@ -2618,6 +2663,22 @@ describe("Claude plugin metadata — declarative read-only inventory", () => {
         join(relativeProject, "subdir", ".."),
         value.home,
       )).not.toBeNull();
+
+      const root = resolve(value.project, "..");
+      const target = join(root, "target", "nested");
+      const linked = join(root, "linked-project");
+      const regular = join(root, "regular-project");
+      mkdirSync(target, { recursive: true });
+      symlinkSync(target, linked, process.platform === "win32" ? "junction" : "dir");
+      writeFileSync(regular, "not a directory");
+      expect(readClaudePluginMetadataInventory(
+        `${linked}${sep}..${sep}project`,
+        value.home,
+      )).toBeNull();
+      expect(readClaudePluginMetadataInventory(
+        `${regular}${sep}..${sep}project`,
+        value.home,
+      )).toBeNull();
     } finally {
       rmSync(join(value.home, ".."), { recursive: true, force: true });
     }
