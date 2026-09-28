@@ -1840,6 +1840,21 @@ function decodeMetadataObject(bytes: Buffer | null): Record<string, unknown> | n
   return plainRecord(parsed);
 }
 
+function decodeCodexUtf8(bytes: Buffer): string | null {
+  if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return null;
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return null;
+  }
+}
+
+function decodeCodexMetadataObject(bytes: Buffer | null): Record<string, unknown> | null {
+  if (bytes === null) return null;
+  const text = decodeCodexUtf8(bytes);
+  return text === null ? null : plainRecord(parseJsonValue(text));
+}
+
 type OptionalMetadataFile =
   | { status: "absent" }
   | { status: "unsafe" }
@@ -1915,8 +1930,10 @@ function parseCodexConfig(observation: OptionalMetadataFile): CodexConfigTables 
   if (observation.status === "unsafe") return null;
   if (observation.status === "absent") return { marketplaces: {}, plugins: {}, projects: {} };
   let config: Record<string, unknown> | null;
+  const text = decodeCodexUtf8(observation.bytes);
+  if (text === null) return null;
   try {
-    config = plainRecord(Bun.TOML.parse(observation.bytes.toString("utf8")));
+    config = plainRecord(Bun.TOML.parse(text));
   } catch {
     return null;
   }
@@ -2000,7 +2017,7 @@ function readCodexCachedVersion(
   for (const entry of entries) {
     if (entry.isFile() && entry.name === ".codex-remote-plugin-install.json") {
       const metadata = readCodexMetadataFile(join(root, entry.name), home, observations);
-      const value = metadata.status === "ok" ? decodeMetadataObject(metadata.bytes) : null;
+      const value = metadata.status === "ok" ? decodeCodexMetadataObject(metadata.bytes) : null;
       if (value?.["schema_version"] !== 1
         || typeof value["remote_plugin_id"] !== "string"
         || value["remote_plugin_id"].trim().length === 0) return false;
@@ -2013,7 +2030,7 @@ function readCodexCachedVersion(
       observations,
     );
     if (manifest.status !== "ok") return false;
-    const declared = decodeMetadataObject(manifest.bytes)?.["version"];
+    const declared = decodeCodexMetadataObject(manifest.bytes)?.["version"];
     if (typeof declared !== "string" || !CODEX_CACHE_NAME.test(declared)
       || (entry.name !== "local" && declared !== entry.name)) return false;
     versions.push({ directory: entry.name, version: declared });
@@ -2070,7 +2087,7 @@ function readCodexMarketplaceManifest(root: string, observations: string[]): Cod
     const observed = readCodexMetadataFile(join(root, ...segments), root, observations);
     if (observed.status === "unsafe") return false;
     if (observed.status === "absent") continue;
-    const manifest = decodeMetadataObject(observed.bytes);
+    const manifest = decodeCodexMetadataObject(observed.bytes);
     const name = manifest?.["name"];
     const plugins = manifest?.["plugins"];
     if (typeof name !== "string" || !CODEX_ENTRY_NAME.test(name)
@@ -2151,10 +2168,9 @@ function readCodexHomeMarketplace(
 ): {
   entry: Record<string, unknown>; manifest: CodexMarketplaceManifest;
 } | null | false {
-  const environmentHome = process.platform === "win32"
-    ? process.env["USERPROFILE"]
-    : process.env["HOME"];
-  const home = ownedHome ?? (typeof environmentHome === "string" && environmentHome.length > 0
+  const environmentHome = [process.env["HOME"], process.env["USERPROFILE"]]
+    .find((value): value is string => typeof value === "string" && value.length > 0 && isAbsolute(value));
+  const home = ownedHome ?? (environmentHome !== undefined
     ? environmentHome
     : resolveOsHome());
   if (home === null || !hasLocalFilesystemShape(home) || !isLocalFilesystemPath(home)) return false;
@@ -2229,7 +2245,9 @@ function codexLayerHasPluginAuthority(observation: OptionalMetadataFile): boolea
   if (observation.status === "unsafe") return null;
   if (observation.status === "absent") return false;
   let layer: Record<string, unknown> | null;
-  try { layer = plainRecord(Bun.TOML.parse(observation.bytes.toString("utf8"))); } catch { return null; }
+  const text = decodeCodexUtf8(observation.bytes);
+  if (text === null) return null;
+  try { layer = plainRecord(Bun.TOML.parse(text)); } catch { return null; }
   if (layer === null) return null;
   const rawFeatures = layer["features"];
   if (rawFeatures !== undefined) {
@@ -2244,7 +2262,9 @@ function codexLayerHasPluginAuthority(observation: OptionalMetadataFile): boolea
 
 function validCodexGitHead(bytes: Buffer): boolean {
   if (bytes.byteLength === 0 || bytes.byteLength > 1024) return false;
-  const value = bytes.toString("utf8").replace(/\n$/, "");
+  const decoded = decodeCodexUtf8(bytes);
+  if (decoded === null) return false;
+  const value = decoded.replace(/\n$/, "");
   if (/^[0-9a-f]{40}$/.test(value) || /^[0-9a-f]{64}$/.test(value)) return true;
   if (!value.startsWith("ref: ")) return false;
   const ref = value.slice(5);
@@ -2314,14 +2334,22 @@ function codexAdditionalLayersAbsent(
 }
 
 function codexProjectTrusted(projects: Record<string, unknown>, root: string, gitRoot: string): boolean | null {
+  const lookupKey = (key: string): string => process.platform === "win32"
+    ? key.replace(/[A-Z]/g, (letter) => letter.toLowerCase()) : key;
   for (const candidate of [root, gitRoot]) {
-    const decisions = Object.entries(projects).filter(([declared]) =>
-      hasLocalFilesystemShape(declared) && lexicalPathIdentity(declared) === lexicalPathIdentity(candidate))
-      .map(([, raw]) => plainRecord(raw)?.["trust_level"]);
+    const candidateKey = lookupKey(candidate);
+    const exact = plainRecord(projects[candidateKey])?.["trust_level"];
+    if (exact === "trusted" || exact === "untrusted") return exact === "trusted";
+    const decisions = Object.entries(projects).flatMap(([declared, raw]) => {
+      const decision = plainRecord(raw)?.["trust_level"];
+      if (decision !== "trusted" && decision !== "untrusted") return [];
+      return lookupKey(declared) === candidateKey ? [{ declared, decision }] : [];
+    });
     if (decisions.length === 0) continue;
-    if (decisions.some((decision) => decision !== decisions[0])) return null;
-    // A directory-specific refusal wins before the Git-root fallback.
-    return decisions[0] === "trusted";
+    decisions.sort((left, right) => left.declared < right.declared ? -1 : left.declared > right.declared ? 1 : 0);
+    // Match the pinned loader's deterministic first normalized raw key without resolving declared
+    // dot segments into a decision the host never made.
+    return decisions[0]?.decision === "trusted";
   }
   return false;
 }
