@@ -895,6 +895,42 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
       expect((JSON.parse(new TextDecoder().decode(supported.stdout)) as InstallReport).hosts.codex.status)
         .toBe("planned");
       expect(existsSync(unexpected)).toBe(false);
+      for (const directory of ["local", packageJson.version]) {
+        const cacheRoot = join(profile, "plugins", "cache", "semctx-stable", "semctx-control", directory);
+        mkdirSync(join(cacheRoot, ".codex-plugin"), { recursive: true });
+        const cacheManifest = join(cacheRoot, ".codex-plugin", "plugin.json");
+        writeFileSync(cacheManifest, JSON.stringify({ name: "semctx-control", version: packageJson.version }));
+        for (const dryRun of [true, false]) {
+          const orphan = run(dryRun);
+          const orphanReport = JSON.parse(new TextDecoder().decode(orphan.stdout)) as InstallReport;
+          expect(orphan.exitCode).toBe(1);
+          expect(orphanReport.hosts.codex.status).toBe("conflict");
+          expect(orphanReport.hosts.codex.error).toContain(directory === "local"
+            ? "local Semctx development cache overrides" : "without a plugin registration");
+          expect(existsSync(unexpected)).toBe(false);
+        }
+        for (const name of [undefined, 123, "foreign-control"]) {
+          writeFileSync(cacheManifest, JSON.stringify({ name, version: packageJson.version }));
+          for (const dryRun of [true, false]) {
+            const malformedCache = run(dryRun);
+            const cacheReport = JSON.parse(new TextDecoder().decode(malformedCache.stdout)) as InstallReport;
+            expect(malformedCache.exitCode).toBe(1);
+            expect(cacheReport.hosts.codex.status).toBe("failed");
+            expect(existsSync(unexpected)).toBe(false);
+          }
+        }
+        rmSync(cacheRoot, { recursive: true, force: true });
+      }
+      const foreignCache = join(root, "foreign-cache");
+      mkdirSync(foreignCache);
+      rmSync(join(profile, "plugins"), { recursive: true, force: true });
+      symlinkSync(foreignCache, join(profile, "plugins"), process.platform === "win32" ? "junction" : "dir");
+      for (const dryRun of [true, false]) {
+        const linkedCache = run(dryRun);
+        expect(linkedCache.exitCode).toBe(1);
+        expect(existsSync(unexpected)).toBe(false);
+        expect(readdirSync(foreignCache)).toEqual([]);
+      }
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
