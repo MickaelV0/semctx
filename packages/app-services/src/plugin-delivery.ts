@@ -2090,8 +2090,14 @@ function readCodexMarketplaceManifest(root: string, observations: string[]): Cod
       if (!validCodexMarketplacePolicy(plugin?.["policy"])
         || (plugin?.["category"] !== undefined && plugin["category"] !== null
           && typeof plugin["category"] !== "string")) return false;
-      if (name === MARKETPLACE_NAME && pluginName === CODEX_PLUGIN
-        && plainRecord(plugin?.["policy"])?.["installation"] === "NOT_AVAILABLE") return false;
+      if (name === MARKETPLACE_NAME && pluginName === CODEX_PLUGIN) {
+        const policy = plainRecord(plugin?.["policy"]);
+        const products = policy?.["products"];
+        if (policy?.["installation"] === "NOT_AVAILABLE"
+          || (Array.isArray(products)
+            && !products.some((product) => typeof product === "string"
+              && product.toLowerCase() === "codex"))) return false;
+      }
       const source = plainRecord(plugin?.["source"]);
       const rawSource = plugin?.["source"];
       const local = typeof rawSource === "string" ? rawSource
@@ -2138,13 +2144,20 @@ function readCodexMarketplaceManifest(root: string, observations: string[]): Cod
   return null;
 }
 
-function readCodexHomeMarketplace(observations: string[], ownedHome?: string): {
+function readCodexHomeMarketplace(
+  observations: string[], ownedHome?: string, resolveOsHome: () => string | null = () => {
+    try { return homedir(); } catch { return null; }
+  },
+): {
   entry: Record<string, unknown>; manifest: CodexMarketplaceManifest;
 } | null | false {
-  const home = ownedHome ?? [process.env["HOME"], process.env["USERPROFILE"]]
-    .find((value): value is string => typeof value === "string" && hasLocalFilesystemShape(value));
-  if (home === undefined) return null;
-  if (!isLocalFilesystemPath(home)) return false;
+  const environmentHome = process.platform === "win32"
+    ? process.env["USERPROFILE"]
+    : process.env["HOME"];
+  const home = ownedHome ?? (typeof environmentHome === "string" && environmentHome.length > 0
+    ? environmentHome
+    : resolveOsHome());
+  if (home === null || !hasLocalFilesystemShape(home) || !isLocalFilesystemPath(home)) return false;
   const manifest = readCodexMarketplaceManifest(home, observations);
   if (manifest === null || manifest === false) return manifest;
   return {
@@ -2156,6 +2169,7 @@ function readCodexHomeMarketplace(observations: string[], ownedHome?: string): {
 export interface CodexPluginMetadataBoundaries {
   systemFiles?: readonly string[];
   managedPreferences?: () => "absent" | "present" | "unknown";
+  resolveOsHome?: () => string | null;
 }
 
 const CODEX_MAC_MANAGED_PREFERENCES_SCRIPT = String.raw`
@@ -2217,33 +2231,53 @@ function codexLayerHasPluginAuthority(observation: OptionalMetadataFile): boolea
   let layer: Record<string, unknown> | null;
   try { layer = plainRecord(Bun.TOML.parse(observation.bytes.toString("utf8"))); } catch { return null; }
   if (layer === null) return null;
-  return ["plugins", "marketplaces", "profile", "profiles", "projects", "project_root_markers"].some((key) => layer[key] !== undefined)
-    || plainRecord(layer["features"])?.["plugins"] !== undefined;
+  const rawFeatures = layer["features"];
+  if (rawFeatures !== undefined) {
+    const features = plainRecord(rawFeatures);
+    if (features === null || (features["plugins"] !== undefined
+      && typeof features["plugins"] !== "boolean")) return null;
+    if (features["plugins"] !== undefined) return true;
+  }
+  return ["plugins", "marketplaces", "profile", "profiles", "projects", "project_root_markers"]
+    .some((key) => layer[key] !== undefined);
+}
+
+function validCodexGitHead(bytes: Buffer): boolean {
+  if (bytes.byteLength === 0 || bytes.byteLength > 1024) return false;
+  const value = bytes.toString("utf8").replace(/\n$/, "");
+  if (/^[0-9a-f]{40}$/.test(value) || /^[0-9a-f]{64}$/.test(value)) return true;
+  if (!value.startsWith("ref: ")) return false;
+  const ref = value.slice(5);
+  return /^refs\/[a-zA-Z0-9._/-]+$/.test(ref)
+    && !ref.includes("..") && !ref.includes("//") && !ref.endsWith("/");
 }
 
 function codexGitBoundary(root: string, observations: string[]): string | null {
   let current = root;
   for (let depth = 0; depth < 128; depth += 1) {
     try {
-      const traversal = captureRawTraversal(join(current, ".git"), false);
+      const gitPath = join(current, ".git");
+      const traversal = captureRawTraversal(gitPath, false, "directory");
       if (traversal === null) return null;
       observations.push(JSON.stringify({ gitBoundary: current, traversal }));
-      const git = lstatSync(join(current, ".git"));
-      if (git.isSymbolicLink() || (!git.isFile() && !git.isDirectory())) return null;
+      const git = lstatSync(gitPath);
+      if (git.isSymbolicLink() || !git.isDirectory()) return null;
+      const head = readCodexMetadataFile(join(gitPath, "HEAD"), gitPath, observations);
+      if (head.status !== "ok" || !validCodexGitHead(head.bytes)) return null;
       return current;
     } catch (cause) {
       if (cause === null || typeof cause !== "object" || !("code" in cause)
         || (cause as { code?: unknown }).code !== "ENOENT") return null;
     }
     const parent = dirname(current);
-    if (parent === current) return current;
+    if (parent === current) return null;
     current = parent;
   }
   return null;
 }
 
 function codexAdditionalLayersAbsent(
-  root: string, gitRoot: string, codexHome: string, trusted: boolean,
+  root: string, gitRoot: string, codexHome: string, projects: Record<string, unknown>,
   observations: string[], boundaries: CodexPluginMetadataBoundaries,
 ): boolean {
   const managed = (boundaries.managedPreferences ?? readCodexManagedPreferences)();
@@ -2259,14 +2293,20 @@ function codexAdditionalLayersAbsent(
     if (observed.status === "ok" && file.endsWith("requirements.toml")
       && observed.bytes.toString("utf8").trim().length > 0) return false;
   }
-  if (!trusted) return true;
-  // The supported user+repository layer is exact when invoked at a Git root. Refuse any other
-  // effective project layer with plugin authority rather than silently omit an ancestor override.
-  const cwdLayer = readCodexMetadataFile(join(root, "config.toml"), root, observations);
-  if (codexLayerHasPluginAuthority(cwdLayer) !== false) return false;
+  // Trust is decided per directory. An untrusted child suppresses only that child's layer; it does
+  // not hide an effective trusted ancestor layer that Codex still loads.
+  const rootTrusted = codexProjectTrusted(projects, root, gitRoot);
+  if (rootTrusted === null) return false;
+  if (rootTrusted) {
+    const cwdLayer = readCodexMetadataFile(join(root, "config.toml"), root, observations);
+    if (codexLayerHasPluginAuthority(cwdLayer) !== false) return false;
+  }
   let current = root;
   while (current !== gitRoot) {
     current = dirname(current);
+    const trusted = codexProjectTrusted(projects, current, gitRoot);
+    if (trusted === null) return false;
+    if (!trusted) continue;
     const layer = readCodexMetadataFile(join(current, ".codex", "config.toml"), current, observations);
     if (codexLayerHasPluginAuthority(layer) !== false) return false;
   }
@@ -2310,7 +2350,7 @@ function readCodexPluginMetadataOnce(
   if (user === null) return null;
   const trusted = codexProjectTrusted(user.projects, root, gitRoot);
   if (trusted === null) return null;
-  if (!codexAdditionalLayersAbsent(root, gitRoot, codexHome, trusted, observations, boundaries)) return null;
+  if (!codexAdditionalLayersAbsent(root, gitRoot, codexHome, user.projects, observations, boundaries)) return null;
   // Codex ignores repository config until the user has explicitly trusted that repository.
   const project = trusted
     ? parseCodexConfig(readCodexMetadataFile(join(root, ".codex", "config.toml"), root, observations))
@@ -2320,7 +2360,11 @@ function readCodexPluginMetadataOnce(
   const pluginTables = { ...user.plugins, ...project.plugins };
   const marketplaces: Record<string, unknown>[] = [];
   const manifests = new Map<string, CodexMarketplaceManifest>();
-  const homeMarketplace = readCodexHomeMarketplace(observations, homeMarketplaceRoot);
+  const homeMarketplace = readCodexHomeMarketplace(
+    observations,
+    homeMarketplaceRoot,
+    boundaries.resolveOsHome,
+  );
   if (homeMarketplace === false) return null;
   if (homeMarketplace !== null) {
     const name = homeMarketplace.manifest.name;

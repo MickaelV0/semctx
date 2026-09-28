@@ -135,10 +135,16 @@ describe("semctx plugin-status — read-only cross-host delivery report", () => 
 
   test("host detection never invokes the CLI and unprovable declarative metadata stays unknown", () => {
     const shim = observableHostShim("codex");
-    const result = runPluginStatus(temporaryRoot(), {
+    const repository = temporaryRoot();
+    const profile = temporaryRoot();
+    mkdirSync(join(repository, ".git"));
+    writeFileSync(join(repository, ".git", "HEAD"), "ref: refs/heads/main\n");
+    writeFileSync(join(profile, "config.toml"), "[plugins.'broken'\n");
+    const result = runPluginStatus(repository, {
       json: true,
       path: shim.directory,
       args: ["--host", "codex"],
+      environment: { CODEX_HOME: profile },
     });
     const report = JSON.parse(result.out);
 

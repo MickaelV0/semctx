@@ -806,10 +806,13 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
   test("Codex dry-run never starts the host CLI and leaves fresh or malformed profiles intact", () => {
     const root = realpathSync.native(mkdtempSync(join(tmpdir(), "semctx-install-readonly-codex-")));
     const profile = join(root, "profile");
+    const project = join(root, "project");
     const bin = join(root, "bin");
     const unexpected = join(root, "unexpected-codex-invocation");
     mkdirSync(profile);
     mkdirSync(bin);
+    mkdirSync(join(project, ".git"), { recursive: true });
+    writeFileSync(join(project, ".git", "HEAD"), "ref: refs/heads/main\n");
     const script = join(bin, "codex-shim.js");
     writeFileSync(script,
       `require("node:fs").writeFileSync(${JSON.stringify(unexpected)}, "called"); process.exit(9);\n`);
@@ -828,8 +831,9 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
     environment["HOME"] = join(root, "home");
     environment["USERPROFILE"] = environment["HOME"];
     const entrypoint = resolve(import.meta.dir, "../src/index.ts");
-    const run = () => Bun.spawnSync([
-      process.execPath, entrypoint, "install", "--host", "codex", "--dry-run", "--skip-setup", "--json",
+    const run = (dryRun = true) => Bun.spawnSync([
+      process.execPath, entrypoint, "install", "--root", project, "--host", "codex",
+      ...(dryRun ? ["--dry-run"] : []), "--skip-setup", "--json",
     ], { env: environment, stdout: "pipe", stderr: "pipe" });
     try {
       const fresh = run();
@@ -862,6 +866,35 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
         .toBe("conflict");
       expect(existsSync(unexpected)).toBe(false);
       expect(readFileSync(config, "utf8")).toBe(foreign);
+
+      const canonical = `[marketplaces.semctx-stable]\nsource_type = 'git'\nsource = 'hoklims/semctx'\n`;
+      writeFileSync(config, canonical);
+      const pluginRoot = join(profile, ".tmp", "marketplaces", "semctx-stable", "plugins", "semctx-control");
+      mkdirSync(pluginRoot, { recursive: true });
+      const manifest = (products: string[] | null) => ({
+        name: "semctx-stable",
+        plugins: [{
+          name: "semctx-control",
+          source: { source: "local", path: "./plugins/semctx-control" },
+          policy: { installation: "AVAILABLE", products },
+        }],
+      });
+      for (const products of [[], ["CHATGPT"]]) {
+        writeFileSync(join(manifestRoot, "marketplace.json"), JSON.stringify(manifest(products)));
+        for (const dryRun of [true, false]) {
+          const excluded = run(dryRun);
+          const excludedReport = JSON.parse(new TextDecoder().decode(excluded.stdout)) as InstallReport;
+          expect(excluded.exitCode).toBe(1);
+          expect(excludedReport.hosts.codex.status).toBe("failed");
+          expect(existsSync(unexpected)).toBe(false);
+        }
+      }
+      writeFileSync(join(manifestRoot, "marketplace.json"), JSON.stringify(manifest(["CODEX"])));
+      const supported = run();
+      expect(supported.exitCode).toBe(0);
+      expect((JSON.parse(new TextDecoder().decode(supported.stdout)) as InstallReport).hosts.codex.status)
+        .toBe("planned");
+      expect(existsSync(unexpected)).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -6,6 +6,10 @@ import { join, sep } from "node:path";
 import { readCodexManagedPreferences, readCodexPluginMetadataInventory } from "../src/plugin-delivery";
 
 const roots: string[] = [];
+function writeGitRoot(root: string): void {
+  mkdirSync(join(root, ".git"), { recursive: true });
+  writeFileSync(join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
+}
 function fixture(): { root: string; home: string; repo: string } {
   const root = realpathSync.native(mkdtempSync(join(realpathSync.native(tmpdir()), "semctx-codex-metadata-")));
   roots.push(root);
@@ -13,7 +17,7 @@ function fixture(): { root: string; home: string; repo: string } {
   const repo = join(root, "repo");
   mkdirSync(home);
   mkdirSync(repo);
-  mkdirSync(join(repo, ".git"));
+  writeGitRoot(repo);
   return { root, home, repo };
 }
 afterEach(() => {
@@ -164,6 +168,9 @@ describe("Codex declarative plugin inventory", () => {
     writeFileSync(system, "");
     expect(readCodexPluginMetadataInventory(repo, home, undefined, home, boundaries))
       .toEqual({ marketplaces: [], plugins: [] });
+    writeFileSync(system, "features = false\n");
+    expect(readCodexPluginMetadataInventory(repo, home, undefined, home, boundaries)).toBeNull();
+    writeFileSync(system, "");
     expect(readCodexPluginMetadataInventory(repo, home, undefined, home,
       { ...boundaries, managedPreferences: () => "unknown" })).toBeNull();
     writeFileSync(join(home, "config.toml"), "profile = 'selected'\n");
@@ -185,8 +192,33 @@ describe("Codex declarative plugin inventory", () => {
       `[projects.'${repo}']\ntrust_level = 'trusted'\n[projects.'${child}']\ntrust_level = 'untrusted'\n`);
     expect(readCodexPluginMetadataInventory(child, home, undefined, home))
       .toEqual({ marketplaces: [], plugins: [] });
+    mkdirSync(join(repo, ".codex"));
+    writeFileSync(join(repo, ".codex", "config.toml"), "[plugins.'broken'\n");
+    expect(readCodexPluginMetadataInventory(child, home, undefined, home)).toBeNull();
     writeFileSync(join(home, "config.toml"), "project_root_markers = ['custom-marker']\n");
     expect(readCodexPluginMetadataInventory(repo, home, undefined, home)).toBeNull();
+  });
+
+  test("empty or malformed Git markers cannot hide a valid ancestor repository", () => {
+    const { root, home, repo } = fixture();
+    const child = join(repo, "child");
+    mkdirSync(join(child, ".git"), { recursive: true });
+    mkdirSync(join(repo, ".codex"));
+    writeFileSync(join(repo, ".codex", "config.toml"), "[plugins.'broken'\n");
+    writeFileSync(join(home, "config.toml"), `[projects.'${repo}']\ntrust_level = 'trusted'\n`);
+    expect(readCodexPluginMetadataInventory(child, home, undefined, home)).toBeNull();
+    writeFileSync(join(child, ".git", "HEAD"), "not a Git head\n");
+    expect(readCodexPluginMetadataInventory(child, home, undefined, home)).toBeNull();
+    rmSync(join(repo, ".codex"), { recursive: true, force: true });
+    for (const detached of ["a".repeat(40), "b".repeat(64)]) {
+      writeFileSync(join(child, ".git", "HEAD"), `${detached}\n`);
+      expect(readCodexPluginMetadataInventory(child, home, undefined, home))
+        .toEqual({ marketplaces: [], plugins: [] });
+    }
+    const linked = join(root, "linked-project");
+    mkdirSync(linked);
+    symlinkSync(join(repo, ".git"), join(linked, ".git"), process.platform === "win32" ? "junction" : "dir");
+    expect(readCodexPluginMetadataInventory(linked, home, undefined, home)).toBeNull();
   });
 
   test("raw linked repository traversal and absent cache or repository identity swaps are rejected", () => {
@@ -206,8 +238,44 @@ describe("Codex declarative plugin inventory", () => {
     }, home)).toBeNull();
     expect(readCodexPluginMetadataInventory(repo, home, () => {
       renameSync(repo, join(root, "retired-repo"));
-      mkdirSync(join(repo, ".git"), { recursive: true });
+      writeGitRoot(repo);
     }, home)).toBeNull();
+  });
+
+  test("missing HOME variables fall back to the confined OS home marketplace", () => {
+    const { root, home, repo } = fixture();
+    const osHome = join(root, "os-home");
+    const ignoredHome = join(root, "ignored-home");
+    mkdirSync(join(osHome, ".agents", "plugins"), { recursive: true });
+    mkdirSync(join(ignoredHome, ".agents", "plugins"), { recursive: true });
+    writeFileSync(join(osHome, ".agents", "plugins", "marketplace.json"), "{broken");
+    writeFileSync(join(ignoredHome, ".agents", "plugins", "marketplace.json"), "{broken");
+    const boundaries = {
+      systemFiles: [],
+      managedPreferences: () => "absent" as const,
+      resolveOsHome: () => osHome,
+    };
+    const primary = process.platform === "win32" ? "USERPROFILE" : "HOME";
+    const secondary = process.platform === "win32" ? "HOME" : "USERPROFILE";
+    const originalPrimary = process.env[primary];
+    const originalSecondary = process.env[secondary];
+    try {
+      delete process.env[primary];
+      process.env[secondary] = ignoredHome;
+      expect(readCodexPluginMetadataInventory(repo, home, undefined, undefined, boundaries)).toBeNull();
+      rmSync(join(osHome, ".agents"), { recursive: true, force: true });
+      expect(readCodexPluginMetadataInventory(repo, home, undefined, undefined, boundaries))
+        .toEqual({ marketplaces: [], plugins: [] });
+      expect(readCodexPluginMetadataInventory(repo, home, undefined, undefined,
+        { ...boundaries, resolveOsHome: () => null })).toBeNull();
+      process.env[primary] = ignoredHome;
+      expect(readCodexPluginMetadataInventory(repo, home, undefined, undefined, boundaries)).toBeNull();
+    } finally {
+      if (originalPrimary === undefined) delete process.env[primary];
+      else process.env[primary] = originalPrimary;
+      if (originalSecondary === undefined) delete process.env[secondary];
+      else process.env[secondary] = originalSecondary;
+    }
   });
 
   test("typed marketplace policy, interface and category fields match the pinned native schema", () => {
@@ -227,9 +295,17 @@ describe("Codex declarative plugin inventory", () => {
     expect(readCodexPluginMetadataInventory(repo, home, undefined, home)).toBeNull();
     writeFileSync(manifestPath, JSON.stringify({ ...valid, plugins: [{ ...plugin, category: [] }] }));
     expect(readCodexPluginMetadataInventory(repo, home, undefined, home)).toBeNull();
-    writeFileSync(manifestPath, JSON.stringify({ ...valid, plugins: [{ ...plugin,
-      policy: { installation: "AVAILABLE", authentication: "ON_INSTALL", products: ["CODEX"] } }] }));
-    expect(readCodexPluginMetadataInventory(repo, home, undefined, home)?.marketplaces).toHaveLength(1);
+    for (const products of [[], ["CHATGPT"], ["chatgpt", "atlas"]]) {
+      writeFileSync(manifestPath, JSON.stringify({ ...valid, plugins: [{ ...plugin,
+        policy: { installation: "AVAILABLE", authentication: "ON_INSTALL", products } }] }));
+      expect(readCodexPluginMetadataInventory(repo, home, undefined, home)).toBeNull();
+    }
+    for (const policy of [undefined, { products: null },
+      { installation: "AVAILABLE", authentication: "ON_INSTALL", products: ["CODEX"] }]) {
+      writeFileSync(manifestPath, JSON.stringify({ ...valid, plugins: [{ ...plugin,
+        ...(policy === undefined ? {} : { policy }) }] }));
+      expect(readCodexPluginMetadataInventory(repo, home, undefined, home)?.marketplaces).toHaveLength(1);
+    }
   });
 
   test.skipIf(process.platform !== "darwin")("native CFPreferences distinguishes absent and present keys in an owned test domain", () => {
