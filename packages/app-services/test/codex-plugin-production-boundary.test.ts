@@ -19,8 +19,9 @@ interface ProductionJsonFixture {
   marketplace: string;
   dryRun?: boolean;
   artifacts?: { sidecar?: string | number[]; snapshotManifest?: string; payloadManifest?: string;
-    configuredRef?: string | null; localSidecar?: boolean };
-  recovery?: { snapshotManifest?: string; cacheManifest?: string };
+    configuredRef?: string | null; configuredSparse?: string[]; localSidecar?: boolean; fixedInventory?: boolean;
+    unregistered?: boolean; orphanCache?: boolean };
+  recovery?: { snapshotManifest?: string; cacheManifest?: string; sidecarAfterAdd?: string };
 }
 
 function productionStatus(source: RawHomeSource, drift = false, orphan = false,
@@ -93,14 +94,17 @@ function productionFixture(source: RawHomeSource, drift: boolean, orphan: boolea
       addFile(join(marketplace, ".agents", "plugins", "marketplace.json"), jsonFixture.marketplace);
       if (jsonFixture.artifacts !== undefined) {
         addFile(join(codexHome, "config.toml"),
-          "[marketplaces.semctx-stable]\\nsource_type = " + (jsonFixture.artifacts.localSidecar ? "'local'" : "'git'")
+          jsonFixture.artifacts.unregistered ? "" : "[marketplaces.semctx-stable]\\nsource_type = " + (jsonFixture.artifacts.localSidecar ? "'local'" : "'git'")
           + "\\nsource = " + JSON.stringify(jsonFixture.artifacts.localSidecar ? marketplace : "hoklims/semctx") + "\\n"
           + (jsonFixture.artifacts.configuredRef === null || jsonFixture.artifacts.localSidecar ? ""
             : "ref = " + JSON.stringify(jsonFixture.artifacts.configuredRef ?? "stable") + "\\n")
+          + "sparse_paths = " + JSON.stringify(jsonFixture.artifacts.configuredSparse ?? []) + "\\n"
           + "[plugins.'semctx-control@semctx-stable']\\nenabled = true\\n");
         const versionedCache = join(codexHome, "plugins", "cache", "semctx-stable", "semctx-control", "0.3.7");
-        addFile(join(versionedCache, ".codex-plugin", "plugin.json"), jsonFixture.artifacts.payloadManifest
-          ?? JSON.stringify({ name: "semctx-control", version: "0.3.7" }));
+        if (!jsonFixture.artifacts.unregistered || jsonFixture.artifacts.orphanCache) {
+          addFile(join(versionedCache, ".codex-plugin", "plugin.json"), jsonFixture.artifacts.payloadManifest
+            ?? JSON.stringify({ name: "semctx-control", version: "0.3.7" }));
+        }
         addFile(join(marketplace, "plugins", "semctx-control", ".codex-plugin", "plugin.json"),
           jsonFixture.artifacts.snapshotManifest ?? JSON.stringify({ name: "semctx-control", version: "0.3.7" }));
         if (jsonFixture.artifacts.sidecar !== undefined) addFile(join(marketplace, ".codex-marketplace-install.json"),
@@ -221,6 +225,9 @@ function productionFixture(source: RawHomeSource, drift: boolean, orphan: boolea
             return { exitCode: 0, stdout: Buffer.from("{}"), stderr: Buffer.alloc(0) };
           }
           if (argv[1] === "plugin" && argv[2] === "add") {
+            if (jsonFixture.recovery.sidecarAfterAdd !== undefined) addFile(
+              join(codexHome, ".tmp", "marketplaces", "semctx-stable", ".codex-marketplace-install.json"),
+              jsonFixture.recovery.sidecarAfterAdd);
             const versioned = join(codexHome, "plugins", "cache", "semctx-stable", "semctx-control", "0.3.7");
             addFile(join(versioned, ".codex-plugin", "plugin.json"), jsonFixture.recovery.cacheManifest
               ?? JSON.stringify({ name: "semctx-control", version: "0.3.7" }));
@@ -258,11 +265,12 @@ function productionFixture(source: RawHomeSource, drift: boolean, orphan: boolea
       { repositoryRoot: repo, version: "0.3.7", scope: "codex" },
       {
         findHostExecutable: () => join(root, "bin", "codex"),
-        ...(jsonFixture?.artifacts?.payloadManifest === undefined ? {} : {
+        ...(jsonFixture?.artifacts?.payloadManifest === undefined && jsonFixture?.artifacts?.fixedInventory !== true ? {} : {
           // Keep inventory fixed to exercise the downstream production payload parser itself.
           readCodexPluginMetadata: () => ({
             marketplaces: [{ name: "semctx-stable", root: join(codexHome, ".tmp", "marketplaces", "semctx-stable"),
-              marketplaceSource: { sourceType: "git", source: "hoklims/semctx" }, ref: "stable" }],
+              marketplaceSource: { sourceType: "git", source: "hoklims/semctx" }, ref: "stable",
+              sparsePaths: jsonFixture.artifacts.configuredSparse ?? [] }],
             plugins: [{ pluginId: "semctx-control@semctx-stable", installed: true, enabled: true, version: "0.3.7",
               cachePath: join(codexHome, "plugins", "cache", "semctx-stable", "semctx-control", "0.3.7") }],
           }),
@@ -349,7 +357,8 @@ describe("production Codex status artifact JSON", () => {
       ref_name: "stable", sparse_paths: [] }],
   ] as const) {
     test(`${name} refuses present sidecar without any Git fallback`, () => {
-      const observed = observe({ sidecar: JSON.stringify(value) });
+      // Pin an admitted inventory to keep exercising the downstream snapshot reader.
+      const observed = observe({ sidecar: JSON.stringify(value), fixedInventory: true });
       expect({ version: observed.report.hosts.codex.snapshot.version,
         gitReads: observed.nativeCalls.filter((call) => call === "git-read"),
         unreadable: observed.report.hosts.codex.reasons.includes("SNAPSHOT_UNREADABLE") })
@@ -363,11 +372,10 @@ describe("production Codex status artifact JSON", () => {
     ["unpaired sidecar Unicode", sidecar.replace('"ref_name":"stable"', String.raw`"ref_name":"\ud800"`)],
     ["invalid sidecar syntax", "{"],
     ["empty present sidecar", ""],
-    ["invalid sidecar UTF-8", [...Buffer.from('{"source_type":"git","source":"hoklims/semctx","ref_name":"'),
-      0xff, ...Buffer.from('","revision":"' + "1".repeat(40) + '"}')]],
+    ["invalid sidecar UTF-8", [...Buffer.from(sidecar.slice(0, -1) + ',"note":"'), 0xff, ...Buffer.from('"}')]],
   ] as const) {
     test(`${name} remains unknown through the effective default status`, () => {
-      const report = status({ sidecar: typeof bytes === "string" ? bytes : [...bytes] });
+      const report = status({ sidecar: typeof bytes === "string" ? bytes : [...bytes], fixedInventory: true });
       expect(report.hosts.codex.snapshot.version).toBeNull();
       expect(report.hosts.codex.reasons).toContain("SNAPSHOT_UNREADABLE");
       expect(report.hosts.codex.delivery).toBe("UNKNOWN");
@@ -410,6 +418,123 @@ describe("production Codex status artifact JSON", () => {
     expect(report.hosts.codex.reasons).toContain("INSTALLED_CACHE_UNREADABLE");
     expect(report.hosts.codex.delivery).toBe("UNKNOWN");
   });
+});
+
+describe("Codex sidecar consumer admission", () => {
+  const marketplace = '{"name":"semctx-stable","plugins":[{"name":"semctx-control",'
+    + '"source":{"source":"local","path":"./plugins/semctx-control"}}]}';
+  const native = { source_type: "git", source: "hoklims/semctx", ref_name: "stable",
+    sparse_paths: [] as string[], revision: "1".repeat(40) };
+  const install = (artifacts: NonNullable<ProductionJsonFixture["artifacts"]>, dryRun: boolean) =>
+    productionFixture("CODEX_HOME", false, false, "absent", "install", "safe", { marketplace, artifacts, dryRun }) as InstallObservation;
+  for (const [name, sidecar] of [
+    ["missing identity", undefined],
+    ["malformed identity", "{"],
+    ["foreign source", JSON.stringify({ ...native, source: "someone/else" })],
+    ["contradictory sparse vector", JSON.stringify({ ...native, sparse_paths: ["different-tree"] })],
+  ] as const) {
+    test(`unregistered selected snapshot ${name} blocks dry-run and apply before native Codex`, () => {
+      const observations = [true, false].map((dryRun) => install({ unregistered: true, sidecar }, dryRun));
+      expect(observations.map((observed) => ({ status: observed.report.hosts.codex.status,
+        calls: observed.nativeCalls.filter((call) => call.startsWith("codex-attempt:")) })))
+        .toEqual([{ status: "failed", calls: [] }, { status: "failed", calls: [] }]);
+    });
+  }
+
+  test("an unregistered selected snapshot with a foreign manifest remains unknown before native Codex", () => {
+    const observations = [true, false].map((dryRun) => productionFixture("CODEX_HOME", false, false,
+      "absent", "install", "safe", { dryRun, marketplace: '{"name":"foreign","plugins":[]}',
+        artifacts: { unregistered: true, sidecar: JSON.stringify(native) } }) as InstallObservation);
+    expect(observations.map((observed) => observed.nativeCalls.filter((call) => call.startsWith("codex-attempt:"))))
+      .toEqual([[], []]);
+    expect(observations.every((observed) => observed.report.hosts.codex.status === "failed")).toBe(true);
+  });
+
+  test("a valid unregistered public snapshot retains the orphan physical cache without registration", () => {
+    const artifacts = { unregistered: true, orphanCache: true, sidecar: JSON.stringify(native) };
+    const observed = productionFixture("CODEX_HOME", false, false, "absent", "status", "safe", { marketplace, artifacts }) as ProductionObservation;
+    expect(observed.report.hosts.codex.marketplace.configured).toBe(false);
+    expect(observed.report.hosts.codex.installed.installed).toBe(true);
+    expect(observed.report.hosts.codex.installed.version).toBe("0.3.7");
+    expect(observed.report.hosts.codex.installed.enabled).toBeNull();
+    expect(observed.report.hosts.codex.installed.contentMatchesSnapshot).toBeNull();
+    expect(observed.report.hosts.codex.delivery).toBe("UNKNOWN");
+    for (const dryRun of [true, false]) {
+      const installObserved = install(artifacts, dryRun);
+      expect(installObserved.report.hosts.codex.status).toBe("conflict");
+      expect(installObserved.nativeCalls.filter((call) => call.startsWith("codex-attempt:"))).toEqual([]);
+    }
+  });
+  for (const [name, sidecar] of [
+    ["malformed JSON", "{"],
+    ["contradictory source", JSON.stringify({ ...native, source: "someone/else" })],
+    ["contradictory ref", JSON.stringify({ ...native, ref_name: "main" })],
+    ["duplicate decoded source", String.raw`{"source_type":"git","source":"someone/else","\u0073ource":"hoklims/semctx","ref_name":"stable","sparse_paths":[],"revision":"${"1".repeat(40)}"}`],
+    ["unpaired escaped string", JSON.stringify(native).replace(/}$/, String.raw`,"note":"\ud800"}`)],
+  ] as const) {
+    test(`${name} blocks default dry-run and apply before any native Codex call`, () => {
+      const observations = [true, false].map((dryRun) => install({ sidecar }, dryRun));
+      expect(observations.map((observed) => ({ ok: observed.report.ok, status: observed.report.hosts.codex.status,
+        calls: observed.nativeCalls.filter((call) => call.startsWith("codex-attempt:")) })))
+        .toEqual([{ ok: false, status: "failed", calls: [] }, { ok: false, status: "failed", calls: [] }]);
+      const observed = productionFixture("CODEX_HOME", false, false, "absent", "status", "safe", {
+        marketplace, artifacts: { sidecar },
+      }) as ProductionObservation;
+      expect(observed.report.hosts.codex.snapshot.version).toBeNull();
+      expect(observed.report.hosts.codex.reasons).toContain("HOST_QUERY_FAILED");
+      expect(observed.report.hosts.codex.delivery).toBe("UNKNOWN");
+    });
+  }
+
+  for (const [name, configuredSparse, sparse_paths] of [
+    ["different sparse tree", [], ["different-tree"]],
+    ["sparse vector order", ["plugins", "skills"], ["skills", "plugins"]],
+    ["sparse vector duplicates", ["plugins"], ["plugins", "plugins"]],
+    ["raw sparse dot segments", ["plugins"], ["./plugins"]],
+  ] as const) {
+    test(`${name} stays unknown in status and blocks default installer admission`, () => {
+      const artifacts = { sidecar: JSON.stringify({ ...native, sparse_paths }), configuredSparse: [...configuredSparse] };
+      for (const fixedInventory of [false, true]) {
+        const observed = productionFixture("CODEX_HOME", false, false, "absent", "status", "safe", {
+          marketplace, artifacts: { ...artifacts, fixedInventory },
+        }) as ProductionObservation;
+        expect(observed.report.hosts.codex.snapshot.version).toBeNull();
+        expect(observed.report.hosts.codex.delivery).toBe("UNKNOWN");
+        expect(observed.nativeCalls).not.toContain("git-read");
+        if (fixedInventory) expect(observed.report.hosts.codex.reasons).toContain("SNAPSHOT_UNREADABLE");
+      }
+      const observations = [true, false].map((dryRun) => install(artifacts, dryRun));
+      expect(observations.map((observed) => observed.nativeCalls.filter((call) => call.startsWith("codex-attempt:"))))
+        .toEqual([[], []]);
+      expect(observations.every((observed) => observed.report.hosts.codex.status === "failed")).toBe(true);
+    });
+  }
+
+  test("native sidecar absence and exact raw vectors retain default dry-run admission", () => {
+    const sparse = ["plugins", "plugins", "./skills", "quoted-\"tree", "emoji-😀"];
+    for (const artifacts of [{}, { sidecar: JSON.stringify(native) },
+      { configuredSparse: sparse, sidecar: JSON.stringify({ ...native, sparse_paths: sparse }) }]) {
+      const observed = install(artifacts, true);
+      expect(observed.report.ok).toBe(true);
+      expect(observed.report.hosts.codex.status).toBe("planned");
+      expect(observed.nativeCalls.filter((call) => call.startsWith("codex-attempt:"))).toEqual([]);
+    }
+  });
+
+  for (const [name, sidecarAfterAdd] of [
+    ["malformed sidecar", "{"],
+    ["changed sparse vector", JSON.stringify({ ...native, sparse_paths: ["different-tree"] })],
+  ] as const) {
+    test.skipIf(process.platform !== "win32")(`${name} after native add cannot prove cache-lock recovery`, () => {
+      const observed = productionFixture("CODEX_HOME", false, false, "absent", "install", "safe", {
+        marketplace, dryRun: false, recovery: { sidecarAfterAdd },
+      }) as InstallObservation;
+      expect(observed.report.ok).toBe(false);
+      expect(observed.report.hosts.codex.cleanupDeferred).not.toBe(true);
+      expect(observed.nativeCalls).not.toContain("cleanup-scheduled");
+      expect(observed.report.hosts.codex.error).toContain("metadata");
+    });
+  }
 });
 
 describe("default installer Windows cache-lock payload convergence", () => {

@@ -311,6 +311,8 @@ export interface ClaudePluginMetadataInventory {
 export interface MarketplaceSnapshotProbe {
   /** Present only for a validated native Codex sidecar; its identity must match the configuration. */
   sourceType?: "git" | "local";
+  /** Native sparse checkout identity, preserving order, duplicates and raw strings. */
+  sparsePaths?: readonly string[];
   /** Commit the host checked out for this marketplace; `null` when it cannot be proven. */
   commit: string | null;
   /** Ref the marketplace tracks, e.g. `stable`. */
@@ -1184,10 +1186,12 @@ function evaluateHost(
     ? null
     : dependencies.readMarketplaceSnapshot(host, marketplaceRoot);
   if (host === "codex" && snapshot?.sourceType !== undefined) {
-    const expected = plainRecord(marketplace["marketplaceSource"]);
-    const configuredRef = rawText(marketplace["ref"]);
-    if (snapshot.sourceType !== expected?.["sourceType"] || snapshot.source !== rawHostSource
-      || snapshot.ref !== configuredRef) snapshot = null;
+    const configured = plainRecord(marketplace["marketplaceSource"]);
+    const expected = codexMarketplaceIdentity(configured?.["sourceType"], configured?.["source"],
+      marketplace["ref"], marketplace["sparsePaths"] === undefined ? [] : marketplace["sparsePaths"]);
+    const observed = codexMarketplaceIdentity(snapshot.sourceType, snapshot.source, snapshot.ref,
+      snapshot.sparsePaths === undefined ? [] : snapshot.sparsePaths);
+    if (expected === null || observed === null || !sameCodexMarketplaceIdentity(expected, observed)) snapshot = null;
   }
   if (snapshot === null) {
     reasons.push("SNAPSHOT_UNREADABLE");
@@ -2033,9 +2037,11 @@ function parseCodexConfig(observation: OptionalMetadataFile): CodexConfigTables 
 
 interface CodexCachedVersion { directory: string; version: string }
 
-function readCodexMetadataFile(file: string, root: string, observations: string[]): OptionalMetadataFile {
+function readCodexMetadataFile(
+  file: string, root: string, observations: string[], maxBytes = PLUGIN_DELIVERY_MAX_HOST_OUTPUT_BYTES,
+): OptionalMetadataFile {
   const traversal = captureRawTraversal(file, false);
-  let observed: OptionalMetadataFile = traversal === null ? { status: "unsafe" } : readOptionalMetadataFile(file, root);
+  let observed: OptionalMetadataFile = traversal === null ? { status: "unsafe" } : readOptionalMetadataFile(file, root, maxBytes);
   // Empty TOML is valid; the shared bundle/JSON reader deliberately rejects empty files. Prove
   // this case through the same physical file identity and an EOF read without widening that reader.
   if (observed.status === "unsafe" && traversal !== null && isWithin(file, root)) {
@@ -2137,6 +2143,73 @@ function isCodexGitSource(source: string): boolean {
   return !hasIdentityControlCharacter(source) && !/\s/.test(source)
     && (/^(?:https?:\/\/|ssh:\/\/|git@[^:]+:)[^\s]+$/.test(source)
       || /^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(source));
+}
+
+interface CodexMarketplaceIdentity {
+  sourceType: "git" | "local";
+  source: string;
+  ref: string | null;
+  sparsePaths: readonly string[];
+}
+
+/** One native identity projection shared by configuration, sidecars and their consumers. */
+function codexMarketplaceIdentity(
+  sourceType: unknown, source: unknown, ref: unknown, sparsePaths: unknown,
+): CodexMarketplaceIdentity | null {
+  if ((sourceType !== "git" && sourceType !== "local")
+    || typeof source !== "string" || source.length === 0 || hasIdentityControlCharacter(source)
+    || (sourceType === "git" && !isCodexGitSource(source))
+    || (sourceType === "local" && codexLocalSourceRoot(source) === null)
+    || (ref !== undefined && ref !== null
+      && (typeof ref !== "string" || ref.length === 0 || /\s/.test(ref) || hasIdentityControlCharacter(ref)))
+    || !Array.isArray(sparsePaths) || !sparsePaths.every((path): path is string => typeof path === "string")) return null;
+  return { sourceType, source, ref: typeof ref === "string" ? ref : null, sparsePaths: [...sparsePaths] };
+}
+
+function sameCodexMarketplaceIdentity(left: CodexMarketplaceIdentity, right: CodexMarketplaceIdentity): boolean {
+  // Native InstalledMarketplaceMetadata derives PartialEq: Vec order and duplicates both matter.
+  return left.sourceType === right.sourceType && left.source === right.source && left.ref === right.ref
+    && left.sparsePaths.length === right.sparsePaths.length
+    && left.sparsePaths.every((path, index) => path === right.sparsePaths[index]);
+}
+
+interface CodexMarketplaceSidecar extends CodexMarketplaceIdentity { revision: string }
+
+function decodeCodexMarketplaceSidecar(bytes: Buffer): CodexMarketplaceSidecar | null {
+  const record = decodeCodexMetadataObject(bytes);
+  if (record === null) return null;
+  const identity = codexMarketplaceIdentity(record["source_type"], record["source"], record["ref_name"], record["sparse_paths"]);
+  const revision = record["revision"];
+  if (identity === null || typeof revision !== "string"
+    || (revision !== "" && !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(revision))
+    || (identity.sourceType === "git" && revision === "")) return null;
+  return { ...identity, revision };
+}
+
+/** Absence is valid; present metadata must carry the bounded, strictly decoded native structure. */
+function readCodexMarketplaceSidecar(root: string, observations: string[]): CodexMarketplaceSidecar | null | false {
+  const observed = readCodexMetadataFile(join(root, ".codex-marketplace-install.json"), root, observations,
+    PLUGIN_DELIVERY_MAX_MANIFEST_BYTES);
+  if (observed.status === "absent") return null;
+  return observed.status === "ok" ? decodeCodexMarketplaceSidecar(observed.bytes) ?? false : false;
+}
+
+/** Protect the Semctx namespace a new native marketplace add would select after an interrupted run. */
+function codexUnregisteredSelectedSnapshotIsSafe(home: string, observations: string[]): boolean {
+  const root = join(home, ...CODEX_SNAPSHOT_SEGMENTS);
+  const traversal = captureRawTraversal(root, false, "directory");
+  if (traversal === null) return false;
+  observations.push(JSON.stringify({ unregisteredSelectedSnapshot: root, traversal }));
+  const sidecar = readCodexMarketplaceSidecar(root, observations);
+  if (sidecar === false) return false;
+  if (traversal.at(-1)?.exists !== true) return sidecar === null;
+  // Without a configuration entry, only the intended public source/stable/full checkout can be
+  // resumed. This proves ownership of the selected slot; it never registers it or grants authority.
+  if (sidecar === null || !isSemctxSource(sidecar.source)) return false;
+  const expected = codexMarketplaceIdentity("git", sidecar.source, PLUGIN_DELIVERY_RELEASE_REF, []);
+  if (expected === null || !sameCodexMarketplaceIdentity(expected, sidecar)) return false;
+  const manifest = readCodexMarketplaceManifest(root, observations);
+  return manifest !== null && manifest !== false && manifest.name === MARKETPLACE_NAME;
 }
 
 function validCodexMarketplacePolicy(value: unknown): boolean {
@@ -2541,6 +2614,8 @@ function readCodexPluginMetadataOnce(
   if (project === null) return null;
   const marketplaceTables = { ...user.marketplaces, ...project.marketplaces };
   const pluginTables = { ...user.plugins, ...project.plugins };
+  if (!Object.prototype.hasOwnProperty.call(marketplaceTables, MARKETPLACE_NAME)
+    && !codexUnregisteredSelectedSnapshotIsSafe(codexHome, observations)) return null;
   // Native installation targets this cache even when TOML contains no plugin registration.
   // Its physical ancestors and absence therefore belong to both read-only snapshots.
   const semctxCache = readCodexCachedVersion(codexHome, MARKETPLACE_NAME, CODEX_PLUGIN, observations);
@@ -2556,6 +2631,11 @@ function readCodexPluginMetadataOnce(
   if (homeMarketplace !== null) {
     const name = homeMarketplace.manifest.name;
     if (Object.prototype.hasOwnProperty.call(marketplaceTables, name)) return null;
+    const configured = plainRecord(homeMarketplace.entry["marketplaceSource"]);
+    const expected = codexMarketplaceIdentity(configured?.["sourceType"], configured?.["source"], undefined, []);
+    const sidecar = expected === null ? false : readCodexMarketplaceSidecar(expected.source, observations);
+    if (expected === null || sidecar === false || (sidecar !== null && !sameCodexMarketplaceIdentity(expected, sidecar))) return null;
+    homeMarketplace.entry["sparsePaths"] = expected.sparsePaths;
     marketplaces.push(homeMarketplace.entry);
     manifests.set(name, homeMarketplace.manifest);
   }
@@ -2566,24 +2646,25 @@ function readCodexPluginMetadataOnce(
     const source = entry?.["source"];
     const ref = entry?.["ref"];
     const sparse = entry?.["sparse_paths"];
-    if ((sourceType !== "git" && sourceType !== "local")
-      || typeof source !== "string" || source.length === 0 || hasIdentityControlCharacter(source)
-      || (sourceType === "git" && !isCodexGitSource(source))
+    const expected = codexMarketplaceIdentity(sourceType, source, ref, sparse === undefined ? [] : sparse);
+    if (expected === null
       || (ref !== undefined && typeof ref !== "string")
-      || (sparse !== undefined && (!Array.isArray(sparse) || sparse.some((value) => typeof value !== "string")))
       || ["last_updated", "last_revision"].some((key) => entry?.[key] !== undefined && typeof entry[key] !== "string")) return null;
-    const marketplaceRoot = sourceType === "git"
+    const marketplaceRoot = expected.sourceType === "git"
       ? join(codexHome, ".tmp", "marketplaces", name)
-      : codexLocalSourceRoot(source);
+      : codexLocalSourceRoot(expected.source);
     if (marketplaceRoot === null) return null;
     const manifest = readCodexMarketplaceManifest(marketplaceRoot, observations);
     if (manifest === null || manifest === false || manifest.name !== name) return null;
+    const sidecar = readCodexMarketplaceSidecar(marketplaceRoot, observations);
+    if (sidecar === false || (sidecar !== null && !sameCodexMarketplaceIdentity(expected, sidecar))) return null;
     manifests.set(name, manifest);
     marketplaces.push({
       name,
       root: marketplaceRoot,
-      marketplaceSource: { sourceType, source },
+      marketplaceSource: { sourceType: expected.sourceType, source: expected.source },
       ...(ref === undefined ? {} : { ref }),
+      sparsePaths: expected.sparsePaths,
     });
   }
   const plugins: Record<string, unknown>[] = [];
@@ -2638,7 +2719,9 @@ function readCodexPluginMetadataOnce(
 
 /**
  * Read pinned Codex 0.147/0.155 declarative state without starting the host CLI. The second read
- * refuses visible drift, and every traversed file is bounded and link-free. No profile is created.
+ * refuses visible drift, and every traversed file is bounded and link-free. A truly absent native
+ * sidecar is allowed; a present sidecar must match the configured source/ref/sparse identity.
+ * No profile is created.
  */
 export function readCodexPluginMetadataInventory(
   repositoryRoot: string,
@@ -2894,7 +2977,7 @@ function bundleDigests(distRoot: string, root: string): Record<string, string | 
 }
 
 /**
- * Codex records the resolved source, ref and revision in the marketplace root; both hosts also
+ * Codex records the resolved source, ref, sparse paths and revision in the marketplace root; both hosts also
  * leave a Git checkout there. The declarative file is preferred because it needs no subprocess.
  */
 function defaultReadMarketplaceSnapshot(
@@ -2909,39 +2992,17 @@ function defaultReadMarketplaceSnapshot(
   let commit: string | null = null;
   let ref: string | null = null;
   let source: string | null = null;
-  let codexSidecarPresent = false;
-  let codexSidecarSourceType: "git" | "local" | undefined;
+  let codexSidecar: CodexMarketplaceSidecar | null = null;
+  const sidecarObservations: string[] = [];
   const sidecar = join(canonicalRoot, ".codex-marketplace-install.json");
   if (host === "codex") {
-    const metadata = readOptionalMetadataFile(sidecar, canonicalRoot, PLUGIN_DELIVERY_MAX_MANIFEST_BYTES);
-    if (metadata.status === "unsafe") return null;
-    if (metadata.status === "ok") {
-      const record = decodeCodexMetadataObject(metadata.bytes);
-      if (record === null) return null;
-      const sourceType = record["source_type"];
-      const rawSource = record["source"];
-      const rawRef = record["ref_name"];
-      const sparse = record["sparse_paths"];
-      const revision = record["revision"];
-      // Both pinned native InstalledMarketplaceMetadata structs require these fields; ref_name
-      // alone is optional. Keep raw identity strings, not a trimmed approximation of native data.
-      if ((sourceType !== "git" && sourceType !== "local")
-        || typeof rawSource !== "string" || rawSource.length === 0
-        || hasIdentityControlCharacter(rawSource)
-        || (sourceType === "git" && !isCodexGitSource(rawSource))
-        || (sourceType === "local" && codexLocalSourceRoot(rawSource) === null)
-        || !Array.isArray(sparse) || sparse.some((path) => typeof path !== "string")
-        || typeof revision !== "string"
-        || (sourceType === "git" && !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(revision))
-        || (sourceType === "local" && revision !== "" && !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(revision))
-        || (rawRef !== undefined && rawRef !== null
-          && (typeof rawRef !== "string" || rawRef.length === 0 || /\s/.test(rawRef)
-            || hasIdentityControlCharacter(rawRef)))) return null;
-      codexSidecarPresent = true;
-      codexSidecarSourceType = sourceType;
-      commit = revision === "" ? null : revision;
-      ref = typeof rawRef === "string" ? rawRef : null;
-      source = rawSource;
+    const metadata = readCodexMarketplaceSidecar(canonicalRoot, sidecarObservations);
+    if (metadata === false) return null;
+    codexSidecar = metadata;
+    if (metadata !== null) {
+      commit = metadata.revision === "" ? null : metadata.revision;
+      ref = metadata.ref;
+      source = metadata.source;
     }
   } else {
     try {
@@ -2957,11 +3018,11 @@ function defaultReadMarketplaceSnapshot(
       // Claude's existing fallback remains independent of Codex metadata refusal.
     }
   }
-  if (commit === null && !codexSidecarPresent) {
+  if (commit === null && codexSidecar === null) {
     const head = runQuery(["git", "--no-replace-objects", "rev-parse", "HEAD"], canonicalRoot, LOCAL_READ_LIMITS);
     if (head.code === 0) commit = safeText(head.out.trim());
   }
-  if (ref === null && !codexSidecarPresent) {
+  if (ref === null && codexSidecar === null) {
     const branch = runQuery(
       ["git", "--no-replace-objects", "rev-parse", "--abbrev-ref", "HEAD"],
       canonicalRoot,
@@ -2979,9 +3040,14 @@ function defaultReadMarketplaceSnapshot(
   const pluginRoot = canonicalDirectoryWithin(join(canonicalRoot, "plugins", layout.directory), canonicalRoot);
   if (pluginRoot === null) return null;
   const version = readJsonField(join(pluginRoot, layout.manifest, "plugin.json"), "version", canonicalRoot, host);
-
-  return { commit, ref, source, version, bundles: bundleDigests(join(pluginRoot, "dist"), canonicalRoot),
-    ...(codexSidecarSourceType === undefined ? {} : { sourceType: codexSidecarSourceType }) };
+  const bundles = bundleDigests(join(pluginRoot, "dist"), canonicalRoot);
+  if (host === "codex") {
+    const after: string[] = [];
+    if (readCodexMarketplaceSidecar(canonicalRoot, after) === false
+      || JSON.stringify(sidecarObservations) !== JSON.stringify(after)) return null;
+  }
+  return { commit, ref, source, version, bundles,
+    ...(codexSidecar === null ? {} : { sourceType: codexSidecar.sourceType, sparsePaths: codexSidecar.sparsePaths }) };
 }
 
 function readJsonField(file: string, field: string, root: string, host: PluginDeliveryHost): string | null {
@@ -3076,6 +3142,12 @@ function jsonField(out: string, field: string): string | null {
     : null;
 }
 
+function boundedReleasePayload(outcome: PluginDeliveryQueryOutcome, maxBytes: number): Buffer | null {
+  if (outcome.code !== 0 || boundedFailure(outcome) !== null) return null;
+  const payload = outcome.bytes ?? new TextEncoder().encode(outcome.out);
+  return payload.byteLength <= maxBytes ? Buffer.from(payload) : null;
+}
+
 /** Why a release could not be read as one coherent artifact. */
 type ReleaseArtifactFailure = "unreadable" | "diverged";
 
@@ -3101,30 +3173,29 @@ function readReleaseArtifacts(
   env: Readonly<Record<string, string | null>> | undefined,
 ): ReleaseArtifacts | ReleaseArtifactFailure {
   const read = releaseBlobReader(gitDir, cwd, commit, runQuery, env);
-  const payloadOf = (outcome: PluginDeliveryQueryOutcome, maxBytes: number): Uint8Array | null => {
-    if (outcome.code !== 0 || boundedFailure(outcome) !== null) return null;
-    const payload = outcome.bytes ?? new TextEncoder().encode(outcome.out);
-    return payload.byteLength <= maxBytes ? payload : null;
-  };
 
   const manifest = read("apps/cli/package.json");
-  if (payloadOf(manifest, PLUGIN_DELIVERY_MAX_MANIFEST_BYTES) === null) return "unreadable";
-  const version = jsonField(manifest.out, "version");
+  const version = safeText(decodeCodexMetadataObject(boundedReleasePayload(manifest,
+    PLUGIN_DELIVERY_MAX_MANIFEST_BYTES))?.["version"]);
   if (version === null) return "unreadable";
 
   const bundles = { codex: {}, claude: {} } as PublicReleaseBundleWitnesses;
   for (const host of PLUGIN_DELIVERY_HOSTS) {
     const layout = RELEASE_PLUGIN[host];
     const pluginManifest = read(`plugins/${layout.directory}/${layout.manifest}/plugin.json`);
-    if (payloadOf(pluginManifest, PLUGIN_DELIVERY_MAX_MANIFEST_BYTES) === null) return "unreadable";
-    if (jsonField(pluginManifest.out, "version") !== version) return "diverged";
+    const manifestBytes = boundedReleasePayload(pluginManifest, PLUGIN_DELIVERY_MAX_MANIFEST_BYTES);
+    if (manifestBytes === null) return "unreadable";
+    const declared = host === "codex" ? safeText(decodeCodexMetadataObject(manifestBytes)?.["version"])
+      : jsonField(pluginManifest.out, "version");
+    if (host === "codex" && declared === null) return "unreadable";
+    if (declared !== version) return "diverged";
 
     const record: Record<string, string | null> = {};
     for (const name of PLUGIN_RUNTIME_BUNDLES) {
       const artifact = read(`plugins/${layout.directory}/dist/${name}`);
       // Raw bytes only. A decoded string would not round-trip to the stored bytes, so a digest
       // taken from it would be a digest of something the release does not contain.
-      const payload = payloadOf(artifact, PLUGIN_DELIVERY_MAX_BUNDLE_BYTES);
+      const payload = boundedReleasePayload(artifact, PLUGIN_DELIVERY_MAX_BUNDLE_BYTES);
       record[name] = payload !== null && payload.length > 0
         ? createHash("sha256").update(payload).digest("hex")
         : null;
@@ -3511,7 +3582,8 @@ function mirrorPublicRelease(repositoryRoot: string, runQuery: QueryRunner): Pub
   if (manifest.code !== 0 || boundedFailure(manifest) !== null) {
     return unresolvedRelease("absent", "PUBLIC_RELEASE_MANIFEST_UNREADABLE");
   }
-  const version = jsonField(manifest.out, "version");
+  const version = safeText(decodeCodexMetadataObject(boundedReleasePayload(manifest,
+    PLUGIN_DELIVERY_MAX_MANIFEST_BYTES))?.["version"]);
   if (version === null) return unresolvedRelease("absent", "PUBLIC_RELEASE_MANIFEST_UNREADABLE");
 
   return {
