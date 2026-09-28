@@ -63,6 +63,7 @@ export type {
   CodexPluginMetadataInventory,
   CodexPluginManifestIdentity,
   CodexMarketplaceIdentity,
+  CodexWindowsQueryFailureReason,
   ClaudePluginMetadataInventory,
   HostInstalledStateV2,
   HostMarketplaceStateV2,
