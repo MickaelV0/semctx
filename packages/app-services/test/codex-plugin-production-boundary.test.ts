@@ -1,4 +1,6 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, parse, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { PluginDeliveryReportV2 } from "../src/plugin-delivery";
@@ -11,6 +13,7 @@ interface ProductionObservation {
   phase: number;
   cachePath: string;
   nativeCalls: string[];
+  nativeOptions: { command: string[]; timeout: number | null; maxBuffer: number | null }[];
 }
 interface InstallObservation extends Omit<ProductionObservation, "report"> { report: InstallReport }
 type SystemPolicy = "absent" | "disabled" | "unresolved" | "root-drift" | "raw-root-drift";
@@ -21,7 +24,10 @@ interface ProductionJsonFixture {
   artifacts?: { sidecar?: string | number[]; snapshotManifest?: string; payloadManifest?: string;
     configuredRef?: string | null; configuredSparse?: string[]; localSidecar?: boolean; fixedInventory?: boolean;
     unregistered?: boolean; orphanCache?: boolean; projectConfig?: string; userConfig?: string };
-  recovery?: { snapshotManifest?: string; cacheManifest?: string; sidecarAfterAdd?: string };
+  recovery?: { snapshotManifest?: string; cacheManifest?: string; sidecarAfterAdd?: string;
+    configBeforeAdd?: string; configAfterAdd?: string; success?: boolean };
+  transport?: { executable: string; mode: string; sentinel: string; advanceAfterMarketplace?: number;
+    timedOutMutation?: boolean };
   unsupportedLayer?: { location: "system" | "cwd" | "ancestor"; text: string };
 }
 
@@ -64,7 +70,17 @@ function productionFixture(source: RawHomeSource, drift: boolean, orphan: boolea
     const cachePath = join(codexHome, "plugins", "cache", "semctx-stable", "semctx-control", "local");
     const dirs = new Set(), files = new Map(), identities = new Map();
     let identity = 1, phase = 0, systemPhase = 0, rawHits = 0, nextDescriptor = 100;
-    const nativeCalls = [], descriptors = new Map();
+    const nativeCalls = [], nativeOptions = [], descriptors = new Map();
+    const originalSpawnSync = Bun.spawnSync, originalNow = Date.now;
+    let nativeClockAdvance = 0;
+    Date.now = () => originalNow() + nativeClockAdvance;
+    const runOwnedHost = (argv, options) => originalSpawnSync(
+      [jsonFixture.transport.executable, ...argv.slice(1)], {
+        ...options, cwd: dirname(jsonFixture.transport.executable),
+        env: { ...(options.env ?? process.env), SEMCTX_NATIVE_MODE: jsonFixture.transport.mode,
+          SEMCTX_NATIVE_SENTINEL: jsonFixture.transport.sentinel,
+          SEMCTX_NATIVE_SNAPSHOT: join(codexHome, ".tmp", "marketplaces", "semctx-stable", "plugins", "semctx-control") },
+      });
     const addDirectory = (path) => {
       let current = resolve(path);
       for (;;) {
@@ -121,10 +137,13 @@ function productionFixture(source: RawHomeSource, drift: boolean, orphan: boolea
         }
       }
       if (jsonFixture.recovery !== undefined) {
+        if (jsonFixture.artifacts?.unregistered) addFile(join(marketplace, ".codex-marketplace-install.json"),
+          JSON.stringify({ source_type: "git", source: "hoklims/semctx", ref_name: "stable", sparse_paths: [], revision: "1".repeat(40) }));
         addFile(join(codexHome, "config.toml"),
-          "[marketplaces.semctx-stable]\\nsource_type = 'git'\\nsource = 'hoklims/semctx'\\nref = 'stable'\\n"
-          + "[plugins.'semctx-control@semctx-stable']\\nenabled = true\\n");
-        addFile(join(codexHome, "plugins", "cache", "semctx-stable", "semctx-control", "0.3.6", ".codex-plugin", "plugin.json"),
+          jsonFixture.recovery.configBeforeAdd ?? (jsonFixture.artifacts?.unregistered ? ""
+            : "[marketplaces.semctx-stable]\\nsource_type = 'git'\\nsource = 'hoklims/semctx'\\nref = 'stable'\\n"
+              + "[plugins.'semctx-control@semctx-stable']\\nenabled = true\\n"));
+        if (!jsonFixture.artifacts?.unregistered) addFile(join(codexHome, "plugins", "cache", "semctx-stable", "semctx-control", "0.3.6", ".codex-plugin", "plugin.json"),
           JSON.stringify({ name: "semctx-control", version: "0.3.6" }));
         addFile(join(marketplace, "plugins", "semctx-control", ".codex-plugin", "plugin.json"),
           jsonFixture.recovery.snapshotManifest ?? JSON.stringify({ name: "semctx-control", version: "0.3.7" }));
@@ -215,7 +234,7 @@ function productionFixture(source: RawHomeSource, drift: boolean, orphan: boolea
     process.env.TMP = process.env.TEMP;
     process.env.TMPDIR = process.env.TEMP;
     // macOS managed-preference presence is also synthetic; no native process is launched.
-    Bun.spawnSync = (argv) => {
+    Bun.spawnSync = (argv, options = {}) => {
       if (argv[0] === "/usr/bin/osascript") {
         nativeCalls.push("managed-preferences");
         return { exitCode: 0, stdout: Buffer.from("absent"), stderr: Buffer.alloc(0) };
@@ -237,11 +256,22 @@ function productionFixture(source: RawHomeSource, drift: boolean, orphan: boolea
       }
       if (caller === "install" && jsonFixture !== null && argv[0] === "codex") {
         nativeCalls.push("codex-attempt:" + argv.join(" "));
+        nativeOptions.push({ command: argv, timeout: options.timeout ?? null, maxBuffer: options.maxBuffer ?? null });
         if (jsonFixture.recovery !== undefined) {
           if (argv[1] === "plugin" && argv[2] === "marketplace") {
+            if (jsonFixture.transport?.timedOutMutation) return {
+              exitCode: 0, stdout: Buffer.from("{}"), stderr: Buffer.alloc(0), exitedDueToTimeout: true,
+            };
+            if (jsonFixture.transport !== undefined) {
+              const result = runOwnedHost(argv, options);
+              nativeClockAdvance += jsonFixture.transport.advanceAfterMarketplace ?? 0;
+              return result;
+            }
             return { exitCode: 0, stdout: Buffer.from("{}"), stderr: Buffer.alloc(0) };
           }
           if (argv[1] === "plugin" && argv[2] === "add") {
+            if (jsonFixture.recovery.configAfterAdd !== undefined) addFile(
+              join(codexHome, "config.toml"), jsonFixture.recovery.configAfterAdd);
             if (jsonFixture.recovery.sidecarAfterAdd !== undefined) addFile(
               join(codexHome, ".tmp", "marketplaces", "semctx-stable", ".codex-marketplace-install.json"),
               jsonFixture.recovery.sidecarAfterAdd);
@@ -251,9 +281,12 @@ function productionFixture(source: RawHomeSource, drift: boolean, orphan: boolea
             for (const bundle of ["semctx-index-worker.js", "semctx-mcp.js", "semctx-shared.js", "semctx.js"]) {
               addFile(join(versioned, "dist", bundle), "same bundle: " + bundle);
             }
+            if (jsonFixture.transport !== undefined) return runOwnedHost(argv, options);
+            if (jsonFixture.recovery.success) return { exitCode: 0, stdout: Buffer.from("{}"), stderr: Buffer.alloc(0) };
             return { exitCode: 1, stdout: Buffer.alloc(0),
               stderr: Buffer.from("failed to back up plugin cache entry: locked (os error 32)") };
           }
+          if (argv[1] === "plugin" && argv[2] === "list" && jsonFixture.transport !== undefined) return runOwnedHost(argv, options);
           if (argv[1] === "plugin" && argv[2] === "list") return {
             exitCode: 0, stderr: Buffer.alloc(0), stdout: Buffer.from(JSON.stringify({ installed: [{
               pluginId: "semctx-control@semctx-stable", installed: true, enabled: true, version: "0.3.7",
@@ -298,7 +331,7 @@ function productionFixture(source: RawHomeSource, drift: boolean, orphan: boolea
           commit: null, source: null, bundles: null, reasons: [] }),
       },
     );
-    process.stdout.write(JSON.stringify({ report, rawHits, phase, cachePath, nativeCalls }));
+    process.stdout.write(JSON.stringify({ report, rawHits, phase, cachePath, nativeCalls, nativeOptions }));
   `;
   const child = Bun.spawnSync([process.execPath, "-e", program], { stdout: "pipe", stderr: "pipe" });
   expect(new TextDecoder().decode(child.stderr)).toBe("");
@@ -717,6 +750,155 @@ describe("default installer Windows cache-lock payload convergence", () => {
     expect(observed.report.ok).toBe(true);
     expect(observed.report.hosts.codex.cleanupDeferred).toBe(true);
     expect(observed.nativeCalls).toContain("cleanup-scheduled");
+  });
+});
+
+describe("default installer preserves the admitted marketplace tuple after apply", () => {
+  const marketplace = '{"name":"semctx-stable","plugins":[{"name":"semctx-control",'
+    + '"source":{"source":"local","path":"./plugins/semctx-control"}}]}';
+  const tuple = (source = "hoklims/semctx", ref = "stable", sparsePaths: string[] = []) => ({ source, ref, sparsePaths });
+  const config = (identity: ReturnType<typeof tuple>) => "[marketplaces.semctx-stable]\nsource_type = 'git'\n"
+    + `source = ${JSON.stringify(identity.source)}\nref = ${JSON.stringify(identity.ref)}\n`
+    + `sparse_paths = ${JSON.stringify(identity.sparsePaths)}\n[plugins.'semctx-control@semctx-stable']\nenabled = true\n`;
+  const sidecar = (identity: ReturnType<typeof tuple>) => JSON.stringify({ source_type: "git",
+    source: identity.source, ref_name: identity.ref, sparse_paths: identity.sparsePaths, revision: "1".repeat(40) });
+  const apply = (before: ReturnType<typeof tuple> | null, after: ReturnType<typeof tuple>, success: boolean) =>
+    productionFixture("CODEX_HOME", false, false, "absent", "install", "safe", {
+      marketplace, dryRun: false, ...(before === null ? { artifacts: { unregistered: true } } : {}),
+      recovery: { configBeforeAdd: before === null ? "" : config(before), configAfterAdd: config(after),
+        sidecarAfterAdd: sidecar(after), success },
+    }) as InstallObservation;
+
+  for (const success of [true, false]) {
+    for (const [name, before, after] of [
+      ["coherent foreign source", tuple(), tuple("someone/else")],
+      ["coherent replaced ref", tuple(), tuple("hoklims/semctx", "other")],
+      ["coherent reordered sparse vector", tuple("hoklims/semctx", "private", ["plugins", "./skills", "plugins"]),
+        tuple("hoklims/semctx", "private", ["plugins", "plugins", "./skills"])],
+      ["coherent deduplicated sparse vector", tuple("hoklims/semctx", "private", ["plugins", "plugins"]),
+        tuple("hoklims/semctx", "private", ["plugins"])],
+      ["fresh registration changed from the public plan", null, tuple("someone/else")],
+    ] as const) {
+      test.skipIf(!success && process.platform !== "win32")(`${name} refuses ${success ? "ordinary success" : "cache-lock recovery"} before cleanup`, () => {
+        const observed = apply(before, after, success);
+        expect(observed.nativeCalls).toContain("codex-attempt:codex plugin add semctx-control@semctx-stable --json");
+        expect(observed.report.ok).toBe(false);
+        expect(observed.report.hosts.codex.status).toBe("failed");
+        expect(observed.report.hosts.codex.error).toContain("marketplace identity");
+        expect(observed.nativeCalls).not.toContain("cleanup-scheduled");
+        expect(observed.report.hosts.codex.cleanupDeferred).not.toBe(true);
+      });
+    }
+    test.skipIf(!success && process.platform !== "win32")(`matching raw source/ref/ordered duplicate vector retains ${success ? "ordinary success" : "cache-lock recovery"}`, () => {
+      const admitted = tuple("https://github.com/hoklims/semctx.git", "private", ["plugins", "plugins", "./skills"]);
+      const observed = apply(admitted, admitted, success);
+      expect(observed.report.ok).toBe(true);
+      expect(observed.report.hosts.codex.status).toBe("updated");
+      expect(observed.nativeCalls.includes("cleanup-scheduled")).toBe(!success);
+    });
+  }
+  test("a fresh matching public tuple remains an installed registration", () => {
+    const observed = apply(null, tuple("https://github.com/hoklims/semctx.git"), true);
+    expect(observed.report.ok).toBe(true);
+    expect(observed.report.hosts.codex.status).toBe("installed");
+    expect(observed.nativeCalls).not.toContain("cleanup-scheduled");
+  });
+});
+
+describe("default installer bounds actual native host executables", () => {
+  let directory: string, executable: string;
+  beforeAll(() => {
+    directory = mkdtempSync(join(tmpdir(), "semctx-install-native-budget-"));
+    const script = join(directory, "host.js");
+    writeFileSync(script, `
+      const fs = require("node:fs"), argv = process.argv.slice(2);
+      const mode = process.env.SEMCTX_NATIVE_MODE;
+      const mutation = argv[1] === "marketplace", readback = argv[1] === "list";
+      const finish = () => {
+        if (readback) process.stdout.write(JSON.stringify({ installed: [{
+          pluginId: "semctx-control@semctx-stable", installed: true, enabled: true, version: "0.3.7",
+          source: { path: process.env.SEMCTX_NATIVE_SNAPSHOT } }] }));
+        else process.stdout.write("{}");
+        process.exit(0);
+      };
+      if (mutation && mode.startsWith("flood")) {
+        const chunk = Buffer.alloc(1024 * 1024, 0x7a);
+        const streams = mode === "flood-both" ? [1, 2] : [mode === "flood-stdout" ? 1 : 2];
+        for (const stream of streams) for (let index = 0; index < 3; index++) fs.writeSync(stream, chunk);
+        setTimeout(() => { fs.writeFileSync(process.env.SEMCTX_NATIVE_SENTINEL, "survived"); finish(); }, 2500);
+      } else if (readback && mode === "hang-readback") setTimeout(finish, 10000);
+      else if (mutation && mode === "slow-mutation") setTimeout(finish, 6000);
+      else if (mutation && mode === "unrelated-error") { process.stderr.write("owned host failure"); process.exit(7); }
+      else finish();
+    `);
+    executable = join(directory, process.platform === "win32" ? "codex.exe" : "codex");
+    if (process.platform === "win32") {
+      const built = Bun.spawnSync([process.execPath, "build", "--compile", script, "--outfile", executable], {
+        stdout: "pipe", stderr: "pipe", timeout: 30000, maxBuffer: 1024 * 1024,
+      });
+      expect(new TextDecoder().decode(built.stderr)).toBe("");
+      expect(built.exitCode).toBe(0);
+    } else {
+      writeFileSync(executable, `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`);
+      chmodSync(executable, 0o755);
+    }
+  });
+  afterAll(() => { if (directory !== undefined) rmSync(directory, { recursive: true, force: true }); });
+  const run = (mode: string, extra: Partial<NonNullable<ProductionJsonFixture["transport"]>> = {}) => {
+    const sentinel = join(directory, `survived-${mode}`);
+    const observed = productionFixture("CODEX_HOME", false, false, "absent", "install", "safe", {
+      marketplace: '{"name":"semctx-stable","plugins":[{"name":"semctx-control",'
+        + '"source":{"source":"local","path":"./plugins/semctx-control"}}]}',
+      dryRun: false, recovery: { success: true }, transport: { executable, mode, sentinel, ...extra },
+    }) as InstallObservation;
+    return { ...observed, sentinel };
+  };
+  for (const mode of ["flood-stdout", "flood-stderr", "flood-both"] as const) {
+    test(`${mode} is refused during the production mutation before add or cleanup`, () => {
+      const observed = run(mode);
+      expect(observed.report.ok).toBe(false);
+      expect(observed.report.hosts.codex.error).toContain("output exceeded");
+      expect(observed.nativeCalls.filter((call) => call.startsWith("codex-attempt:"))).toHaveLength(1);
+      expect(existsSync(observed.sentinel)).toBe(false);
+      expect(observed.nativeCalls).not.toContain("cleanup-scheduled");
+    });
+  }
+  test("a readback deadline refuses a successful mutation as unverified", () => {
+    const observed = run("hang-readback");
+    expect(observed.report.ok).toBe(false);
+    expect(observed.report.hosts.codex.error).toContain("time budget");
+    expect(observed.report.hosts.codex.status).toBe("failed");
+    expect(observed.nativeCalls).not.toContain("cleanup-scheduled");
+  });
+  test("a mutation beyond the query deadline retains its own finite native budget", () => {
+    const observed = run("slow-mutation");
+    expect(observed.report.ok).toBe(true);
+    expect(observed.nativeOptions.map(({ timeout, maxBuffer }) => [timeout, maxBuffer])).toEqual([
+      [120000, 2 * 1024 * 1024], [120000, 2 * 1024 * 1024], [5000, 2 * 1024 * 1024],
+    ]);
+  });
+  test("an exhausted whole-operation deadline refuses before another native mutation", () => {
+    const observed = run("healthy", { advanceAfterMarketplace: 240001 });
+    expect(observed.report.ok).toBe(false);
+    expect(observed.report.hosts.codex.error).toContain("time budget");
+    expect(observed.nativeCalls.filter((call) => call.startsWith("codex-attempt:"))).toHaveLength(1);
+    expect(observed.nativeCalls).not.toContain("cleanup-scheduled");
+  });
+  test("a timeout flag refuses even a zero-exit mutation without cache-lock recovery", () => {
+    const observed = run("healthy", { timedOutMutation: true });
+    expect(observed.report.ok).toBe(false);
+    expect(observed.report.hosts.codex.error).toContain("time budget");
+    expect(observed.nativeCalls.filter((call) => call.startsWith("codex-attempt:"))).toHaveLength(1);
+    expect(observed.nativeCalls).not.toContain("cleanup-scheduled");
+  });
+  test("a small healthy host retains ordinary success", () => {
+    expect(run("healthy").report.ok).toBe(true);
+  });
+  test("an unrelated host failure remains the original command error", () => {
+    const observed = run("unrelated-error");
+    expect(observed.report.ok).toBe(false);
+    expect(observed.report.hosts.codex.error).toContain("owned host failure");
+    expect(observed.nativeCalls.filter((call) => call.startsWith("codex-attempt:"))).toHaveLength(1);
   });
 });
 

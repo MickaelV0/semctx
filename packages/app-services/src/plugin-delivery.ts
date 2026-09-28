@@ -2191,7 +2191,7 @@ function isCodexGitSource(source: string): boolean {
       || /^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(source));
 }
 
-interface CodexMarketplaceIdentity {
+export interface CodexMarketplaceIdentity {
   sourceType: "git" | "local";
   source: string;
   ref: string | null;
@@ -2199,7 +2199,7 @@ interface CodexMarketplaceIdentity {
 }
 
 /** One native identity projection shared by configuration, sidecars and their consumers. */
-function codexMarketplaceIdentity(
+export function codexMarketplaceIdentity(
   sourceType: unknown, source: unknown, ref: unknown, sparsePaths: unknown,
 ): CodexMarketplaceIdentity | null {
   if ((sourceType !== "git" && sourceType !== "local")
@@ -2212,7 +2212,7 @@ function codexMarketplaceIdentity(
   return { sourceType, source, ref: typeof ref === "string" ? ref : null, sparsePaths: [...sparsePaths] };
 }
 
-function sameCodexMarketplaceIdentity(left: CodexMarketplaceIdentity, right: CodexMarketplaceIdentity): boolean {
+export function sameCodexMarketplaceIdentity(left: CodexMarketplaceIdentity, right: CodexMarketplaceIdentity): boolean {
   // Native InstalledMarketplaceMetadata derives PartialEq: Vec order and duplicates both matter.
   return left.sourceType === right.sourceType && left.source === right.source && left.ref === right.ref
     && left.sparsePaths.length === right.sparsePaths.length
