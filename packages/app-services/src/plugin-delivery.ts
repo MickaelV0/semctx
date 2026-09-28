@@ -2240,7 +2240,79 @@ export function readCodexManagedPreferences(domain = "com.openai.codex"): "absen
   return status === "absent" || status === "present" ? status : "unknown";
 }
 
-function defaultCodexSystemFiles(codexHome: string, observations: string[]): string[] | null {
+const CODEX_WINDOWS_PROGRAM_DATA_SCRIPT = "$ErrorActionPreference = 'Stop'; "
+  + "[Console]::Write([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("
+  + "[Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData,"
+  + "[Environment+SpecialFolderOption]::None))))";
+
+function codexWindowsQueryTemporaryRoot(protectedRoots: readonly string[]): {
+  candidate: string; path: string; traversal: RawTraversalEntry[];
+  profileCandidate: string; profilePath: string; profileTraversal: RawTraversalEntry[];
+} | null {
+  const roots = [...protectedRoots];
+  for (const host of PLUGIN_DELIVERY_HOSTS) {
+    const home = defaultResolveHostExclusionHome(host);
+    if (home === null) return null;
+    roots.push(home);
+  }
+  let profileCandidate = process.env["USERPROFILE"];
+  if (profileCandidate === undefined || profileCandidate.length === 0) {
+    try { profileCandidate = homedir(); } catch { return null; }
+  }
+  if (!hasLocalFilesystemShape(profileCandidate)
+    || roots.some((root) => isWithinTrustedRoot(profileCandidate, root))) return null;
+  const profileTraversal = captureRawTraversal(profileCandidate, false, "directory");
+  if (profileTraversal === null || profileTraversal.at(-1)?.exists !== true) return null;
+  let profilePath: string;
+  try { profilePath = realpathSync.native(resolve(profileCandidate)); } catch { return null; }
+  if (roots.some((root) => isWithinTrustedRoot(profilePath, root))) return null;
+  const candidates: string[] = [];
+  try { candidates.push(tmpdir()); } catch { /* No caller temporary location is usable. */ }
+  const windows = process.env["SystemRoot"];
+  if (windows !== undefined && hasLocalFilesystemShape(windows)) {
+    const separator = windows.endsWith("/") || windows.endsWith("\\") ? "" : sep;
+    candidates.push(`${windows}${separator}Temp`);
+  }
+  for (const candidate of candidates) {
+    if (!hasLocalFilesystemShape(candidate) || roots.some((root) => isWithinTrustedRoot(candidate, root))) continue;
+    const traversal = captureRawTraversal(candidate, false, "directory");
+    if (traversal === null || traversal.at(-1)?.exists !== true) continue;
+    try {
+      const path = realpathSync.native(resolve(candidate));
+      if (roots.some((root) => isWithinTrustedRoot(path, root))) continue;
+      return { candidate, path, traversal, profileCandidate, profilePath, profileTraversal };
+    } catch { /* An unresolved physical temporary directory cannot host the OS query. */ }
+  }
+  return null;
+}
+
+/** Read the OS known folder, independently of the mutable ProgramData environment variable. */
+export function resolveCodexWindowsProgramData(protectedRoots: readonly string[] = [process.cwd()]): string | null {
+  if (process.platform !== "win32") return null;
+  // PowerShell startup can create absent TEMP and USERPROFILE directories even with -NoProfile.
+  // Give it only existing physical locations outside the project and protected host trees.
+  const temporary = codexWindowsQueryTemporaryRoot(protectedRoots);
+  if (temporary === null) return null;
+  // The precompiled CLR method calls SHGetFolderPath, a SHGetKnownFolderPath wrapper. None uses
+  // flags 0 and verifies existence without creating a directory. An unavailable root stays unknown.
+  const result = runPluginDeliveryQuery(
+    ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", CODEX_WINDOWS_PROGRAM_DATA_SCRIPT],
+    process.cwd(),
+    { timeoutMs: PLUGIN_DELIVERY_QUERY_TIMEOUT_MS, maxBytes: 16 * 1024,
+      env: { TEMP: temporary.path, TMP: temporary.path, TMPDIR: temporary.path,
+        USERPROFILE: temporary.profilePath, HOME: temporary.profilePath } },
+  );
+  if (result.code !== 0 || boundedFailure(result) !== null || result.err.length > 0
+    || !/^[A-Za-z0-9+/]+={0,2}$/.test(result.out)
+    || !sameRawTraversal(temporary.candidate, false, "directory", temporary.traversal)
+    || !sameRawTraversal(temporary.profileCandidate, false, "directory", temporary.profileTraversal)) return null;
+  const bytes = Buffer.from(result.out, "base64");
+  if (bytes.toString("base64") !== result.out) return null;
+  const path = decodeCodexUtf8(bytes);
+  return path !== null && hasLocalFilesystemShape(path) ? path : null;
+}
+
+function defaultCodexSystemFiles(codexHome: string, observations: string[], repositoryRoot: string): string[] | null {
   if (process.platform !== "win32") {
     let systemRoot = "/etc";
     if (process.platform === "darwin") {
@@ -2258,8 +2330,12 @@ function defaultCodexSystemFiles(codexHome: string, observations: string[]): str
     }
     return ["config.toml", "requirements.toml", "managed_config.toml"].map((name) => join(systemRoot, "codex", name));
   }
-  const programData = process.env["ProgramData"] ?? process.env["PROGRAMDATA"];
-  if (programData === undefined || !hasLocalFilesystemShape(programData)) return null;
+  const programData = resolveCodexWindowsProgramData([repositoryRoot, codexHome]);
+  if (programData === null) return null;
+  const traversal = captureRawTraversal(programData, false, "directory");
+  if (traversal === null || traversal.at(-1)?.exists !== true) return null;
+  // Retain the raw known-folder lineage even when joining its policy filenames cancels components.
+  observations.push(JSON.stringify({ windowsProgramData: programData, traversal }));
   return [
     join(programData, "OpenAI", "Codex", "config.toml"),
     join(programData, "OpenAI", "Codex", "requirements.toml"),
@@ -2331,7 +2407,7 @@ function codexAdditionalLayersAbsent(
   const managed = (boundaries.managedPreferences ?? readCodexManagedPreferences)();
   observations.push(`managed:${managed}`);
   if (managed !== "absent") return false;
-  const systemFiles = boundaries.systemFiles ?? defaultCodexSystemFiles(codexHome, observations);
+  const systemFiles = boundaries.systemFiles ?? defaultCodexSystemFiles(codexHome, observations, root);
   if (systemFiles === null) return false;
   for (const file of systemFiles) {
     if (!hasLocalFilesystemShape(file)) return false;
