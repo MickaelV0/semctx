@@ -550,16 +550,48 @@ describe("production Codex admitted cache version and native build metadata", ()
     }) as ProductionObservation;
 
   for (const before of [true, false]) {
-    test(`build-metadata cache tie refuses inventory when peer is inserted ${before ? "before" : "after"}`, () => {
+    test(`native build-metadata order selects the higher peer inserted ${before ? "before" : "after"}`, () => {
       const observed = status({
         matchingBundles: true,
         cachePeers: [{ version: "0.3.7+build.2", before, bundlePrefix: "different bundle: " }],
       });
-      expect(observed.report.hosts.codex.marketplace.configured).toBeNull();
-      expect(observed.report.hosts.codex.reasons).toContain("HOST_QUERY_FAILED");
-      expect(observed.report.hosts.codex.delivery).toBe("UNKNOWN");
+      expect(observed.report.hosts.codex.installed.version).toBe("0.3.7+build.2");
+      expect(observed.report.hosts.codex.installed.contentMatchesSnapshot).toBe(false);
     });
   }
+  for (const reverse of [false, true]) {
+    test(`arbitrary-length numeric prerelease order follows digit length (${reverse ? "reverse" : "forward"})`, () => {
+      const peers = [
+        { version: "1.0.0-99999999999999999999", before: true, bundlePrefix: "lower: " },
+        { version: "1.0.0-100000000000000000000", before: true, bundlePrefix: "higher: " },
+      ];
+      const observed = status({ cachePeers: reverse ? peers.reverse() : peers });
+      expect(observed.report.hosts.codex.installed.version).toBe("1.0.0-100000000000000000000");
+      expect(observed.report.hosts.codex.installed.contentMatchesSnapshot).toBe(false);
+    });
+    test(`ordinary numeric prerelease control selects 100 over 99 (${reverse ? "reverse" : "forward"})`, () => {
+      const peers = [
+        { version: "1.0.0-99", before: true, bundlePrefix: "lower: " },
+        { version: "1.0.0-100", before: true, bundlePrefix: "higher: " },
+      ];
+      const observed = status({ cachePeers: reverse ? peers.reverse() : peers });
+      expect(observed.report.hosts.codex.installed.version).toBe("1.0.0-100");
+    });
+  }
+  test("build metadata uses native numeric leading-zero ordering", () => {
+    const observed = status({ cachePeers: [
+      { version: "0.3.7+0", before: true, bundlePrefix: "zero: " },
+      { version: "0.3.7+00", before: false, bundlePrefix: "double-zero: " },
+    ] });
+    expect(observed.report.hosts.codex.installed.version).toBe("0.3.7+00");
+  });
+  test("build metadata orders nonnumeric identifiers above numeric identifiers", () => {
+    const observed = status({ cachePeers: [
+      { version: "0.3.7+9", before: false, bundlePrefix: "numeric: " },
+      { version: "0.3.7+alpha", before: true, bundlePrefix: "alpha: " },
+    ] });
+    expect(observed.report.hosts.codex.installed.version).toBe("0.3.7+alpha");
+  });
   test("cache numeric core components must fit native Rust u64 parsing", () => {
     const observed = status({
       cachePeers: [{ version: "18446744073709551616.0.0", before: false, bundlePrefix: "overflow: " }],

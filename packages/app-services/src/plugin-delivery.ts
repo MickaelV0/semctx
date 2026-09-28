@@ -602,6 +602,88 @@ function codexVersionIdentity(value: unknown): string | null {
     && BigInt(component) <= NATIVE_SEMVER_MAX_COMPONENT) ? value : null;
 }
 
+interface NativeCodexVersion {
+  core: readonly [bigint, bigint, bigint];
+  prerelease: string;
+  build: string;
+}
+
+function parseNativeCodexVersion(value: string): NativeCodexVersion | null {
+  if (codexVersionIdentity(value) === null) return null;
+  const buildSeparator = value.indexOf("+");
+  const withoutBuild = buildSeparator === -1 ? value : value.slice(0, buildSeparator);
+  const prereleaseSeparator = withoutBuild.indexOf("-");
+  const core = (prereleaseSeparator === -1 ? withoutBuild : withoutBuild.slice(0, prereleaseSeparator))
+    .split(".");
+  if (core.length !== 3) return null;
+  return {
+    core: [BigInt(core[0] ?? ""), BigInt(core[1] ?? ""), BigInt(core[2] ?? "")],
+    prerelease: prereleaseSeparator === -1 ? "" : withoutBuild.slice(prereleaseSeparator + 1),
+    build: buildSeparator === -1 ? "" : value.slice(buildSeparator + 1),
+  };
+}
+
+function compareScalar(left: bigint | number | string, right: bigint | number | string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function compareNativePrerelease(left: string, right: string): number {
+  if (left === right) return 0;
+  if (left === "") return 1;
+  if (right === "") return -1;
+  const leftParts = left.split(".");
+  const rightParts = right.split(".");
+  for (let index = 0; index < Math.min(leftParts.length, rightParts.length); index += 1) {
+    const leftPart = leftParts[index] ?? "";
+    const rightPart = rightParts[index] ?? "";
+    const leftNumeric = /^\d+$/.test(leftPart);
+    const rightNumeric = /^\d+$/.test(rightPart);
+    const comparison = leftNumeric && rightNumeric
+      ? compareScalar(leftPart.length, rightPart.length) || compareScalar(leftPart, rightPart)
+      : leftNumeric ? -1 : rightNumeric ? 1 : compareScalar(leftPart, rightPart);
+    if (comparison !== 0) return comparison;
+  }
+  return compareScalar(leftParts.length, rightParts.length);
+}
+
+function compareNativeBuild(left: string, right: string): number {
+  if (left === right) return 0;
+  if (left === "") return -1;
+  if (right === "") return 1;
+  const leftParts = left.split(".");
+  const rightParts = right.split(".");
+  for (let index = 0; index < Math.min(leftParts.length, rightParts.length); index += 1) {
+    const leftPart = leftParts[index] ?? "";
+    const rightPart = rightParts[index] ?? "";
+    const leftNumeric = /^\d+$/.test(leftPart);
+    const rightNumeric = /^\d+$/.test(rightPart);
+    let comparison: number;
+    if (leftNumeric && rightNumeric) {
+      const leftValue = leftPart.replace(/^0+/, "");
+      const rightValue = rightPart.replace(/^0+/, "");
+      comparison = compareScalar(leftValue.length, rightValue.length)
+        || compareScalar(leftValue, rightValue)
+        || compareScalar(leftPart.length, rightPart.length);
+    } else {
+      comparison = leftNumeric ? -1 : rightNumeric ? 1 : compareScalar(leftPart, rightPart);
+    }
+    if (comparison !== 0) return comparison;
+  }
+  return compareScalar(leftParts.length, rightParts.length);
+}
+
+function compareNativeCodexVersions(left: string, right: string): number {
+  const leftVersion = parseNativeCodexVersion(left);
+  const rightVersion = parseNativeCodexVersion(right);
+  if (leftVersion === null || rightVersion === null) return compareScalar(left, right);
+  for (let index = 0; index < leftVersion.core.length; index += 1) {
+    const comparison = compareScalar(leftVersion.core[index] ?? 0n, rightVersion.core[index] ?? 0n);
+    if (comparison !== 0) return comparison;
+  }
+  return compareNativePrerelease(leftVersion.prerelease, rightVersion.prerelease)
+    || compareNativeBuild(leftVersion.build, rightVersion.build);
+}
+
 /** A Codex plugin manifest is authoritative only for the expected plugin and one raw valid version. */
 export interface CodexPluginManifestIdentity {
   readonly name: string;
@@ -2204,21 +2286,9 @@ function readCodexCachedVersion(
   if (versions.length === 0) return null;
   const local = versions.find((entry) => entry.directory === "local");
   if (local !== undefined) return local;
-  // Rust semver's Version::cmp orders build metadata, while Bun's precedence comparator discards it.
-  // Refuse a distinct tie instead of letting filesystem enumeration choose a different cache than Codex.
-  for (let left = 0; left < versions.length; left += 1) {
-    for (let right = left + 1; right < versions.length; right += 1) {
-      const leftVersion = versions[left]?.version;
-      const rightVersion = versions[right]?.version;
-      if (leftVersion !== undefined && rightVersion !== undefined && leftVersion !== rightVersion
-        && VERSION_SEGMENT.test(leftVersion) && VERSION_SEGMENT.test(rightVersion)
-        && Bun.semver.order(leftVersion, rightVersion) === 0) return false;
-    }
-  }
-  versions.sort((left, right) => VERSION_SEGMENT.test(left.version) && VERSION_SEGMENT.test(right.version)
-    ? Bun.semver.order(right.version, left.version)
-    : left.version < right.version ? 1 : left.version > right.version ? -1 : 0);
-  return versions[0] ?? false;
+  // Captured Codex 0.147.0 and 0.155.1 use semver 1.0.27 Version::cmp, including pre and build.
+  versions.sort((left, right) => compareNativeCodexVersions(left.version, right.version));
+  return versions.at(-1) ?? false;
 }
 
 interface CodexMarketplaceManifest {
