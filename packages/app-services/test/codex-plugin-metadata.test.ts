@@ -161,6 +161,48 @@ describe("Codex declarative plugin inventory", () => {
     expect(readCodexPluginMetadataInventory(repo, home, undefined, home)).toBeNull();
   });
 
+  test("plugin-cache JSON rejects duplicate decoded keys and unpaired escaped strings", () => {
+    const { home, repo } = fixture();
+    const boundaries = { systemFiles: [], managedPreferences: () => "absent" as const };
+    const inspect = () => readCodexPluginMetadataInventory(repo, home, undefined, home, boundaries);
+    const cacheRoot = join(home, "plugins", "cache", "semctx-stable", "semctx-control");
+    const manifestRoot = join(cacheRoot, "0.3.7", ".codex-plugin");
+    mkdirSync(manifestRoot, { recursive: true });
+    const manifest = join(manifestRoot, "plugin.json");
+    const valid = '{"name":"semctx-control","version":"0.3.7"}';
+    for (const invalid of [
+      '{"name":"foreign","name":"semctx-control","version":"0.3.7"}',
+      String.raw`{"name":"foreign","\u006eame":"semctx-control","version":"0.3.7"}`,
+      '{"name":"semctx-control","version":"0.3.6","version":"0.3.7"}',
+      String.raw`{"name":"semctx-control","version":"0.3.7","nested":{"text":"\udc00"}}`,
+      '{"name":"semctx-control","version":"0.3.7","nested":{"field":false,"field":true}}',
+    ]) {
+      writeFileSync(manifest, invalid);
+      expect(inspect()).toBeNull();
+    }
+    writeFileSync(manifest, valid);
+    expect(inspect()?.plugins[0]?.["version"]).toBe("0.3.7");
+  });
+
+  test("remote-install JSON rejects duplicate decoded keys and unpaired escaped strings", () => {
+    const { home, repo } = fixture();
+    cache(home, "0.3.7");
+    const boundaries = { systemFiles: [], managedPreferences: () => "absent" as const };
+    const inspect = () => readCodexPluginMetadataInventory(repo, home, undefined, home, boundaries);
+    const cacheRoot = join(home, "plugins", "cache", "semctx-stable", "semctx-control");
+    const marker = join(cacheRoot, ".codex-remote-plugin-install.json");
+    for (const invalid of [
+      '{"schema_version":0,"schema_version":1,"remote_plugin_id":"known"}',
+      String.raw`{"schema_version":1,"remote_plugin_id":"old","remote_plugin_\u0069d":"known"}`,
+      String.raw`{"schema_version":1,"remote_plugin_id":"known","nested":{"text":"\ud800"}}`,
+    ]) {
+      writeFileSync(marker, invalid);
+      expect(inspect()).toBeNull();
+    }
+    writeFileSync(marker, '{"schema_version":1,"remote_plugin_id":"known"}');
+    expect(inspect()?.plugins[0]?.["version"]).toBe("0.3.7");
+  });
+
   test("supported alternate manifests and a local cache retain their native identity", () => {
     const { home, repo } = fixture();
     snapshot(home);

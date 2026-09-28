@@ -15,6 +15,11 @@ interface ProductionObservation {
 interface InstallObservation extends Omit<ProductionObservation, "report"> { report: InstallReport }
 type SystemPolicy = "absent" | "disabled" | "unresolved" | "root-drift" | "raw-root-drift";
 type FallbackFault = "safe" | "drift" | "link" | "regular";
+interface ProductionJsonFixture {
+  marketplace: string;
+  dryRun?: boolean;
+  artifacts?: { sidecar?: string | number[]; snapshotManifest?: string; payloadManifest?: string };
+}
 
 function productionStatus(source: RawHomeSource, drift = false, orphan = false,
   systemPolicy: SystemPolicy = "absent"): ProductionObservation {
@@ -28,6 +33,7 @@ function productionInstall(fault: FallbackFault): InstallObservation {
 /** Module replacements stay in a child process; every filesystem observation is synthetic. */
 function productionFixture(source: RawHomeSource, drift: boolean, orphan: boolean,
   systemPolicy: SystemPolicy, caller = "status", fallbackFault: FallbackFault = "safe",
+  jsonFixture?: ProductionJsonFixture,
 ): ProductionObservation | InstallObservation {
   const moduleUrl = pathToFileURL(join(import.meta.dir, "..", "src", "plugin-delivery.ts")).href;
   const installUrl = pathToFileURL(join(import.meta.dir, "../../../apps/cli/src/commands/install.ts")).href;
@@ -43,6 +49,7 @@ function productionFixture(source: RawHomeSource, drift: boolean, orphan: boolea
     const drift = ${JSON.stringify(drift)}, orphan = ${JSON.stringify(orphan)};
     const systemPolicy = ${JSON.stringify(systemPolicy)}, caller = ${JSON.stringify(caller)};
     const fallbackFault = ${JSON.stringify(fallbackFault)};
+    const jsonFixture = ${JSON.stringify(jsonFixture ?? null)};
     const repo = join(root, "repo"), home = join(root, "profile");
     const osHome = join(root, "os-home"), cancelled = join(root, "cancelled");
     const knownFolder = join(root, "known-program-data"), systemCancelled = join(root, "system-cancelled");
@@ -76,6 +83,25 @@ function productionFixture(source: RawHomeSource, drift: boolean, orphan: boolea
       "[features]\\nplugins = false\\n");
     if (orphan) addFile(join(cachePath, ".codex-plugin", "plugin.json"),
       JSON.stringify({ name: "semctx-control", version: "0.3.7" }));
+    if (jsonFixture !== null) {
+      const marketplace = join(codexHome, ".tmp", "marketplaces", "semctx-stable");
+      addDirectory(join(marketplace, "plugins", "semctx-control"));
+      addFile(join(codexHome, "config.toml"),
+        "[marketplaces.semctx-stable]\\nsource_type = 'git'\\nsource = 'hoklims/semctx'\\nref = 'stable'\\n");
+      addFile(join(marketplace, ".agents", "plugins", "marketplace.json"), jsonFixture.marketplace);
+      if (jsonFixture.artifacts !== undefined) {
+        addFile(join(codexHome, "config.toml"),
+          "[marketplaces.semctx-stable]\\nsource_type = 'git'\\nsource = 'hoklims/semctx'\\nref = 'stable'\\n"
+          + "[plugins.'semctx-control@semctx-stable']\\nenabled = true\\n");
+        const versionedCache = join(codexHome, "plugins", "cache", "semctx-stable", "semctx-control", "0.3.7");
+        addFile(join(versionedCache, ".codex-plugin", "plugin.json"), jsonFixture.artifacts.payloadManifest
+          ?? JSON.stringify({ name: "semctx-control", version: "0.3.7" }));
+        addFile(join(marketplace, "plugins", "semctx-control", ".codex-plugin", "plugin.json"),
+          jsonFixture.artifacts.snapshotManifest ?? JSON.stringify({ name: "semctx-control", version: "0.3.7" }));
+        if (jsonFixture.artifacts.sidecar !== undefined) addFile(join(marketplace, ".codex-marketplace-install.json"),
+          jsonFixture.artifacts.sidecar);
+      }
+    }
     const missing = () => Object.assign(new Error("synthetic absence"), { code: "ENOENT" });
     const stat = (path) => {
       const physical = resolve(String(path));
@@ -158,6 +184,15 @@ function productionFixture(source: RawHomeSource, drift: boolean, orphan: boolea
         nativeCalls.push("git-root");
         return { exitCode: 0, stdout: Buffer.from(repo), stderr: Buffer.alloc(0) };
       }
+      if (jsonFixture?.artifacts !== undefined && argv[0] === "git" && argv.includes("rev-parse")) {
+        nativeCalls.push("git-read");
+        return { exitCode: 0, stdout: Buffer.from(argv.includes("--abbrev-ref") ? "stable" : "1".repeat(40)),
+          stderr: Buffer.alloc(0) };
+      }
+      if (caller === "install" && jsonFixture !== null && argv[0] === "codex") {
+        nativeCalls.push("codex-attempt:" + argv.join(" "));
+        return { exitCode: 9, stdout: Buffer.alloc(0), stderr: Buffer.from("native invocation intercepted") };
+      }
       nativeCalls.push("unexpected:" + argv[0]);
       throw new Error("unexpected native query: " + argv[0]);
     };
@@ -167,12 +202,23 @@ function productionFixture(source: RawHomeSource, drift: boolean, orphan: boolea
     if (caller === "install") {
       const { executeInstall } = await import(${JSON.stringify(installUrl)});
       const { parseArgs } = await import(${JSON.stringify(argsUrl)});
-      report = executeInstall(repo, parseArgs(["install", "--host", "codex", "--dry-run", "--skip-setup"]));
+      report = executeInstall(repo, parseArgs(["install", "--host", "codex", "--skip-setup",
+        ...(jsonFixture?.dryRun === false ? [] : ["--dry-run"])]));
     } else report = pluginDeliveryStatus(
       { repositoryRoot: repo, version: "0.3.7", scope: "codex" },
       {
         findHostExecutable: () => join(root, "bin", "codex"),
+        ...(jsonFixture?.artifacts?.payloadManifest === undefined ? {} : {
+          // Keep inventory fixed to exercise the downstream production payload parser itself.
+          readCodexPluginMetadata: () => ({
+            marketplaces: [{ name: "semctx-stable", root: join(codexHome, ".tmp", "marketplaces", "semctx-stable"),
+              marketplaceSource: { sourceType: "git", source: "hoklims/semctx" }, ref: "stable" }],
+            plugins: [{ pluginId: "semctx-control@semctx-stable", installed: true, enabled: true, version: "0.3.7",
+              cachePath: join(codexHome, "plugins", "cache", "semctx-stable", "semctx-control", "0.3.7") }],
+          }),
+        }),
         readRepositoryChannel: () => ({ commit: null, originIsSemctx: false }),
+        ...(jsonFixture?.artifacts === undefined ? { readMarketplaceSnapshot: () => null } : {}),
         resolvePublicRelease: () => ({ status: "unresolved", authority: "absent", version: null,
           commit: null, source: null, bundles: null, reasons: [] }),
       },
@@ -184,7 +230,9 @@ function productionFixture(source: RawHomeSource, drift: boolean, orphan: boolea
   expect(child.exitCode).toBe(0);
   const result = JSON.parse(new TextDecoder().decode(child.stdout)) as ProductionObservation | InstallObservation;
   expect(result.nativeCalls.every((call) => call === "known-folder"
-    || call === "managed-preferences" || (caller === "install" && call === "git-root"))).toBe(true);
+    || call === "managed-preferences" || (caller === "install" && call === "git-root")
+    || (jsonFixture?.artifacts !== undefined && call === "git-read")
+    || (jsonFixture !== undefined && caller === "install" && call.startsWith("codex-attempt:")))).toBe(true);
   return result;
 }
 
@@ -222,6 +270,111 @@ describe("pluginDeliveryStatus production Codex metadata boundary", () => {
     expect(state.activation).toBeNull();
     expect(state.convergence).toEqual([]);
     expect(state.reasons).toContain("MARKETPLACE_NOT_CONFIGURED");
+  });
+});
+
+describe("production Codex status artifact JSON", () => {
+  const marketplace = '{"name":"semctx-stable","plugins":[{"name":"semctx-control",'
+    + '"source":{"source":"local","path":"./plugins/semctx-control"}}]}';
+  const sidecar = '{"source_type":"git","source":"hoklims/semctx","ref_name":"stable","revision":"'
+    + "1".repeat(40) + '"}';
+  const status = (artifacts: NonNullable<ProductionJsonFixture["artifacts"]>) => {
+    const observed = productionFixture("CODEX_HOME", false, false, "absent", "status", "safe", { marketplace, artifacts });
+    return (observed as ProductionObservation).report;
+  };
+
+  for (const [name, bytes] of [
+    ["duplicate sidecar revision", sidecar.replace('"revision":', '"revision":"foreign","revision":')],
+    ["escaped sidecar duplicate", sidecar.replace('"revision":', String.raw`"revision":"foreign","\u0072evision":`)],
+    ["unpaired sidecar Unicode", sidecar.replace('"ref_name":"stable"', String.raw`"ref_name":"\ud800"`)],
+    ["invalid sidecar syntax", "{"],
+    ["empty present sidecar", ""],
+    ["invalid sidecar UTF-8", [...Buffer.from('{"source_type":"git","source":"hoklims/semctx","ref_name":"'),
+      0xff, ...Buffer.from('","revision":"' + "1".repeat(40) + '"}')]],
+  ] as const) {
+    test(`${name} remains unknown through the effective default status`, () => {
+      const report = status({ sidecar: typeof bytes === "string" ? bytes : [...bytes] });
+      expect(report.hosts.codex.snapshot.version).toBeNull();
+      expect(report.hosts.codex.reasons).toContain("SNAPSHOT_UNREADABLE");
+      expect(report.hosts.codex.delivery).toBe("UNKNOWN");
+      expect(report.publicRelease.authority).toBe("absent");
+    });
+  }
+
+  test("sidecar absence and a valid sidecar preserve version observations without release authority", () => {
+    for (const artifacts of [{}, { sidecar }]) {
+      const report = status(artifacts);
+      expect(report.hosts.codex.snapshot.version).toBe("0.3.7");
+      expect(report.hosts.codex.reasons).not.toContain("SNAPSHOT_UNREADABLE");
+      expect(report.publicRelease.authority).toBe("absent");
+    }
+  });
+
+  const invalidManifest = '{"name":"semctx-control","version":"old","version":"0.3.7"}';
+  test("a duplicate snapshot manifest version is unknown through default snapshot reads", () => {
+    const report = status({ sidecar, snapshotManifest: invalidManifest });
+    expect(report.hosts.codex.snapshot.version).toBeNull();
+    expect(report.hosts.codex.reasons).toContain("SNAPSHOT_VERSION_UNKNOWN");
+    expect(report.hosts.codex.delivery).toBe("UNKNOWN");
+  });
+
+  test("a duplicate payload manifest version is unknown through default payload reads", () => {
+    const report = status({ sidecar, payloadManifest: invalidManifest });
+    expect(report.hosts.codex.installed.version).toBeNull();
+    expect(report.hosts.codex.reasons).toContain("INSTALLED_CACHE_UNREADABLE");
+    expect(report.hosts.codex.delivery).toBe("UNKNOWN");
+  });
+});
+
+describe("production Codex JSON metadata refusal", () => {
+  const invalid = [
+    ["duplicate marketplace identity", '{"name":"foreign","name":"semctx-stable","plugins":[]}'],
+    ["escaped equivalent identity", String.raw`{"name":"foreign","\u006eame":"semctx-stable","plugins":[]}`],
+    ["duplicate plugin identity", '{"name":"semctx-stable","plugins":[{"name":"foreign","name":"semctx-control",'
+      + '"source":{"source":"local","path":"./plugins/semctx-control"}}]}'],
+    ["duplicate nested policy", '{"name":"semctx-stable","plugins":[{"name":"semctx-control",'
+      + '"source":{"source":"local","path":"./plugins/semctx-control"},'
+      + '"policy":{"installation":"NOT_AVAILABLE","installation":"AVAILABLE","products":["CODEX"]}}]}'],
+    ["unpaired escaped high surrogate", String.raw`{"name":"semctx-stable","plugins":[],"interface":{"displayName":"\ud800"}}`],
+    ["unpaired escaped low surrogate", String.raw`{"name":"semctx-stable","plugins":[],"interface":{"displayName":"\udc00"}}`],
+    ["unpaired escaped surrogate key", String.raw`{"name":"semctx-stable","plugins":[],"\ud800":true}`],
+  ] as const;
+
+  for (const [name, marketplace] of invalid) {
+    test(`${name} refuses default status and installer planning/apply before any native invocation`, () => {
+      const status = productionFixture("CODEX_HOME", false, false, "absent", "status", "safe",
+        { marketplace }) as ProductionObservation;
+      const dryRun = productionFixture("CODEX_HOME", false, false, "absent", "install", "safe",
+        { marketplace }) as InstallObservation;
+      const apply = productionFixture("CODEX_HOME", false, false, "absent", "install", "safe",
+        { marketplace, dryRun: false }) as InstallObservation;
+      expect({
+        marketplaceConfigured: status.report.hosts.codex.marketplace.configured,
+        dryRunStatus: dryRun.report.hosts.codex.status,
+        applyStatus: apply.report.hosts.codex.status,
+        nativeAttempts: [...dryRun.nativeCalls, ...apply.nativeCalls].filter((call) => call.startsWith("codex-attempt:")),
+      }).toEqual({ marketplaceConfigured: null, dryRunStatus: "failed", applyStatus: "failed", nativeAttempts: [] });
+      expect(status.report.hosts.codex.reasons).toContain("HOST_QUERY_FAILED");
+      expect(apply.report.hosts.codex.error).toContain("declarative plugin metadata safely");
+    });
+  }
+
+  test("distinct nested scopes, quoted JSON and valid paired/raw Unicode remain admissible", () => {
+    const marketplace = JSON.stringify({
+      name: "semctx-stable", plugins: [], interface: { displayName: "Emoji 😀" },
+      first: { name: "one", items: [{ name: "two" }, { name: "three" }],
+        quoted: '{"name":"foreign","name":"semctx-stable"}', escaped: '\\ud800',
+        punctuation: '\\"{,}:[]', "é": 1, "e\u0301": 2 },
+      second: { name: "four", items: ["name", "name", null, true, -1.2e3] },
+    }).replace('"displayName":"Emoji 😀"', String.raw`"displayName":"Emoji \ud83d\ude00"`);
+    const status = productionFixture("CODEX_HOME", false, false, "absent", "status", "safe",
+      { marketplace }) as ProductionObservation;
+    const install = productionFixture("CODEX_HOME", false, false, "absent", "install", "safe",
+      { marketplace }) as InstallObservation;
+    expect(status.report.hosts.codex.marketplace.configured).toBe(true);
+    expect(install.report.ok).toBe(true);
+    expect(install.report.hosts.codex.status).toBe("planned");
+    expect(install.nativeCalls.some((call) => call.startsWith("codex-attempt:"))).toBe(false);
   });
 });
 
