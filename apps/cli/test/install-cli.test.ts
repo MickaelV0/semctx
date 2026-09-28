@@ -1681,6 +1681,105 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
     });
   }
 
+  const finalCodexMetadata = (
+    plugin: Record<string, unknown> | null = {
+      pluginId: "semctx-control@semctx-stable",
+      installed: true,
+      enabled: true,
+      version: packageJson.version,
+      cacheDirectory: packageJson.version,
+    },
+  ): CodexPluginMetadataInventory => ({
+    marketplaces: [{
+      name: "semctx-stable",
+      marketplaceSource: { sourceType: "git", source: SEMCTX_SOURCE },
+      ref: "stable",
+      sparsePaths: [],
+    }],
+    plugins: plugin === null ? [] : [plugin],
+  });
+
+  for (const [name, final] of [
+    ["disabled plugin", finalCodexMetadata({
+      pluginId: "semctx-control@semctx-stable", installed: true, enabled: false,
+      version: packageJson.version, cacheDirectory: packageJson.version,
+    })],
+    ["higher selected cache", finalCodexMetadata({
+      pluginId: "semctx-control@semctx-stable", installed: true, enabled: true,
+      version: "0.3.8", cacheDirectory: "0.3.8",
+    })],
+    ["missing registration", finalCodexMetadata(null)],
+  ] as const) {
+    test(`final declarative inventory refuses ${name} before repository setup`, () => {
+      const initial = finalCodexMetadata();
+      const runtime = fakeRuntime({
+        codex: true,
+        claude: false,
+        codexMetadata: initial,
+        codexPluginsAfter: codexPluginsAfter({}),
+      });
+      let reads = 0;
+      runtime.readCodexPluginMetadata = () => {
+        reads += 1;
+        return reads < 4 ? initial : final;
+      };
+
+      const report = executeInstall("C:\\work\\project", parseArgs(["install"]), runtime);
+
+      expect(reads).toBeGreaterThanOrEqual(4);
+      expect(report.ok).toBe(false);
+      expect(report.hosts.codex.status).toBe("failed");
+      expect(report.hosts.codex.steps.find((step) => step.action === "verify Semctx Codex plugin")?.status)
+        .toBe("failed");
+      expect(runtime.setupRoots).toEqual([]);
+      expect(runtime.deferredCacheCleanups).toEqual([]);
+    });
+  }
+
+  test("a coherent final declarative inventory permits repository setup", () => {
+    const metadata = finalCodexMetadata();
+    const runtime = fakeRuntime({ codex: true, claude: false, codexMetadata: metadata,
+      codexPluginsAfter: codexPluginsAfter({}) });
+    const report = executeInstall("C:\\work\\project", parseArgs(["install"]), runtime);
+    expect(report.ok).toBe(true);
+    expect(runtime.setupRoots).toEqual(["C:\\work\\project"]);
+  });
+
+  for (const [name, final] of [
+    ["disabled plugin", finalCodexMetadata({
+      pluginId: "semctx-control@semctx-stable", installed: true, enabled: false,
+      version: packageJson.version, cacheDirectory: packageJson.version,
+    })],
+    ["higher selected cache", finalCodexMetadata({
+      pluginId: "semctx-control@semctx-stable", installed: true, enabled: true,
+      version: "0.3.8", cacheDirectory: "0.3.8",
+    })],
+  ] as const) {
+    test(`cache-lock recovery refuses final declarative ${name} before cleanup`, () => {
+      const initial = finalCodexMetadata({
+        pluginId: "semctx-control@semctx-stable", installed: true, enabled: true,
+        version: "0.1.17", cacheDirectory: "0.1.17",
+      });
+      const runtime = installWithLockedAdd({
+        codexMetadata: initial,
+        codexPluginsAfter: codexPluginsAfter({}),
+      });
+      let reads = 0;
+      runtime.readCodexPluginMetadata = () => {
+        reads += 1;
+        return reads < 4 ? initial : final;
+      };
+
+      const report = executeInstall("C:\\work\\project", parseArgs(["install"]), runtime);
+
+      expect(reads).toBeGreaterThanOrEqual(4);
+      expect(report.ok).toBe(false);
+      expect(report.hosts.codex.status).toBe("failed");
+      expect(runtime.deferredCacheCleanups).toEqual([]);
+      expect(runtime.setupRoots).toEqual([]);
+    });
+  }
+
   test("an ordinary inventory query failure keeps the generic remedy, not the host-CLI upgrade message", () => {
     const runtime = fakeRuntime({
       codex: true,

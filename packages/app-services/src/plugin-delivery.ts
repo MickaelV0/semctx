@@ -2548,7 +2548,20 @@ export interface CodexPluginMetadataBoundaries {
   systemFiles?: readonly string[];
   managedPreferences?: () => "absent" | "present" | "unknown";
   resolveOsHome?: () => string | null;
+  windowsQueryFailure?: (reason: CodexWindowsQueryFailureReason) => void;
 }
+
+export type CodexWindowsQueryFailureReason =
+  | "WINDOWS_QUERY_TEMP_ROOT_UNAVAILABLE"
+  | "WINDOWS_QUERY_EXIT_NONZERO"
+  | "WINDOWS_QUERY_TIMEOUT"
+  | "WINDOWS_QUERY_OUTPUT_LIMIT"
+  | "WINDOWS_QUERY_STDERR"
+  | "WINDOWS_QUERY_OUTPUT_SHAPE"
+  | "WINDOWS_QUERY_TEMP_DRIFT"
+  | "WINDOWS_QUERY_PROFILE_DRIFT"
+  | "WINDOWS_QUERY_DECODE"
+  | "WINDOWS_QUERY_PATH_SHAPE";
 
 const CODEX_MAC_MANAGED_PREFERENCES_SCRIPT = String.raw`
 ObjC.import('Foundation');
@@ -2621,12 +2634,19 @@ function codexWindowsQueryTemporaryRoot(protectedRoots: readonly string[]): {
 }
 
 /** Read the OS known folder, independently of the mutable ProgramData environment variable. */
-export function resolveCodexWindowsProgramData(protectedRoots: readonly string[] = [process.cwd()]): string | null {
+export function resolveCodexWindowsProgramData(
+  protectedRoots: readonly string[] = [process.cwd()],
+  onFailure?: (reason: CodexWindowsQueryFailureReason) => void,
+): string | null {
   if (process.platform !== "win32") return null;
+  const fail = (reason: CodexWindowsQueryFailureReason): null => {
+    onFailure?.(reason);
+    return null;
+  };
   // PowerShell startup can create absent TEMP and USERPROFILE directories even with -NoProfile.
   // Give it only existing physical locations outside the project and protected host trees.
   const temporary = codexWindowsQueryTemporaryRoot(protectedRoots);
-  if (temporary === null) return null;
+  if (temporary === null) return fail("WINDOWS_QUERY_TEMP_ROOT_UNAVAILABLE");
   // The precompiled CLR method calls SHGetFolderPath, a SHGetKnownFolderPath wrapper. None uses
   // flags 0 and verifies existence without creating a directory. An unavailable root stays unknown.
   const result = runPluginDeliveryQuery(
@@ -2636,17 +2656,31 @@ export function resolveCodexWindowsProgramData(protectedRoots: readonly string[]
       env: { TEMP: temporary.path, TMP: temporary.path, TMPDIR: temporary.path,
         USERPROFILE: temporary.profilePath, HOME: temporary.profilePath } },
   );
-  if (result.code !== 0 || boundedFailure(result) !== null || result.err.length > 0
-    || !/^[A-Za-z0-9+/]+={0,2}$/.test(result.out)
-    || !sameRawTraversal(temporary.candidate, false, "directory", temporary.traversal)
-    || !sameRawTraversal(temporary.profileCandidate, false, "directory", temporary.profileTraversal)) return null;
+  if (result.timedOut === true) return fail("WINDOWS_QUERY_TIMEOUT");
+  if (result.truncated === true) return fail("WINDOWS_QUERY_OUTPUT_LIMIT");
+  if (result.code !== 0) return fail("WINDOWS_QUERY_EXIT_NONZERO");
+  if (result.err.length > 0) return fail("WINDOWS_QUERY_STDERR");
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(result.out)) return fail("WINDOWS_QUERY_OUTPUT_SHAPE");
+  if (!sameRawTraversal(temporary.candidate, false, "directory", temporary.traversal)) {
+    return fail("WINDOWS_QUERY_TEMP_DRIFT");
+  }
+  if (!sameRawTraversal(temporary.profileCandidate, false, "directory", temporary.profileTraversal)) {
+    return fail("WINDOWS_QUERY_PROFILE_DRIFT");
+  }
   const bytes = Buffer.from(result.out, "base64");
-  if (bytes.toString("base64") !== result.out) return null;
+  if (bytes.toString("base64") !== result.out) return fail("WINDOWS_QUERY_DECODE");
   const path = decodeCodexUtf8(bytes);
-  return path !== null && hasLocalFilesystemShape(path) ? path : null;
+  if (path === null) return fail("WINDOWS_QUERY_DECODE");
+  const traversal = hasLocalFilesystemShape(path) ? captureRawTraversal(path, false, "directory") : null;
+  return traversal !== null && traversal.at(-1)?.exists === true ? path : fail("WINDOWS_QUERY_PATH_SHAPE");
 }
 
-function defaultCodexSystemFiles(codexHome: string, observations: string[], repositoryRoot: string): string[] | null {
+function defaultCodexSystemFiles(
+  codexHome: string,
+  observations: string[],
+  repositoryRoot: string,
+  windowsQueryFailure?: (reason: CodexWindowsQueryFailureReason) => void,
+): string[] | null {
   if (process.platform !== "win32") {
     let systemRoot = "/etc";
     if (process.platform === "darwin") {
@@ -2664,7 +2698,7 @@ function defaultCodexSystemFiles(codexHome: string, observations: string[], repo
     }
     return ["config.toml", "requirements.toml", "managed_config.toml"].map((name) => join(systemRoot, "codex", name));
   }
-  const programData = resolveCodexWindowsProgramData([repositoryRoot, codexHome]);
+  const programData = resolveCodexWindowsProgramData([repositoryRoot, codexHome], windowsQueryFailure);
   if (programData === null) return null;
   const traversal = captureRawTraversal(programData, false, "directory");
   if (traversal === null || traversal.at(-1)?.exists !== true) return null;
@@ -2741,7 +2775,12 @@ function codexAdditionalLayersAbsent(
   const managed = (boundaries.managedPreferences ?? readCodexManagedPreferences)();
   observations.push(`managed:${managed}`);
   if (managed !== "absent") return false;
-  const systemFiles = boundaries.systemFiles ?? defaultCodexSystemFiles(codexHome, observations, root);
+  const systemFiles = boundaries.systemFiles ?? defaultCodexSystemFiles(
+    codexHome,
+    observations,
+    root,
+    boundaries.windowsQueryFailure,
+  );
   if (systemFiles === null) return false;
   for (const file of systemFiles) {
     if (!hasLocalFilesystemShape(file)) return false;

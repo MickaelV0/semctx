@@ -3,7 +3,12 @@ import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join, parse, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { codexPluginManifestIdentity, type PluginDeliveryReportV2 } from "../src/plugin-delivery";
+import {
+  codexPluginManifestIdentity,
+  resolveCodexWindowsProgramData,
+  type CodexWindowsQueryFailureReason,
+  type PluginDeliveryReportV2,
+} from "../src/plugin-delivery";
 import type { InstallReport } from "../../../apps/cli/src/commands/install";
 
 type RawHomeSource = "HOME" | "USERPROFILE" | "CODEX_HOME" | "OS_HOME";
@@ -17,7 +22,9 @@ interface ProductionObservation {
   cacheManifestOpens: number;
 }
 interface InstallObservation extends Omit<ProductionObservation, "report"> { report: InstallReport }
-type SystemPolicy = "absent" | "disabled" | "unresolved" | "root-drift" | "raw-root-drift";
+type SystemPolicy = "absent" | "disabled" | "unresolved" | "root-drift" | "raw-root-drift"
+  | "temp-root" | "query-nonzero" | "query-timeout" | "query-output-limit" | "query-stderr"
+  | "query-output-shape" | "query-temp-drift" | "query-profile-drift" | "query-decode" | "query-path-shape";
 type FallbackFault = "safe" | "drift" | "link" | "regular";
 interface ProductionJsonFixture {
   marketplace: string;
@@ -31,7 +38,8 @@ interface ProductionJsonFixture {
       topLevelFault?: "timeout" | "truncated" } };
   unrelatedCache?: { version: string; declaredVersion?: string; pluginName?: string };
   recovery?: { snapshotManifest?: string; cacheManifest?: string; sidecarAfterAdd?: string;
-    configBeforeAdd?: string; configAfterAdd?: string; success?: boolean };
+    configBeforeAdd?: string; configAfterAdd?: string; success?: boolean;
+    afterNativeList?: "disable" | "higher-cache" };
   transport?: { executable: string; mode: string; sentinel: string; advanceAfterMarketplace?: number;
     timedOutMutation?: boolean };
   unsupportedLayer?: { location: "system" | "cwd" | "ancestor"; text: string };
@@ -75,7 +83,7 @@ function productionFixture(source: RawHomeSource, drift: boolean, orphan: boolea
     const codexHome = source === "OS_HOME" ? join(osHome, ".codex") : home;
     const cachePath = join(codexHome, "plugins", "cache", "semctx-stable", "semctx-control", "local");
     const dirs = new Set(), files = new Map(), identities = new Map();
-    let identity = 1, phase = 0, systemPhase = 0, rawHits = 0, nextDescriptor = 100;
+    let identity = 1, phase = 0, systemPhase = 0, windowsQueryPhase = 0, rawHits = 0, nextDescriptor = 100;
     let cacheManifestOpens = 0;
     const selectedCache = join(codexHome, "plugins", "cache", "semctx-stable", "semctx-control",
       jsonFixture?.artifacts?.localCache ? "local" : "0.3.7");
@@ -213,7 +221,9 @@ function productionFixture(source: RawHomeSource, drift: boolean, orphan: boolea
         dev: 1, ino: identities.get(physical)
           + (physical === cancelled ? phase * 1000 : 0)
           + (((systemPolicy === "root-drift" && physical === knownFolder)
-            || (systemPolicy === "raw-root-drift" && physical === systemCancelled)) ? systemPhase * 1000 : 0),
+            || (systemPolicy === "raw-root-drift" && physical === systemCancelled)) ? systemPhase * 1000 : 0)
+          + (systemPolicy === "query-temp-drift" && physical === join(root, "owned-temp") ? windowsQueryPhase * 1000 : 0)
+          + (systemPolicy === "query-profile-drift" && physical === osHome ? windowsQueryPhase * 1000 : 0),
         mode: dirs.has(physical) ? 16877 : 33188, size: files.get(physical)?.length ?? 0,
         isDirectory: () => dirs.has(physical) && !(physical === cancelled && fallbackFault === "regular"),
         isFile: () => files.has(physical) || (physical === cancelled && fallbackFault === "regular"),
@@ -266,7 +276,10 @@ function productionFixture(source: RawHomeSource, drift: boolean, orphan: boolea
           name: basename(entry), isDirectory: () => true, isFile: () => false, isSymbolicLink: () => false,
         })),
     }));
-    mock.module("node:os", () => ({ ...originalOs, homedir: () => source === "OS_HOME" ? rawHome : osHome }));
+    mock.module("node:os", () => ({ ...originalOs,
+      homedir: () => source === "OS_HOME" ? rawHome : osHome,
+      tmpdir: () => systemPolicy === "temp-root" ? join(root, "missing-temp") : originalOs.tmpdir(),
+    }));
     process.env.CODEX_HOME = source === "CODEX_HOME" ? rawCodexHome : codexHome;
     if (source === "OS_HOME") delete process.env.CODEX_HOME;
     process.env.HOME = source === "HOME" ? rawHome : osHome;
@@ -286,6 +299,20 @@ function productionFixture(source: RawHomeSource, drift: boolean, orphan: boolea
       }
       if (basename(argv[0]).toLowerCase() === "powershell.exe") {
         nativeCalls.push("known-folder");
+        if (systemPolicy === "query-timeout") return { exitCode: 1, stdout: Buffer.alloc(0),
+          stderr: Buffer.from("secret-timeout-detail"), exitedDueToTimeout: true };
+        if (systemPolicy === "query-output-limit") return { exitCode: 1, stdout: Buffer.alloc(0),
+          stderr: Buffer.alloc(0), exitedDueToMaxBuffer: true };
+        if (systemPolicy === "query-nonzero") return { exitCode: 7, stdout: Buffer.alloc(0),
+          stderr: Buffer.from("secret-exit-detail") };
+        if (systemPolicy === "query-stderr") return { exitCode: 0, stdout: Buffer.from("QzpcXFByb2dyYW1EYXRh"),
+          stderr: Buffer.from("secret-stderr-detail") };
+        if (systemPolicy === "query-output-shape") return { exitCode: 0, stdout: Buffer.from("not base64"), stderr: Buffer.alloc(0) };
+        if (systemPolicy === "query-decode") return { exitCode: 0,
+          stdout: Buffer.from(Buffer.from([0xff]).toString("base64")), stderr: Buffer.alloc(0) };
+        if (systemPolicy === "query-path-shape") return { exitCode: 0,
+          stdout: Buffer.from(Buffer.from("relative-path").toString("base64")), stderr: Buffer.alloc(0) };
+        if (systemPolicy === "query-temp-drift" || systemPolicy === "query-profile-drift") windowsQueryPhase = 1;
         const resolved = systemPolicy === "unresolved" ? "" : systemPolicy === "raw-root-drift"
           ? systemCancelled + sep + ".." + sep + "known-program-data" : knownFolder;
         return { exitCode: 0, stdout: Buffer.from(Buffer.from(resolved).toString("base64")), stderr: Buffer.alloc(0) };
@@ -355,12 +382,23 @@ function productionFixture(source: RawHomeSource, drift: boolean, orphan: boolea
               stderr: Buffer.from("failed to back up plugin cache entry: locked (os error 32)") };
           }
           if (argv[1] === "plugin" && argv[2] === "list" && jsonFixture.transport !== undefined) return runOwnedHost(argv, options);
-          if (argv[1] === "plugin" && argv[2] === "list") return {
-            exitCode: 0, stderr: Buffer.alloc(0), stdout: Buffer.from(JSON.stringify({ installed: [{
+          if (argv[1] === "plugin" && argv[2] === "list") {
+            const reply = {
+              exitCode: 0, stderr: Buffer.alloc(0), stdout: Buffer.from(JSON.stringify({ installed: [{
               pluginId: "semctx-control@semctx-stable", installed: true, enabled: true, version: "0.3.7",
               source: { path: join(codexHome, ".tmp", "marketplaces", "semctx-stable", "plugins", "semctx-control") },
             }] })),
-          };
+            };
+            if (jsonFixture.recovery.afterNativeList === "disable") {
+              const config = join(codexHome, "config.toml");
+              addFile(config, files.get(config).toString("utf8").replace("enabled = true", "enabled = false"));
+            } else if (jsonFixture.recovery.afterNativeList === "higher-cache") {
+              const newer = join(codexHome, "plugins", "cache", "semctx-stable", "semctx-control", "0.3.8");
+              addFile(join(newer, ".codex-plugin", "plugin.json"),
+                JSON.stringify({ name: "semctx-control", version: "0.3.8" }));
+            }
+            return reply;
+          }
         }
         return { exitCode: 9, stdout: Buffer.alloc(0), stderr: Buffer.from("native invocation intercepted") };
       }
@@ -1024,6 +1062,29 @@ describe("default installer Windows cache-lock payload convergence", () => {
   });
 });
 
+describe("default installer final declarative plugin verification", () => {
+  const marketplace = '{"name":"semctx-stable","plugins":[{"name":"semctx-control",'
+    + '"source":{"source":"local","path":"./plugins/semctx-control"}}]}';
+  for (const success of [true, false]) {
+    for (const mutation of ["disable", "higher-cache"] as const) {
+      test.skipIf(!success && process.platform !== "win32")(
+        `${mutation} after native list blocks ${success ? "ordinary success" : "cache-lock recovery"}`,
+        () => {
+          const observed = productionFixture("CODEX_HOME", false, false, "absent", "install", "safe", {
+            marketplace,
+            dryRun: false,
+            recovery: { success, afterNativeList: mutation },
+          }) as InstallObservation;
+          expect(observed.report.ok).toBe(false);
+          expect(observed.report.hosts.codex.status).toBe("failed");
+          expect(observed.nativeCalls).not.toContain("cleanup-scheduled");
+          expect(observed.report.hosts.codex.cleanupDeferred).not.toBe(true);
+        },
+      );
+    }
+  }
+});
+
 describe("default installer preserves the admitted marketplace tuple after apply", () => {
   const marketplace = '{"name":"semctx-stable","plugins":[{"name":"semctx-control",'
     + '"source":{"source":"local","path":"./plugins/semctx-control"}}]}';
@@ -1266,4 +1327,31 @@ describe("executeInstall production fallback metadata boundary", () => {
       expect(result.nativeCalls).not.toContain("codex");
     });
   }
+
+  for (const [policy, reason] of [
+    ["temp-root", "WINDOWS_QUERY_TEMP_ROOT_UNAVAILABLE"],
+    ["query-nonzero", "WINDOWS_QUERY_EXIT_NONZERO"],
+    ["query-timeout", "WINDOWS_QUERY_TIMEOUT"],
+    ["query-output-limit", "WINDOWS_QUERY_OUTPUT_LIMIT"],
+    ["query-stderr", "WINDOWS_QUERY_STDERR"],
+    ["query-output-shape", "WINDOWS_QUERY_OUTPUT_SHAPE"],
+    ["query-temp-drift", "WINDOWS_QUERY_TEMP_DRIFT"],
+    ["query-profile-drift", "WINDOWS_QUERY_PROFILE_DRIFT"],
+    ["query-decode", "WINDOWS_QUERY_DECODE"],
+    ["query-path-shape", "WINDOWS_QUERY_PATH_SHAPE"],
+  ] as const satisfies readonly (readonly [SystemPolicy, CodexWindowsQueryFailureReason])[]) {
+    test.skipIf(process.platform !== "win32")(`Windows known-folder failure reports ${reason}`, () => {
+      const result = productionFixture("CODEX_HOME", false, false, policy, "install") as InstallObservation;
+      expect(result.report.ok).toBe(false);
+      expect(result.report.hosts.codex.error).toContain("cannot inspect Codex declarative plugin metadata safely");
+      expect(result.report.hosts.codex.error).toContain(reason);
+      expect(result.report.hosts.codex.error).not.toContain("secret-");
+    });
+  }
+
+  test.skipIf(process.platform === "win32")("non-Windows known-folder resolution emits no Windows reason", () => {
+    let reason: CodexWindowsQueryFailureReason | undefined;
+    expect(resolveCodexWindowsProgramData(undefined, (value) => { reason = value; })).toBeNull();
+    expect(reason).toBeUndefined();
+  });
 });

@@ -17,6 +17,7 @@ import {
   type CodexMarketplaceIdentity,
   type CodexPluginManifestIdentity,
   type CodexPluginMetadataInventory,
+  type CodexWindowsQueryFailureReason,
 } from "@semantic-context/app-services";
 import { isSemctxError, SemctxError } from "@semantic-context/core";
 import { Buffer } from "node:buffer";
@@ -136,7 +137,10 @@ export interface InstallRuntime {
   /** Probe a plugin directory. `null` when it is not a readable directory. */
   readCodexPluginPayload(path: string): CodexPayloadProbe | null;
   /** Declarative Codex inventory; production never starts Codex during preflight. */
-  readCodexPluginMetadata?(root: string): CodexPluginMetadataInventory | null;
+  readCodexPluginMetadata?(
+    root: string,
+    onFailure?: (reason: CodexWindowsQueryFailureReason) => void,
+  ): CodexPluginMetadataInventory | null;
   /** Declarative Claude inventory; production never launches Claude Code for an inventory probe. */
   readClaudePluginMetadata?(root: string): ClaudePluginMetadataInventory | null;
   /** Read-only PATH lookup. A host CLI can write to its profile even for `--version`. */
@@ -702,10 +706,16 @@ const DEFAULT_RUNTIME: InstallRuntime = {
   deferCodexCacheCleanup: defaultDeferCodexCacheCleanup,
   codexHome: defaultCodexHome,
   readCodexPluginPayload: defaultReadCodexPluginPayload,
-  readCodexPluginMetadata: (root) => {
+  readCodexPluginMetadata: (root, onFailure) => {
     const configured = process.env["CODEX_HOME"];
     const home = configured !== undefined && configured.length > 0 ? configured : defaultCodexHome();
-    return home === null ? null : readCodexPluginMetadataInventory(root, home);
+    return home === null ? null : readCodexPluginMetadataInventory(
+      root,
+      home,
+      undefined,
+      undefined,
+      { windowsQueryFailure: onFailure },
+    );
   },
   findHostExecutable: (host) => Bun.which(host),
   readClaudePluginMetadata: (root) => {
@@ -876,7 +886,7 @@ function isLockedCodexCacheReplacement(
  * points at carries that version plus the whole split runtime. Every other outcome returns the
  * reason it stays unproven, so the caller can keep failing closed.
  */
-function unprovenCodexMarketplaceIdentity(
+function unprovenCodexDeclarativeState(
   root: string,
   runtime: InstallRuntime,
   admitted: CodexMarketplaceIdentity | undefined,
@@ -884,16 +894,33 @@ function unprovenCodexMarketplaceIdentity(
   // Historical injected runtimes supply their own inventory transport. Production always has
   // the declarative reader, whose raw identity is copied before the first mutation.
   if (admitted === undefined) return undefined;
-  const metadata = runtime.readCodexPluginMetadata?.(root);
+  let failureReason: CodexWindowsQueryFailureReason | undefined;
+  const metadata = runtime.readCodexPluginMetadata?.(root, (reason) => { failureReason = reason; });
   if (metadata === undefined || metadata === null) {
-    return "cannot re-read Codex declarative plugin metadata safely after installation";
+    return "cannot re-read Codex declarative plugin metadata safely after installation"
+      + (failureReason === undefined ? "" : ` (${failureReason})`);
   }
   const selected = metadata.marketplaces.find((item) => item["name"] === CODEX_MARKETPLACE) as CodexMarketplace | undefined;
   const observed = codexMarketplaceIdentity(selected?.marketplaceSource?.sourceType,
     selected?.marketplaceSource?.source, selected?.ref, selected?.sparsePaths ?? []);
-  return observed === null || !sameCodexMarketplaceIdentity(admitted, observed)
-    ? "the Codex marketplace identity changed after admission; installation state remains unverified"
-    : undefined;
+  if (observed === null || !sameCodexMarketplaceIdentity(admitted, observed)) {
+    return "the Codex marketplace identity changed after admission; installation state remains unverified";
+  }
+  const plugins = metadata.plugins.filter((item) => item["pluginId"]
+    === `${CODEX_PLUGIN}@${CODEX_MARKETPLACE}`) as CodexPlugin[];
+  if (plugins.length !== 1) {
+    return "the expected Codex plugin registration is missing or ambiguous in declarative metadata";
+  }
+  const plugin = plugins[0] as CodexPlugin;
+  if (plugin.registered === false) return "the expected Codex plugin is not registered";
+  if (plugin.installed !== true) return "the expected Codex plugin is not installed in declarative metadata";
+  if (plugin.enabled !== true) return "the expected Codex plugin is not enabled in declarative metadata";
+  if (plugin.version !== packageJson.version) {
+    return `declarative metadata did not select the exact expected plugin v${packageJson.version}`;
+  }
+  return plugin.cacheDirectory === packageJson.version
+    ? undefined
+    : `declarative metadata did not select the expected v${packageJson.version} cache directory`;
 }
 
 function unprovenCodexConvergence(
@@ -949,7 +976,7 @@ function unprovenCodexConvergence(
     return `cache at ${cachePath} declares v${cache.version ?? "unknown"}, expected v${packageJson.version}`;
   }
 
-  const identityError = unprovenCodexMarketplaceIdentity(root, runtime, admitted);
+  const identityError = unprovenCodexDeclarativeState(root, runtime, admitted);
   if (identityError !== undefined) return identityError;
 
   for (const name of CODEX_PLUGIN_RUNTIME_BUNDLES) {
@@ -1138,7 +1165,8 @@ function installCodex(
   plannedIdentity?: CodexMarketplaceIdentity,
   retainPlannedIdentity?: (identity: CodexMarketplaceIdentity) => void,
 ): void {
-  const metadata = runtime.readCodexPluginMetadata?.(root);
+  let metadataFailureReason: CodexWindowsQueryFailureReason | undefined;
+  const metadata = runtime.readCodexPluginMetadata?.(root, (reason) => { metadataFailureReason = reason; });
   const marketplacesResult = metadata === undefined
     ? runtime.run(["codex", "plugin", "marketplace", "list", "--json"], root)
     : null;
@@ -1155,6 +1183,7 @@ function installCodex(
     report.status = "failed";
     report.error = metadata === null
       ? "cannot inspect Codex declarative plugin metadata safely"
+        + (metadataFailureReason === undefined ? "" : ` (${metadataFailureReason})`)
       : marketplaces === null
         ? `cannot inspect Codex marketplaces: ${compactError(marketplacesResult as CommandResult)}`
         : `cannot inspect Codex plugins: ${compactError(pluginsResult as CommandResult)}`;
@@ -1341,7 +1370,7 @@ function verifyCodexInstall(
       error = `expected plugin v${packageJson.version}, found v${String(installed.version ?? "unknown")}`;
     }
   }
-  error ??= unprovenCodexMarketplaceIdentity(root, runtime, admitted);
+  error ??= unprovenCodexDeclarativeState(root, runtime, admitted);
   return recordVerification(report, "verify Semctx Codex plugin", command, error);
 }
 
