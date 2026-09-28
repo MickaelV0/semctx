@@ -20,7 +20,7 @@ interface ProductionJsonFixture {
   dryRun?: boolean;
   artifacts?: { sidecar?: string | number[]; snapshotManifest?: string; payloadManifest?: string;
     configuredRef?: string | null; configuredSparse?: string[]; localSidecar?: boolean; fixedInventory?: boolean;
-    unregistered?: boolean; orphanCache?: boolean };
+    unregistered?: boolean; orphanCache?: boolean; projectConfig?: string; userConfig?: string };
   recovery?: { snapshotManifest?: string; cacheManifest?: string; sidecarAfterAdd?: string };
 }
 
@@ -111,6 +111,12 @@ function productionFixture(source: RawHomeSource, drift: boolean, orphan: boolea
           jsonFixture.artifacts.sidecar);
         if (jsonFixture.artifacts.localSidecar) addFile(join(marketplace, ".codex-marketplace-install.json"),
           JSON.stringify({ source_type: "local", source: marketplace, ref_name: null, sparse_paths: [], revision: "" }));
+        if (jsonFixture.artifacts.projectConfig !== undefined) {
+          const user = jsonFixture.artifacts.userConfig ?? files.get(join(codexHome, "config.toml")).toString("utf8");
+          addFile(join(codexHome, "config.toml"), user + "\\n[projects." + JSON.stringify(repo)
+            + "]\\ntrust_level = 'trusted'\\n");
+          addFile(join(repo, ".codex", "config.toml"), jsonFixture.artifacts.projectConfig);
+        }
       }
       if (jsonFixture.recovery !== undefined) {
         addFile(join(codexHome, "config.toml"),
@@ -417,6 +423,79 @@ describe("production Codex status artifact JSON", () => {
     expect(report.hosts.codex.installed.version).toBeNull();
     expect(report.hosts.codex.reasons).toContain("INSTALLED_CACHE_UNREADABLE");
     expect(report.hosts.codex.delivery).toBe("UNKNOWN");
+  });
+});
+
+describe("Codex native trusted project merge production", () => {
+  const marketplace = '{"name":"semctx-stable","plugins":[{"name":"semctx-control",'
+    + '"source":{"source":"local","path":"./plugins/semctx-control"}}]}';
+  const partial = "[marketplaces.semctx-stable]\nsource_type = 'git'\nsource = 'hoklims/semctx'\n";
+  const native = { source_type: "git", source: "hoklims/semctx", revision: "1".repeat(40) };
+  const observe = (artifacts: NonNullable<ProductionJsonFixture["artifacts"]>, caller: "status" | "install", dryRun = true) =>
+    productionFixture("CODEX_HOME", false, false, "absent", caller, "safe", { marketplace, artifacts, dryRun });
+
+  test("partial project source cannot erase inherited user ref and sparse vector before dry-run or apply", () => {
+    const artifacts = { configuredRef: "other-ref", configuredSparse: ["private-tree"], projectConfig: partial,
+      sidecar: JSON.stringify({ ...native, ref_name: null, sparse_paths: [] }) };
+    const installs = [true, false].map((dryRun) => observe(artifacts, "install", dryRun) as InstallObservation);
+    expect(installs.map((observed) => ({ status: observed.report.hosts.codex.status,
+      calls: observed.nativeCalls.filter((call) => call.startsWith("codex-attempt:")) })))
+      .toEqual([{ status: "failed", calls: [] }, { status: "failed", calls: [] }]);
+    const status = observe(artifacts, "status") as ProductionObservation;
+    expect(status.report.hosts.codex.snapshot.version).toBeNull();
+    expect(status.report.hosts.codex.reasons).toContain("HOST_QUERY_FAILED");
+    expect(status.report.hosts.codex.delivery).toBe("UNKNOWN");
+  });
+
+  test("partial project source retains matching raw identity and enabled cache observations", () => {
+    const artifacts = { configuredRef: "other-ref", configuredSparse: ["private-tree", "./tree", "private-tree"],
+      projectConfig: partial, sidecar: JSON.stringify({ ...native, ref_name: "other-ref",
+        sparse_paths: ["private-tree", "./tree", "private-tree"] }) };
+    const status = observe(artifacts, "status") as ProductionObservation;
+    expect(status.report.hosts.codex.marketplace.configured).toBe(true);
+    expect(status.report.hosts.codex.marketplace.ref).toBe("other-ref");
+    expect(status.report.hosts.codex.snapshot.commit).toBe("1".repeat(40));
+    expect(status.report.hosts.codex.snapshot.version).toBe("0.3.7");
+    expect(status.report.hosts.codex.installed.installed).toBe(true);
+    expect(status.report.hosts.codex.installed.enabled).toBe(true);
+    expect(status.report.publicRelease.authority).toBe("absent");
+    const install = observe(artifacts, "install") as InstallObservation;
+    expect(install.report.hosts.codex.status).toBe("planned");
+    expect(install.nativeCalls.filter((call) => call.startsWith("codex-attempt:"))).toEqual([]);
+  });
+
+  test("explicit project ref and empty vector replace the user values without erasing source", () => {
+    const artifacts = { configuredRef: "other-ref", configuredSparse: ["private-tree"],
+      projectConfig: "[marketplaces.semctx-stable]\nref = 'stable'\nsparse_paths = []\n",
+      sidecar: JSON.stringify({ ...native, ref_name: "stable", sparse_paths: [] }) };
+    const status = observe(artifacts, "status") as ProductionObservation;
+    expect(status.report.hosts.codex.marketplace.ref).toBe("stable");
+    expect(status.report.hosts.codex.snapshot.version).toBe("0.3.7");
+    const install = observe(artifacts, "install") as InstallObservation;
+    expect(install.report.hosts.codex.status).toBe("planned");
+    expect(install.nativeCalls.filter((call) => call.startsWith("codex-attempt:"))).toEqual([]);
+  });
+
+  const enabledConfig = "[marketplaces.semctx-stable]\nsource_type = 'git'\nsource = 'hoklims/semctx'\nref = 'stable'\n"
+    + "[plugins.'semctx-control@semctx-stable']\nenabled = true\n";
+  test("a trusted project feature true overrides user false through default status and installer", () => {
+    const artifacts = { userConfig: "[features]\nplugins = false\n" + enabledConfig,
+      projectConfig: "[features]\nplugins = true\n", sidecar: JSON.stringify({ ...native, ref_name: "stable", sparse_paths: [] }) };
+    const status = observe(artifacts, "status") as ProductionObservation;
+    expect(status.report.hosts.codex.snapshot.version).toBe("0.3.7");
+    expect(status.report.hosts.codex.installed.enabled).toBe(true);
+    const install = observe(artifacts, "install") as InstallObservation;
+    expect(install.report.hosts.codex.status).toBe("planned");
+    expect(install.nativeCalls.filter((call) => call.startsWith("codex-attempt:"))).toEqual([]);
+  });
+
+  test("a trusted project feature false refuses default dry-run and apply before native Codex", () => {
+    const artifacts = { userConfig: "[features]\nplugins = true\n" + enabledConfig,
+      projectConfig: "[features]\nplugins = false\n", sidecar: JSON.stringify({ ...native, ref_name: "stable", sparse_paths: [] }) };
+    const installs = [true, false].map((dryRun) => observe(artifacts, "install", dryRun) as InstallObservation);
+    expect(installs.map((observed) => ({ status: observed.report.hosts.codex.status,
+      calls: observed.nativeCalls.filter((call) => call.startsWith("codex-attempt:")) })))
+      .toEqual([{ status: "failed", calls: [] }, { status: "failed", calls: [] }]);
   });
 });
 

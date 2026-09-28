@@ -2002,14 +2002,52 @@ const CODEX_HOME_MARKETPLACE_MANIFESTS = [
   [".cursor-plugin", "marketplace.json"],
 ] as const;
 
-function parseCodexConfig(observation: OptionalMetadataFile): CodexConfigTables | null {
+function codexTomlTable(value: unknown): Record<string, unknown> | null {
+  const record = plainRecord(value);
+  if (record === null) return null;
+  const prototype: unknown = Object.getPrototypeOf(record);
+  // TOML datetimes are scalar Date values in Bun; only actual tables merge recursively.
+  return prototype === Object.prototype || prototype === null ? record : null;
+}
+
+/** Pinned generic TOML merge for supported plugin metadata: tables recurse, other values replace. */
+function mergeCodexTomlTables(base: Record<string, unknown>, overlay: Record<string, unknown>): Record<string, unknown> {
+  const copy = (table: Record<string, unknown>): Record<string, unknown> =>
+    Object.assign(Object.create(null) as Record<string, unknown>, table);
+  const result = copy(base);
+  const pending = [{ base, overlay, result }];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (current === undefined) break;
+    for (const [key, value] of Object.entries(current.overlay)) {
+      const lower = codexTomlTable(current.base[key]);
+      const higher = codexTomlTable(value);
+      if (lower !== null && higher !== null) {
+        const result = copy(lower);
+        current.result[key] = result;
+        pending.push({ base: lower, overlay: higher, result });
+      } else current.result[key] = value;
+    }
+  }
+  return result;
+}
+
+function validCodexProjects(projects: Record<string, unknown>): boolean {
+  return Object.values(projects).every((raw) => {
+    const project = codexTomlTable(raw);
+    return project !== null && (project["trust_level"] === undefined
+      || project["trust_level"] === "trusted" || project["trust_level"] === "untrusted");
+  });
+}
+
+function parseCodexConfig(observation: OptionalMetadataFile): Record<string, unknown> | null {
   if (observation.status === "unsafe") return null;
-  if (observation.status === "absent") return { marketplaces: {}, plugins: {}, projects: {} };
+  if (observation.status === "absent") return {};
   let config: Record<string, unknown> | null;
   const text = decodeCodexUtf8(observation.bytes);
   if (text === null) return null;
   try {
-    config = plainRecord(Bun.TOML.parse(text));
+    config = codexTomlTable(Bun.TOML.parse(text));
   } catch {
     return null;
   }
@@ -2018,20 +2056,20 @@ function parseCodexConfig(observation: OptionalMetadataFile): CodexConfigTables 
   // reconstructed from this metadata-only boundary and must not be treated as the user layer.
   if (config["profile"] !== undefined || config["profiles"] !== undefined
     || config["project_root_markers"] !== undefined) return null;
-  const features = config["features"] === undefined ? {} : plainRecord(config["features"]);
+  return config;
+}
+
+function effectiveCodexConfigTables(config: Record<string, unknown>): CodexConfigTables | null {
+  const features = config["features"] === undefined ? {} : codexTomlTable(config["features"]);
   if (features === null || features["plugins"] === false
     || (features["plugins"] !== undefined && typeof features["plugins"] !== "boolean")) return null;
-  const marketplaces = config["marketplaces"] === undefined ? {} : plainRecord(config["marketplaces"]);
-  const plugins = config["plugins"] === undefined ? {} : plainRecord(config["plugins"]);
-  const projects = config["projects"] === undefined ? {} : plainRecord(config["projects"]);
+  const marketplaces = config["marketplaces"] === undefined ? {} : codexTomlTable(config["marketplaces"]);
+  const plugins = config["plugins"] === undefined ? {} : codexTomlTable(config["plugins"]);
+  const projects = config["projects"] === undefined ? {} : codexTomlTable(config["projects"]);
   if (marketplaces === null || plugins === null || projects === null
     || Object.keys(marketplaces).length > MAX_CODEX_ENTRIES
     || Object.keys(plugins).length > MAX_CODEX_ENTRIES) return null;
-  if (Object.values(projects).some((raw) => {
-    const project = plainRecord(raw);
-    return project === null || (project["trust_level"] !== undefined
-      && project["trust_level"] !== "trusted" && project["trust_level"] !== "untrusted");
-  })) return null;
+  if (!validCodexProjects(projects)) return null;
   return { marketplaces, plugins, projects };
 }
 
@@ -2604,16 +2642,20 @@ function readCodexPluginMetadataOnce(
   if (gitRoot === null) return null;
   const user = parseCodexConfig(readCodexMetadataFile(join(codexHome, "config.toml"), codexHome, observations));
   if (user === null) return null;
-  const trusted = codexProjectTrusted(user.projects, root, gitRoot);
+  const userProjects = user["projects"] === undefined ? {} : codexTomlTable(user["projects"]);
+  if (userProjects === null || !validCodexProjects(userProjects)) return null;
+  const trusted = codexProjectTrusted(userProjects, root, gitRoot);
   if (trusted === null) return null;
-  if (!codexAdditionalLayersAbsent(root, gitRoot, codexHome, user.projects, observations, boundaries)) return null;
+  if (!codexAdditionalLayersAbsent(root, gitRoot, codexHome, userProjects, observations, boundaries)) return null;
   // Codex ignores repository config until the user has explicitly trusted that repository.
   const project = trusted
     ? parseCodexConfig(readCodexMetadataFile(join(root, ".codex", "config.toml"), root, observations))
-    : { marketplaces: {}, plugins: {}, projects: {} };
+    : {};
   if (project === null) return null;
-  const marketplaceTables = { ...user.marketplaces, ...project.marketplaces };
-  const pluginTables = { ...user.plugins, ...project.plugins };
+  const effective = effectiveCodexConfigTables(mergeCodexTomlTables(user, project));
+  if (effective === null) return null;
+  const marketplaceTables = effective.marketplaces;
+  const pluginTables = effective.plugins;
   if (!Object.prototype.hasOwnProperty.call(marketplaceTables, MARKETPLACE_NAME)
     && !codexUnregisteredSelectedSnapshotIsSafe(codexHome, observations)) return null;
   // Native installation targets this cache even when TOML contains no plugin registration.

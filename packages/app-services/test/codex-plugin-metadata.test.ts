@@ -39,6 +39,94 @@ function snapshot(home: string): void {
   }));
 }
 
+describe("Codex native trusted project merge inventory", () => {
+  const identity = "[marketplaces.semctx-stable]\nsource_type = 'git'\nsource = 'hoklims/semctx'\n"
+    + "ref = 'other-ref'\nsparse_paths = ['private-tree', './tree', 'private-tree']\n";
+  const plugin = "[plugins.'semctx-control@semctx-stable']\nenabled = false\n";
+  const partial = "[marketplaces.semctx-stable]\nsource_type = 'git'\nsource = 'hoklims/semctx'\n";
+  const native: { source_type: string; source: string; ref_name: string | null; sparse_paths: string[]; revision: string }
+    = { source_type: "git", source: "hoklims/semctx", ref_name: "other-ref",
+    sparse_paths: ["private-tree", "./tree", "private-tree"], revision: "1".repeat(40) };
+  const observe = (user: string, project: string, sidecar = native) => {
+    const { home, repo } = fixture();
+    snapshot(home);
+    cache(home, "0.3.7");
+    writeFileSync(join(home, "config.toml"), `${user}\n[projects.${JSON.stringify(repo)}]\ntrust_level = 'trusted'\n`);
+    mkdirSync(join(repo, ".codex"));
+    writeFileSync(join(repo, ".codex", "config.toml"), project);
+    writeFileSync(join(home, ".tmp", "marketplaces", "semctx-stable", ".codex-marketplace-install.json"), JSON.stringify(sidecar));
+    return readCodexPluginMetadataInventory(repo, home, undefined, home,
+      { systemFiles: [], managedPreferences: () => "absent" });
+  };
+
+  test("a partial project source cannot erase user identity and accept a contradictory native sidecar", () => {
+    expect(observe(identity + plugin, partial, { ...native, ref_name: null, sparse_paths: [] }))
+      .toBeNull();
+  });
+
+  test("matching partial overlays preserve ref, raw ordered vectors and physical plugin enablement", () => {
+    const inventory = observe(identity + plugin, partial);
+    expect(inventory?.marketplaces[0]).toEqual(expect.objectContaining({ ref: "other-ref",
+      sparsePaths: native.sparse_paths, marketplaceSource: { sourceType: "git", source: "hoklims/semctx" } }));
+    expect(inventory?.plugins[0]).toEqual(expect.objectContaining({ installed: true, enabled: false, version: "0.3.7" }));
+  });
+
+  test("empty overlapping marketplace and plugin tables retain all lower keys", () => {
+    const inventory = observe(identity + plugin, "[marketplaces.semctx-stable]\n[plugins.'semctx-control@semctx-stable']\n");
+    expect(inventory?.marketplaces[0]?.["ref"]).toBe("other-ref");
+    expect(inventory?.marketplaces[0]?.["sparsePaths"]).toEqual(native.sparse_paths);
+    expect(inventory?.plugins[0]?.["enabled"]).toBe(false);
+    expect(inventory?.plugins[0]?.["installed"]).toBe(true);
+  });
+
+  test("an empty project plugin entry preserves explicit user disablement", () => {
+    const inventory = observe(identity + plugin, "[plugins.'semctx-control@semctx-stable']\n");
+    expect(inventory?.plugins[0]?.["enabled"]).toBe(false);
+    expect(inventory?.plugins[0]?.["version"]).toBe("0.3.7");
+  });
+
+  test("explicit project scalars and arrays replace lower values without deleting sibling fields", () => {
+    const inventory = observe(identity + plugin,
+      "[marketplaces.semctx-stable]\nref = 'stable'\nsparse_paths = []\n"
+      + "[plugins.'semctx-control@semctx-stable']\nenabled = true\n",
+      { ...native, ref_name: "stable", sparse_paths: [] });
+    expect(inventory?.marketplaces[0]).toEqual(expect.objectContaining({ ref: "stable", sparsePaths: [],
+      marketplaceSource: { sourceType: "git", source: "hoklims/semctx" } }));
+    expect(inventory?.plugins[0]?.["enabled"]).toBe(true);
+  });
+
+  test("project sparse arrays replace rather than concatenate or sort the user vector", () => {
+    const sparse_paths = ["./tree", "./tree", "private-tree"];
+    const inventory = observe(identity + plugin, `\n[marketplaces.semctx-stable]\nsparse_paths = ${JSON.stringify(sparse_paths)}\n`,
+      { ...native, sparse_paths });
+    expect(inventory?.marketplaces[0]?.["ref"]).toBe("other-ref");
+    expect(inventory?.marketplaces[0]?.["sparsePaths"]).toEqual(sparse_paths);
+  });
+
+  test("a trusted project feature scalar overrides a user plugin feature false before validation", () => {
+    const inventory = observe("[features]\nplugins = false\n" + identity + plugin, "[features]\nplugins = true\n");
+    expect(inventory?.marketplaces[0]?.["ref"]).toBe("other-ref");
+    expect(inventory?.plugins[0]?.["installed"]).toBe(true);
+  });
+
+  test("empty feature tables preserve disabled state and explicit project false remains unknown", () => {
+    expect(observe("[features]\nplugins = false\n" + identity + plugin, "[features]\n")).toBeNull();
+    expect(observe("[features]\nplugins = true\n" + identity + plugin, "[features]\nplugins = false\n")).toBeNull();
+  });
+
+  for (const [name, project] of [
+    ["marketplace scalar", "[marketplaces]\nsemctx-stable = 'not-a-table'\n"],
+    ["ref table", "[marketplaces.semctx-stable.ref]\nvalue = 'other-ref'\n"],
+    ["plugin enabled table", "[plugins.'semctx-control@semctx-stable'.enabled]\nvalue = true\n"],
+    ["plugin feature table", "[features.plugins]\nenabled = true\n"],
+    ["unsupported TOML null deletion", "[marketplaces.semctx-stable]\nref = null\n"],
+  ] as const) {
+    test(`${name} stays unknown after the native merge model`, () => {
+      expect(observe(identity + plugin, project)).toBeNull();
+    });
+  }
+});
+
 describe("Codex declarative plugin inventory", () => {
   for (const mutation of ["appearance", "removal", "same-bytes inode replacement", "metadata byte drift"] as const) {
     test(`Codex sidecar snapshot observations reject ${mutation}`, () => {
