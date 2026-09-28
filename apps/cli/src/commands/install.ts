@@ -869,6 +869,12 @@ function unprovenCodexConvergence(
     return `cache at ${cachePath} declares v${cache.version ?? "unknown"}, expected v${packageJson.version}`;
   }
 
+  // An update can replace the native marketplace sidecar after preflight. The shared declarative
+  // reader proves its current source/ref/sparse identity and both physical observations again.
+  if (runtime.readCodexPluginMetadata !== undefined && runtime.readCodexPluginMetadata(root) === null) {
+    return "cannot re-read Codex declarative plugin metadata safely after installation";
+  }
+
   for (const name of CODEX_PLUGIN_RUNTIME_BUNDLES) {
     const cached = cache.bundles[name];
     if (cached === undefined) return `cached ${name} is missing`;

@@ -40,6 +40,28 @@ function snapshot(home: string): void {
 }
 
 describe("Codex declarative plugin inventory", () => {
+  for (const mutation of ["appearance", "removal", "same-bytes inode replacement", "metadata byte drift"] as const) {
+    test(`Codex sidecar snapshot observations reject ${mutation}`, () => {
+      const { home, repo } = fixture();
+      snapshot(home);
+      writeFileSync(join(home, "config.toml"),
+        "[marketplaces.semctx-stable]\nsource_type = 'git'\nsource = 'hoklims/semctx'\nref = 'stable'\nsparse_paths = []\n");
+      const file = join(home, ".tmp", "marketplaces", "semctx-stable", ".codex-marketplace-install.json");
+      const native = JSON.stringify({ source_type: "git", source: "hoklims/semctx", ref_name: "stable",
+        sparse_paths: [], revision: "1".repeat(40) });
+      if (mutation !== "appearance") writeFileSync(file, native);
+      const inventory = readCodexPluginMetadataInventory(repo, home, () => {
+        if (mutation === "removal") rmSync(file);
+        else if (mutation === "same-bytes inode replacement") {
+          renameSync(file, `${file}.previous`);
+          writeFileSync(file, native);
+        } else writeFileSync(file, mutation === "appearance" ? native
+          : native.replace(/}$/, ',"note":"changed metadata bytes"}'));
+      }, home, { systemFiles: [], managedPreferences: () => "absent" });
+      expect(inventory).toBeNull();
+    });
+  }
+
   test("a fresh profile is provably empty and never creates profile files", () => {
     const { home, repo } = fixture();
     expect(readCodexPluginMetadataInventory(repo, home, undefined, home)).toEqual({ marketplaces: [], plugins: [] });

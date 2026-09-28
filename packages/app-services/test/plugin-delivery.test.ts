@@ -1910,6 +1910,74 @@ function gitCalls(recorded: readonly RecordedQuery[]): string[] {
   return recorded.filter((query) => query.argv[0] === "git").map((query) => query.argv.join(" "));
 }
 
+describe("Codex release manifest consumer", () => {
+  const invalid = [
+    ["duplicate version", Buffer.from(`{"version":"0.3.6","version":"${RELEASE_VERSION}"}`)],
+    ["escaped equivalent version", Buffer.from(String.raw`{"version":"0.3.6","\u0076ersion":"${RELEASE_VERSION}"}`)],
+    ["unpaired escaped surrogate", Buffer.from(String.raw`{"version":"${RELEASE_VERSION}","note":"\ud800"}`)],
+    ["invalid UTF-8", Buffer.concat([Buffer.from(`{"version":"${RELEASE_VERSION}","note":"`),
+      Buffer.from([0xff]), Buffer.from('"}')])],
+    ["UTF-8 BOM", Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(`{"version":"${RELEASE_VERSION}"}`)])],
+    ["malformed syntax", Buffer.from("{")],
+  ] as const;
+  for (const path of ["apps/cli/package.json", "plugins/semctx-control/.codex-plugin/plugin.json"] as const) {
+    for (const [name, bytes] of invalid) {
+      test(`${path} ${name} refuses raw release identity and bundle witnesses`, () => {
+        const { report, recorded } = releaseOf({ outcomes: { [`:${path}`]: {
+          code: 0, out: JSON.stringify({ version: RELEASE_VERSION }), bytes,
+        } } });
+        expect(report.publicRelease.version).toBeNull();
+        expect(gitCalls(recorded).filter((call) => call.includes("plugins/semctx-control/dist/"))).toEqual([]);
+        expect(report.publicRelease.status).toBe("unknown");
+        expect(recorded.every((query) => query.argv[0] === "git")).toBe(true);
+      });
+    }
+  }
+
+  test("the local mirror also refuses raw ambiguous common release metadata", () => {
+    const { report, recorded } = releaseOf({ outcomes: { ":apps/cli/package.json": {
+      code: 0, out: JSON.stringify({ version: RELEASE_VERSION }), bytes: invalid[0][1],
+    } } }, false);
+    expect(report.publicRelease.version).toBeNull();
+    expect(report.publicRelease.reasons).toContain("PUBLIC_RELEASE_MANIFEST_UNREADABLE");
+    expect(gitCalls(recorded).filter((call) => call.includes("/dist/"))).toEqual([]);
+  });
+
+  test("raw quoted strings, independent nested scopes and paired Unicode remain valid", () => {
+    const bytes = Buffer.from(JSON.stringify({ version: RELEASE_VERSION, note: '{"version":"literal"}',
+      left: { value: "left" }, right: { value: "right" }, array: ['"version"', "{}"], emoji: "😀" }));
+    const { report, recorded } = releaseOf({ outcomes: {
+      ":apps/cli/package.json": { code: 0, out: "{", bytes },
+      ":plugins/semctx-control/.codex-plugin/plugin.json": { code: 0, out: "{", bytes },
+    } });
+    expect(report.publicRelease.version).toBe(RELEASE_VERSION);
+    expect(report.publicRelease.status).toBe("resolved");
+    for (const name of PLUGIN_RUNTIME_BUNDLES) {
+      expect(gitCalls(recorded).some((call) => call.endsWith(`:plugins/semctx-control/dist/${name}`))).toBe(true);
+    }
+    expect(recorded.every((query) => query.argv[0] === "git")).toBe(true);
+  });
+
+  test("plain stale Codex version remains a refused release", () => {
+    const { report } = releaseOf({ pluginVersions: { codex: "0.3.6" } });
+    expect(report.publicRelease.status).toBe("unknown");
+    expect(report.publicRelease.reasons).toContain("PUBLIC_RELEASE_VERSION_DIVERGED");
+  });
+
+  test("Claude release manifest parsing keeps its existing contract", () => {
+    const out = String.raw`{"version":"0.3.6","version":"${RELEASE_VERSION}","note":"\ud800"}`;
+    const { report } = releaseOf({ outcomes: {
+      ":plugins/claude-code/.claude-plugin/plugin.json": { code: 0, out, bytes: Buffer.from(out) },
+    } });
+    expect(report.publicRelease.status).toBe("resolved");
+    expect(report.publicRelease.version).toBe(RELEASE_VERSION);
+    const invalid = releaseOf({ outcomes: {
+      ":plugins/claude-code/.claude-plugin/plugin.json": { code: 0, out: "{", bytes: Buffer.from("{") },
+    } });
+    expect(invalid.report.publicRelease.reasons).toContain("PUBLIC_RELEASE_VERSION_DIVERGED");
+  });
+});
+
 describe("plugin delivery — the attestation authority is canonical, not the inspected project", () => {
   test("default attestation excludes a configured Claude home even when inventory refuses its alias", () => {
     const root = mkdtempSync(join(PHYSICAL_TEMPORARY_ROOT, "semctx-attestation-claude-home-alias-"));
