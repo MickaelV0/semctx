@@ -309,6 +309,8 @@ export interface ClaudePluginMetadataInventory {
 
 /** What a marketplace snapshot directory declares about the source it was resolved from. */
 export interface MarketplaceSnapshotProbe {
+  /** Exact Codex plugin manifest identity; Claude has no corresponding requirement. */
+  pluginIdentity: CodexPluginManifestIdentity | null;
   /** Present only for a validated native Codex sidecar; its identity must match the configuration. */
   sourceType?: "git" | "local";
   /** Native sparse checkout identity, preserving order, duplicates and raw strings. */
@@ -327,6 +329,8 @@ export interface MarketplaceSnapshotProbe {
 
 /** What the executed cache entry declares and contains. */
 export interface InstalledPayloadProbe {
+  /** Exact Codex plugin manifest identity; Claude has no corresponding requirement. */
+  pluginIdentity: CodexPluginManifestIdentity | null;
   version: string | null;
   bundles: Record<string, string | null>;
 }
@@ -591,6 +595,23 @@ function rawText(value: unknown): string | null {
 /** A Semctx version is an identity: no trimming, control removal or display redaction. */
 function codexVersionIdentity(value: unknown): string | null {
   return typeof value === "string" && value.trim() === value && VERSION_SEGMENT.test(value) ? value : null;
+}
+
+/** A Codex plugin manifest is authoritative only for the expected plugin and one raw valid version. */
+export interface CodexPluginManifestIdentity {
+  readonly name: string;
+  readonly version: string;
+}
+
+export function codexPluginManifestIdentity(
+  value: unknown,
+  expectedName: string,
+): CodexPluginManifestIdentity | null {
+  const record = plainRecord(value);
+  const version = codexVersionIdentity(record?.["version"]);
+  return record?.["name"] === expectedName && version !== null
+    ? { name: expectedName, version }
+    : null;
 }
 
 function hasIdentityControlCharacter(value: string): boolean {
@@ -1190,6 +1211,7 @@ function evaluateHost(
   let snapshot = marketplaceRoot === null
     ? null
     : dependencies.readMarketplaceSnapshot(host, marketplaceRoot);
+  if (host === "codex" && snapshot?.pluginIdentity?.name !== CODEX_PLUGIN) snapshot = null;
   if (host === "codex" && snapshot?.sourceType !== undefined) {
     const configured = plainRecord(marketplace["marketplaceSource"]);
     const expected = codexMarketplaceIdentity(configured?.["sourceType"], configured?.["source"],
@@ -1198,7 +1220,9 @@ function evaluateHost(
       snapshot.sparsePaths === undefined ? [] : snapshot.sparsePaths);
     if (expected === null || observed === null || !sameCodexMarketplaceIdentity(expected, observed)) snapshot = null;
   }
-  const snapshotVersion = host === "codex" ? codexVersionIdentity(snapshot?.version) : safeText(snapshot?.version);
+  const snapshotVersion = host === "codex" && snapshot?.pluginIdentity?.name === CODEX_PLUGIN
+    ? snapshot.pluginIdentity.version
+    : host === "codex" ? null : safeText(snapshot?.version);
   if (snapshot === null) {
     reasons.push("SNAPSHOT_UNREADABLE");
   } else {
@@ -1252,10 +1276,11 @@ function evaluateHost(
   report.installed.path = safeText(cachePath);
 
   const payload = cachePath === null ? null : dependencies.readInstalledPayload(host, cachePath);
-  const cacheVersion = host === "codex" ? codexVersionIdentity(payload?.version) : safeText(payload?.version);
+  const cacheVersion = host === "codex" ? payload?.pluginIdentity?.version ?? null : safeText(payload?.version);
   // The payload readback cannot replace the version admitted by inventory. `local` is a
   // directory identity, so compare declared versions rather than the cache path's basename.
-  if (payload === null || cacheVersion === null || (host === "codex" && cacheVersion !== rawHostVersion)) {
+  if (payload === null || cacheVersion === null || (host === "codex"
+    && (payload.pluginIdentity?.name !== CODEX_PLUGIN || cacheVersion !== rawHostVersion))) {
     report.reasons = sortedUnique([...reasons, "INSTALLED_CACHE_UNREADABLE"]);
     report.verdict = "UNKNOWN";
     return report;
@@ -2156,10 +2181,9 @@ function readCodexCachedVersion(
       observations,
     );
     if (manifest.status !== "ok") return false;
-    const identity = decodeCodexMetadataObject(manifest.bytes);
-    const declared = identity?.["version"];
-    if (identity?.["name"] !== plugin
-      || typeof declared !== "string" || !CODEX_CACHE_NAME.test(declared)
+    const identity = codexPluginManifestIdentity(decodeCodexMetadataObject(manifest.bytes), plugin);
+    const declared = identity?.version;
+    if (identity === null || declared === undefined || !CODEX_CACHE_NAME.test(declared)
       || (entry.name !== "local" && declared !== entry.name)) return false;
     versions.push({ directory: entry.name, version: declared });
   }
@@ -3081,7 +3105,12 @@ function defaultReadMarketplaceSnapshot(
       LOCAL_READ_LIMITS,
     );
     if (branch.code === 0) {
-      const name = safeText(branch.out.trim());
+      const decoded = branch.bytes === undefined
+        ? branch.out
+        : branch.bytes === null ? null : decodeCodexUtf8(Buffer.from(branch.bytes));
+      const name = decoded === null ? null
+        : decoded.endsWith("\r\n") ? decoded.slice(0, -2)
+          : decoded.endsWith("\n") ? decoded.slice(0, -1) : decoded;
       ref = name === "HEAD" ? null : name;
     }
   }
@@ -3091,23 +3120,34 @@ function defaultReadMarketplaceSnapshot(
   const layout = RELEASE_PLUGIN[host];
   const pluginRoot = canonicalDirectoryWithin(join(canonicalRoot, "plugins", layout.directory), canonicalRoot);
   if (pluginRoot === null) return null;
-  const version = readJsonField(join(pluginRoot, layout.manifest, "plugin.json"), "version", canonicalRoot, host);
+  const manifest = readPluginManifestIdentity(
+    join(pluginRoot, layout.manifest, "plugin.json"), canonicalRoot, host,
+  );
+  const version = host === "codex" ? manifest.codex?.version ?? null : manifest.version;
   const bundles = bundleDigests(join(pluginRoot, "dist"), canonicalRoot);
   if (host === "codex") {
     const after: string[] = [];
     if (readCodexMarketplaceSidecar(canonicalRoot, after) === false
       || JSON.stringify(sidecarObservations) !== JSON.stringify(after)) return null;
   }
-  return { commit, ref, source, version, bundles,
+  return { commit, ref, source, version, bundles, pluginIdentity: manifest.codex,
     ...(codexSidecar === null ? {} : { sourceType: codexSidecar.sourceType, sparsePaths: codexSidecar.sparsePaths }) };
 }
 
-function readJsonField(file: string, field: string, root: string, host: PluginDeliveryHost): string | null {
+function readPluginManifestIdentity(
+  file: string,
+  root: string,
+  host: PluginDeliveryHost,
+): { codex: CodexPluginManifestIdentity | null; version: string | null } {
   // A manifest is a small JSON document. A file claiming to be one while being far larger is
   // refused by the bounded read rather than parsed.
   const record = host === "codex" ? readCodexMetadataObject(file, root)
     : decodeMetadataObject(readConfinedFile(file, root, PLUGIN_DELIVERY_MAX_MANIFEST_BYTES));
-  return record === null ? null : host === "codex" ? codexVersionIdentity(record[field]) : safeText(record[field]);
+  if (host === "codex") {
+    const codex = codexPluginManifestIdentity(record, CODEX_PLUGIN);
+    return { codex, version: codex?.version ?? null };
+  }
+  return { codex: null, version: record === null ? null : safeText(record["version"]) };
 }
 
 function defaultReadInstalledPayload(
@@ -3117,14 +3157,18 @@ function defaultReadInstalledPayload(
   if (!isLocalFilesystemPath(path) || !existsSync(path)) return null;
   const canonicalRoot = canonicalDirectoryWithin(path, path);
   if (canonicalRoot === null) return null;
-  const version = readJsonField(
+  const manifest = readPluginManifestIdentity(
     join(canonicalRoot, RELEASE_PLUGIN[host].manifest, "plugin.json"),
-    "version",
     canonicalRoot,
     host,
   );
+  const version = host === "codex" ? manifest.codex?.version ?? null : manifest.version;
   if (version === null) return null;
-  return { version, bundles: bundleDigests(join(canonicalRoot, "dist"), canonicalRoot) };
+  return {
+    pluginIdentity: manifest.codex,
+    version,
+    bundles: bundleDigests(join(canonicalRoot, "dist"), canonicalRoot),
+  };
 }
 
 function defaultReadRepositoryChannel(
@@ -3237,7 +3281,10 @@ function readReleaseArtifacts(
     const pluginManifest = read(`plugins/${layout.directory}/${layout.manifest}/plugin.json`);
     const manifestBytes = boundedReleasePayload(pluginManifest, PLUGIN_DELIVERY_MAX_MANIFEST_BYTES);
     if (manifestBytes === null) return "unreadable";
-    const declared = host === "codex" ? codexVersionIdentity(decodeCodexMetadataObject(manifestBytes)?.["version"])
+    const codexIdentity = host === "codex"
+      ? codexPluginManifestIdentity(decodeCodexMetadataObject(manifestBytes), CODEX_PLUGIN)
+      : null;
+    const declared = host === "codex" ? codexIdentity?.version ?? null
       : jsonField(pluginManifest.out, "version");
     if (host === "codex" && declared === null) return "unreadable";
     if (declared !== version) return "diverged";
@@ -3592,9 +3639,9 @@ function storeExceeds(root: string, maxBytes: number): boolean {
 /**
  * Report the already-fetched `origin/stable` of the inspected project.
  *
- * This path is informational by construction, so it stops at commit and version: bundle digests
- * could never license anything here, and reading several megabytes of Git objects to compute
- * witnesses that are then discarded would be cost without evidence.
+ * This path is informational by construction. It still validates both host manifests and their
+ * bundle presence as one coherent release artifact, but discards the computed bundle witnesses:
+ * a local mirror has no freshness authority and therefore cannot license delivery convergence.
  */
 function mirrorPublicRelease(repositoryRoot: string, runQuery: QueryRunner): PublicReleaseProbe {
   const origin = runQuery(["git", "config", "--get", "remote.origin.url"], repositoryRoot, LOCAL_READ_LIMITS);
@@ -3628,21 +3675,19 @@ function mirrorPublicRelease(repositoryRoot: string, runQuery: QueryRunner): Pub
   if (commit === null || !COMMIT_ID.test(commit)) {
     return unresolvedRelease("absent", "PUBLIC_RELEASE_REF_ABSENT");
   }
-  const manifest = releaseBlobReader(null, repositoryRoot, commit, runQuery, LOCAL_READ_ENVIRONMENT)(
-    "apps/cli/package.json",
-  );
-  if (manifest.code !== 0 || boundedFailure(manifest) !== null) {
+  const artifacts = readReleaseArtifacts(null, repositoryRoot, commit, runQuery, LOCAL_READ_ENVIRONMENT);
+  if (artifacts === "unreadable") {
     return unresolvedRelease("absent", "PUBLIC_RELEASE_MANIFEST_UNREADABLE");
   }
-  const version = codexVersionIdentity(decodeCodexMetadataObject(boundedReleasePayload(manifest,
-    PLUGIN_DELIVERY_MAX_MANIFEST_BYTES))?.["version"]);
-  if (version === null) return unresolvedRelease("absent", "PUBLIC_RELEASE_MANIFEST_UNREADABLE");
+  if (artifacts === "diverged") {
+    return unresolvedRelease("absent", "PUBLIC_RELEASE_VERSION_DIVERGED");
+  }
 
   return {
     // The mirror proves what was fetched, not that no newer public stable commit exists.
     authority: "local-mirror",
     status: "unknown",
-    version,
+    version: artifacts.version,
     commit,
     // A remote-tracking ref is a local mirror: it is only as current as the last fetch.
     source: "git-remote-tracking-ref",
