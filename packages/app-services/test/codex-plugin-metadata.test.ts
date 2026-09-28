@@ -199,6 +199,47 @@ describe("Codex declarative plugin inventory", () => {
     expect(readCodexPluginMetadataInventory(repo, home, undefined, home)).toBeNull();
   });
 
+  test("absent and noncanonical child trust declarations preserve trusted-parent inheritance", () => {
+    const { home, repo } = fixture();
+    const child = join(repo, "child");
+    mkdirSync(join(child, ".codex"), { recursive: true });
+    writeFileSync(join(child, ".codex", "config.toml"), "[plugins.'broken'\n");
+    const parentTrust = `[projects.'${repo}']\ntrust_level = 'trusted'\n`;
+    writeFileSync(join(home, "config.toml"), `${parentTrust}[projects.'${child}']\n`);
+    expect(readCodexPluginMetadataInventory(child, home, undefined, home)).toBeNull();
+    writeFileSync(join(home, "config.toml"),
+      `${parentTrust}[projects.'${child}${sep}..${sep}child']\ntrust_level = 'untrusted'\n`);
+    expect(readCodexPluginMetadataInventory(child, home, undefined, home)).toBeNull();
+    writeFileSync(join(home, "config.toml"),
+      `${parentTrust}[projects.'${child}']\ntrust_level = 'untrusted'\n`);
+    expect(readCodexPluginMetadataInventory(child, home, undefined, home))
+      .toEqual({ marketplaces: [], plugins: [] });
+  });
+
+  test.skipIf(process.platform !== "win32")("Windows trust lookup selects normalized exact keys then sorted raw keys using ASCII case", () => {
+    const { home, repo } = fixture();
+    mkdirSync(join(repo, ".codex"));
+    writeFileSync(join(repo, ".codex", "config.toml"), "[plugins.'broken'\n");
+    writeFileSync(join(home, "config.toml"),
+      `[projects.'${repo.toUpperCase()}']\ntrust_level = 'trusted'\n`
+      + `[projects.'${repo}']\ntrust_level = 'untrusted'\n`);
+    expect(readCodexPluginMetadataInventory(repo, home, undefined, home)).toBeNull();
+    writeFileSync(join(home, "config.toml"),
+      `[projects.'${repo.toUpperCase()}']\ntrust_level = 'trusted'\n`
+      + `[projects.'${repo.toLowerCase()}']\ntrust_level = 'untrusted'\n`);
+    expect(readCodexPluginMetadataInventory(repo, home, undefined, home))
+      .toEqual({ marketplaces: [], plugins: [] });
+
+    const child = join(repo, "École");
+    mkdirSync(join(child, ".codex"), { recursive: true });
+    writeFileSync(join(child, ".codex", "config.toml"), "[plugins.'broken'\n");
+    rmSync(join(repo, ".codex"), { recursive: true, force: true });
+    writeFileSync(join(home, "config.toml"),
+      `[projects.'${repo}']\ntrust_level = 'trusted'\n`
+      + `[projects.'${child.replace("École", "école")}']\ntrust_level = 'untrusted'\n`);
+    expect(readCodexPluginMetadataInventory(child, home, undefined, home)).toBeNull();
+  });
+
   test("empty or malformed Git markers cannot hide a valid ancestor repository", () => {
     const { root, home, repo } = fixture();
     const child = join(repo, "child");
@@ -208,6 +249,8 @@ describe("Codex declarative plugin inventory", () => {
     writeFileSync(join(home, "config.toml"), `[projects.'${repo}']\ntrust_level = 'trusted'\n`);
     expect(readCodexPluginMetadataInventory(child, home, undefined, home)).toBeNull();
     writeFileSync(join(child, ".git", "HEAD"), "not a Git head\n");
+    expect(readCodexPluginMetadataInventory(child, home, undefined, home)).toBeNull();
+    writeFileSync(join(child, ".git", "HEAD"), Buffer.from([0xff]));
     expect(readCodexPluginMetadataInventory(child, home, undefined, home)).toBeNull();
     rmSync(join(repo, ".codex"), { recursive: true, force: true });
     for (const detached of ["a".repeat(40), "b".repeat(64)]) {
@@ -242,40 +285,76 @@ describe("Codex declarative plugin inventory", () => {
     }, home)).toBeNull();
   });
 
-  test("missing HOME variables fall back to the confined OS home marketplace", () => {
+  test("home marketplace discovery follows HOME, USERPROFILE, then confined OS fallback", () => {
     const { root, home, repo } = fixture();
     const osHome = join(root, "os-home");
-    const ignoredHome = join(root, "ignored-home");
-    mkdirSync(join(osHome, ".agents", "plugins"), { recursive: true });
-    mkdirSync(join(ignoredHome, ".agents", "plugins"), { recursive: true });
-    writeFileSync(join(osHome, ".agents", "plugins", "marketplace.json"), "{broken");
-    writeFileSync(join(ignoredHome, ".agents", "plugins", "marketplace.json"), "{broken");
+    const environmentHome = join(root, "environment-home");
+    const userProfile = join(root, "user-profile");
+    for (const directory of [osHome, environmentHome, userProfile]) mkdirSync(directory);
+    const malformed = (directory: string) => {
+      mkdirSync(join(directory, ".agents", "plugins"), { recursive: true });
+      writeFileSync(join(directory, ".agents", "plugins", "marketplace.json"), "{broken");
+    };
     const boundaries = {
       systemFiles: [],
       managedPreferences: () => "absent" as const,
       resolveOsHome: () => osHome,
     };
-    const primary = process.platform === "win32" ? "USERPROFILE" : "HOME";
-    const secondary = process.platform === "win32" ? "HOME" : "USERPROFILE";
-    const originalPrimary = process.env[primary];
-    const originalSecondary = process.env[secondary];
+    const originalHome = process.env["HOME"];
+    const originalUserProfile = process.env["USERPROFILE"];
     try {
-      delete process.env[primary];
-      process.env[secondary] = ignoredHome;
+      delete process.env["HOME"];
+      process.env["USERPROFILE"] = userProfile;
+      malformed(userProfile);
+      expect(readCodexPluginMetadataInventory(repo, home, undefined, undefined, boundaries)).toBeNull();
+      rmSync(join(userProfile, ".agents"), { recursive: true, force: true });
+      process.env["HOME"] = environmentHome;
+      malformed(environmentHome);
+      expect(readCodexPluginMetadataInventory(repo, home, undefined, undefined, boundaries)).toBeNull();
+      rmSync(join(environmentHome, ".agents"), { recursive: true, force: true });
+      delete process.env["HOME"];
+      delete process.env["USERPROFILE"];
+      malformed(osHome);
       expect(readCodexPluginMetadataInventory(repo, home, undefined, undefined, boundaries)).toBeNull();
       rmSync(join(osHome, ".agents"), { recursive: true, force: true });
       expect(readCodexPluginMetadataInventory(repo, home, undefined, undefined, boundaries))
         .toEqual({ marketplaces: [], plugins: [] });
       expect(readCodexPluginMetadataInventory(repo, home, undefined, undefined,
         { ...boundaries, resolveOsHome: () => null })).toBeNull();
-      process.env[primary] = ignoredHome;
-      expect(readCodexPluginMetadataInventory(repo, home, undefined, undefined, boundaries)).toBeNull();
     } finally {
-      if (originalPrimary === undefined) delete process.env[primary];
-      else process.env[primary] = originalPrimary;
-      if (originalSecondary === undefined) delete process.env[secondary];
-      else process.env[secondary] = originalSecondary;
+      if (originalHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = originalHome;
+      if (originalUserProfile === undefined) delete process.env["USERPROFILE"];
+      else process.env["USERPROFILE"] = originalUserProfile;
     }
+  });
+
+  test("Codex TOML metadata requires UTF-8 without a BOM and preserves valid Unicode", () => {
+    const { home, repo } = fixture();
+    const config = join(home, "config.toml");
+    writeFileSync(config, "model = 'français'\n");
+    expect(readCodexPluginMetadataInventory(repo, home, undefined, home))
+      .toEqual({ marketplaces: [], plugins: [] });
+    writeFileSync(config, Buffer.concat([Buffer.from("model = '"), Buffer.from([0xff]), Buffer.from("'\n")]));
+    expect(readCodexPluginMetadataInventory(repo, home, undefined, home)).toBeNull();
+    writeFileSync(config, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("model = 'valid'\n")]));
+    expect(readCodexPluginMetadataInventory(repo, home, undefined, home)).toBeNull();
+  });
+
+  test("Codex JSON metadata requires UTF-8 without a BOM and preserves valid Unicode", () => {
+    const { home, repo } = fixture();
+    snapshot(home);
+    writeFileSync(join(home, "config.toml"),
+      `[marketplaces.semctx-stable]\nsource_type = 'git'\nsource = 'hoklims/semctx'\n`);
+    const manifest = join(home, ".tmp", "marketplaces", "semctx-stable", ".agents", "plugins", "marketplace.json");
+    const valid = JSON.parse(readFileSync(manifest, "utf8")) as Record<string, unknown>;
+    writeFileSync(manifest, JSON.stringify({ ...valid, interface: { displayName: "Contexte sémantique" } }));
+    expect(readCodexPluginMetadataInventory(repo, home, undefined, home)?.marketplaces).toHaveLength(1);
+    writeFileSync(manifest, Buffer.concat([Buffer.from('{"name":"semctx-stable","plugins":[] ,"x":"'),
+      Buffer.from([0xff]), Buffer.from('"}') ]));
+    expect(readCodexPluginMetadataInventory(repo, home, undefined, home)).toBeNull();
+    writeFileSync(manifest, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(JSON.stringify(valid))]));
+    expect(readCodexPluginMetadataInventory(repo, home, undefined, home)).toBeNull();
   });
 
   test("typed marketplace policy, interface and category fields match the pinned native schema", () => {
