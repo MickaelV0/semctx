@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -68,18 +68,18 @@ afterEach(() => {
 });
 
 /**
- * A real host executable, on real `PATH`, that answers `--version` but rejects every `plugin`
- * subcommand with a clap-style parser diagnostic — the exact shape a Codex/Claude host reports when
- * its installed CLI predates plugin support. Exercises the classifier at the real process boundary
- * rather than through the injected `runQuery` seam.
+ * A real host executable on real `PATH` that records any invocation. The metadata-only production
+ * path may detect this executable, but must never start it or trigger its profile side effects.
  */
-function unsupportedHostShim(name: "codex" | "claude"): string {
+function observableHostShim(name: "codex" | "claude"): { directory: string; invoked: string } {
   const directory = mkdtempSync(join(tmpdir(), `semctx-plugin-status-${name}-shim-`));
   roots.push(directory);
   const script = join(directory, `${name}-shim.js`);
+  const invoked = join(directory, "invoked");
   writeFileSync(
     script,
-    `const argv = process.argv.slice(2).join(" ");
+    `require("node:fs").writeFileSync(${JSON.stringify(invoked)}, "invoked");
+const argv = process.argv.slice(2).join(" ");
 if (argv === "--version") {
   process.stdout.write("${name}-cli 0.148.0\\n");
   process.exit(0);
@@ -98,7 +98,7 @@ process.exit(2);
     writeFileSync(executable, `#!/bin/sh\n"${process.execPath}" "${script}" "$@"\n`);
     chmodSync(executable, 0o755);
   }
-  return directory;
+  return { directory, invoked };
 }
 
 describe("semctx plugin-status — read-only cross-host delivery report", () => {
@@ -133,21 +133,22 @@ describe("semctx plugin-status — read-only cross-host delivery report", () => 
     expect(result.code).toBe(3);
   }, SPAWN_TIMEOUT_MS);
 
-  test("a real host CLI that rejects the plugin subcommand reports HOST_INTERFACE_UNSUPPORTED, not a generic failure", () => {
-    const shimDirectory = unsupportedHostShim("codex");
+  test("host detection never invokes the CLI and unprovable declarative metadata stays unknown", () => {
+    const shim = observableHostShim("codex");
     const result = runPluginStatus(temporaryRoot(), {
       json: true,
-      path: shimDirectory,
+      path: shim.directory,
       args: ["--host", "codex"],
     });
     const report = JSON.parse(result.out);
 
     expect(report.hosts.codex.detected).toBe(true);
-    expect(report.hosts.codex.reasons).toContain("HOST_INTERFACE_UNSUPPORTED");
-    expect(report.hosts.codex.reasons).not.toContain("HOST_QUERY_FAILED");
+    expect(report.hosts.codex.reasons).toContain("HOST_QUERY_FAILED");
+    expect(report.hosts.codex.reasons).not.toContain("HOST_INTERFACE_UNSUPPORTED");
     expect(report.hosts.codex.verdict).toBe("UNKNOWN");
     expect(report.hosts.codex.marketplace.configured).toBeNull();
     expect(report.hosts.codex.convergence).toEqual([]);
+    expect(existsSync(shim.invoked)).toBe(false);
     expect(result.code).toBe(3);
   }, SPAWN_TIMEOUT_MS);
 
@@ -180,7 +181,7 @@ describe("semctx plugin-status — read-only cross-host delivery report", () => 
     const project = join(base, "project");
     const subdir = join(project, "subdir");
     const profile = join(base, "profile");
-    const shimDirectory = unsupportedHostShim("claude");
+    const shim = observableHostShim("claude");
     mkdirSync(subdir, { recursive: true });
     mkdirSync(profile);
     writeFileSync(join(profile, "settings.json"), "{}");
@@ -188,7 +189,7 @@ describe("semctx plugin-status — read-only cross-host delivery report", () => 
     const reports = [project, ".", join("subdir", "..")].map((root) => {
       const result = runPluginStatus(root, {
         json: true,
-        path: shimDirectory,
+        path: shim.directory,
         args: ["--host", "claude"],
         cwd: project,
         environment: { CLAUDE_CONFIG_DIR: profile },
@@ -204,10 +205,11 @@ describe("semctx plugin-status — read-only cross-host delivery report", () => 
     }
     expect(reports[1].hosts.claude).toEqual(reports[0].hosts.claude);
     expect(reports[2].hosts.claude).toEqual(reports[0].hosts.claude);
+    expect(existsSync(shim.invoked)).toBe(false);
 
     const unsafeHome = runPluginStatus(".", {
       json: true,
-      path: shimDirectory,
+      path: shim.directory,
       args: ["--host", "claude"],
       cwd: project,
       environment: { CLAUDE_CONFIG_DIR: "relative-profile" },
