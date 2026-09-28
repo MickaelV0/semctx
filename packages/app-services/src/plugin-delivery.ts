@@ -1870,10 +1870,46 @@ function decodeCodexUtf8(bytes: Buffer): string | null {
   }
 }
 
+/** JSON syntax is already validated; retain decoded keys that JSON.parse otherwise overwrites. */
+function codexJsonStringsAreUnambiguous(text: string): boolean {
+  const scopes: ({ keys: Set<string>; awaitingKey: boolean } | null)[] = [];
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    if (character === "{") scopes.push({ keys: new Set(), awaitingKey: true });
+    else if (character === "[") scopes.push(null);
+    else if (character === "}" || character === "]") scopes.pop();
+    else if (character === "," || character === ":") {
+      const scope = scopes.at(-1);
+      if (scope !== undefined && scope !== null) scope.awaitingKey = character === ",";
+    } else if (character === '"') {
+      const start = index;
+      for (index += 1; index < text.length; index += 1) {
+        if (text[index] === "\\") index += 1;
+        else if (text[index] === '"') break;
+      }
+      const value = parseJsonValue(text.slice(start, index + 1));
+      if (typeof value !== "string") return false;
+      // Iteration joins valid UTF-16 pairs into one code point; a remaining surrogate is invalid.
+      for (const scalar of value) {
+        const code = scalar.codePointAt(0) ?? 0;
+        if (code >= 0xd800 && code <= 0xdfff) return false;
+      }
+      const scope = scopes.at(-1);
+      if (scope !== undefined && scope !== null && scope.awaitingKey) {
+        if (scope.keys.has(value)) return false;
+        scope.keys.add(value);
+      }
+    }
+  }
+  return scopes.length === 0;
+}
+
 function decodeCodexMetadataObject(bytes: Buffer | null): Record<string, unknown> | null {
   if (bytes === null) return null;
   const text = decodeCodexUtf8(bytes);
-  return text === null ? null : plainRecord(parseJsonValue(text));
+  if (text === null) return null;
+  const parsed = plainRecord(parseJsonValue(text));
+  return parsed !== null && codexJsonStringsAreUnambiguous(text) ? parsed : null;
 }
 
 type OptionalMetadataFile =
@@ -1882,7 +1918,9 @@ type OptionalMetadataFile =
   | { status: "ok"; bytes: Buffer };
 
 /** Distinguish a proven absent file from an unsafe path; `readConfinedFile` intentionally cannot. */
-function readOptionalMetadataFile(file: string, root: string): OptionalMetadataFile {
+function readOptionalMetadataFile(
+  file: string, root: string, maxBytes = PLUGIN_DELIVERY_MAX_HOST_OUTPUT_BYTES,
+): OptionalMetadataFile {
   try {
     const resolvedRoot = resolve(root);
     const resolvedFile = resolve(file);
@@ -1913,7 +1951,7 @@ function readOptionalMetadataFile(file: string, root: string): OptionalMetadataF
       if (!final && !stats.isDirectory()) return { status: "unsafe" };
       if (final && !stats.isFile()) return { status: "unsafe" };
     }
-    const bytes = readConfinedFile(file, root, PLUGIN_DELIVERY_MAX_HOST_OUTPUT_BYTES);
+    const bytes = readConfinedFile(file, root, maxBytes);
     return bytes === null ? { status: "unsafe" } : { status: "ok", bytes };
   } catch {
     return { status: "unsafe" };
@@ -2858,21 +2896,30 @@ function defaultReadMarketplaceSnapshot(
   let commit: string | null = null;
   let ref: string | null = null;
   let source: string | null = null;
-  try {
-    const metadata = readConfinedFile(
-      join(canonicalRoot, ".codex-marketplace-install.json"),
-      canonicalRoot,
-      PLUGIN_DELIVERY_MAX_MANIFEST_BYTES,
-    );
-    const raw = metadata === null ? undefined : parseJsonValue(metadata.toString("utf8"));
-    if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
-      const record = raw as Record<string, unknown>;
+  const sidecar = join(canonicalRoot, ".codex-marketplace-install.json");
+  if (host === "codex") {
+    const metadata = readOptionalMetadataFile(sidecar, canonicalRoot, PLUGIN_DELIVERY_MAX_MANIFEST_BYTES);
+    if (metadata.status === "unsafe") return null;
+    if (metadata.status === "ok") {
+      const record = decodeCodexMetadataObject(metadata.bytes);
+      if (record === null) return null;
       commit = safeText(record["revision"]);
       ref = safeText(record["ref_name"]);
       source = safeText(record["source"]);
     }
-  } catch {
-    // No declarative metadata; fall back to the checkout below.
+  } else {
+    try {
+      const metadata = readConfinedFile(sidecar, canonicalRoot, PLUGIN_DELIVERY_MAX_MANIFEST_BYTES);
+      const raw = metadata === null ? undefined : parseJsonValue(metadata.toString("utf8"));
+      if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
+        const record = raw as Record<string, unknown>;
+        commit = safeText(record["revision"]);
+        ref = safeText(record["ref_name"]);
+        source = safeText(record["source"]);
+      }
+    } catch {
+      // Claude's existing fallback remains independent of Codex metadata refusal.
+    }
   }
   if (commit === null) {
     const head = runQuery(["git", "--no-replace-objects", "rev-parse", "HEAD"], canonicalRoot, LOCAL_READ_LIMITS);
@@ -2895,20 +2942,18 @@ function defaultReadMarketplaceSnapshot(
   const layout = RELEASE_PLUGIN[host];
   const pluginRoot = canonicalDirectoryWithin(join(canonicalRoot, "plugins", layout.directory), canonicalRoot);
   if (pluginRoot === null) return null;
-  const version = readJsonField(join(pluginRoot, layout.manifest, "plugin.json"), "version", canonicalRoot);
+  const version = readJsonField(join(pluginRoot, layout.manifest, "plugin.json"), "version", canonicalRoot, host);
 
   return { commit, ref, source, version, bundles: bundleDigests(join(pluginRoot, "dist"), canonicalRoot) };
 }
 
-function readJsonField(file: string, field: string, root: string): string | null {
+function readJsonField(file: string, field: string, root: string, host: PluginDeliveryHost): string | null {
   // A manifest is a small JSON document. A file claiming to be one while being far larger is
   // refused by the bounded read rather than parsed.
   const bytes = readConfinedFile(file, root, PLUGIN_DELIVERY_MAX_MANIFEST_BYTES);
   if (bytes === null) return null;
-  const raw = parseJsonValue(bytes.toString("utf8"));
-  return raw !== null && typeof raw === "object" && !Array.isArray(raw)
-    ? safeText((raw as Record<string, unknown>)[field])
-    : null;
+  const record = host === "codex" ? decodeCodexMetadataObject(bytes) : decodeMetadataObject(bytes);
+  return record === null ? null : safeText(record[field]);
 }
 
 function defaultReadInstalledPayload(
@@ -2922,6 +2967,7 @@ function defaultReadInstalledPayload(
     join(canonicalRoot, RELEASE_PLUGIN[host].manifest, "plugin.json"),
     "version",
     canonicalRoot,
+    host,
   );
   if (version === null) return null;
   return { version, bundles: bundleDigests(join(canonicalRoot, "dist"), canonicalRoot) };
