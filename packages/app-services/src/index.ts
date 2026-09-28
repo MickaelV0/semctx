@@ -50,6 +50,7 @@ export {
   isCanonicalClaudeMarketplaceSource,
   isHostInterfaceUnsupportedFailure,
   pluginDeliveryStatus,
+  readCodexMetadataObject,
   readCodexPluginMetadataInventory,
   readClaudePluginMetadataInventory,
   resolveClaudePluginHome,
