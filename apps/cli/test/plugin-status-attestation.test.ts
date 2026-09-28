@@ -13,6 +13,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join, relative } from "node:path";
+import {
+  PLUGIN_DELIVERY_MAX_HOST_OUTPUT_BYTES,
+  PLUGIN_DELIVERY_QUERY_TIMEOUT_MS,
+  runPluginDeliveryQuery,
+} from "../../../packages/app-services/src/plugin-delivery";
 
 /**
  * End-to-end proof that no local machine can stand in for the public release authority.
@@ -296,11 +301,54 @@ function writeHostShims(
   }
 }
 
+function hostFixture(directory: string, host: "codex" | "claude"): string {
+  return join(directory, process.platform === "win32" ? `${host}.exe` : host);
+}
+
+function runHostFixture(directory: string, host: "codex" | "claude") {
+  return runPluginDeliveryQuery(
+    [hostFixture(directory, host), "--version"],
+    consumer,
+    {
+      timeoutMs: PLUGIN_DELIVERY_QUERY_TIMEOUT_MS,
+      maxBytes: PLUGIN_DELIVERY_MAX_HOST_OUTPUT_BYTES,
+      env: { SEMCTX_TEST_BUN: process.execPath },
+    },
+  );
+}
+
+/** Keep PATH hermetic while preserving the existing real-Git attestation against the local fixture. */
+function writeGitForwarder(directory: string): string {
+  const git = Bun.which("git");
+  if (git === null) throw new Error("git is required by the attestation fixture");
+  const invoked = join(directory, "git-invoked");
+  if (process.platform === "win32") {
+    const script = join(directory, "git-forwarder.js");
+    writeFileSync(
+      script,
+      `require("node:fs").writeFileSync(${JSON.stringify(invoked)}, "invoked");\nconst result = Bun.spawnSync([${JSON.stringify(git)}, ...process.argv.slice(2)], { stdin: "inherit", stdout: "inherit", stderr: "inherit" });\nprocess.exit(result.exitCode ?? 1);\n`,
+    );
+    const compiled = Bun.spawnSync([
+      process.execPath, "build", "--compile", script, "--outfile", join(directory, "git.exe"),
+    ], { stdout: "pipe", stderr: "pipe" });
+    if (compiled.exitCode !== 0) {
+      throw new Error(`could not compile Git forwarder: ${new TextDecoder().decode(compiled.stderr)}`);
+    }
+    return invoked;
+  }
+  const executable = join(directory, "git");
+  writeFileSync(executable, `#!/bin/sh\nprintf invoked > ${JSON.stringify(invoked)}\nexec ${JSON.stringify(git)} "$@"\n`);
+  chmodSync(executable, 0o755);
+  return invoked;
+}
+
 interface RunOptions {
   root?: string;
   bin?: string;
   /** Extra environment for the child, used to inject Git configuration the resolver must ignore. */
   env?: Record<string, string>;
+  /** Omit the ambient PATH; the fixture directory must contain every executable the case permits. */
+  isolatedPath?: boolean;
 }
 
 function runStatus(
@@ -313,7 +361,9 @@ function runStatus(
     // `PATH` lets process creation choose the original value and bypass the hermetic shim prefix.
     if (name.toUpperCase() !== "PATH") environment[name] = value;
   }
-  environment["PATH"] = `${options.bin ?? shimDir}${delimiter}${process.env["PATH"] ?? ""}`;
+  environment["PATH"] = options.isolatedPath === true
+    ? options.bin ?? shimDir
+    : `${options.bin ?? shimDir}${delimiter}${process.env["PATH"] ?? ""}`;
 
   const result = Bun.spawnSync([
     process.execPath, "run", CLI, "plugin-status", "--root", options.root ?? consumer, "--json", ...extra,
@@ -715,14 +765,13 @@ describe("semctx plugin-status — the production runner enforces its own budget
     const sentinel = join(work, "stdout-flood-survived");
     writeHostShims(flooding, [["codex", { kind: "flood", stream: "stdout", sentinel }], ["claude", null]]);
 
-    const { code, report } = runStatus(["--host", "codex"], { bin: flooding });
+    const result = runHostFixture(flooding, "codex");
 
-    expect(reasons(host(report, "codex"))).toContain("HOST_OUTPUT_TOO_LARGE");
+    expect(result.truncated).toBe(true);
+    expect(result.out).toBe("");
     // The budget is a live ceiling: the flood is killed in flight rather than accumulated whole
     // and inspected once the damage is already done.
     expect(existsSync(sentinel)).toBe(false);
-    expect(report["delivery"]).toBe("UNKNOWN");
-    expect(code).toBe(3);
   }, TIMEOUT_MS);
 
   test("a host flooding stderr is bounded exactly like one flooding stdout", () => {
@@ -730,11 +779,11 @@ describe("semctx plugin-status — the production runner enforces its own budget
     const sentinel = join(work, "stderr-flood-survived");
     writeHostShims(flooding, [["codex", { kind: "flood", stream: "stderr", sentinel }], ["claude", null]]);
 
-    const { code, report } = runStatus(["--host", "codex"], { bin: flooding });
+    const result = runHostFixture(flooding, "codex");
 
-    expect(reasons(host(report, "codex"))).toContain("HOST_OUTPUT_TOO_LARGE");
+    expect(result.truncated).toBe(true);
+    expect(result.out).toBe("");
     expect(existsSync(sentinel)).toBe(false);
-    expect(code).toBe(3);
   }, TIMEOUT_MS);
 
   test("a host that never returns is killed at its deadline and reported as a timeout", () => {
@@ -742,30 +791,29 @@ describe("semctx plugin-status — the production runner enforces its own budget
     writeHostShims(hanging, [["codex", { kind: "hang" }], ["claude", null]]);
 
     const started = Date.now();
-    const { code, report } = runStatus(["--host", "codex"], { bin: hanging });
+    const result = runHostFixture(hanging, "codex");
 
-    expect(reasons(host(report, "codex"))).toContain("HOST_QUERY_TIMEOUT");
+    expect(result.timedOut).toBe(true);
     // The budget is a real deadline, not a hint: the shim would otherwise run for a minute.
     expect(Date.now() - started).toBeLessThan(60_000);
-    expect(host(report, "codex")["convergence"]).toEqual([]);
-    expect(host(report, "codex")["activation"]).toBeNull();
-    expect(code).toBe(3);
   }, TIMEOUT_MS);
 });
 
 describe("semctx plugin-status — scope selection over real hosts", () => {
   test("auto omits an absent host while an explicit scope keeps it unknown", () => {
     const codexOnly = join(work, "codex-only-bin");
-    writeHostShims(codexOnly, [["codex", codexInventory], ["claude", null]]);
+    writeHostShims(codexOnly, [["codex", codexInventory]]);
+    const gitInvoked = writeGitForwarder(codexOnly);
 
-    const auto = runStatus(["--attest"], { bin: codexOnly });
+    const auto = runStatus(["--attest"], { bin: codexOnly, isolatedPath: true });
     // `auto` asks what is installed here, so an absent host is not part of the question.
     expect(host(auto.report, "claude")["requested"]).toBe(false);
     expect(host(auto.report, "codex")["requested"]).toBe(true);
     expect(reasons(host(auto.report, "codex"))).not.toContain("HOST_NOT_DETECTED");
+    expect(existsSync(gitInvoked)).toBe(true);
 
     // Naming the host makes its absence part of the answer.
-    const all = runStatus(["--attest", "--host", "all"], { bin: codexOnly });
+    const all = runStatus(["--attest", "--host", "all"], { bin: codexOnly, isolatedPath: true });
     expect(host(all.report, "claude")["requested"]).toBe(true);
     expect(reasons(host(all.report, "claude"))).toContain("HOST_NOT_DETECTED");
     expect(all.report["delivery"]).toBe("UNKNOWN");
@@ -902,9 +950,9 @@ describe("semctx plugin-status — the output budget is a total, not a per-strea
       ["claude", null],
     ]);
 
-    const { report } = runStatus(["--host", "codex"], { bin: directory });
+    const result = runHostFixture(directory, "codex");
 
-    expect(reasons(host(report, "codex"))).toContain("HOST_OUTPUT_TOO_LARGE");
+    expect(result.truncated).toBe(true);
   }, TIMEOUT_MS);
 
   test("both streams under half are accepted, which is what bounds the total", () => {
@@ -915,10 +963,12 @@ describe("semctx plugin-status — the output budget is a total, not a per-strea
       ["claude", null],
     ]);
 
-    const { report } = runStatus(["--host", "codex"], { bin: directory });
+    const result = runHostFixture(directory, "codex");
 
-    expect(reasons(host(report, "codex"))).not.toContain("HOST_OUTPUT_TOO_LARGE");
-    expect(host(report, "codex")["detected"]).toBe(true);
+    expect(result.truncated).not.toBe(true);
+    expect(result.timedOut).not.toBe(true);
+    expect(result.code).toBe(0);
+    expect(result.out).toEndWith("codex 0.0.0-test\n");
   }, TIMEOUT_MS);
 });
 

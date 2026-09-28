@@ -537,6 +537,9 @@ describe("static page contract", () => {
 
   test("browser reader accepts the committed candidate or release projection", () => {
     const evidence = JSON.parse(readFileSync(join(import.meta.dir, "..", "..", "site", "evidence.json"), "utf8"));
+    const packageIdentity = JSON.parse(
+      readFileSync(join(import.meta.dir, "..", "..", "apps", "cli", "package.json"), "utf8"),
+    );
     const rendered = renderEvidenceInBrowserShell(evidence);
     expect(["candidate", "release"]).toContain(evidence.phase);
     if (evidence.phase === "release") {
@@ -549,7 +552,8 @@ describe("static page contract", () => {
     }
     expect(rendered["phase-value"]?.textContent).toBe(evidence.phase);
     expect(rendered["global-verdict"]?.textContent).toBe("WARN");
-    expect(rendered["artifact-version"]?.textContent).toBe("0.3.5");
+    expect(evidence.demo.packageVersion).toBe(packageIdentity.version);
+    expect(rendered["artifact-version"]?.textContent).toBe(evidence.demo.packageVersion);
     expect(rendered["report-status"]?.textContent).toBe("Packaged demo evidence is present.");
   });
 
