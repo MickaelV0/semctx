@@ -1136,6 +1136,23 @@ function evaluateHost(
     // A successfully read, empty inventory *proves* the marketplace is not configured — this is the
     // one path allowed to report `false` rather than `null`.
     report.marketplace.configured = false;
+    if (host === "codex") {
+      // The declarative reader also observes physical caches without a registration. Preserve that
+      // confined evidence without inferring enablement, approved content or session activation.
+      const orphan = objectEntries(queries.plugins).find((entry) => entry["pluginId"] === CODEX_PLUGIN_ID
+        && entry["installed"] === true && entry["registered"] === false);
+      if (orphan !== undefined) {
+        const reportedPath = rawText(orphan["cachePath"]);
+        const cachePath = acceptHostPath(reportedPath, home);
+        if (reportedPath !== null && cachePath === null) reasons.push("HOST_PATH_REJECTED");
+        if (cachePath !== null) {
+          report.installed.installed = true;
+          report.installed.path = safeText(cachePath);
+          report.installed.version = safeText(orphan["version"]);
+          reasons.push("PLUGIN_ENABLEMENT_UNKNOWN", "INSTALLED_CACHE_CONTENT_UNPROVEN");
+        }
+      }
+    }
     report.reasons = sortedUnique([...reasons, "MARKETPLACE_NOT_CONFIGURED"]);
     report.verdict = "UNKNOWN";
     return report;
@@ -1658,10 +1675,14 @@ function defaultResolveHostHome(host: PluginDeliveryHost): string | null {
     const configured = process.env["CODEX_HOME"];
     if (typeof configured === "string" && configured.trim().length > 0) {
       const candidate = configured;
-      return isLocalFilesystemPath(candidate) ? resolve(candidate) : null;
+      return isLocalFilesystemPath(candidate) ? candidate : null;
     }
   }
-  return isLocalFilesystemPath(home) ? resolve(join(home, ".codex")) : null;
+  if (!isLocalFilesystemPath(home)) return null;
+  // Preserve cancelled components from the OS home until the inventory's two snapshots record
+  // their identities. join/resolve here would erase an ancestor that can drift during the read.
+  const separator = home.endsWith("/") || home.endsWith("\\") ? "" : sep;
+  return `${home}${separator}.codex`;
 }
 
 /**
@@ -2175,7 +2196,12 @@ function readCodexHomeMarketplace(
   const home = ownedHome ?? (environmentHome !== undefined
     ? environmentHome
     : resolveOsHome());
-  if (home === null || !hasLocalFilesystemShape(home) || !isLocalFilesystemPath(home)) return false;
+  if (home === null || !hasLocalFilesystemShape(home)) return false;
+  const homeTraversal = captureRawTraversal(home, false, "directory");
+  if (homeTraversal === null) return false;
+  // Manifest joins normalize the root. Retain every raw HOME/USERPROFILE/OS-home component in
+  // both snapshots so a cancelled directory replacement cannot become proven marketplace absence.
+  observations.push(JSON.stringify({ homeMarketplaceRoot: home, homeTraversal }));
   const manifest = readCodexMarketplaceManifest(home, observations);
   if (manifest === null || manifest === false) return manifest;
   return {
