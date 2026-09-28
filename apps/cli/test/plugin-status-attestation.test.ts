@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -398,6 +399,31 @@ function authority(report: Record<string, unknown>): string {
   return release(report)["authority"] as string;
 }
 
+/** Require the real declarative inventory and bundle comparison before testing public authority. */
+function expectForgedCodexArtifacts(report: Record<string, unknown>): void {
+  const codex = host(report, "codex");
+  const marketplace = codex["marketplace"] as Record<string, unknown>;
+  const snapshot = codex["snapshot"] as Record<string, unknown>;
+  const installed = codex["installed"] as Record<string, unknown>;
+  expect(marketplace["configured"]).toBe(true);
+  expect(marketplace["source"]).toBe(SEMCTX_URL);
+  expect(marketplace["ref"]).toBe("stable");
+  expect(snapshot["path"]).toBe(join(codexHome, ".tmp", "marketplaces", "semctx-stable"));
+  expect(snapshot["commit"]).toBe(forgedCommit);
+  expect(snapshot["version"]).toBe(FORGED_VERSION);
+  expect(installed["installed"]).toBe(true);
+  expect(installed["enabled"]).toBe(true);
+  expect(installed["path"]).toBe(join(codexHome, "plugins", "cache", "semctx-stable", "semctx-control", FORGED_VERSION));
+  expect(installed["version"]).toBe(FORGED_VERSION);
+  expect(installed["contentMatchesSnapshot"]).toBe(true);
+}
+
+function runStatusWithCodexArtifacts(extra: readonly string[], options: RunOptions = {}) {
+  const observed = runStatus(extra, options);
+  expectForgedCodexArtifacts(observed.report);
+  return observed;
+}
+
 /** Everything about a Git repository a read-only diagnostic must leave exactly as it found it. */
 function repositoryState(root: string): string {
   return [
@@ -428,7 +454,7 @@ function treeState(root: string): string {
 beforeAll(() => {
   // Deliberately not the `semctx-attestation-` prefix the resolver uses for its own scratch store:
   // sharing it would make a leftover directory impossible to attribute when auditing cleanup.
-  work = mkdtempSync(join(tmpdir(), "semctx-plugin-status-e2e-"));
+  work = mkdtempSync(join(realpathSync.native(tmpdir()), "semctx-plugin-status-e2e-"));
   originGit = join(work, "origin.git");
   const source = join(work, "forged-release");
   consumer = join(work, "consumer");
@@ -475,6 +501,15 @@ beforeAll(() => {
   // Real marketplace snapshots and real installed caches, byte-identical to the *forged* release.
   const codexMarketplace = join(codexHome, ".tmp", "marketplaces", "semctx-stable");
   writeReleaseTree(codexMarketplace, FORGED_VERSION, "forged");
+  write(join(codexHome, "config.toml"), "[features]\nplugins = true\n"
+    + "[marketplaces.semctx-stable]\nsource_type = 'git'\n"
+    + `source = ${JSON.stringify(SEMCTX_URL)}\nref = 'stable'\nsparse_paths = []\n`
+    + "[plugins.'semctx-control@semctx-stable']\nenabled = true\n"
+    + [consumer, foreign].map((root) => `[projects.${JSON.stringify(root)}]\ntrust_level = 'trusted'\n`).join(""));
+  write(join(codexMarketplace, ".agents", "plugins", "marketplace.json"), `${JSON.stringify({
+    name: "semctx-stable",
+    plugins: [{ name: "semctx-control", source: { source: "local", path: "./plugins/semctx-control" } }],
+  })}\n`);
   write(
     join(codexMarketplace, ".codex-marketplace-install.json"),
     `${JSON.stringify({ source_type: "git", source: SEMCTX_URL, ref_name: "stable", sparse_paths: [], revision: forgedCommit })}\n`,
@@ -585,7 +620,7 @@ describe("semctx plugin-status — a local repository cannot become the public a
   test("a local-protocol rewrite is refused on two independent grounds", () => {
     // Belt and braces: the variable is severed, and even if it survived the transport pin would
     // refuse a `file://` target. Neither alone is relied upon.
-    const { code, report } = runStatus(["--attest", "--host", "all"], {
+    const { code, report } = runStatusWithCodexArtifacts(["--attest", "--host", "all"], {
       env: { GIT_CONFIG_PARAMETERS: `'url.${localUrl(originGit)}.insteadOf=${SEMCTX_URL}'` },
     });
 
@@ -661,7 +696,7 @@ describe("semctx plugin-status — a local repository cannot become the public a
     const trace = join(work, "packfile-trace.bin");
     rmSync(trace, { force: true });
 
-    runStatus(["--attest", "--host", "codex"], {
+    runStatusWithCodexArtifacts(["--attest", "--host", "codex"], {
       env: { GIT_TRACE_PACKFILE: trace, GIT_TRACE: trace, GIT_TRACE_SETUP: trace },
     });
 
@@ -670,7 +705,7 @@ describe("semctx plugin-status — a local repository cannot become the public a
   }, TIMEOUT_MS);
 
   test("url.insteadOf cannot manufacture an attested release", () => {
-    const { code, report, raw } = runStatus(["--attest", "--host", "all"], { env: rewriting() });
+    const { code, report, raw } = runStatusWithCodexArtifacts(["--attest", "--host", "all"], { env: rewriting() });
 
     // Whether or not this machine has network access, the forged release must not be believed.
     expect(release(report)["commit"]).not.toBe(forgedCommit);
@@ -679,8 +714,8 @@ describe("semctx plugin-status — a local repository cannot become the public a
     // snapshot's recorded revision — so what must never happen is it being believed as the public
     // release, or its bytes being accepted as the released ones.
     expect(raw).toContain(forgedCommit);
-    expect((host(report, "codex")["installed"] as Record<string, unknown>)["contentMatchesPublicRelease"])
-      .not.toBe(true);
+    const publicContent = (host(report, "codex")["installed"] as Record<string, unknown>)["contentMatchesPublicRelease"];
+    expect(publicContent).toBe(release(report)["status"] === "resolved" ? false : null);
     // A cache built from the forged release can therefore never be reported as converged.
     expect(report["delivery"]).not.toBe("UP_TO_DATE");
     expect(report["verdict"]).not.toBe("UP_TO_DATE");
@@ -702,7 +737,7 @@ describe("semctx plugin-status — a local repository cannot become the public a
     const decoy = git(consumer, "commit-tree", root, "-m", "decoy");
     git(consumer, "replace", "--force", real, decoy);
     try {
-      const { report } = runStatus(["--host", "codex"]);
+      const { report } = runStatusWithCodexArtifacts(["--host", "codex"]);
 
       // The mirror names the ref's own commit and reads that commit's own objects; the substituted
       // version must never surface as the release.
@@ -718,7 +753,7 @@ describe("semctx plugin-status — a local repository cannot become the public a
   test("a partial clone is refused instead of turning a local read into a fetch", () => {
     git(consumer, "config", "extensions.partialclone", "origin");
     try {
-      const { code, report } = runStatus(["--host", "all"]);
+      const { code, report } = runStatusWithCodexArtifacts(["--host", "all"]);
 
       expect(release(report)["authority"]).toBe("absent");
       expect(reasons(release(report))).toContain("PUBLIC_RELEASE_LOCAL_STORE_PARTIAL");
@@ -730,7 +765,7 @@ describe("semctx plugin-status — a local repository cannot become the public a
   }, TIMEOUT_MS);
 
   test("the default path never claims an attested authority", () => {
-    const { code, report } = runStatus(["--host", "all"], { env: rewriting() });
+    const { code, report } = runStatusWithCodexArtifacts(["--host", "all"], { env: rewriting() });
 
     expect(release(report)["authority"]).toBe("local-mirror");
     expect(release(report)["status"]).toBe("unknown");
@@ -742,7 +777,7 @@ describe("semctx plugin-status — a local repository cannot become the public a
 
 describe("semctx plugin-status — attestation does not require a semctx checkout", () => {
   test("runs from an unrelated project without being gated on its origin", () => {
-    const { report } = runStatus(["--attest", "--host", "codex"], { root: foreign });
+    const { report } = runStatusWithCodexArtifacts(["--attest", "--host", "codex"], { root: foreign });
 
     // The regression: a resolver anchored on the consumer's `origin` refused to answer here.
     expect(reasons(release(report))).not.toContain("PUBLIC_RELEASE_ORIGIN_NOT_SEMCTX");
@@ -931,7 +966,7 @@ describe("semctx plugin-status — the attestation scratch store is placed, capp
   test("a successful attestation leaves no scratch store behind", () => {
     const base = mkdtempSync(join(work, "clean-base-"));
 
-    runStatus(["--attest", "--host", "codex"], {
+    runStatusWithCodexArtifacts(["--attest", "--host", "codex"], {
       env: { TMPDIR: base, TEMP: base, TMP: base },
     });
 
@@ -976,7 +1011,7 @@ describe("semctx plugin-status — nothing is mutated, including under --attest"
   test("leaves the inspected repository's objects, refs and configuration untouched", () => {
     const before = repositoryState(consumer);
 
-    runStatus(["--attest", "--host", "all"], { env: { GIT_CONFIG_GLOBAL: join(userHome, ".gitconfig") } });
+    runStatusWithCodexArtifacts(["--attest", "--host", "all"], { env: { GIT_CONFIG_GLOBAL: join(userHome, ".gitconfig") } });
 
     // No fetch into the inspected project, no ref written, no configuration changed — an
     // attestation that borrowed the consumer's object store would show up here.
@@ -987,7 +1022,7 @@ describe("semctx plugin-status — nothing is mutated, including under --attest"
     const beforeCodex = treeState(codexHome);
     const beforeClaude = treeState(userHome);
 
-    runStatus(["--attest", "--host", "all"]);
+    runStatusWithCodexArtifacts(["--attest", "--host", "all"]);
 
     expect(treeState(codexHome)).toBe(beforeCodex);
     expect(treeState(userHome)).toBe(beforeClaude);
