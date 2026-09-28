@@ -1919,6 +1919,9 @@ describe("Codex release manifest consumer", () => {
       Buffer.from([0xff]), Buffer.from('"}')])],
     ["UTF-8 BOM", Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(`{"version":"${RELEASE_VERSION}"}`)])],
     ["malformed syntax", Buffer.from("{")],
+    ["version whitespace", Buffer.from(JSON.stringify({ version: ` ${RELEASE_VERSION} ` }))],
+    ["version embedded NUL", Buffer.from(JSON.stringify({ version: RELEASE_VERSION.slice(0, -1) + "\u0000" + RELEASE_VERSION.slice(-1) }))],
+    ["version bidi control", Buffer.from(JSON.stringify({ version: RELEASE_VERSION.slice(0, -1) + "\u202e" + RELEASE_VERSION.slice(-1) }))],
   ] as const;
   for (const path of ["apps/cli/package.json", "plugins/semctx-control/.codex-plugin/plugin.json"] as const) {
     for (const [name, bytes] of invalid) {
@@ -1941,6 +1944,17 @@ describe("Codex release manifest consumer", () => {
     expect(report.publicRelease.version).toBeNull();
     expect(report.publicRelease.reasons).toContain("PUBLIC_RELEASE_MANIFEST_UNREADABLE");
     expect(gitCalls(recorded).filter((call) => call.includes("/dist/"))).toEqual([]);
+  });
+
+  test("local mirror raw version identities never compare equal after display cleanup", () => {
+    for (const version of [` ${RELEASE_VERSION} `,
+      RELEASE_VERSION.slice(0, -1) + "\u0000" + RELEASE_VERSION.slice(-1),
+      RELEASE_VERSION.slice(0, -1) + "\u202e" + RELEASE_VERSION.slice(-1)]) {
+      const bytes = Buffer.from(JSON.stringify({ version }));
+      const { report } = releaseOf({ outcomes: { ":apps/cli/package.json": { code: 0, out: bytes.toString("utf8"), bytes } } }, false);
+      expect(report.publicRelease.version).toBeNull();
+      expect(report.publicRelease.reasons).toContain("PUBLIC_RELEASE_MANIFEST_UNREADABLE");
+    }
   });
 
   test("raw quoted strings, independent nested scopes and paired Unicode remain valid", () => {

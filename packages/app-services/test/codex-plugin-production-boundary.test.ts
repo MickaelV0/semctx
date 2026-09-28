@@ -22,6 +22,7 @@ interface ProductionJsonFixture {
     configuredRef?: string | null; configuredSparse?: string[]; localSidecar?: boolean; fixedInventory?: boolean;
     unregistered?: boolean; orphanCache?: boolean; projectConfig?: string; userConfig?: string };
   recovery?: { snapshotManifest?: string; cacheManifest?: string; sidecarAfterAdd?: string };
+  unsupportedLayer?: { location: "system" | "cwd" | "ancestor"; text: string };
 }
 
 function productionStatus(source: RawHomeSource, drift = false, orphan = false,
@@ -53,7 +54,8 @@ function productionFixture(source: RawHomeSource, drift: boolean, orphan: boolea
     const systemPolicy = ${JSON.stringify(systemPolicy)}, caller = ${JSON.stringify(caller)};
     const fallbackFault = ${JSON.stringify(fallbackFault)};
     const jsonFixture = ${JSON.stringify(jsonFixture ?? null)};
-    const repo = join(root, "repo"), home = join(root, "profile");
+    const gitRoot = join(root, "repo"), home = join(root, "profile");
+    const repo = jsonFixture?.unsupportedLayer?.location === "ancestor" ? join(gitRoot, "child") : gitRoot;
     const osHome = join(root, "os-home"), cancelled = join(root, "cancelled");
     const knownFolder = join(root, "known-program-data"), systemCancelled = join(root, "system-cancelled");
     const rawHome = cancelled + sep + ".." + sep + "os-home";
@@ -81,7 +83,7 @@ function productionFixture(source: RawHomeSource, drift: boolean, orphan: boolea
     for (const path of [repo, home, osHome, cancelled, codexHome, knownFolder, systemCancelled, join(root, "owned-temp"),
       join(root, "program-data")]) addDirectory(path);
     if (process.platform !== "win32") addDirectory("/etc");
-    addFile(join(repo, ".git", "HEAD"), "ref: refs/heads/main\\n");
+    addFile(join(gitRoot, ".git", "HEAD"), "ref: refs/heads/main\\n");
     if (systemPolicy === "disabled") addFile(join(knownFolder, "OpenAI", "Codex", "config.toml"),
       "[features]\\nplugins = false\\n");
     if (orphan) addFile(join(cachePath, ".codex-plugin", "plugin.json"),
@@ -129,6 +131,15 @@ function productionFixture(source: RawHomeSource, drift: boolean, orphan: boolea
         for (const bundle of ["semctx-index-worker.js", "semctx-mcp.js", "semctx-shared.js", "semctx.js"]) {
           addFile(join(marketplace, "plugins", "semctx-control", "dist", bundle), "same bundle: " + bundle);
         }
+      }
+      if (jsonFixture.unsupportedLayer !== undefined) {
+        const location = jsonFixture.unsupportedLayer.location;
+        const target = location === "system" ? (process.platform === "win32"
+          ? join(knownFolder, "OpenAI", "Codex", "config.toml") : "/etc/codex/config.toml")
+          : location === "cwd" ? join(repo, "config.toml") : join(gitRoot, ".codex", "config.toml");
+        addFile(target, jsonFixture.unsupportedLayer.text);
+        if (location !== "system") addFile(join(codexHome, "config.toml"), files.get(join(codexHome, "config.toml")).toString("utf8")
+          + "\\n[projects." + JSON.stringify(gitRoot) + "]\\ntrust_level = 'trusted'\\n");
       }
     }
     const missing = () => Object.assign(new Error("synthetic absence"), { code: "ENOENT" });
@@ -217,7 +228,7 @@ function productionFixture(source: RawHomeSource, drift: boolean, orphan: boolea
       }
       if (caller === "install" && argv[0] === "git" && argv.includes("--show-toplevel")) {
         nativeCalls.push("git-root");
-        return { exitCode: 0, stdout: Buffer.from(repo), stderr: Buffer.alloc(0) };
+        return { exitCode: 0, stdout: Buffer.from(gitRoot), stderr: Buffer.alloc(0) };
       }
       if (jsonFixture?.artifacts !== undefined && argv[0] === "git" && argv.includes("rev-parse")) {
         nativeCalls.push("git-read");
@@ -424,6 +435,65 @@ describe("production Codex status artifact JSON", () => {
     expect(report.hosts.codex.reasons).toContain("INSTALLED_CACHE_UNREADABLE");
     expect(report.hosts.codex.delivery).toBe("UNKNOWN");
   });
+});
+
+describe("Codex raw identity and unsupported Date production", () => {
+  const marketplace = '{"name":"semctx-stable","plugins":[{"name":"semctx-control",'
+    + '"source":{"source":"local","path":"./plugins/semctx-control"}}]}';
+  const native = { source_type: "git", source: "hoklims/semctx", ref_name: "stable", sparse_paths: [], revision: "1".repeat(40) };
+  const status = (artifacts: NonNullable<ProductionJsonFixture["artifacts"]>) =>
+    (productionFixture("CODEX_HOME", false, false, "absent", "status", "safe", { marketplace, artifacts }) as ProductionObservation).report;
+  for (const [name, version] of [
+    ["whitespace", " 0.3.7 "], ["embedded NUL", "0.3.\u00007"], ["bidi control", "0.3.\u202e7"],
+  ] as const) {
+    test(`${name} snapshot version cannot become the displayed canonical identity`, () => {
+      const report = status({ sidecar: JSON.stringify(native), snapshotManifest: JSON.stringify({ name: "semctx-control", version }) });
+      expect(report.hosts.codex.snapshot.version).toBeNull();
+      expect(report.hosts.codex.reasons).toContain("SNAPSHOT_VERSION_UNKNOWN");
+    });
+    test(`${name} payload version cannot become the displayed canonical identity`, () => {
+      const report = status({ sidecar: JSON.stringify(native), payloadManifest: JSON.stringify({ name: "semctx-control", version }) });
+      expect(report.hosts.codex.installed.version).toBeNull();
+      expect(report.hosts.codex.reasons).toContain("INSTALLED_CACHE_UNREADABLE");
+    });
+  }
+  test("a bidi ref is compared raw to stable before safe display", () => {
+    const ref = "sta\u202eble";
+    const report = status({ configuredRef: ref, sidecar: JSON.stringify({ ...native, ref_name: ref }) });
+    expect(report.hosts.codex.snapshot.version).toBe("0.3.7");
+    expect(report.hosts.codex.reasons).toContain("MARKETPLACE_REF_UNEXPECTED");
+    expect(report.hosts.codex.delivery).not.toBe("UP_TO_DATE");
+  });
+  test("valid raw SemVer and stable ref preserve canonical observations", () => {
+    const report = status({ sidecar: JSON.stringify(native), snapshotManifest: '{"name":"semctx-control","version":"0.3.7-rc.1+build.2"}' });
+    expect(report.hosts.codex.snapshot.version).toBe("0.3.7-rc.1+build.2");
+    expect(report.hosts.codex.reasons).not.toContain("MARKETPLACE_REF_UNEXPECTED");
+    expect(report.publicRelease.authority).toBe("absent");
+  });
+
+  for (const location of ["system", "cwd", "ancestor"] as const) {
+    test(`${location} Date feature container refuses status and default dry-run/apply before native Codex`, () => {
+      const fixture = { marketplace, artifacts: { sidecar: JSON.stringify(native) },
+        unsupportedLayer: { location, text: "features = 1979-05-27T07:32:00Z\n" } };
+      const statusObserved = productionFixture("CODEX_HOME", false, false, "absent", "status", "safe", fixture) as ProductionObservation;
+      const installs = [true, false].map((dryRun) => productionFixture("CODEX_HOME", false, false, "absent",
+        "install", "safe", { ...fixture, dryRun }) as InstallObservation);
+      expect(installs.map((observed) => ({ status: observed.report.hosts.codex.status,
+        calls: observed.nativeCalls.filter((call) => call.startsWith("codex-attempt:")) })))
+        .toEqual([{ status: "failed", calls: [] }, { status: "failed", calls: [] }]);
+      expect(statusObserved.report.hosts.codex.marketplace.configured).toBeNull();
+      expect(statusObserved.report.hosts.codex.reasons).toContain("HOST_QUERY_FAILED");
+    });
+    test(`${location} false feature container refuses and empty table remains irrelevant`, () => {
+      for (const [text, expected] of [["features = false\n", "failed"], ["features = {}\n", "planned"]] as const) {
+        const observed = productionFixture("CODEX_HOME", false, false, "absent", "install", "safe", {
+          marketplace, dryRun: true, artifacts: { sidecar: JSON.stringify(native) }, unsupportedLayer: { location, text },
+        }) as InstallObservation;
+        expect(observed.report.hosts.codex.status).toBe(expected);
+        expect(observed.nativeCalls.filter((call) => call.startsWith("codex-attempt:"))).toEqual([]);
+      }
+    });
+  }
 });
 
 describe("Codex native trusted project merge production", () => {

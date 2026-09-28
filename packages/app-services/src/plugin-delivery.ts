@@ -588,6 +588,11 @@ function rawText(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+/** A Semctx version is an identity: no trimming, control removal or display redaction. */
+function codexVersionIdentity(value: unknown): string | null {
+  return typeof value === "string" && value.trim() === value && VERSION_SEGMENT.test(value) ? value : null;
+}
+
 function hasIdentityControlCharacter(value: string): boolean {
   for (const character of value) {
     const code = character.charCodeAt(0);
@@ -1193,18 +1198,20 @@ function evaluateHost(
       snapshot.sparsePaths === undefined ? [] : snapshot.sparsePaths);
     if (expected === null || observed === null || !sameCodexMarketplaceIdentity(expected, observed)) snapshot = null;
   }
+  const snapshotVersion = host === "codex" ? codexVersionIdentity(snapshot?.version) : safeText(snapshot?.version);
   if (snapshot === null) {
     reasons.push("SNAPSHOT_UNREADABLE");
   } else {
     report.snapshot.commit = safeText(snapshot.commit);
-    report.snapshot.version = safeText(snapshot.version);
+    report.snapshot.version = safeText(snapshotVersion);
     if (report.snapshot.commit === null) reasons.push("SNAPSHOT_COMMIT_UNKNOWN");
     if (report.snapshot.version === null) reasons.push("SNAPSHOT_VERSION_UNKNOWN");
   }
 
   // Claude reports the tracked ref directly; Codex records it in the snapshot install metadata.
-  const ref = safeText(marketplace["ref"]) ?? safeText(snapshot?.ref) ?? null;
-  report.marketplace.ref = ref;
+  const ref = host === "codex" ? rawText(marketplace["ref"]) ?? rawText(snapshot?.ref)
+    : safeText(marketplace["ref"]) ?? safeText(snapshot?.ref) ?? null;
+  report.marketplace.ref = safeText(ref);
   if (ref === null) reasons.push("MARKETPLACE_REF_UNKNOWN");
   else if (ref !== PLUGIN_DELIVERY_RELEASE_REF) reasons.push("MARKETPLACE_REF_UNEXPECTED");
 
@@ -1245,15 +1252,15 @@ function evaluateHost(
   report.installed.path = safeText(cachePath);
 
   const payload = cachePath === null ? null : dependencies.readInstalledPayload(host, cachePath);
-  const cacheVersion = safeText(payload?.version);
+  const cacheVersion = host === "codex" ? codexVersionIdentity(payload?.version) : safeText(payload?.version);
   if (payload === null || cacheVersion === null) {
     report.reasons = sortedUnique([...reasons, "INSTALLED_CACHE_UNREADABLE"]);
     report.verdict = "UNKNOWN";
     return report;
   }
-  report.installed.version = cacheVersion;
+  report.installed.version = safeText(cacheVersion);
 
-  if (report.snapshot.version !== null && cacheVersion !== report.snapshot.version) {
+  if (snapshotVersion !== null && cacheVersion !== snapshotVersion) {
     reasons.push("INSTALLED_CACHE_BEHIND_SNAPSHOT");
   }
 
@@ -1297,14 +1304,15 @@ function evaluateHost(
 
   // --- Layer 5: what a running session loaded. Never inferred from the cache. ---
   const session = dependencies.observeSessionVersion(host);
+  const sessionVersion = host === "codex" ? codexVersionIdentity(session.version) : safeText(session.version);
   report.session = {
     status: session.status,
-    version: safeText(session.version),
+    version: safeText(sessionVersion),
     reason: safeText(session.reason),
   };
-  if (report.session.status !== "observed" || report.session.version === null) {
+  if (report.session.status !== "observed" || sessionVersion === null) {
     reasons.push("SESSION_VERSION_UNOBSERVABLE");
-  } else if (report.session.version !== cacheVersion) {
+  } else if (sessionVersion !== cacheVersion) {
     reasons.push("SESSION_BEHIND_INSTALLED_CACHE");
   }
 
@@ -2513,11 +2521,11 @@ function codexLayerHasPluginAuthority(observation: OptionalMetadataFile): boolea
   let layer: Record<string, unknown> | null;
   const text = decodeCodexUtf8(observation.bytes);
   if (text === null) return null;
-  try { layer = plainRecord(Bun.TOML.parse(text)); } catch { return null; }
+  try { layer = codexTomlTable(Bun.TOML.parse(text)); } catch { return null; }
   if (layer === null) return null;
   const rawFeatures = layer["features"];
   if (rawFeatures !== undefined) {
-    const features = plainRecord(rawFeatures);
+    const features = codexTomlTable(rawFeatures);
     if (features === null || (features["plugins"] !== undefined
       && typeof features["plugins"] !== "boolean")) return null;
     if (features["plugins"] !== undefined) return true;
@@ -3097,7 +3105,7 @@ function readJsonField(file: string, field: string, root: string, host: PluginDe
   // refused by the bounded read rather than parsed.
   const record = host === "codex" ? readCodexMetadataObject(file, root)
     : decodeMetadataObject(readConfinedFile(file, root, PLUGIN_DELIVERY_MAX_MANIFEST_BYTES));
-  return record === null ? null : safeText(record[field]);
+  return record === null ? null : host === "codex" ? codexVersionIdentity(record[field]) : safeText(record[field]);
 }
 
 function defaultReadInstalledPayload(
@@ -3217,7 +3225,7 @@ function readReleaseArtifacts(
   const read = releaseBlobReader(gitDir, cwd, commit, runQuery, env);
 
   const manifest = read("apps/cli/package.json");
-  const version = safeText(decodeCodexMetadataObject(boundedReleasePayload(manifest,
+  const version = codexVersionIdentity(decodeCodexMetadataObject(boundedReleasePayload(manifest,
     PLUGIN_DELIVERY_MAX_MANIFEST_BYTES))?.["version"]);
   if (version === null) return "unreadable";
 
@@ -3227,7 +3235,7 @@ function readReleaseArtifacts(
     const pluginManifest = read(`plugins/${layout.directory}/${layout.manifest}/plugin.json`);
     const manifestBytes = boundedReleasePayload(pluginManifest, PLUGIN_DELIVERY_MAX_MANIFEST_BYTES);
     if (manifestBytes === null) return "unreadable";
-    const declared = host === "codex" ? safeText(decodeCodexMetadataObject(manifestBytes)?.["version"])
+    const declared = host === "codex" ? codexVersionIdentity(decodeCodexMetadataObject(manifestBytes)?.["version"])
       : jsonField(pluginManifest.out, "version");
     if (host === "codex" && declared === null) return "unreadable";
     if (declared !== version) return "diverged";
@@ -3624,7 +3632,7 @@ function mirrorPublicRelease(repositoryRoot: string, runQuery: QueryRunner): Pub
   if (manifest.code !== 0 || boundedFailure(manifest) !== null) {
     return unresolvedRelease("absent", "PUBLIC_RELEASE_MANIFEST_UNREADABLE");
   }
-  const version = safeText(decodeCodexMetadataObject(boundedReleasePayload(manifest,
+  const version = codexVersionIdentity(decodeCodexMetadataObject(boundedReleasePayload(manifest,
     PLUGIN_DELIVERY_MAX_MANIFEST_BYTES))?.["version"]);
   if (version === null) return unresolvedRelease("absent", "PUBLIC_RELEASE_MANIFEST_UNREADABLE");
 

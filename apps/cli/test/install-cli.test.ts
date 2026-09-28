@@ -839,6 +839,13 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
     ], { env: environment, stdout: "pipe", stderr: "pipe" });
     try {
       const fresh = run();
+      if (fresh.exitCode !== 0) {
+        console.error("Codex read-only fixture child failed", JSON.stringify({
+          exitCode: fresh.exitCode,
+          stdout: new TextDecoder().decode(fresh.stdout).slice(0, 8192),
+          stderr: new TextDecoder().decode(fresh.stderr).slice(0, 8192),
+        }));
+      }
       expect(fresh.exitCode).toBe(0);
       expect((JSON.parse(new TextDecoder().decode(fresh.stdout)) as InstallReport).hosts.codex.status)
         .toBe("planned");
