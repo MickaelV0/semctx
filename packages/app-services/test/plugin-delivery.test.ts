@@ -696,7 +696,12 @@ describe("plugin delivery — main is informative and never confers freshness", 
 
   test("a repository ahead of the release never makes an outdated cache look current", () => {
     const report = statusOf({
-      installed: { [CODEX_CACHE_PATH]: { version: "0.1.16" }, [CLAUDE_CACHE_PATH]: { version: "0.1.16" } },
+      codexPlugins: codexPlugins({ version: "0.1.16" }),
+      claudePlugins: claudePlugins({ version: "0.1.16", installPath: join(CLAUDE_CACHE_ROOT, "0.1.16") }),
+      installed: {
+        [join(CODEX_CACHE_ROOT, "0.1.16")]: { version: "0.1.16" },
+        [join(CLAUDE_CACHE_ROOT, "0.1.16")]: { version: "0.1.16" },
+      },
     });
 
     expect(report.repository.matchesPublicRelease).toBe(false);
@@ -1105,7 +1110,12 @@ describe("plugin delivery — the session version is never inferred", () => {
 
   test("an outdated cache degrades delivery, not only the overall verdict", () => {
     const report = statusOf({
-      installed: { [CODEX_CACHE_PATH]: { version: "0.1.16" }, [CLAUDE_CACHE_PATH]: { version: "0.1.16" } },
+      codexPlugins: codexPlugins({ version: "0.1.16" }),
+      claudePlugins: claudePlugins({ version: "0.1.16", installPath: join(CLAUDE_CACHE_ROOT, "0.1.16") }),
+      installed: {
+        [join(CODEX_CACHE_ROOT, "0.1.16")]: { version: "0.1.16" },
+        [join(CLAUDE_CACHE_ROOT, "0.1.16")]: { version: "0.1.16" },
+      },
     });
 
     expect(report.delivery).toBe("UPDATE_AVAILABLE");
