@@ -829,6 +829,8 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
     const environment = fixtureEnvironmentWithPath(bin);
     environment["CODEX_HOME"] = profile;
     environment["HOME"] = join(root, "home");
+    // The read-only Windows OS query requires an existing home, never startup-created caller state.
+    mkdirSync(environment["HOME"]);
     environment["USERPROFILE"] = environment["HOME"];
     const entrypoint = resolve(import.meta.dir, "../src/index.ts");
     const run = (dryRun = true) => Bun.spawnSync([

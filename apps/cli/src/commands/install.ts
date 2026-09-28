@@ -565,9 +565,11 @@ export function resolveCodexHome(configured: string | undefined, fallbackHome: s
     const candidate = configured.trim();
     return isAbsolute(candidate) ? resolve(candidate) : null;
   }
-  return fallbackHome.length > 0 && isAbsolute(fallbackHome)
-    ? resolve(join(fallbackHome, ".codex"))
-    : null;
+  if (fallbackHome.length === 0 || !isAbsolute(fallbackHome)) return null;
+  // The production metadata reader must observe cancelled or linked fallback ancestors before
+  // normalization. Keep that raw lineage when appending the default profile directory.
+  const separator = fallbackHome.endsWith("/") || fallbackHome.endsWith("\\") ? "" : sep;
+  return `${fallbackHome}${separator}.codex`;
 }
 
 function defaultCodexHome(): string | null {
