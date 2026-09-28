@@ -25,7 +25,8 @@ interface ProductionJsonFixture {
   artifacts?: { sidecar?: string | number[]; snapshotManifest?: string; payloadManifest?: string;
     configuredRef?: string | null; configuredSparse?: string[]; localSidecar?: boolean; fixedInventory?: boolean;
     unregistered?: boolean; orphanCache?: boolean; projectConfig?: string; userConfig?: string;
-    matchingBundles?: boolean; localCache?: boolean; payloadAfterInventory?: string };
+    matchingBundles?: boolean; localCache?: boolean; payloadAfterInventory?: string; gitRef?: string;
+    cachePeers?: { version: string; before: boolean; bundlePrefix: string }[] };
   unrelatedCache?: { version: string; declaredVersion?: string; pluginName?: string };
   recovery?: { snapshotManifest?: string; cacheManifest?: string; sidecarAfterAdd?: string;
     configBeforeAdd?: string; configAfterAdd?: string; success?: boolean };
@@ -117,6 +118,15 @@ function productionFixture(source: RawHomeSource, drift: boolean, orphan: boolea
         "[marketplaces.semctx-stable]\\nsource_type = 'git'\\nsource = 'hoklims/semctx'\\nref = 'stable'\\n");
       addFile(join(marketplace, ".agents", "plugins", "marketplace.json"), jsonFixture.marketplace);
       if (jsonFixture.artifacts !== undefined) {
+        const addCachePeer = (peer) => {
+          const peerRoot = join(codexHome, "plugins", "cache", "semctx-stable", "semctx-control", peer.version);
+          addFile(join(peerRoot, ".codex-plugin", "plugin.json"),
+            JSON.stringify({ name: "semctx-control", version: peer.version }));
+          for (const bundle of ["semctx-index-worker.js", "semctx-mcp.js", "semctx-shared.js", "semctx.js"]) {
+            addFile(join(peerRoot, "dist", bundle), peer.bundlePrefix + bundle);
+          }
+        };
+        for (const peer of jsonFixture.artifacts.cachePeers ?? []) if (peer.before) addCachePeer(peer);
         addFile(join(codexHome, "config.toml"),
           jsonFixture.artifacts.unregistered ? "" : "[marketplaces.semctx-stable]\\nsource_type = " + (jsonFixture.artifacts.localSidecar ? "'local'" : "'git'")
           + "\\nsource = " + JSON.stringify(jsonFixture.artifacts.localSidecar ? marketplace : "hoklims/semctx") + "\\n"
@@ -141,6 +151,7 @@ function productionFixture(source: RawHomeSource, drift: boolean, orphan: boolea
             addFile(join(versionedCache, "dist", bundle), "same bundle: " + bundle);
           }
         }
+        for (const peer of jsonFixture.artifacts.cachePeers ?? []) if (!peer.before) addCachePeer(peer);
         if (jsonFixture.artifacts.projectConfig !== undefined) {
           const user = jsonFixture.artifacts.userConfig ?? files.get(join(codexHome, "config.toml")).toString("utf8");
           addFile(join(codexHome, "config.toml"), user + "\\n[projects." + JSON.stringify(repo)
@@ -283,7 +294,8 @@ function productionFixture(source: RawHomeSource, drift: boolean, orphan: boolea
       }
       if (jsonFixture?.artifacts !== undefined && argv[0] === "git" && argv.includes("rev-parse")) {
         nativeCalls.push("git-read");
-        return { exitCode: 0, stdout: Buffer.from(argv.includes("--abbrev-ref") ? "stable" : "1".repeat(40)),
+        return { exitCode: 0, stdout: Buffer.from(argv.includes("--abbrev-ref")
+          ? jsonFixture.artifacts.gitRef ?? "stable" : "1".repeat(40)),
           stderr: Buffer.alloc(0) };
       }
       if (caller === "install" && jsonFixture !== null && argv[0] === "codex") {
@@ -513,6 +525,18 @@ describe("production Codex admitted cache version and native build metadata", ()
       marketplace, artifacts: { sidecar, matchingBundles: true, ...artifacts },
     }) as ProductionObservation;
 
+  for (const before of [true, false]) {
+    test(`build-metadata cache tie refuses inventory when peer is inserted ${before ? "before" : "after"}`, () => {
+      const observed = status({
+        matchingBundles: true,
+        cachePeers: [{ version: "0.3.7+build.2", before, bundlePrefix: "different bundle: " }],
+      });
+      expect(observed.report.hosts.codex.marketplace.configured).toBeNull();
+      expect(observed.report.hosts.codex.reasons).toContain("HOST_QUERY_FAILED");
+      expect(observed.report.hosts.codex.delivery).toBe("UNKNOWN");
+    });
+  }
+
   for (const localCache of [false, true]) {
     test(`third payload version drift at ${localCache ? "local" : "0.3.7"} never replaces the admitted inventory identity`, () => {
       const observed = status({ localCache, snapshotManifest: manifest("0.3.8"), payloadAfterInventory: manifest("0.3.8") });
@@ -612,6 +636,13 @@ describe("Codex raw identity and unsupported Date production", () => {
     expect(report.hosts.codex.snapshot.version).toBe("0.3.7");
     expect(report.hosts.codex.reasons).toContain("MARKETPLACE_REF_UNEXPECTED");
     expect(report.hosts.codex.delivery).not.toBe("UP_TO_DATE");
+  });
+  test("a configured stable ref cannot mask a contradictory sidecar-absent raw Git branch", () => {
+    const report = status({ configuredRef: "stable", gitRef: "sta\u202eble", matchingBundles: true });
+    expect(report.hosts.codex.marketplace.ref).toBe("stable");
+    expect(report.hosts.codex.snapshot.version).toBeNull();
+    expect(report.hosts.codex.reasons).toContain("MARKETPLACE_REF_UNEXPECTED");
+    expect(report.hosts.codex.delivery).toBe("UNKNOWN");
   });
   test("valid raw SemVer and stable ref preserve canonical observations", () => {
     const report = status({ sidecar: JSON.stringify(native), snapshotManifest: '{"name":"semctx-control","version":"0.3.7-rc.1+build.2"}' });

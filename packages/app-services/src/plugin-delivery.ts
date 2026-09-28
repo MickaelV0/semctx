@@ -1212,6 +1212,15 @@ function evaluateHost(
     ? null
     : dependencies.readMarketplaceSnapshot(host, marketplaceRoot);
   if (host === "codex" && snapshot?.pluginIdentity?.name !== CODEX_PLUGIN) snapshot = null;
+  const configuredCodexRef = host === "codex" ? rawText(marketplace["ref"]) : null;
+  const fallbackCodexRef = host === "codex" && snapshot !== null && snapshot.sourceType === undefined
+    ? rawText(snapshot.ref)
+    : null;
+  if (configuredCodexRef !== null && fallbackCodexRef !== null
+    && configuredCodexRef !== fallbackCodexRef) {
+    reasons.push("MARKETPLACE_REF_UNEXPECTED");
+    snapshot = null;
+  }
   if (host === "codex" && snapshot?.sourceType !== undefined) {
     const configured = plainRecord(marketplace["marketplaceSource"]);
     const expected = codexMarketplaceIdentity(configured?.["sourceType"], configured?.["source"],
@@ -1233,7 +1242,7 @@ function evaluateHost(
   }
 
   // Claude reports the tracked ref directly; Codex records it in the snapshot install metadata.
-  const ref = host === "codex" ? rawText(marketplace["ref"]) ?? rawText(snapshot?.ref)
+  const ref = host === "codex" ? configuredCodexRef ?? rawText(snapshot?.ref)
     : safeText(marketplace["ref"]) ?? safeText(snapshot?.ref) ?? null;
   report.marketplace.ref = safeText(ref);
   if (ref === null) reasons.push("MARKETPLACE_REF_UNKNOWN");
@@ -2190,6 +2199,17 @@ function readCodexCachedVersion(
   if (versions.length === 0) return null;
   const local = versions.find((entry) => entry.directory === "local");
   if (local !== undefined) return local;
+  // Rust semver's Version::cmp orders build metadata, while Bun's precedence comparator discards it.
+  // Refuse a distinct tie instead of letting filesystem enumeration choose a different cache than Codex.
+  for (let left = 0; left < versions.length; left += 1) {
+    for (let right = left + 1; right < versions.length; right += 1) {
+      const leftVersion = versions[left]?.version;
+      const rightVersion = versions[right]?.version;
+      if (leftVersion !== undefined && rightVersion !== undefined && leftVersion !== rightVersion
+        && VERSION_SEGMENT.test(leftVersion) && VERSION_SEGMENT.test(rightVersion)
+        && Bun.semver.order(leftVersion, rightVersion) === 0) return false;
+    }
+  }
   versions.sort((left, right) => VERSION_SEGMENT.test(left.version) && VERSION_SEGMENT.test(right.version)
     ? Bun.semver.order(right.version, left.version)
     : left.version < right.version ? 1 : left.version > right.version ? -1 : 0);
