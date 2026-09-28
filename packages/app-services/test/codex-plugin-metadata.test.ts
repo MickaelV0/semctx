@@ -83,7 +83,12 @@ describe("Codex declarative plugin inventory", () => {
       `[marketplaces.semctx-stable]\nsource_type = 'git'\nsource = 'hoklims/semctx'\n`
         + `[plugins.'semctx-control@semctx-stable']\nenabled = true\n`);
     cache(home, "0.3.6");
-    expect(readCodexPluginMetadataInventory(repo, home, undefined, home)).toEqual({ marketplaces: [], plugins: [] });
+    const inventory = readCodexPluginMetadataInventory(repo, home, undefined, home);
+    expect(inventory?.marketplaces).toEqual([]);
+    expect(inventory?.plugins).toEqual([expect.objectContaining({
+      pluginId: "semctx-control@semctx-stable", installed: true, registered: false, version: "0.3.6",
+    })]);
+    expect(Object.hasOwn(inventory!.plugins[0]!, "enabled")).toBe(false);
   });
 
   test("malformed configuration and cache are unknown, and visible drift is rejected", () => {
@@ -102,6 +107,41 @@ describe("Codex declarative plugin inventory", () => {
     writeFileSync(join(home, "plugins", "cache", "semctx-stable", "semctx-control", "0.3.6", ".codex-plugin", "plugin.json"),
       JSON.stringify({ name: "semctx-control", version: "9.9.9" }));
     expect(readCodexPluginMetadataInventory(repo, home, undefined, home)).toBeNull();
+  });
+
+  test("unregistered Semctx caches remain physical evidence and cache ancestors are confined", () => {
+    const { root, home, repo } = fixture();
+    cache(home, "local");
+    const cachePath = join(home, "plugins", "cache", "semctx-stable", "semctx-control", "local");
+    writeFileSync(join(cachePath, ".codex-plugin", "plugin.json"), JSON.stringify({ name: "semctx-control", version: "0.3.7" }));
+    const inventory = readCodexPluginMetadataInventory(repo, home, undefined, home);
+    expect(inventory?.plugins).toEqual([expect.objectContaining({
+      pluginId: "semctx-control@semctx-stable", installed: true, registered: false,
+      cacheDirectory: "local", cachePath, version: "0.3.7",
+    })]);
+    expect(Object.hasOwn(inventory!.plugins[0]!, "enabled")).toBe(false);
+    const plugins = join(home, "plugins");
+    const moved = join(root, "retired-plugins");
+    expect(readCodexPluginMetadataInventory(repo, home, () => {
+      renameSync(plugins, moved);
+      symlinkSync(moved, plugins, process.platform === "win32" ? "junction" : "dir");
+    }, home)).toBeNull();
+  });
+
+  test("cache manifest identity is required and wrong or malformed names are unknown", () => {
+    const { home, repo } = fixture();
+    snapshot(home);
+    writeFileSync(join(home, "config.toml"),
+      `[marketplaces.semctx-stable]\nsource_type = 'git'\nsource = 'hoklims/semctx'\n`
+      + `[plugins.'semctx-control@semctx-stable']\nenabled = true\n`);
+    cache(home, "0.3.7");
+    const manifest = join(home, "plugins", "cache", "semctx-stable", "semctx-control", "0.3.7", ".codex-plugin", "plugin.json");
+    for (const name of [undefined, null, 123, "foreign-control"]) {
+      writeFileSync(manifest, JSON.stringify({ name, version: "0.3.7" }));
+      expect(readCodexPluginMetadataInventory(repo, home, undefined, home)).toBeNull();
+    }
+    writeFileSync(manifest, JSON.stringify({ name: "semctx-control", version: "0.3.7" }));
+    expect(readCodexPluginMetadataInventory(repo, home, undefined, home)?.plugins[0]?.["version"]).toBe("0.3.7");
   });
 
   test("every configured marketplace must have a valid manifest, and a relative local source cannot impersonate Git", () => {

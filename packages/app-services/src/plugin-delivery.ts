@@ -2030,8 +2030,10 @@ function readCodexCachedVersion(
       observations,
     );
     if (manifest.status !== "ok") return false;
-    const declared = decodeCodexMetadataObject(manifest.bytes)?.["version"];
-    if (typeof declared !== "string" || !CODEX_CACHE_NAME.test(declared)
+    const identity = decodeCodexMetadataObject(manifest.bytes);
+    const declared = identity?.["version"];
+    if (identity?.["name"] !== plugin
+      || typeof declared !== "string" || !CODEX_CACHE_NAME.test(declared)
       || (entry.name !== "local" && declared !== entry.name)) return false;
     versions.push({ directory: entry.name, version: declared });
   }
@@ -2386,6 +2388,10 @@ function readCodexPluginMetadataOnce(
   if (project === null) return null;
   const marketplaceTables = { ...user.marketplaces, ...project.marketplaces };
   const pluginTables = { ...user.plugins, ...project.plugins };
+  // Native installation targets this cache even when TOML contains no plugin registration.
+  // Its physical ancestors and absence therefore belong to both read-only snapshots.
+  const semctxCache = readCodexCachedVersion(codexHome, MARKETPLACE_NAME, CODEX_PLUGIN, observations);
+  if (semctxCache === false) return null;
   const marketplaces: Record<string, unknown>[] = [];
   const manifests = new Map<string, CodexMarketplaceManifest>();
   const homeMarketplace = readCodexHomeMarketplace(
@@ -2436,7 +2442,8 @@ function readCodexPluginMetadataOnce(
     if (!CODEX_ENTRY_NAME.test(plugin) || !CODEX_ENTRY_NAME.test(marketplace)
       || entry === null || typeof entry["enabled"] !== "boolean"
       || !marketplaces.some((item) => item["name"] === marketplace)) return null;
-    const cached = readCodexCachedVersion(codexHome, marketplace, plugin, observations);
+    const cached = pluginId === CODEX_PLUGIN_ID ? semctxCache
+      : readCodexCachedVersion(codexHome, marketplace, plugin, observations);
     if (cached === false) return null;
     const version = cached?.version ?? null;
     const marketplaceEntry = marketplaces.find((item) => item["name"] === marketplace);
@@ -2461,6 +2468,16 @@ function readCodexPluginMetadataOnce(
         cachePath: join(codexHome, "plugins", "cache", marketplace, plugin, cached.directory),
       }),
       ...(sourcePath === null ? {} : { source: { path: sourcePath } }),
+    });
+  }
+  if (!Object.prototype.hasOwnProperty.call(pluginTables, CODEX_PLUGIN_ID) && semctxCache !== null) {
+    plugins.push({
+      pluginId: CODEX_PLUGIN_ID,
+      installed: true,
+      registered: false,
+      version: semctxCache.version,
+      cacheDirectory: semctxCache.directory,
+      cachePath: join(codexHome, "plugins", "cache", MARKETPLACE_NAME, CODEX_PLUGIN, semctxCache.directory),
     });
   }
   return { inventory: { marketplaces, plugins }, observations };

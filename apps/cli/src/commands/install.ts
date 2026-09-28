@@ -208,6 +208,7 @@ interface CodexPlugin {
   enabled?: unknown;
   version?: unknown;
   cacheDirectory?: unknown;
+  registered?: unknown;
   source?: {
     path?: unknown;
   };
@@ -1093,6 +1094,11 @@ function installCodex(
   if (existing?.cacheDirectory === "local") {
     report.status = "conflict";
     report.error = "Codex's local Semctx development cache overrides the stable plugin; resolve the local override before installing stable";
+    return;
+  }
+  if (existing?.registered === false) {
+    report.status = "conflict";
+    report.error = "Codex has a physical Semctx cache without a plugin registration; reconcile its ownership and registration before installing stable";
     return;
   }
   /** What was on disk before the update — the only cache entry we can know to be obsolete after it. */
