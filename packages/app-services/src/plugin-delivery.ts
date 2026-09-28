@@ -94,6 +94,7 @@ export const PLUGIN_RUNTIME_BUNDLES = [
 
 /** A plugin version is a semver token; anything else must never reach a filesystem path. */
 const VERSION_SEGMENT = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+const NATIVE_SEMVER_MAX_COMPONENT = 18_446_744_073_709_551_615n;
 
 /**
  * Drop C0/C1 controls, which a hostile host could use to repaint a terminal line. Written as an
@@ -594,7 +595,11 @@ function rawText(value: unknown): string | null {
 
 /** A Semctx version is an identity: no trimming, control removal or display redaction. */
 function codexVersionIdentity(value: unknown): string | null {
-  return typeof value === "string" && value.trim() === value && VERSION_SEGMENT.test(value) ? value : null;
+  if (typeof value !== "string" || value.trim() !== value) return null;
+  const match = VERSION_SEGMENT.exec(value);
+  if (match === null) return null;
+  return match.slice(1, 4).every((component) => component !== undefined
+    && BigInt(component) <= NATIVE_SEMVER_MAX_COMPONENT) ? value : null;
 }
 
 /** A Codex plugin manifest is authoritative only for the expected plugin and one raw valid version. */
@@ -2254,7 +2259,8 @@ export function codexMarketplaceIdentity(
     || (sourceType === "local" && codexLocalSourceRoot(source) === null)
     || (ref !== undefined && ref !== null
       && (typeof ref !== "string" || ref.length === 0 || /\s/.test(ref) || hasIdentityControlCharacter(ref)))
-    || !Array.isArray(sparsePaths) || !sparsePaths.every((path): path is string => typeof path === "string")) return null;
+    || !Array.isArray(sparsePaths) || !sparsePaths.every((path): path is string =>
+      typeof path === "string" && !path.includes("\0"))) return null;
   return { sourceType, source, ref: typeof ref === "string" ? ref : null, sparsePaths: [...sparsePaths] };
 }
 
@@ -2287,6 +2293,44 @@ function readCodexMarketplaceSidecar(root: string, observations: string[]): Code
 }
 
 /** Protect the Semctx namespace a new native marketplace add would select after an interrupted run. */
+function codexCheckoutQueryLine(root: string, command: readonly string[], observations: string[]): string | null {
+  const outcome = runPluginDeliveryQuery(command, root, LOCAL_READ_LIMITS);
+  const bytes = outcome.bytes === undefined ? new TextEncoder().encode(outcome.out) : outcome.bytes;
+  observations.push(JSON.stringify({
+    checkoutQuery: command.slice(3),
+    code: outcome.code,
+    timedOut: outcome.timedOut === true,
+    truncated: outcome.truncated === true,
+    stdoutDigest: bytes === null ? null : createHash("sha256").update(bytes).digest("hex"),
+  }));
+  if (outcome.code !== 0 || outcome.timedOut === true || outcome.truncated === true || bytes === null) return null;
+  const decoded = decodeCodexUtf8(Buffer.from(bytes));
+  if (decoded === null) return null;
+  const line = decoded.endsWith("\r\n") ? decoded.slice(0, -2)
+    : decoded.endsWith("\n") ? decoded.slice(0, -1) : decoded;
+  return line.length > 0 && !/[\r\n]/.test(line) ? line : null;
+}
+
+function codexUnregisteredCheckoutMatches(root: string, sidecar: CodexMarketplaceSidecar,
+  observations: string[]): boolean {
+  const prefix = ["git", "-C", root, "--no-replace-objects"] as const;
+  const topLevel = codexCheckoutQueryLine(root, [...prefix, "rev-parse", "--show-toplevel"], observations);
+  if (topLevel === null || !hasLocalFilesystemShape(topLevel)) return false;
+  const rootTraversal = captureRawTraversal(root, false, "directory");
+  const topLevelTraversal = captureRawTraversal(topLevel, false, "directory");
+  observations.push(JSON.stringify({ checkoutRoot: root, rootTraversal, topLevel, topLevelTraversal }));
+  if (rootTraversal === null || topLevelTraversal === null) return false;
+  try {
+    if (lexicalPathIdentity(realpathSync.native(root))
+      !== lexicalPathIdentity(realpathSync.native(topLevel))) return false;
+  } catch { return false; }
+  const source = codexCheckoutQueryLine(root, [...prefix, "remote", "get-url", "origin"], observations);
+  const ref = codexCheckoutQueryLine(root, [...prefix, "symbolic-ref", "--short", "HEAD"], observations);
+  const revision = codexCheckoutQueryLine(root, [...prefix, "rev-parse", "HEAD"], observations);
+  return source !== null && isSemctxSource(source) && isSemctxSource(sidecar.source)
+    && ref === sidecar.ref && revision === sidecar.revision;
+}
+
 function codexUnregisteredSelectedSnapshotIsSafe(home: string, observations: string[]): boolean {
   const root = join(home, ...CODEX_SNAPSHOT_SEGMENTS);
   const traversal = captureRawTraversal(root, false, "directory");
@@ -2301,7 +2345,11 @@ function codexUnregisteredSelectedSnapshotIsSafe(home: string, observations: str
   const expected = codexMarketplaceIdentity("git", sidecar.source, PLUGIN_DELIVERY_RELEASE_REF, []);
   if (expected === null || !sameCodexMarketplaceIdentity(expected, sidecar)) return false;
   const manifest = readCodexMarketplaceManifest(root, observations);
-  return manifest !== null && manifest !== false && manifest.name === MARKETPLACE_NAME;
+  if (manifest === null || manifest === false || manifest.name !== MARKETPLACE_NAME) return false;
+  const pluginRoot = manifest.localSources[CODEX_PLUGIN];
+  return typeof pluginRoot === "string"
+    && lexicalPathIdentity(pluginRoot) === lexicalPathIdentity(join(root, "plugins", CODEX_PLUGIN))
+    && codexUnregisteredCheckoutMatches(root, sidecar, observations);
 }
 
 function validCodexMarketplacePolicy(value: unknown): boolean {

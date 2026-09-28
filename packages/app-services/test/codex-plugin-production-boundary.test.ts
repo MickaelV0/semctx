@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join, parse, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { PluginDeliveryReportV2 } from "../src/plugin-delivery";
+import { codexPluginManifestIdentity, type PluginDeliveryReportV2 } from "../src/plugin-delivery";
 import type { InstallReport } from "../../../apps/cli/src/commands/install";
 
 type RawHomeSource = "HOME" | "USERPROFILE" | "CODEX_HOME" | "OS_HOME";
@@ -26,7 +26,9 @@ interface ProductionJsonFixture {
     configuredRef?: string | null; configuredSparse?: string[]; localSidecar?: boolean; fixedInventory?: boolean;
     unregistered?: boolean; orphanCache?: boolean; projectConfig?: string; userConfig?: string;
     matchingBundles?: boolean; localCache?: boolean; payloadAfterInventory?: string; gitRef?: string;
-    cachePeers?: { version: string; before: boolean; bundlePrefix: string }[] };
+    cachePeers?: { version: string; before: boolean; bundlePrefix: string }[];
+    checkout?: { source: string; ref: string; revision: string; topLevel?: "self" | "parent" | "relative";
+      topLevelFault?: "timeout" | "truncated" } };
   unrelatedCache?: { version: string; declaredVersion?: string; pluginName?: string };
   recovery?: { snapshotManifest?: string; cacheManifest?: string; sidecarAfterAdd?: string;
     configBeforeAdd?: string; configAfterAdd?: string; success?: boolean };
@@ -288,9 +290,31 @@ function productionFixture(source: RawHomeSource, drift: boolean, orphan: boolea
           ? systemCancelled + sep + ".." + sep + "known-program-data" : knownFolder;
         return { exitCode: 0, stdout: Buffer.from(Buffer.from(resolved).toString("base64")), stderr: Buffer.alloc(0) };
       }
-      if (caller === "install" && argv[0] === "git" && argv.includes("--show-toplevel")) {
+      if (caller === "install" && argv[0] === "git" && argv.includes("--show-toplevel")
+        && !argv.includes("-C")) {
         nativeCalls.push("git-root");
         return { exitCode: 0, stdout: Buffer.from(gitRoot), stderr: Buffer.alloc(0) };
+      }
+      if (jsonFixture?.artifacts !== undefined && argv[0] === "git" && argv.includes("-C")) {
+        nativeCalls.push("git-read");
+        const checkout = jsonFixture.artifacts.checkout;
+        if (checkout === undefined) return { exitCode: 1, stdout: Buffer.alloc(0), stderr: Buffer.from("not a checkout") };
+        if (argv.includes("--show-toplevel") && checkout.topLevelFault !== undefined) return {
+          exitCode: 1,
+          stdout: Buffer.alloc(0),
+          stderr: Buffer.alloc(0),
+          ...(checkout.topLevelFault === "timeout" ? { exitedDueToTimeout: true } : { exitedDueToMaxBuffer: true }),
+        };
+        const marketplaceRoot = join(codexHome, ".tmp", "marketplaces", "semctx-stable");
+        const value = argv.includes("--show-toplevel")
+          ? checkout.topLevel === "parent" ? dirname(marketplaceRoot)
+            : checkout.topLevel === "relative" ? "relative-marketplace" : marketplaceRoot
+          : argv.includes("get-url") ? checkout.source
+          : argv.includes("symbolic-ref") ? checkout.ref
+            : argv.includes("rev-parse") ? checkout.revision : null;
+        return value === null
+          ? { exitCode: 1, stdout: Buffer.alloc(0), stderr: Buffer.from("unsupported read") }
+          : { exitCode: 0, stdout: Buffer.from(value + "\\n"), stderr: Buffer.alloc(0) };
       }
       if (jsonFixture?.artifacts !== undefined && argv[0] === "git" && argv.includes("rev-parse")) {
         nativeCalls.push("git-read");
@@ -536,6 +560,20 @@ describe("production Codex admitted cache version and native build metadata", ()
       expect(observed.report.hosts.codex.delivery).toBe("UNKNOWN");
     });
   }
+  test("cache numeric core components must fit native Rust u64 parsing", () => {
+    const observed = status({
+      cachePeers: [{ version: "18446744073709551616.0.0", before: false, bundlePrefix: "overflow: " }],
+    });
+    expect(observed.report.hosts.codex.marketplace.configured).toBeNull();
+    expect(observed.report.hosts.codex.reasons).toContain("HOST_QUERY_FAILED");
+  });
+  test("native u64 boundary and arbitrarily long numeric prerelease identifiers stay valid", () => {
+    expect(codexPluginManifestIdentity({ name: "semctx-control", version: "18446744073709551615.0.0" },
+      "semctx-control")?.version).toBe("18446744073709551615.0.0");
+    const prerelease = "1.0.0-18446744073709551616000000000000000000+build.2";
+    expect(codexPluginManifestIdentity({ name: "semctx-control", version: prerelease },
+      "semctx-control")?.version).toBe(prerelease);
+  });
 
   for (const localCache of [false, true]) {
     test(`third payload version drift at ${localCache ? "local" : "0.3.7"} never replaces the admitted inventory identity`, () => {
@@ -756,6 +794,55 @@ describe("Codex sidecar consumer admission", () => {
     sparse_paths: [] as string[], revision: "1".repeat(40) };
   const install = (artifacts: NonNullable<ProductionJsonFixture["artifacts"]>, dryRun: boolean) =>
     productionFixture("CODEX_HOME", false, false, "absent", "install", "safe", { marketplace, artifacts, dryRun }) as InstallObservation;
+  test("an unregistered selected namespace without a coherent checkout or expected plugin blocks native add", () => {
+    const emptyMarketplace = '{"name":"semctx-stable","plugins":[]}';
+    const observations = [true, false].map((dryRun) => productionFixture("CODEX_HOME", false, false,
+      "absent", "install", "safe", { dryRun, marketplace: emptyMarketplace,
+        artifacts: { unregistered: true, sidecar: JSON.stringify(native) } }) as InstallObservation);
+    expect(observations.every((observed) => observed.report.hosts.codex.status === "failed")).toBe(true);
+    expect(observations.flatMap((observed) => observed.nativeCalls)
+      .filter((call) => call.startsWith("codex-attempt:"))).toEqual([]);
+  });
+  test("an ancestor Git repository cannot lend identity to the selected snapshot directory", () => {
+    const checkout = { source: "https://github.com/hoklims/semctx.git", ref: "stable",
+      revision: "1".repeat(40), topLevel: "parent" as const };
+    const observations = [true, false].map((dryRun) => install({
+      unregistered: true,
+      sidecar: JSON.stringify(native),
+      checkout,
+    }, dryRun));
+    expect(observations.every((observed) => observed.report.hosts.codex.status === "failed")).toBe(true);
+    expect(observations.flatMap((observed) => observed.nativeCalls)
+      .filter((call) => call.startsWith("codex-attempt:"))).toEqual([]);
+  });
+  for (const [name, topLevel, topLevelFault] of [
+    ["relative path", "relative", undefined],
+    ["timeout", undefined, "timeout"],
+    ["truncated output", undefined, "truncated"],
+  ] as const) {
+    test(`an unprovable checkout root (${name}) blocks native add`, () => {
+      const observed = install({
+        unregistered: true,
+        sidecar: JSON.stringify(native),
+        checkout: { source: "https://github.com/hoklims/semctx.git", ref: "stable",
+          revision: "1".repeat(40), topLevel, topLevelFault },
+      }, false);
+      expect(observed.report.hosts.codex.status).toBe("failed");
+      expect(observed.nativeCalls.filter((call) => call.startsWith("codex-attempt:"))).toEqual([]);
+    });
+  }
+  test("NUL sparse paths block status and installer admission before native upgrade", () => {
+    const sparsePaths = ["a\u0000b"];
+    const artifacts = { configuredSparse: sparsePaths,
+      sidecar: JSON.stringify({ ...native, sparse_paths: sparsePaths }) };
+    const status = productionFixture("CODEX_HOME", false, false, "absent", "status", "safe",
+      { marketplace, artifacts }) as ProductionObservation;
+    const installs = [true, false].map((dryRun) => install(artifacts, dryRun));
+    expect(status.report.hosts.codex.reasons).toContain("HOST_QUERY_FAILED");
+    expect(installs.every((observed) => observed.report.hosts.codex.status === "failed")).toBe(true);
+    expect(installs.flatMap((observed) => observed.nativeCalls)
+      .filter((call) => call.startsWith("codex-attempt:"))).toEqual([]);
+  });
   for (const [name, sidecar] of [
     ["missing identity", undefined],
     ["malformed identity", "{"],
@@ -780,7 +867,8 @@ describe("Codex sidecar consumer admission", () => {
   });
 
   test("a valid unregistered public snapshot retains the orphan physical cache without registration", () => {
-    const artifacts = { unregistered: true, orphanCache: true, sidecar: JSON.stringify(native) };
+    const artifacts = { unregistered: true, orphanCache: true, sidecar: JSON.stringify(native),
+      checkout: { source: "https://github.com/hoklims/semctx.git", ref: "stable", revision: "1".repeat(40) } };
     const observed = productionFixture("CODEX_HOME", false, false, "absent", "status", "safe", { marketplace, artifacts }) as ProductionObservation;
     expect(observed.report.hosts.codex.marketplace.configured).toBe(false);
     expect(observed.report.hosts.codex.installed.installed).toBe(true);
@@ -915,7 +1003,8 @@ describe("default installer preserves the admitted marketplace tuple after apply
     source: identity.source, ref_name: identity.ref, sparse_paths: identity.sparsePaths, revision: "1".repeat(40) });
   const apply = (before: ReturnType<typeof tuple> | null, after: ReturnType<typeof tuple>, success: boolean) =>
     productionFixture("CODEX_HOME", false, false, "absent", "install", "safe", {
-      marketplace, dryRun: false, ...(before === null ? { artifacts: { unregistered: true } } : {}),
+      marketplace, dryRun: false, ...(before === null ? { artifacts: { unregistered: true,
+        checkout: { source: "https://github.com/hoklims/semctx.git", ref: "stable", revision: "1".repeat(40) } } } : {}),
       recovery: { configBeforeAdd: before === null ? "" : config(before), configAfterAdd: config(after),
         sidecarAfterAdd: sidecar(after), success },
     }) as InstallObservation;
