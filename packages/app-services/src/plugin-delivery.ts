@@ -1253,7 +1253,9 @@ function evaluateHost(
 
   const payload = cachePath === null ? null : dependencies.readInstalledPayload(host, cachePath);
   const cacheVersion = host === "codex" ? codexVersionIdentity(payload?.version) : safeText(payload?.version);
-  if (payload === null || cacheVersion === null) {
+  // The payload readback cannot replace the version admitted by inventory. `local` is a
+  // directory identity, so compare declared versions rather than the cache path's basename.
+  if (payload === null || cacheVersion === null || (host === "codex" && cacheVersion !== rawHostVersion)) {
     report.reasons = sortedUnique([...reasons, "INSTALLED_CACHE_UNREADABLE"]);
     report.verdict = "UNKNOWN";
     return report;
@@ -2001,7 +2003,7 @@ interface CodexConfigTables {
 }
 
 const CODEX_ENTRY_NAME = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/;
-const CODEX_CACHE_NAME = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/;
+const CODEX_CACHE_NAME = /^[a-zA-Z0-9][a-zA-Z0-9._+-]{0,127}$/;
 const MAX_CODEX_ENTRIES = 256;
 const CODEX_HOME_MARKETPLACE_MANIFESTS = [
   [".agents", "plugins", "marketplace.json"],
