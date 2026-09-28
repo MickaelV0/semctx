@@ -46,6 +46,7 @@ export {
   PLUGIN_DELIVERY_SCHEMA_VERSION,
   PLUGIN_RUNTIME_BUNDLES,
   codexCacheEntryFromMarketplaceRoot,
+  codexMarketplaceIdentity,
   isCanonicalClaudeMarketplaceRecord,
   isCanonicalClaudeMarketplaceSource,
   isHostInterfaceUnsupportedFailure,
@@ -54,9 +55,12 @@ export {
   readCodexPluginMetadataInventory,
   readClaudePluginMetadataInventory,
   resolveClaudePluginHome,
+  runPluginDeliveryQuery,
+  sameCodexMarketplaceIdentity,
 } from "./plugin-delivery";
 export type {
   CodexPluginMetadataInventory,
+  CodexMarketplaceIdentity,
   ClaudePluginMetadataInventory,
   HostInstalledStateV2,
   HostMarketplaceStateV2,

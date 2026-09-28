@@ -1,4 +1,4 @@
-import { describe, it, expect } from "bun:test";
+import { afterAll, beforeAll, describe, it, expect } from "bun:test";
 // The guard ships as runnable Node ESM (it runs on machines without Bun). bun:test imports it
 // directly; main() is guarded by an argv check so importing does not execute it.
 import {
@@ -1078,19 +1078,11 @@ describe("guard runtime — repository scope must be explicit", () => {
     }
   });
 
-  it("blocks Git executable, environment, and CLI retargeting under a valid session baseline", () => {
-    const repo = createGuardedRepo("semctx-guard-retarget-");
-    try {
-      const guard = resolve(import.meta.dir, "../hooks/semctx-guard.mjs");
-      const indirectHooks = join(repo, ".semctx", "indirect-hooks");
-      const indirectConfig = join(repo, ".semctx", "indirect.gitconfig");
-      mkdirSync(indirectHooks);
-      writeFileSync(join(indirectHooks, "pre-commit"), "#!/bin/sh\ngit add tracked.ts\n");
-      writeFileSync(
-        indirectConfig,
-        `[core]\n\thooksPath = ${indirectHooks.replaceAll("\\", "/")}\n`,
-      );
-      for (const command of [
+  describe("blocks Git executable, environment, and CLI retargeting under a valid session baseline", () => {
+    let repo = "";
+    let indirectConfig = "";
+    const guard = resolve(import.meta.dir, "../hooks/semctx-guard.mjs");
+    const commands = (indirectConfig: string) => [
         "GIT_DIR=../other/.git GIT_WORK_TREE=../other git commit -m x",
         "PATH=../proxy-bin git commit -m x",
         "HOME=../alternate-home git push origin main",
@@ -1130,19 +1122,38 @@ describe("guard runtime — repository scope must be explicit", () => {
         "git -ccore.hooksPath=.semctx/no-hooks commit -m x",
         "/tmp/proxy/git commit -m x",
         "C:\\proxy\\git.exe push origin main",
-      ]) {
+      ];
+    beforeAll(() => {
+      repo = createGuardedRepo("semctx-guard-retarget-");
+    const indirectHooks = join(repo, ".semctx", "indirect-hooks");
+    indirectConfig = join(repo, ".semctx", "indirect.gitconfig");
+    mkdirSync(indirectHooks);
+    writeFileSync(join(indirectHooks, "pre-commit"), "#!/bin/sh\ngit add tracked.ts\n");
+    writeFileSync(
+      indirectConfig,
+      `[core]\n\thooksPath = ${indirectHooks.replaceAll("\\", "/")}\n`,
+    );
+    }, 15_000);
+    afterAll(() => {
+      if (repo) rmSync(repo, { recursive: true, force: true });
+    }, 15_000);
+    for (const [index, label] of commands("<owned-config>").entries()) {
+      it(`${index + 1}: ${label}`, () => {
+        const command = commands(indirectConfig)[index]!;
         const result = spawnSync("node", [guard], {
           cwd: repo,
           input: JSON.stringify({ tool_name: "Bash", tool_input: { command }, cwd: repo }),
           encoding: "utf8",
         });
-        expect(result.status).toBe(2);
-        expect(result.stderr).toContain("must be an isolated command");
-      }
-    } finally {
-      rmSync(repo, { recursive: true, force: true });
+        if (result.status !== 2) console.error("Guard retargeting fixture child failed", JSON.stringify({
+          command, status: result.status, signal: result.signal, error: result.error?.message ?? null,
+          stdout: result.stdout?.slice(0, 8192) ?? null, stderr: result.stderr?.slice(0, 8192) ?? null,
+        }));
+        expect(result.status, command).toBe(2);
+        expect(result.stderr, command).toContain("must be an isolated command");
+      }, 15_000);
     }
-  }, 15_000);
+  });
 
   it("anchors guarded state at the Git root when push starts in or targets a subdirectory", () => {
     const repo = createGuardedRepo("semctx-guard-subdirectory-");
