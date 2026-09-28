@@ -46,6 +46,7 @@ export {
   PLUGIN_DELIVERY_SCHEMA_VERSION,
   PLUGIN_RUNTIME_BUNDLES,
   codexCacheEntryFromMarketplaceRoot,
+  codexPluginManifestIdentity,
   codexMarketplaceIdentity,
   isCanonicalClaudeMarketplaceRecord,
   isCanonicalClaudeMarketplaceSource,
@@ -60,6 +61,7 @@ export {
 } from "./plugin-delivery";
 export type {
   CodexPluginMetadataInventory,
+  CodexPluginManifestIdentity,
   CodexMarketplaceIdentity,
   ClaudePluginMetadataInventory,
   HostInstalledStateV2,

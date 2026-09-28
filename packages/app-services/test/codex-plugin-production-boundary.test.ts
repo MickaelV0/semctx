@@ -490,7 +490,7 @@ describe("production Codex status artifact JSON", () => {
   test("a duplicate snapshot manifest version is unknown through default snapshot reads", () => {
     const report = status({ sidecar, snapshotManifest: invalidManifest });
     expect(report.hosts.codex.snapshot.version).toBeNull();
-    expect(report.hosts.codex.reasons).toContain("SNAPSHOT_VERSION_UNKNOWN");
+    expect(report.hosts.codex.reasons).toContain("SNAPSHOT_UNREADABLE");
     expect(report.hosts.codex.delivery).toBe("UNKNOWN");
   });
 
@@ -598,7 +598,7 @@ describe("Codex raw identity and unsupported Date production", () => {
     test(`${name} snapshot version cannot become the displayed canonical identity`, () => {
       const report = status({ sidecar: JSON.stringify(native), snapshotManifest: JSON.stringify({ name: "semctx-control", version }) });
       expect(report.hosts.codex.snapshot.version).toBeNull();
-      expect(report.hosts.codex.reasons).toContain("SNAPSHOT_VERSION_UNKNOWN");
+      expect(report.hosts.codex.reasons).toContain("SNAPSHOT_UNREADABLE");
     });
     test(`${name} payload version cannot become the displayed canonical identity`, () => {
       const report = status({ sidecar: JSON.stringify(native), payloadManifest: JSON.stringify({ name: "semctx-control", version }) });
@@ -856,7 +856,11 @@ describe("default installer Windows cache-lock payload convergence", () => {
           deferred: observed.report.hosts.codex.cleanupDeferred === true })
           .toEqual({ ok: false, cleanup: false, deferred: false });
         expect(observed.report.hosts.codex.status).toBe("failed");
-        expect(observed.report.hosts.codex.error).toContain("declares v");
+        expect(observed.report.hosts.codex.error).toContain(
+          name === "plain stale version control"
+            ? "declares v"
+            : "does not declare the expected plugin identity",
+        );
       });
     }
   }

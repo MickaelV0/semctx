@@ -1,6 +1,7 @@
 import packageJson from "../../package.json";
 import {
   codexMarketplaceIdentity,
+  codexPluginManifestIdentity,
   isCanonicalClaudeMarketplaceRecord,
   isHostInterfaceUnsupportedFailure,
   PLUGIN_DELIVERY_MAX_HOST_OUTPUT_BYTES,
@@ -14,6 +15,7 @@ import {
   sameCodexMarketplaceIdentity,
   type ClaudePluginMetadataInventory,
   type CodexMarketplaceIdentity,
+  type CodexPluginManifestIdentity,
   type CodexPluginMetadataInventory,
 } from "@semantic-context/app-services";
 import { isSemctxError, SemctxError } from "@semantic-context/core";
@@ -101,6 +103,8 @@ export type CodexBundleProbe =
 
 /** What a plugin directory actually holds — used for both the marketplace snapshot and the cache. */
 export interface CodexPayloadProbe {
+  /** Exact manifest identity when the production reader admitted it. */
+  identity?: CodexPluginManifestIdentity;
   /** `.codex-plugin/plugin.json` version; absent when the manifest is missing or malformed. */
   version?: string;
   /** Keyed by bundle basename. */
@@ -660,11 +664,10 @@ function defaultReadCodexPluginPayload(path: string): CodexPayloadProbe | null {
     return null;
   }
 
-  let version: string | undefined;
+  let identity: CodexPluginManifestIdentity | undefined;
   try {
     const manifest = readCodexMetadataObject(join(path, ".codex-plugin", "plugin.json"), path);
-    const declared = manifest?.["version"];
-    if (typeof declared === "string") version = declared;
+    identity = codexPluginManifestIdentity(manifest, CODEX_PLUGIN) ?? undefined;
   } catch {
     // Manifest stays unknown; callers that require it fail closed.
   }
@@ -673,7 +676,10 @@ function defaultReadCodexPluginPayload(path: string): CodexPayloadProbe | null {
   for (const name of CODEX_PLUGIN_RUNTIME_BUNDLES) {
     bundles[name] = probeCodexBundle(join(path, "dist", name));
   }
-  return { ...(version === undefined ? {} : { version }), bundles };
+  return {
+    ...(identity === undefined ? {} : { identity, version: identity.version }),
+    bundles,
+  };
 }
 
 function defaultSetup(root: string, dryRun: boolean): SetupExecution {
@@ -928,11 +934,17 @@ function unprovenCodexConvergence(
   }
   const snapshot = runtime.readCodexPluginPayload(snapshotPath);
   if (snapshot === null) return `cannot read the marketplace snapshot at ${snapshotPath}`;
+  if (admitted !== undefined && snapshot.identity?.name !== CODEX_PLUGIN) {
+    return `snapshot at ${snapshotPath} does not declare the expected plugin identity`;
+  }
   if (snapshot.version !== packageJson.version) {
     return `snapshot at ${snapshotPath} declares v${snapshot.version ?? "unknown"}, expected v${packageJson.version}`;
   }
   const cache = runtime.readCodexPluginPayload(cachePath);
   if (cache === null) return `cannot read the installed plugin cache at ${cachePath}`;
+  if (admitted !== undefined && cache.identity?.name !== CODEX_PLUGIN) {
+    return `cache at ${cachePath} does not declare the expected plugin identity`;
+  }
   if (cache.version !== packageJson.version) {
     return `cache at ${cachePath} declares v${cache.version ?? "unknown"}, expected v${packageJson.version}`;
   }
@@ -1123,6 +1135,8 @@ function installCodex(
   dryRun: boolean,
   runtime: InstallRuntime,
   report: HostInstallReport,
+  plannedIdentity?: CodexMarketplaceIdentity,
+  retainPlannedIdentity?: (identity: CodexMarketplaceIdentity) => void,
 ): void {
   const metadata = runtime.readCodexPluginMetadata?.(root);
   const marketplacesResult = metadata === undefined
@@ -1167,6 +1181,13 @@ function installCodex(
     report.error = "cannot retain the admitted Codex marketplace identity safely";
     return;
   }
+  if (plannedIdentity !== undefined
+    && (admitted === undefined || !sameCodexMarketplaceIdentity(plannedIdentity, admitted))) {
+    report.status = "failed";
+    report.error = "the Codex marketplace identity changed after the installation plan was admitted";
+    return;
+  }
+  if (admitted !== undefined) retainPlannedIdentity?.(admitted);
 
   const legacyMarketplaces = marketplaces.filter(
     (item) => LEGACY_CODEX_MARKETPLACES.some((name) => item.name === name)
@@ -1683,13 +1704,20 @@ export function executeInstall(
     codex: hostReport(selected(selection, "codex")),
     claude: hostReport(selected(selection, "claude")),
   });
-  const inspectHosts = (inspectionDryRun: boolean): Record<Host, HostInstallReport> => {
+  let plannedCodexIdentity: CodexMarketplaceIdentity | undefined;
+  const inspectHosts = (
+    inspectionDryRun: boolean,
+    expectedCodexIdentity?: CodexMarketplaceIdentity,
+    retainCodexIdentity?: (identity: CodexMarketplaceIdentity) => void,
+  ): Record<Host, HostInstallReport> => {
     const inspected = newHostReports();
     for (const host of ["codex", "claude"] as const) {
       const report = inspected[host];
       if (!report.requested) continue;
       if (!detectHost(host, root, selection, runtime, report)) continue;
-      if (host === "codex") installCodex(root, inspectionDryRun, runtime, report);
+      if (host === "codex") {
+        installCodex(root, inspectionDryRun, runtime, report, expectedCodexIdentity, retainCodexIdentity);
+      }
       else installClaude(root, inspectionDryRun, runtime, report);
     }
     return inspected;
@@ -1725,7 +1753,9 @@ export function executeInstall(
 
   // Aggregate every requested host's read-only inventory and plan before the first host mutation.
   // A known conflict on host B must not leave host A installed.
-  hosts = inspectHosts(true);
+  hosts = inspectHosts(true, undefined, (identity) => {
+    plannedCodexIdentity = identity;
+  });
   const planAdmissible = hostsAdmissible(hosts);
   if (!planAdmissible || dryRun) {
     const ok = planAdmissible;
@@ -1743,7 +1773,7 @@ export function executeInstall(
   // Re-read every requested host at the apply boundary before any native mutation. Each host is
   // still read again in `inspectHosts(false)` immediately before its own mutations; this aggregate
   // pass prevents host A from changing the machine before host B can refuse changed or unsafe state.
-  hosts = inspectHosts(true);
+  hosts = inspectHosts(true, plannedCodexIdentity);
   if (!hostsAdmissible(hosts)) {
     return {
       ok: false,
@@ -1756,7 +1786,7 @@ export function executeInstall(
     };
   }
 
-  hosts = inspectHosts(false);
+  hosts = inspectHosts(false, plannedCodexIdentity);
 
   const requestedReports = (Object.keys(hosts) as Host[])
     .map((host) => hosts[host])

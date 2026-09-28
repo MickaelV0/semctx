@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { basename, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  codexPluginManifestIdentity,
   PLUGIN_DELIVERY_MAX_BUNDLE_BYTES,
   PLUGIN_DELIVERY_MAX_MANIFEST_BYTES,
   PLUGIN_DELIVERY_RELEASE_URL,
@@ -140,7 +141,11 @@ function witnesses(overrides: Record<string, string | null> = {}): PublicRelease
 }
 
 function snapshotProbe(overrides: Partial<MarketplaceSnapshotProbe> = {}): MarketplaceSnapshotProbe {
+  const version = overrides.version === undefined ? RELEASE_VERSION : overrides.version;
   return {
+    pluginIdentity: Object.prototype.hasOwnProperty.call(overrides, "pluginIdentity")
+      ? overrides.pluginIdentity ?? null
+      : version === null ? null : { name: "semctx-control", version },
     commit: STABLE_COMMIT,
     ref: "stable",
     source: SEMCTX_SOURCE,
@@ -151,7 +156,15 @@ function snapshotProbe(overrides: Partial<MarketplaceSnapshotProbe> = {}): Marke
 }
 
 function installedProbe(overrides: Partial<InstalledPayloadProbe> = {}): InstalledPayloadProbe {
-  return { version: RELEASE_VERSION, bundles: digests(), ...overrides };
+  const version = overrides.version === undefined ? RELEASE_VERSION : overrides.version;
+  return {
+    pluginIdentity: Object.prototype.hasOwnProperty.call(overrides, "pluginIdentity")
+      ? overrides.pluginIdentity ?? null
+      : version === null ? null : { name: "semctx-control", version },
+    version,
+    bundles: digests(),
+    ...overrides,
+  };
 }
 
 function codexMarketplaces(overrides: Record<string, unknown> = {}): unknown {
@@ -1001,7 +1014,10 @@ describe("plugin delivery — host-supplied paths are confined", () => {
       ref_name: "stable",
       source: SEMCTX_SOURCE,
     }));
-    writeFileSync(join(externalPlugin, ".codex-plugin", "plugin.json"), JSON.stringify({ version: RELEASE_VERSION }));
+    writeFileSync(join(externalPlugin, ".codex-plugin", "plugin.json"), JSON.stringify({
+      name: "semctx-control",
+      version: RELEASE_VERSION,
+    }));
     for (const name of PLUGIN_RUNTIME_BUNDLES) writeFileSync(join(externalPlugin, "dist", name), `outside-${name}`);
     symlinkSync(externalPlugin, join(pluginsRoot, "semctx-control"), process.platform === "win32" ? "junction" : "dir");
 
@@ -1378,7 +1394,7 @@ describe("plugin delivery — partial evidence never yields UP_TO_DATE", () => {
     });
 
     expect(report.hosts.codex.snapshot.version).toBeNull();
-    expect(report.hosts.codex.reasons).toContain("SNAPSHOT_VERSION_UNKNOWN");
+    expect(report.hosts.codex.reasons).toContain("SNAPSHOT_UNREADABLE");
     expect(report.hosts.codex.verdict).toBe("UNKNOWN");
   });
 
@@ -1832,7 +1848,10 @@ function releaseRunner(script: ReleaseScript = {}): {
       const directory = host === "codex" ? "semctx-control" : "claude-code";
       const manifest = host === "codex" ? ".codex-plugin" : ".claude-plugin";
       if (path === `plugins/${directory}/${manifest}/plugin.json`) {
-        return JSON.stringify({ version: script.pluginVersions?.[host] ?? version });
+        return JSON.stringify({
+          ...(host === "codex" ? { name: "semctx-control" } : {}),
+          version: script.pluginVersions?.[host] ?? version,
+        });
       }
       const bundle = PLUGIN_RUNTIME_BUNDLES.find((name) => path === `plugins/${directory}/dist/${name}`);
       if (bundle !== undefined) return script.bundleContent?.[host]?.[bundle] ?? releasedBundle(bundle);
@@ -1970,9 +1989,12 @@ describe("Codex release manifest consumer", () => {
   test("raw quoted strings, independent nested scopes and paired Unicode remain valid", () => {
     const bytes = Buffer.from(JSON.stringify({ version: RELEASE_VERSION, note: '{"version":"literal"}',
       left: { value: "left" }, right: { value: "right" }, array: ['"version"', "{}"], emoji: "😀" }));
+    const pluginBytes = Buffer.from(JSON.stringify({ name: "semctx-control", version: RELEASE_VERSION,
+      note: '{"version":"literal"}', left: { value: "left" }, right: { value: "right" },
+      array: ['"version"', "{}"], emoji: "😀" }));
     const { report, recorded } = releaseOf({ outcomes: {
       ":apps/cli/package.json": { code: 0, out: "{", bytes },
-      ":plugins/semctx-control/.codex-plugin/plugin.json": { code: 0, out: "{", bytes },
+      ":plugins/semctx-control/.codex-plugin/plugin.json": { code: 0, out: "{", bytes: pluginBytes },
     } });
     expect(report.publicRelease.version).toBe(RELEASE_VERSION);
     expect(report.publicRelease.status).toBe("resolved");
@@ -1986,6 +2008,19 @@ describe("Codex release manifest consumer", () => {
     const { report } = releaseOf({ pluginVersions: { codex: "0.3.6" } });
     expect(report.publicRelease.status).toBe("unknown");
     expect(report.publicRelease.reasons).toContain("PUBLIC_RELEASE_VERSION_DIVERGED");
+  });
+
+  test("a foreign Codex plugin manifest cannot inherit release authority", () => {
+    const bytes = Buffer.from(JSON.stringify({ name: "foreign-plugin", version: RELEASE_VERSION }));
+    const { report, recorded } = releaseOf({ outcomes: {
+      ":plugins/semctx-control/.codex-plugin/plugin.json": {
+        code: 0,
+        out: bytes.toString("utf8"),
+        bytes,
+      },
+    } });
+    expect(report.publicRelease.reasons).toContain("PUBLIC_RELEASE_MANIFEST_UNREADABLE");
+    expect(gitCalls(recorded).some((call) => call.includes("plugins/semctx-control/dist/"))).toBe(false);
   });
 
   test("Claude release manifest parsing keeps its existing contract", () => {
@@ -2560,7 +2595,10 @@ describe("plugin delivery — local artifacts are bounded before they are read",
     mkdirSync(join(codexCache, "dist"), { recursive: true });
     mkdirSync(join(claudeCache, ".claude-plugin"), { recursive: true });
 
-    writeFileSync(join(codexCache, ".codex-plugin", "plugin.json"), JSON.stringify({ version: RELEASE_VERSION }));
+    writeFileSync(join(codexCache, ".codex-plugin", "plugin.json"), JSON.stringify({
+      name: "semctx-control",
+      version: RELEASE_VERSION,
+    }));
     for (const name of PLUGIN_RUNTIME_BUNDLES) writeFileSync(join(codexCache, "dist", name), `bundle ${name}`);
     // One bundle past the ceiling: its digest stays unproven rather than being allocated.
     writeFileSync(
@@ -3402,7 +3440,10 @@ describe("plugin delivery — the three delivery states over real artifacts", ()
   function writePlugin(root: string, manifest: string, version: string, bundle: (name: string) => string): void {
     mkdirSync(join(root, manifest), { recursive: true });
     mkdirSync(join(root, "dist"), { recursive: true });
-    writeFileSync(join(root, manifest, "plugin.json"), JSON.stringify({ version }));
+    writeFileSync(join(root, manifest, "plugin.json"), JSON.stringify({
+      ...(manifest === ".codex-plugin" ? { name: "semctx-control" } : {}),
+      version,
+    }));
     for (const name of PLUGIN_RUNTIME_BUNDLES) writeFileSync(join(root, "dist", name), bundle(name));
   }
 
@@ -3432,7 +3473,7 @@ describe("plugin delivery — the three delivery states over real artifacts", ()
     return { codexMarketplace, claudeMarketplace, codexCache, claudeCache };
   }
 
-  function inventoriesFor(paths: ReturnType<typeof materialise>): ReleaseScript["inventories"] {
+  function inventoriesFor(paths: ReturnType<typeof materialise>): NonNullable<ReleaseScript["inventories"]> {
     return {
       codex: {
         marketplaces: {
@@ -3495,6 +3536,62 @@ describe("plugin delivery — the three delivery states over real artifacts", ()
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
+  }
+
+  test("Codex manifest identity keeps raw build metadata and ignores unrelated fields", () => {
+    expect(codexPluginManifestIdentity({
+      name: "semctx-control",
+      version: "0.3.7+build.15",
+      helper: { enabled: true },
+    }, "semctx-control")).toEqual({ name: "semctx-control", version: "0.3.7+build.15" });
+    expect(codexPluginManifestIdentity({
+      name: "foreign-plugin",
+      version: "0.3.7+build.15",
+    }, "semctx-control")).toBeNull();
+  });
+
+  test("a sidecar-absent Codex branch keeps bidi in raw ref identity before display cleanup", () => {
+    withHome(releasedBundle, (home, paths) => {
+      rmSync(join(paths.codexMarketplace, ".codex-marketplace-install.json"));
+      const inventories = inventoriesFor(paths);
+      const codexInventory = inventories.codex?.marketplaces as { marketplaces: Record<string, unknown>[] };
+      delete codexInventory.marketplaces[0]?.["ref"];
+      const script = releaseRunner({ inventories });
+      const bidiRef = "sta\u202eble\n";
+      const runQuery: PluginDeliveryDependencies["runQuery"] = (command, cwd, limits) =>
+        cwd === paths.codexMarketplace && command.includes("--abbrev-ref")
+          ? { code: 0, out: bidiRef, err: "", bytes: new TextEncoder().encode(bidiRef) }
+          : script.runQuery(command, cwd, limits);
+      const report = pluginDeliveryStatus(
+        { repositoryRoot: CONSUMER_ROOT, version: RELEASE_VERSION, hosts: ["codex"], attest: true },
+        { runQuery, resolveHostHome: () => home },
+      );
+
+      expect(report.hosts.codex.marketplace.ref).toBe("stable");
+      expect(report.hosts.codex.reasons).toContain("MARKETPLACE_REF_UNEXPECTED");
+      expect(report.hosts.codex.delivery).not.toBe("UP_TO_DATE");
+    });
+  });
+
+  for (const target of ["snapshot", "cache"] as const) {
+    test(`a foreign Codex ${target} manifest cannot reuse admitted version and bundle bytes`, () => {
+      withHome(releasedBundle, (home, paths) => {
+        const root = target === "snapshot"
+          ? join(paths.codexMarketplace, "plugins", "semctx-control")
+          : paths.codexCache;
+        writeFileSync(join(root, ".codex-plugin", "plugin.json"), JSON.stringify({
+          name: "foreign-plugin",
+          version: RELEASE_VERSION,
+        }));
+        const report = statusOverRealArtifacts(home, paths, true);
+
+        expect(report.hosts.codex.installed.contentMatchesSnapshot).not.toBe(true);
+        expect(report.hosts.codex.reasons).toContain(
+          target === "snapshot" ? "SNAPSHOT_UNREADABLE" : "INSTALLED_CACHE_UNREADABLE",
+        );
+        expect(report.hosts.codex.delivery).not.toBe("UP_TO_DATE");
+      });
+    });
   }
 
   test("state 0: an attested release matching both real caches converges", () => {
