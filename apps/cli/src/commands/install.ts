@@ -2,6 +2,7 @@ import packageJson from "../../package.json";
 import {
   isCanonicalClaudeMarketplaceRecord,
   isHostInterfaceUnsupportedFailure,
+  readCodexMetadataObject,
   readCodexPluginMetadataInventory,
   readClaudePluginMetadataInventory,
   resolveClaudePluginHome,
@@ -614,7 +615,7 @@ function defaultReadCodexPluginPayload(path: string): CodexPayloadProbe | null {
 
   let version: string | undefined;
   try {
-    const manifest = parseJsonObject(readFileSync(join(path, ".codex-plugin", "plugin.json"), "utf8"));
+    const manifest = readCodexMetadataObject(join(path, ".codex-plugin", "plugin.json"), path);
     const declared = manifest?.["version"];
     if (typeof declared === "string") version = declared;
   } catch {

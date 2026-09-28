@@ -309,6 +309,8 @@ export interface ClaudePluginMetadataInventory {
 
 /** What a marketplace snapshot directory declares about the source it was resolved from. */
 export interface MarketplaceSnapshotProbe {
+  /** Present only for a validated native Codex sidecar; its identity must match the configuration. */
+  sourceType?: "git" | "local";
   /** Commit the host checked out for this marketplace; `null` when it cannot be proven. */
   commit: string | null;
   /** Ref the marketplace tracks, e.g. `stable`. */
@@ -1178,9 +1180,15 @@ function evaluateHost(
   if (reportedRoot !== null && marketplaceRoot === null) reasons.push("HOST_PATH_REJECTED");
   report.snapshot.path = safeText(marketplaceRoot);
 
-  const snapshot = marketplaceRoot === null
+  let snapshot = marketplaceRoot === null
     ? null
     : dependencies.readMarketplaceSnapshot(host, marketplaceRoot);
+  if (host === "codex" && snapshot?.sourceType !== undefined) {
+    const expected = plainRecord(marketplace["marketplaceSource"]);
+    const configuredRef = rawText(marketplace["ref"]);
+    if (snapshot.sourceType !== expected?.["sourceType"] || snapshot.source !== rawHostSource
+      || snapshot.ref !== configuredRef) snapshot = null;
+  }
   if (snapshot === null) {
     reasons.push("SNAPSHOT_UNREADABLE");
   } else {
@@ -1910,6 +1918,11 @@ function decodeCodexMetadataObject(bytes: Buffer | null): Record<string, unknown
   if (text === null) return null;
   const parsed = plainRecord(parseJsonValue(text));
   return parsed !== null && codexJsonStringsAreUnambiguous(text) ? parsed : null;
+}
+
+/** Shared descriptor-bound Codex JSON reader for manifest consumers, including installer recovery. */
+export function readCodexMetadataObject(file: string, root: string): Record<string, unknown> | null {
+  return decodeCodexMetadataObject(readConfinedFile(file, root, PLUGIN_DELIVERY_MAX_MANIFEST_BYTES));
 }
 
 type OptionalMetadataFile =
@@ -2896,6 +2909,8 @@ function defaultReadMarketplaceSnapshot(
   let commit: string | null = null;
   let ref: string | null = null;
   let source: string | null = null;
+  let codexSidecarPresent = false;
+  let codexSidecarSourceType: "git" | "local" | undefined;
   const sidecar = join(canonicalRoot, ".codex-marketplace-install.json");
   if (host === "codex") {
     const metadata = readOptionalMetadataFile(sidecar, canonicalRoot, PLUGIN_DELIVERY_MAX_MANIFEST_BYTES);
@@ -2903,9 +2918,30 @@ function defaultReadMarketplaceSnapshot(
     if (metadata.status === "ok") {
       const record = decodeCodexMetadataObject(metadata.bytes);
       if (record === null) return null;
-      commit = safeText(record["revision"]);
-      ref = safeText(record["ref_name"]);
-      source = safeText(record["source"]);
+      const sourceType = record["source_type"];
+      const rawSource = record["source"];
+      const rawRef = record["ref_name"];
+      const sparse = record["sparse_paths"];
+      const revision = record["revision"];
+      // Both pinned native InstalledMarketplaceMetadata structs require these fields; ref_name
+      // alone is optional. Keep raw identity strings, not a trimmed approximation of native data.
+      if ((sourceType !== "git" && sourceType !== "local")
+        || typeof rawSource !== "string" || rawSource.length === 0
+        || hasIdentityControlCharacter(rawSource)
+        || (sourceType === "git" && !isCodexGitSource(rawSource))
+        || (sourceType === "local" && codexLocalSourceRoot(rawSource) === null)
+        || !Array.isArray(sparse) || sparse.some((path) => typeof path !== "string")
+        || typeof revision !== "string"
+        || (sourceType === "git" && !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(revision))
+        || (sourceType === "local" && revision !== "" && !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(revision))
+        || (rawRef !== undefined && rawRef !== null
+          && (typeof rawRef !== "string" || rawRef.length === 0 || /\s/.test(rawRef)
+            || hasIdentityControlCharacter(rawRef)))) return null;
+      codexSidecarPresent = true;
+      codexSidecarSourceType = sourceType;
+      commit = revision === "" ? null : revision;
+      ref = typeof rawRef === "string" ? rawRef : null;
+      source = rawSource;
     }
   } else {
     try {
@@ -2921,11 +2957,11 @@ function defaultReadMarketplaceSnapshot(
       // Claude's existing fallback remains independent of Codex metadata refusal.
     }
   }
-  if (commit === null) {
+  if (commit === null && !codexSidecarPresent) {
     const head = runQuery(["git", "--no-replace-objects", "rev-parse", "HEAD"], canonicalRoot, LOCAL_READ_LIMITS);
     if (head.code === 0) commit = safeText(head.out.trim());
   }
-  if (ref === null) {
+  if (ref === null && !codexSidecarPresent) {
     const branch = runQuery(
       ["git", "--no-replace-objects", "rev-parse", "--abbrev-ref", "HEAD"],
       canonicalRoot,
@@ -2944,15 +2980,15 @@ function defaultReadMarketplaceSnapshot(
   if (pluginRoot === null) return null;
   const version = readJsonField(join(pluginRoot, layout.manifest, "plugin.json"), "version", canonicalRoot, host);
 
-  return { commit, ref, source, version, bundles: bundleDigests(join(pluginRoot, "dist"), canonicalRoot) };
+  return { commit, ref, source, version, bundles: bundleDigests(join(pluginRoot, "dist"), canonicalRoot),
+    ...(codexSidecarSourceType === undefined ? {} : { sourceType: codexSidecarSourceType }) };
 }
 
 function readJsonField(file: string, field: string, root: string, host: PluginDeliveryHost): string | null {
   // A manifest is a small JSON document. A file claiming to be one while being far larger is
   // refused by the bounded read rather than parsed.
-  const bytes = readConfinedFile(file, root, PLUGIN_DELIVERY_MAX_MANIFEST_BYTES);
-  if (bytes === null) return null;
-  const record = host === "codex" ? decodeCodexMetadataObject(bytes) : decodeMetadataObject(bytes);
+  const record = host === "codex" ? readCodexMetadataObject(file, root)
+    : decodeMetadataObject(readConfinedFile(file, root, PLUGIN_DELIVERY_MAX_MANIFEST_BYTES));
   return record === null ? null : safeText(record[field]);
 }
 

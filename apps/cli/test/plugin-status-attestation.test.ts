@@ -477,7 +477,7 @@ beforeAll(() => {
   writeReleaseTree(codexMarketplace, FORGED_VERSION, "forged");
   write(
     join(codexMarketplace, ".codex-marketplace-install.json"),
-    `${JSON.stringify({ source_type: "git", source: SEMCTX_URL, ref_name: "stable", revision: forgedCommit })}\n`,
+    `${JSON.stringify({ source_type: "git", source: SEMCTX_URL, ref_name: "stable", sparse_paths: [], revision: forgedCommit })}\n`,
   );
   writeCacheEntry(
     join(codexHome, "plugins", "cache", "semctx-stable", "semctx-control", FORGED_VERSION),

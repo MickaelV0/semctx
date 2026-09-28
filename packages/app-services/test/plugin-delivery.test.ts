@@ -991,6 +991,8 @@ describe("plugin delivery — host-supplied paths are confined", () => {
     mkdirSync(join(externalPlugin, "dist"), { recursive: true });
     writeFileSync(join(marketplaceRoot, ".codex-marketplace-install.json"), JSON.stringify({
       revision: STABLE_COMMIT,
+      source_type: "git",
+      sparse_paths: [],
       ref_name: "stable",
       source: SEMCTX_SOURCE,
     }));
@@ -3328,7 +3330,7 @@ describe("plugin delivery — the three delivery states over real artifacts", ()
       mkdirSync(marketplace, { recursive: true });
       writeFileSync(
         join(marketplace, ".codex-marketplace-install.json"),
-        JSON.stringify({ source_type: "git", source: SEMCTX_SOURCE, ref_name: "stable", revision: STABLE_COMMIT }),
+        JSON.stringify({ source_type: "git", source: SEMCTX_SOURCE, ref_name: "stable", sparse_paths: [], revision: STABLE_COMMIT }),
       );
       writePlugin(join(marketplace, "plugins", "semctx-control"), ".codex-plugin", RELEASE_VERSION, releasedBundle);
       writePlugin(join(marketplace, "plugins", "claude-code"), ".claude-plugin", RELEASE_VERSION, releasedBundle);
@@ -3346,6 +3348,7 @@ describe("plugin delivery — the three delivery states over real artifacts", ()
             name: MARKETPLACE,
             root: paths.codexMarketplace,
             marketplaceSource: { sourceType: "git", source: SEMCTX_SOURCE },
+            ref: "stable",
           }],
         },
         plugins: {
