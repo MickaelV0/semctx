@@ -80,8 +80,10 @@ gate. If compatibility is intentionally broken, version the contract and documen
 
 ## Implementation and evidence
 
-Use the narrowest test set that proves the applicable contract, then run `bun run verify:pr`.
-Before running it, stage every intended new file. The gate refuses any remaining non-ignored
+Use the narrowest test set that proves the applicable contract, then require the adaptive CI plan
+and `semctx-required` on the exact PR SHA. Run `bun run verify:pr` for releases, unknown impact,
+uncovered obligations or failed targeted checks. Before running it, stage every intended new file.
+The full gate refuses any remaining non-ignored
 untracked file because an omitted file cannot be included in diff hygiene or PR evidence.
 Depending on the surface, evidence includes:
 
@@ -99,5 +101,4 @@ repository generator, commit all resulting artifacts, and run the corresponding 
 
 In the PR description, report every applicable item above with the command and observed result.
 Use `N/A — <reason>` when an item truly does not apply; a blank entry or unexplained `N/A` is not
-evidence. `bun run verify:pr` is the sole documented pre-PR gate, but it does not replace
-surface-specific evidence or live release verification.
+evidence. Adaptive CI does not replace surface-specific evidence or live release verification.
