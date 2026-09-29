@@ -19,7 +19,7 @@ Select exactly one: the highest tier reached by this change. See the
 
 ## Validation
 
-- [ ] `bun run verify:pr` passes locally, or the validation gap is explained below.
+- [ ] Affected local checks are reported, and the selected `semctx-required` CI gate passes on this SHA.
 - [ ] Tests cover changed behavior.
 - [ ] Generated plugin artifacts are updated when their sources change.
 

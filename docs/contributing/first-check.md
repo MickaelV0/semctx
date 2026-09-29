@@ -23,7 +23,8 @@ service, changes configuration, or requires a global plugin or Docker.
 Choose `check core`, `check app-services` or `check mcp-server` to execute the corresponding existing
 package tests. The helper prints the command, observed test count, duration and omitted gates. An
 unknown or cross-cutting scope needs full verification. An exit code of zero with no Bun test summary
-is rejected. A targeted success does not claim source coverage or replace `bun run verify:pr`.
+is rejected. A targeted success does not claim full source coverage; the required CI plan
+selects the affected gates under [ADR 0031](../adr/0031-change-scoped-ci-gates.md).
 
 `recipe` copies the real `symbolId` implementation and its existing scope-qualified identity test
 into an owned temporary directory. It changes the scope separator from `.` to `#`, requires the
@@ -33,8 +34,9 @@ never mutated by the recipe.
 
 `full` delegates to the unchanged `scripts/verify-pr.ts`. Optional `--base REF` is passed through;
 `--skip-diff` is rejected because it cannot establish complete verification. Stage intended new files
-first, as the canonical gate rejects non-ignored untracked files. All required quality checks and
-tests remain mandatory before opening or updating a PR.
+first, as the full gate rejects non-ignored untracked files. Run it for a release, uncertain
+impact or an uncovered obligation; otherwise report the targeted result and require
+`semctx-required` on the PR's exact SHA.
 
 Every mode supports `--json` for a versioned `contributor_check` record. Full-gate logs go to stderr
 in that mode; stdout remains JSON. These diagnostics are local and may expose private paths or
