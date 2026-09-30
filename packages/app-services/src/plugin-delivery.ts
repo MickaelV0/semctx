@@ -8,6 +8,7 @@ import {
   mkdtempSync,
   openSync,
   readSync,
+  readlinkSync,
   readdirSync,
   realpathSync,
   rmSync,
@@ -36,7 +37,7 @@ import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:p
  *
  * Two modes, and they differ in exactly one respect:
  *
- * - **default** — Codex `list` queries plus local declarative Claude reads. No network operation.
+ * - **default** — local declarative Codex and Claude reads. No network operation.
  * - **`--attest`** — additionally resolves and *fetches* the canonical public release into a
  *   throwaway store outside the project, then deletes it. This is a real network transfer, opt-in
  *   by name, and it is the only one. Saying "never fetches" of the whole command would be false;
@@ -93,6 +94,7 @@ export const PLUGIN_RUNTIME_BUNDLES = [
 
 /** A plugin version is a semver token; anything else must never reach a filesystem path. */
 const VERSION_SEGMENT = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+const NATIVE_SEMVER_MAX_COMPONENT = 18_446_744_073_709_551_615n;
 
 /**
  * Drop C0/C1 controls, which a hostile host could use to repaint a terminal line. Written as an
@@ -308,6 +310,12 @@ export interface ClaudePluginMetadataInventory {
 
 /** What a marketplace snapshot directory declares about the source it was resolved from. */
 export interface MarketplaceSnapshotProbe {
+  /** Exact Codex plugin manifest identity; Claude has no corresponding requirement. */
+  pluginIdentity: CodexPluginManifestIdentity | null;
+  /** Present only for a validated native Codex sidecar; its identity must match the configuration. */
+  sourceType?: "git" | "local";
+  /** Native sparse checkout identity, preserving order, duplicates and raw strings. */
+  sparsePaths?: readonly string[];
   /** Commit the host checked out for this marketplace; `null` when it cannot be proven. */
   commit: string | null;
   /** Ref the marketplace tracks, e.g. `stable`. */
@@ -322,6 +330,8 @@ export interface MarketplaceSnapshotProbe {
 
 /** What the executed cache entry declares and contains. */
 export interface InstalledPayloadProbe {
+  /** Exact Codex plugin manifest identity; Claude has no corresponding requirement. */
+  pluginIdentity: CodexPluginManifestIdentity | null;
   version: string | null;
   bundles: Record<string, string | null>;
 }
@@ -374,6 +384,10 @@ export interface PluginDeliveryDependencies {
     cwd: string,
     limits?: PluginDeliveryQueryLimits,
   ): PluginDeliveryQueryOutcome;
+  /** Read-only PATH lookup; native host version commands may write profile bookkeeping. */
+  findHostExecutable?(host: PluginDeliveryHost): string | null;
+  /** Declarative Codex inventory; production does not launch Codex for a status query. */
+  readCodexPluginMetadata?(repositoryRoot: string): CodexPluginMetadataInventory | null;
   /**
    * Read Claude's declarative metadata without launching Claude Code. The native `plugin list`
    * commands maintain profile bookkeeping even when used only for diagnosis, so the production
@@ -577,6 +591,114 @@ function safeText(value: unknown): string | null {
 
 function rawText(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+/** A Semctx version is an identity: no trimming, control removal or display redaction. */
+function codexVersionIdentity(value: unknown): string | null {
+  if (typeof value !== "string" || value.trim() !== value) return null;
+  const match = VERSION_SEGMENT.exec(value);
+  if (match === null) return null;
+  return match.slice(1, 4).every((component) => component !== undefined
+    && BigInt(component) <= NATIVE_SEMVER_MAX_COMPONENT) ? value : null;
+}
+
+interface NativeCodexVersion {
+  core: readonly [bigint, bigint, bigint];
+  prerelease: string;
+  build: string;
+}
+
+function parseNativeCodexVersion(value: string): NativeCodexVersion | null {
+  if (codexVersionIdentity(value) === null) return null;
+  const buildSeparator = value.indexOf("+");
+  const withoutBuild = buildSeparator === -1 ? value : value.slice(0, buildSeparator);
+  const prereleaseSeparator = withoutBuild.indexOf("-");
+  const core = (prereleaseSeparator === -1 ? withoutBuild : withoutBuild.slice(0, prereleaseSeparator))
+    .split(".");
+  if (core.length !== 3) return null;
+  return {
+    core: [BigInt(core[0] ?? ""), BigInt(core[1] ?? ""), BigInt(core[2] ?? "")],
+    prerelease: prereleaseSeparator === -1 ? "" : withoutBuild.slice(prereleaseSeparator + 1),
+    build: buildSeparator === -1 ? "" : value.slice(buildSeparator + 1),
+  };
+}
+
+function compareScalar(left: bigint | number | string, right: bigint | number | string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function compareNativePrerelease(left: string, right: string): number {
+  if (left === right) return 0;
+  if (left === "") return 1;
+  if (right === "") return -1;
+  const leftParts = left.split(".");
+  const rightParts = right.split(".");
+  for (let index = 0; index < Math.min(leftParts.length, rightParts.length); index += 1) {
+    const leftPart = leftParts[index] ?? "";
+    const rightPart = rightParts[index] ?? "";
+    const leftNumeric = /^\d+$/.test(leftPart);
+    const rightNumeric = /^\d+$/.test(rightPart);
+    const comparison = leftNumeric && rightNumeric
+      ? compareScalar(leftPart.length, rightPart.length) || compareScalar(leftPart, rightPart)
+      : leftNumeric ? -1 : rightNumeric ? 1 : compareScalar(leftPart, rightPart);
+    if (comparison !== 0) return comparison;
+  }
+  return compareScalar(leftParts.length, rightParts.length);
+}
+
+function compareNativeBuild(left: string, right: string): number {
+  if (left === right) return 0;
+  if (left === "") return -1;
+  if (right === "") return 1;
+  const leftParts = left.split(".");
+  const rightParts = right.split(".");
+  for (let index = 0; index < Math.min(leftParts.length, rightParts.length); index += 1) {
+    const leftPart = leftParts[index] ?? "";
+    const rightPart = rightParts[index] ?? "";
+    const leftNumeric = /^\d+$/.test(leftPart);
+    const rightNumeric = /^\d+$/.test(rightPart);
+    let comparison: number;
+    if (leftNumeric && rightNumeric) {
+      const leftValue = leftPart.replace(/^0+/, "");
+      const rightValue = rightPart.replace(/^0+/, "");
+      comparison = compareScalar(leftValue.length, rightValue.length)
+        || compareScalar(leftValue, rightValue)
+        || compareScalar(leftPart.length, rightPart.length);
+    } else {
+      comparison = leftNumeric ? -1 : rightNumeric ? 1 : compareScalar(leftPart, rightPart);
+    }
+    if (comparison !== 0) return comparison;
+  }
+  return compareScalar(leftParts.length, rightParts.length);
+}
+
+function compareNativeCodexVersions(left: string, right: string): number {
+  const leftVersion = parseNativeCodexVersion(left);
+  const rightVersion = parseNativeCodexVersion(right);
+  if (leftVersion === null || rightVersion === null) return compareScalar(left, right);
+  for (let index = 0; index < leftVersion.core.length; index += 1) {
+    const comparison = compareScalar(leftVersion.core[index] ?? 0n, rightVersion.core[index] ?? 0n);
+    if (comparison !== 0) return comparison;
+  }
+  return compareNativePrerelease(leftVersion.prerelease, rightVersion.prerelease)
+    || compareNativeBuild(leftVersion.build, rightVersion.build);
+}
+
+/** A Codex plugin manifest is authoritative only for the expected plugin and one raw valid version. */
+export interface CodexPluginManifestIdentity {
+  readonly name: string;
+  readonly version: string;
+}
+
+export function codexPluginManifestIdentity(
+  value: unknown,
+  expectedName: string,
+): CodexPluginManifestIdentity | null {
+  const record = plainRecord(value);
+  const version = codexVersionIdentity(record?.["version"]);
+  return record?.["name"] === expectedName && version !== null
+    ? { name: expectedName, version }
+    : null;
 }
 
 function hasIdentityControlCharacter(value: string): boolean {
@@ -950,6 +1072,11 @@ function readHostQueries(
   cwd: string,
   dependencies: PluginDeliveryDependencies,
 ): HostQueries | PluginDeliveryReason {
+  if (host === "codex" && dependencies.readCodexPluginMetadata !== undefined) {
+    const inventory = dependencies.readCodexPluginMetadata(cwd);
+    if (inventory === null) return "HOST_QUERY_FAILED";
+    return validateHostInventory(host, inventory.marketplaces, inventory.plugins);
+  }
   if (host === "claude" && dependencies.readClaudePluginMetadata !== undefined) {
     const inventory = dependencies.readClaudePluginMetadata(cwd);
     if (inventory === null) return "HOST_QUERY_FAILED";
@@ -1082,20 +1209,28 @@ function evaluateHost(
   publicReleaseBundles: Record<string, string | null> | null,
   dependencies: PluginDeliveryDependencies,
 ): HostPluginDeliveryV2 {
-  const detection = dependencies.runQuery([host, "--version"], command.repositoryRoot, {
-    timeoutMs: PLUGIN_DELIVERY_QUERY_TIMEOUT_MS,
-    maxBytes: PLUGIN_DELIVERY_MAX_HOST_OUTPUT_BYTES,
-  });
-  const detectionBound = boundedFailure(detection);
-  if (detectionBound !== null) {
-    const report = emptyHost(true, true);
-    report.reasons = [detectionBound];
-    return report;
-  }
-  if (detection.code !== 0) {
-    const report = emptyHost(true, false);
-    report.reasons = ["HOST_NOT_DETECTED"];
-    return report;
+  if (dependencies.findHostExecutable !== undefined) {
+    if (dependencies.findHostExecutable(host) === null) {
+      const report = emptyHost(true, false);
+      report.reasons = ["HOST_NOT_DETECTED"];
+      return report;
+    }
+  } else {
+    const detection = dependencies.runQuery([host, "--version"], command.repositoryRoot, {
+      timeoutMs: PLUGIN_DELIVERY_QUERY_TIMEOUT_MS,
+      maxBytes: PLUGIN_DELIVERY_MAX_HOST_OUTPUT_BYTES,
+    });
+    const detectionBound = boundedFailure(detection);
+    if (detectionBound !== null) {
+      const report = emptyHost(true, true);
+      report.reasons = [detectionBound];
+      return report;
+    }
+    if (detection.code !== 0) {
+      const report = emptyHost(true, false);
+      report.reasons = ["HOST_NOT_DETECTED"];
+      return report;
+    }
   }
 
   const report = emptyHost(true, true);
@@ -1118,6 +1253,23 @@ function evaluateHost(
     // A successfully read, empty inventory *proves* the marketplace is not configured — this is the
     // one path allowed to report `false` rather than `null`.
     report.marketplace.configured = false;
+    if (host === "codex") {
+      // The declarative reader also observes physical caches without a registration. Preserve that
+      // confined evidence without inferring enablement, approved content or session activation.
+      const orphan = objectEntries(queries.plugins).find((entry) => entry["pluginId"] === CODEX_PLUGIN_ID
+        && entry["installed"] === true && entry["registered"] === false);
+      if (orphan !== undefined) {
+        const reportedPath = rawText(orphan["cachePath"]);
+        const cachePath = acceptHostPath(reportedPath, home);
+        if (reportedPath !== null && cachePath === null) reasons.push("HOST_PATH_REJECTED");
+        if (cachePath !== null) {
+          report.installed.installed = true;
+          report.installed.path = safeText(cachePath);
+          report.installed.version = safeText(orphan["version"]);
+          reasons.push("PLUGIN_ENABLEMENT_UNKNOWN", "INSTALLED_CACHE_CONTENT_UNPROVEN");
+        }
+      }
+    }
     report.reasons = sortedUnique([...reasons, "MARKETPLACE_NOT_CONFIGURED"]);
     report.verdict = "UNKNOWN";
     return report;
@@ -1133,7 +1285,7 @@ function evaluateHost(
   report.marketplace.source = safeText(rawHostSource);
   report.marketplace.matchesSemctx = host === "claude"
     ? isCanonicalClaudeMarketplaceRecord(marketplace)
-    : isSemctxSource(rawHostSource);
+    : plainRecord(marketplace["marketplaceSource"])?.["sourceType"] === "git" && isSemctxSource(rawHostSource);
   if (report.marketplace.matchesSemctx !== true) reasons.push("MARKETPLACE_SOURCE_MISMATCH");
 
   const reportedRoot = host === "codex"
@@ -1143,21 +1295,43 @@ function evaluateHost(
   if (reportedRoot !== null && marketplaceRoot === null) reasons.push("HOST_PATH_REJECTED");
   report.snapshot.path = safeText(marketplaceRoot);
 
-  const snapshot = marketplaceRoot === null
+  let snapshot = marketplaceRoot === null
     ? null
     : dependencies.readMarketplaceSnapshot(host, marketplaceRoot);
+  if (host === "codex" && snapshot?.pluginIdentity?.name !== CODEX_PLUGIN) snapshot = null;
+  const configuredCodexRef = host === "codex" ? rawText(marketplace["ref"]) : null;
+  const fallbackCodexRef = host === "codex" && snapshot !== null && snapshot.sourceType === undefined
+    ? rawText(snapshot.ref)
+    : null;
+  if (configuredCodexRef !== null && fallbackCodexRef !== null
+    && configuredCodexRef !== fallbackCodexRef) {
+    reasons.push("MARKETPLACE_REF_UNEXPECTED");
+    snapshot = null;
+  }
+  if (host === "codex" && snapshot?.sourceType !== undefined) {
+    const configured = plainRecord(marketplace["marketplaceSource"]);
+    const expected = codexMarketplaceIdentity(configured?.["sourceType"], configured?.["source"],
+      marketplace["ref"], marketplace["sparsePaths"] === undefined ? [] : marketplace["sparsePaths"]);
+    const observed = codexMarketplaceIdentity(snapshot.sourceType, snapshot.source, snapshot.ref,
+      snapshot.sparsePaths === undefined ? [] : snapshot.sparsePaths);
+    if (expected === null || observed === null || !sameCodexMarketplaceIdentity(expected, observed)) snapshot = null;
+  }
+  const snapshotVersion = host === "codex" && snapshot?.pluginIdentity?.name === CODEX_PLUGIN
+    ? snapshot.pluginIdentity.version
+    : host === "codex" ? null : safeText(snapshot?.version);
   if (snapshot === null) {
     reasons.push("SNAPSHOT_UNREADABLE");
   } else {
     report.snapshot.commit = safeText(snapshot.commit);
-    report.snapshot.version = safeText(snapshot.version);
+    report.snapshot.version = safeText(snapshotVersion);
     if (report.snapshot.commit === null) reasons.push("SNAPSHOT_COMMIT_UNKNOWN");
     if (report.snapshot.version === null) reasons.push("SNAPSHOT_VERSION_UNKNOWN");
   }
 
   // Claude reports the tracked ref directly; Codex records it in the snapshot install metadata.
-  const ref = safeText(marketplace["ref"]) ?? safeText(snapshot?.ref) ?? null;
-  report.marketplace.ref = ref;
+  const ref = host === "codex" ? configuredCodexRef ?? rawText(snapshot?.ref)
+    : safeText(marketplace["ref"]) ?? safeText(snapshot?.ref) ?? null;
+  report.marketplace.ref = safeText(ref);
   if (ref === null) reasons.push("MARKETPLACE_REF_UNKNOWN");
   else if (ref !== PLUGIN_DELIVERY_RELEASE_REF) reasons.push("MARKETPLACE_REF_UNEXPECTED");
 
@@ -1189,7 +1363,7 @@ function evaluateHost(
   const rawHostVersion = rawText(installedEntry?.["version"]);
   // `source.path` is the approved marketplace snapshot, never the executed cache entry.
   const reportedCachePath = host === "codex"
-    ? (marketplaceRoot === null || rawHostVersion === null
+    ? rawText(installedEntry?.["cachePath"]) ?? (marketplaceRoot === null || rawHostVersion === null
       ? null
       : codexCacheEntryFromMarketplaceRoot(marketplaceRoot, rawHostVersion, home))
     : rawText(installedEntry?.["installPath"]);
@@ -1198,15 +1372,18 @@ function evaluateHost(
   report.installed.path = safeText(cachePath);
 
   const payload = cachePath === null ? null : dependencies.readInstalledPayload(host, cachePath);
-  const cacheVersion = safeText(payload?.version);
-  if (payload === null || cacheVersion === null) {
+  const cacheVersion = host === "codex" ? payload?.pluginIdentity?.version ?? null : safeText(payload?.version);
+  // The payload readback cannot replace the version admitted by inventory. `local` is a
+  // directory identity, so compare declared versions rather than the cache path's basename.
+  if (payload === null || cacheVersion === null || (host === "codex"
+    && (payload.pluginIdentity?.name !== CODEX_PLUGIN || cacheVersion !== rawHostVersion))) {
     report.reasons = sortedUnique([...reasons, "INSTALLED_CACHE_UNREADABLE"]);
     report.verdict = "UNKNOWN";
     return report;
   }
-  report.installed.version = cacheVersion;
+  report.installed.version = safeText(cacheVersion);
 
-  if (report.snapshot.version !== null && cacheVersion !== report.snapshot.version) {
+  if (snapshotVersion !== null && cacheVersion !== snapshotVersion) {
     reasons.push("INSTALLED_CACHE_BEHIND_SNAPSHOT");
   }
 
@@ -1250,14 +1427,15 @@ function evaluateHost(
 
   // --- Layer 5: what a running session loaded. Never inferred from the cache. ---
   const session = dependencies.observeSessionVersion(host);
+  const sessionVersion = host === "codex" ? codexVersionIdentity(session.version) : safeText(session.version);
   report.session = {
     status: session.status,
-    version: safeText(session.version),
+    version: safeText(sessionVersion),
     reason: safeText(session.reason),
   };
-  if (report.session.status !== "observed" || report.session.version === null) {
+  if (report.session.status !== "observed" || sessionVersion === null) {
     reasons.push("SESSION_VERSION_UNOBSERVABLE");
-  } else if (report.session.version !== cacheVersion) {
+  } else if (sessionVersion !== cacheVersion) {
     reasons.push("SESSION_BEHIND_INSTALLED_CACHE");
   }
 
@@ -1358,7 +1536,9 @@ export function pluginDeliveryStatus(
 ): PluginDeliveryReportV2 {
   // Every default is bound to the resolved query seam, so a test that injects `runQuery` observes
   // the Git reads too and the read-only guarantee is provable, not merely asserted.
-  const runQuery = dependencies.runQuery ?? defaultRunQuery;
+  const runQuery = dependencies.runQuery ?? runPluginDeliveryQuery;
+  const findHostExecutable = dependencies.findHostExecutable
+    ?? (dependencies.runQuery === undefined ? (host: PluginDeliveryHost) => Bun.which(host) : undefined);
   const resolveHostHome = dependencies.resolveHostHome ?? defaultResolveHostHome;
   const resolveAttestationExclusionHome = dependencies.resolveHostHome
     ?? defaultResolveHostExclusionHome;
@@ -1369,8 +1549,17 @@ export function pluginDeliveryStatus(
           return home === null ? null : readClaudePluginMetadataInventory(root, home);
         }
       : undefined);
+  const readCodexPluginMetadata = dependencies.readCodexPluginMetadata
+    ?? (dependencies.runQuery === undefined
+      ? (_root: string) => {
+          const home = resolveHostHome("codex");
+          return home === null ? null : readCodexPluginMetadataInventory(_root, home);
+        }
+      : undefined);
   const resolved: PluginDeliveryDependencies = {
     runQuery,
+    ...(findHostExecutable === undefined ? {} : { findHostExecutable }),
+    ...(readCodexPluginMetadata === undefined ? {} : { readCodexPluginMetadata }),
     ...(readClaudePluginMetadata === undefined ? {} : { readClaudePluginMetadata }),
     readMarketplaceSnapshot: dependencies.readMarketplaceSnapshot
       ?? ((host, root) => defaultReadMarketplaceSnapshot(host, root, runQuery)),
@@ -1495,7 +1684,7 @@ export function pluginDeliveryStatus(
 
 type QueryRunner = PluginDeliveryDependencies["runQuery"];
 
-function defaultRunQuery(
+export function runPluginDeliveryQuery(
   command: readonly string[],
   cwd: string,
   limits: PluginDeliveryQueryLimits = {
@@ -1628,11 +1817,15 @@ function defaultResolveHostHome(host: PluginDeliveryHost): string | null {
   if (host === "codex") {
     const configured = process.env["CODEX_HOME"];
     if (typeof configured === "string" && configured.trim().length > 0) {
-      const candidate = configured.trim();
-      return isLocalFilesystemPath(candidate) ? resolve(candidate) : null;
+      const candidate = configured;
+      return isLocalFilesystemPath(candidate) ? candidate : null;
     }
   }
-  return isLocalFilesystemPath(home) ? resolve(join(home, ".codex")) : null;
+  if (!isLocalFilesystemPath(home)) return null;
+  // Preserve cancelled components from the OS home until the inventory's two snapshots record
+  // their identities. join/resolve here would erase an ancestor that can drift during the read.
+  const separator = home.endsWith("/") || home.endsWith("\\") ? "" : sep;
+  return `${home}${separator}.codex`;
 }
 
 /**
@@ -1811,13 +2004,71 @@ function decodeMetadataObject(bytes: Buffer | null): Record<string, unknown> | n
   return plainRecord(parsed);
 }
 
+function decodeCodexUtf8(bytes: Buffer): string | null {
+  if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return null;
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return null;
+  }
+}
+
+/** JSON syntax is already validated; retain decoded keys that JSON.parse otherwise overwrites. */
+function codexJsonStringsAreUnambiguous(text: string): boolean {
+  const scopes: ({ keys: Set<string>; awaitingKey: boolean } | null)[] = [];
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    if (character === "{") scopes.push({ keys: new Set(), awaitingKey: true });
+    else if (character === "[") scopes.push(null);
+    else if (character === "}" || character === "]") scopes.pop();
+    else if (character === "," || character === ":") {
+      const scope = scopes.at(-1);
+      if (scope !== undefined && scope !== null) scope.awaitingKey = character === ",";
+    } else if (character === '"') {
+      const start = index;
+      for (index += 1; index < text.length; index += 1) {
+        if (text[index] === "\\") index += 1;
+        else if (text[index] === '"') break;
+      }
+      const value = parseJsonValue(text.slice(start, index + 1));
+      if (typeof value !== "string") return false;
+      // Iteration joins valid UTF-16 pairs into one code point; a remaining surrogate is invalid.
+      for (const scalar of value) {
+        const code = scalar.codePointAt(0) ?? 0;
+        if (code >= 0xd800 && code <= 0xdfff) return false;
+      }
+      const scope = scopes.at(-1);
+      if (scope !== undefined && scope !== null && scope.awaitingKey) {
+        if (scope.keys.has(value)) return false;
+        scope.keys.add(value);
+      }
+    }
+  }
+  return scopes.length === 0;
+}
+
+function decodeCodexMetadataObject(bytes: Buffer | null): Record<string, unknown> | null {
+  if (bytes === null) return null;
+  const text = decodeCodexUtf8(bytes);
+  if (text === null) return null;
+  const parsed = plainRecord(parseJsonValue(text));
+  return parsed !== null && codexJsonStringsAreUnambiguous(text) ? parsed : null;
+}
+
+/** Shared descriptor-bound Codex JSON reader for manifest consumers, including installer recovery. */
+export function readCodexMetadataObject(file: string, root: string): Record<string, unknown> | null {
+  return decodeCodexMetadataObject(readConfinedFile(file, root, PLUGIN_DELIVERY_MAX_MANIFEST_BYTES));
+}
+
 type OptionalMetadataFile =
   | { status: "absent" }
   | { status: "unsafe" }
   | { status: "ok"; bytes: Buffer };
 
 /** Distinguish a proven absent file from an unsafe path; `readConfinedFile` intentionally cannot. */
-function readOptionalMetadataFile(file: string, root: string): OptionalMetadataFile {
+function readOptionalMetadataFile(
+  file: string, root: string, maxBytes = PLUGIN_DELIVERY_MAX_HOST_OUTPUT_BYTES,
+): OptionalMetadataFile {
   try {
     const resolvedRoot = resolve(root);
     const resolvedFile = resolve(file);
@@ -1848,7 +2099,7 @@ function readOptionalMetadataFile(file: string, root: string): OptionalMetadataF
       if (!final && !stats.isDirectory()) return { status: "unsafe" };
       if (final && !stats.isFile()) return { status: "unsafe" };
     }
-    const bytes = readConfinedFile(file, root, PLUGIN_DELIVERY_MAX_HOST_OUTPUT_BYTES);
+    const bytes = readConfinedFile(file, root, maxBytes);
     return bytes === null ? { status: "unsafe" } : { status: "ok", bytes };
   } catch {
     return { status: "unsafe" };
@@ -1858,6 +2109,885 @@ function readOptionalMetadataFile(file: string, root: string): OptionalMetadataF
 function sameOptionalObservation(before: OptionalMetadataFile, after: OptionalMetadataFile): boolean {
   if (before.status !== after.status) return false;
   return before.status !== "ok" || (after.status === "ok" && before.bytes.equals(after.bytes));
+}
+
+/** The subset of Codex's config and cache inventory needed by install and plugin-status. */
+export interface CodexPluginMetadataInventory {
+  marketplaces: Record<string, unknown>[];
+  plugins: Record<string, unknown>[];
+}
+
+interface CodexConfigTables {
+  marketplaces: Record<string, unknown>;
+  plugins: Record<string, unknown>;
+  projects: Record<string, unknown>;
+}
+
+const CODEX_ENTRY_NAME = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/;
+const CODEX_CACHE_NAME = /^[a-zA-Z0-9][a-zA-Z0-9._+-]{0,127}$/;
+const MAX_CODEX_ENTRIES = 256;
+const CODEX_HOME_MARKETPLACE_MANIFESTS = [
+  [".agents", "plugins", "marketplace.json"],
+  [".agents", "plugins", "api_marketplace.json"],
+  [".claude-plugin", "marketplace.json"],
+  [".cursor-plugin", "marketplace.json"],
+] as const;
+
+function codexTomlTable(value: unknown): Record<string, unknown> | null {
+  const record = plainRecord(value);
+  if (record === null) return null;
+  const prototype: unknown = Object.getPrototypeOf(record);
+  // TOML datetimes are scalar Date values in Bun; only actual tables merge recursively.
+  return prototype === Object.prototype || prototype === null ? record : null;
+}
+
+/** Pinned generic TOML merge for supported plugin metadata: tables recurse, other values replace. */
+function mergeCodexTomlTables(base: Record<string, unknown>, overlay: Record<string, unknown>): Record<string, unknown> {
+  const copy = (table: Record<string, unknown>): Record<string, unknown> =>
+    Object.assign(Object.create(null) as Record<string, unknown>, table);
+  const result = copy(base);
+  const pending = [{ base, overlay, result }];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (current === undefined) break;
+    for (const [key, value] of Object.entries(current.overlay)) {
+      const lower = codexTomlTable(current.base[key]);
+      const higher = codexTomlTable(value);
+      if (lower !== null && higher !== null) {
+        const result = copy(lower);
+        current.result[key] = result;
+        pending.push({ base: lower, overlay: higher, result });
+      } else current.result[key] = value;
+    }
+  }
+  return result;
+}
+
+function validCodexProjects(projects: Record<string, unknown>): boolean {
+  return Object.values(projects).every((raw) => {
+    const project = codexTomlTable(raw);
+    return project !== null && (project["trust_level"] === undefined
+      || project["trust_level"] === "trusted" || project["trust_level"] === "untrusted");
+  });
+}
+
+function parseCodexConfig(observation: OptionalMetadataFile): Record<string, unknown> | null {
+  if (observation.status === "unsafe") return null;
+  if (observation.status === "absent") return {};
+  let config: Record<string, unknown> | null;
+  const text = decodeCodexUtf8(observation.bytes);
+  if (text === null) return null;
+  try {
+    config = codexTomlTable(Bun.TOML.parse(text));
+  } catch {
+    return null;
+  }
+  if (config === null) return null;
+  // Bare plugin commands do not select a profile. A separately selected profile cannot be
+  // reconstructed from this metadata-only boundary and must not be treated as the user layer.
+  if (config["profile"] !== undefined || config["profiles"] !== undefined
+    || config["project_root_markers"] !== undefined) return null;
+  return config;
+}
+
+function effectiveCodexConfigTables(config: Record<string, unknown>): CodexConfigTables | null {
+  const features = config["features"] === undefined ? {} : codexTomlTable(config["features"]);
+  if (features === null || features["plugins"] === false
+    || (features["plugins"] !== undefined && typeof features["plugins"] !== "boolean")) return null;
+  const marketplaces = config["marketplaces"] === undefined ? {} : codexTomlTable(config["marketplaces"]);
+  const plugins = config["plugins"] === undefined ? {} : codexTomlTable(config["plugins"]);
+  const projects = config["projects"] === undefined ? {} : codexTomlTable(config["projects"]);
+  if (marketplaces === null || plugins === null || projects === null
+    || Object.keys(marketplaces).length > MAX_CODEX_ENTRIES
+    || Object.keys(plugins).length > MAX_CODEX_ENTRIES) return null;
+  if (!validCodexProjects(projects)) return null;
+  return { marketplaces, plugins, projects };
+}
+
+interface CodexCachedVersion { directory: string; version: string }
+
+function readCodexMetadataFile(
+  file: string, root: string, observations: string[], maxBytes = PLUGIN_DELIVERY_MAX_HOST_OUTPUT_BYTES,
+): OptionalMetadataFile {
+  const traversal = captureRawTraversal(file, false);
+  let observed: OptionalMetadataFile = traversal === null ? { status: "unsafe" } : readOptionalMetadataFile(file, root, maxBytes);
+  // Empty TOML is valid; the shared bundle/JSON reader deliberately rejects empty files. Prove
+  // this case through the same physical file identity and an EOF read without widening that reader.
+  if (observed.status === "unsafe" && traversal !== null && isWithin(file, root)) {
+    let descriptor: number | undefined;
+    try {
+      const before = lstatSync(file);
+      const physical = traversal.at(-1);
+      if (before.isFile() && !before.isSymbolicLink() && before.size === 0
+        && physical?.exists === true && before.dev === physical.dev && before.ino === physical.ino) {
+        descriptor = openSync(file, "r");
+        const opened = fstatSync(descriptor);
+        if (opened.dev === before.dev && opened.ino === before.ino && opened.size === 0
+          && readSync(descriptor, Buffer.alloc(1), 0, 1, 0) === 0
+          && fstatSync(descriptor).size === 0) observed = { status: "ok", bytes: Buffer.alloc(0) };
+      }
+    } catch { /* The empty-file observation remains unsafe. */ }
+    finally {
+      if (descriptor !== undefined) {
+        try { closeSync(descriptor); } catch { observed = { status: "unsafe" }; }
+      }
+    }
+  }
+  observations.push(JSON.stringify({
+    file, traversal, status: observed.status,
+    digest: observed.status === "ok" ? createHash("sha256").update(observed.bytes).digest("hex") : null,
+  }));
+  return observed;
+}
+
+function readCodexCachedVersion(
+  home: string, marketplace: string, plugin: string, observations: string[],
+): CodexCachedVersion | null | false {
+  const root = join(home, "plugins", "cache", marketplace, plugin);
+  const traversal = captureRawTraversal(root, false, "directory");
+  if (!hasLocalFilesystemShape(root) || traversal === null) return false;
+  observations.push(JSON.stringify({ cacheRoot: root, traversal }));
+  let entries: Dirent[];
+  try {
+    const stats = lstatSync(root);
+    if (!stats.isDirectory() || stats.isSymbolicLink()) return false;
+    entries = readdirSync(root, { withFileTypes: true });
+  } catch (cause) {
+    return cause !== null && typeof cause === "object" && "code" in cause
+      && (cause as { code?: unknown }).code === "ENOENT" ? null : false;
+  }
+  if (entries.length > MAX_CODEX_ENTRIES) return false;
+  observations.push(JSON.stringify({ root, traversal: captureRawTraversal(root, false, "directory"), entries: entries.map((entry) => ({
+    name: entry.name, directory: entry.isDirectory(), file: entry.isFile(), link: entry.isSymbolicLink(),
+  })).sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0) }));
+  const versions: CodexCachedVersion[] = [];
+  for (const entry of entries) {
+    if (entry.isFile() && entry.name === ".codex-remote-plugin-install.json") {
+      const metadata = readCodexMetadataFile(join(root, entry.name), home, observations);
+      const value = metadata.status === "ok" ? decodeCodexMetadataObject(metadata.bytes) : null;
+      if (value?.["schema_version"] !== 1
+        || typeof value["remote_plugin_id"] !== "string"
+        || value["remote_plugin_id"].trim().length === 0) return false;
+      continue;
+    }
+    if (!entry.isDirectory() || !CODEX_CACHE_NAME.test(entry.name)) return false;
+    const manifest = readCodexMetadataFile(
+      join(root, entry.name, ".codex-plugin", "plugin.json"),
+      home,
+      observations,
+    );
+    if (manifest.status !== "ok") return false;
+    const identity = codexPluginManifestIdentity(decodeCodexMetadataObject(manifest.bytes), plugin);
+    const declared = identity?.version;
+    if (identity === null || declared === undefined || !CODEX_CACHE_NAME.test(declared)
+      || (entry.name !== "local" && declared !== entry.name)) return false;
+    versions.push({ directory: entry.name, version: declared });
+  }
+  if (versions.length === 0) return null;
+  const local = versions.find((entry) => entry.directory === "local");
+  if (local !== undefined) return local;
+  // Captured Codex 0.147.0 and 0.155.1 use semver 1.0.27 Version::cmp, including pre and build.
+  versions.sort((left, right) => compareNativeCodexVersions(left.version, right.version));
+  return versions.at(-1) ?? false;
+}
+
+interface CodexMarketplaceManifest {
+  name: string;
+  localSources: Record<string, string | null>;
+}
+
+function codexLocalSourceRoot(source: string): string | null {
+  // Codex serializes Win32 local paths with this prefix. Only a drive path may be unwrapped;
+  // UNC/device aliases remain rejected before any filesystem access.
+  const candidate = process.platform === "win32" && /^\\\\\?\\[A-Za-z]:\\/.test(source)
+    ? source.slice(4)
+    : source;
+  return hasLocalFilesystemShape(candidate) && !hasExplicitTraversalSegment(candidate)
+    && isLocalFilesystemPath(candidate) ? resolve(candidate) : null;
+}
+
+function isCodexGitSource(source: string): boolean {
+  return !hasIdentityControlCharacter(source) && !/\s/.test(source)
+    && (/^(?:https?:\/\/|ssh:\/\/|git@[^:]+:)[^\s]+$/.test(source)
+      || /^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(source));
+}
+
+export interface CodexMarketplaceIdentity {
+  sourceType: "git" | "local";
+  source: string;
+  ref: string | null;
+  sparsePaths: readonly string[];
+}
+
+/** One native identity projection shared by configuration, sidecars and their consumers. */
+export function codexMarketplaceIdentity(
+  sourceType: unknown, source: unknown, ref: unknown, sparsePaths: unknown,
+): CodexMarketplaceIdentity | null {
+  if ((sourceType !== "git" && sourceType !== "local")
+    || typeof source !== "string" || source.length === 0 || hasIdentityControlCharacter(source)
+    || (sourceType === "git" && !isCodexGitSource(source))
+    || (sourceType === "local" && codexLocalSourceRoot(source) === null)
+    || (ref !== undefined && ref !== null
+      && (typeof ref !== "string" || ref.length === 0 || /\s/.test(ref) || hasIdentityControlCharacter(ref)))
+    || !Array.isArray(sparsePaths) || !sparsePaths.every((path): path is string =>
+      typeof path === "string" && !path.includes("\0"))) return null;
+  return { sourceType, source, ref: typeof ref === "string" ? ref : null, sparsePaths: [...sparsePaths] };
+}
+
+export function sameCodexMarketplaceIdentity(left: CodexMarketplaceIdentity, right: CodexMarketplaceIdentity): boolean {
+  // Native InstalledMarketplaceMetadata derives PartialEq: Vec order and duplicates both matter.
+  return left.sourceType === right.sourceType && left.source === right.source && left.ref === right.ref
+    && left.sparsePaths.length === right.sparsePaths.length
+    && left.sparsePaths.every((path, index) => path === right.sparsePaths[index]);
+}
+
+interface CodexMarketplaceSidecar extends CodexMarketplaceIdentity { revision: string }
+
+function decodeCodexMarketplaceSidecar(bytes: Buffer): CodexMarketplaceSidecar | null {
+  const record = decodeCodexMetadataObject(bytes);
+  if (record === null) return null;
+  const identity = codexMarketplaceIdentity(record["source_type"], record["source"], record["ref_name"], record["sparse_paths"]);
+  const revision = record["revision"];
+  if (identity === null || typeof revision !== "string"
+    || (revision !== "" && !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(revision))
+    || (identity.sourceType === "git" && revision === "")) return null;
+  return { ...identity, revision };
+}
+
+/** Absence is valid; present metadata must carry the bounded, strictly decoded native structure. */
+function readCodexMarketplaceSidecar(root: string, observations: string[]): CodexMarketplaceSidecar | null | false {
+  const observed = readCodexMetadataFile(join(root, ".codex-marketplace-install.json"), root, observations,
+    PLUGIN_DELIVERY_MAX_MANIFEST_BYTES);
+  if (observed.status === "absent") return null;
+  return observed.status === "ok" ? decodeCodexMarketplaceSidecar(observed.bytes) ?? false : false;
+}
+
+/** Protect the Semctx namespace a new native marketplace add would select after an interrupted run. */
+function codexCheckoutQueryLine(root: string, command: readonly string[], observations: string[]): string | null {
+  const outcome = runPluginDeliveryQuery(command, root, LOCAL_READ_LIMITS);
+  const bytes = outcome.bytes === undefined ? new TextEncoder().encode(outcome.out) : outcome.bytes;
+  observations.push(JSON.stringify({
+    checkoutQuery: command.slice(3),
+    code: outcome.code,
+    timedOut: outcome.timedOut === true,
+    truncated: outcome.truncated === true,
+    stdoutDigest: bytes === null ? null : createHash("sha256").update(bytes).digest("hex"),
+  }));
+  if (outcome.code !== 0 || outcome.timedOut === true || outcome.truncated === true || bytes === null) return null;
+  const decoded = decodeCodexUtf8(Buffer.from(bytes));
+  if (decoded === null) return null;
+  const line = decoded.endsWith("\r\n") ? decoded.slice(0, -2)
+    : decoded.endsWith("\n") ? decoded.slice(0, -1) : decoded;
+  return line.length > 0 && !/[\r\n]/.test(line) ? line : null;
+}
+
+function codexUnregisteredCheckoutMatches(root: string, sidecar: CodexMarketplaceSidecar,
+  observations: string[]): boolean {
+  const prefix = ["git", "-C", root, "--no-replace-objects"] as const;
+  const topLevel = codexCheckoutQueryLine(root, [...prefix, "rev-parse", "--show-toplevel"], observations);
+  if (topLevel === null || !hasLocalFilesystemShape(topLevel)) return false;
+  const rootTraversal = captureRawTraversal(root, false, "directory");
+  const topLevelTraversal = captureRawTraversal(topLevel, false, "directory");
+  observations.push(JSON.stringify({ checkoutRoot: root, rootTraversal, topLevel, topLevelTraversal }));
+  if (rootTraversal === null || topLevelTraversal === null) return false;
+  try {
+    if (lexicalPathIdentity(realpathSync.native(root))
+      !== lexicalPathIdentity(realpathSync.native(topLevel))) return false;
+  } catch { return false; }
+  const source = codexCheckoutQueryLine(root, [...prefix, "remote", "get-url", "origin"], observations);
+  const ref = codexCheckoutQueryLine(root, [...prefix, "symbolic-ref", "--short", "HEAD"], observations);
+  const revision = codexCheckoutQueryLine(root, [...prefix, "rev-parse", "HEAD"], observations);
+  return source !== null && isSemctxSource(source) && isSemctxSource(sidecar.source)
+    && ref === sidecar.ref && revision === sidecar.revision;
+}
+
+function codexUnregisteredSelectedSnapshotIsSafe(home: string, observations: string[]): boolean {
+  const root = join(home, ...CODEX_SNAPSHOT_SEGMENTS);
+  const traversal = captureRawTraversal(root, false, "directory");
+  if (traversal === null) return false;
+  observations.push(JSON.stringify({ unregisteredSelectedSnapshot: root, traversal }));
+  const sidecar = readCodexMarketplaceSidecar(root, observations);
+  if (sidecar === false) return false;
+  if (traversal.at(-1)?.exists !== true) return sidecar === null;
+  // Without a configuration entry, only the intended public source/stable/full checkout can be
+  // resumed. This proves ownership of the selected slot; it never registers it or grants authority.
+  if (sidecar === null || !isSemctxSource(sidecar.source)) return false;
+  const expected = codexMarketplaceIdentity("git", sidecar.source, PLUGIN_DELIVERY_RELEASE_REF, []);
+  if (expected === null || !sameCodexMarketplaceIdentity(expected, sidecar)) return false;
+  const manifest = readCodexMarketplaceManifest(root, observations);
+  if (manifest === null || manifest === false || manifest.name !== MARKETPLACE_NAME) return false;
+  const pluginRoot = manifest.localSources[CODEX_PLUGIN];
+  return typeof pluginRoot === "string"
+    && lexicalPathIdentity(pluginRoot) === lexicalPathIdentity(join(root, "plugins", CODEX_PLUGIN))
+    && codexUnregisteredCheckoutMatches(root, sidecar, observations);
+}
+
+function validCodexMarketplacePolicy(value: unknown): boolean {
+  if (value === undefined) return true;
+  const policy = plainRecord(value);
+  if (policy === null) return false;
+  const installation = policy["installation"];
+  const authentication = policy["authentication"];
+  const products = policy["products"];
+  return (installation === undefined || (typeof installation === "string"
+      && ["NOT_AVAILABLE", "AVAILABLE", "INSTALLED_BY_DEFAULT"].includes(installation)))
+    && (authentication === undefined || (typeof authentication === "string"
+      && ["ON_INSTALL", "ON_USE"].includes(authentication)))
+    && (products === undefined || products === null || (Array.isArray(products)
+      && products.every((product) => typeof product === "string"
+        && ["chatgpt", "codex", "atlas", "CHATGPT", "CODEX", "ATLAS"].includes(product))));
+}
+
+function readCodexMarketplaceManifest(root: string, observations: string[]): CodexMarketplaceManifest | null | false {
+  if (!isLocalFilesystemPath(root)) return false;
+  for (const segments of CODEX_HOME_MARKETPLACE_MANIFESTS) {
+    const observed = readCodexMetadataFile(join(root, ...segments), root, observations);
+    if (observed.status === "unsafe") return false;
+    if (observed.status === "absent") continue;
+    const manifest = decodeCodexMetadataObject(observed.bytes);
+    const name = manifest?.["name"];
+    const plugins = manifest?.["plugins"];
+    if (typeof name !== "string" || !CODEX_ENTRY_NAME.test(name)
+      || !Array.isArray(plugins) || plugins.length > MAX_CODEX_ENTRIES) return false;
+    const marketplaceInterface = manifest?.["interface"];
+    if (marketplaceInterface !== undefined && marketplaceInterface !== null) {
+      const details = plainRecord(marketplaceInterface);
+      if (details === null || (details["displayName"] !== undefined && details["displayName"] !== null
+        && typeof details["displayName"] !== "string")) return false;
+    }
+    const localSources: Record<string, string | null> = {};
+    for (const raw of plugins) {
+      const plugin = plainRecord(raw);
+      const pluginName = plugin?.["name"];
+      if (typeof pluginName !== "string" || !CODEX_ENTRY_NAME.test(pluginName)
+        || Object.prototype.hasOwnProperty.call(localSources, pluginName)) return false;
+      if (!validCodexMarketplacePolicy(plugin?.["policy"])
+        || (plugin?.["category"] !== undefined && plugin["category"] !== null
+          && typeof plugin["category"] !== "string")) return false;
+      if (name === MARKETPLACE_NAME && pluginName === CODEX_PLUGIN) {
+        const policy = plainRecord(plugin?.["policy"]);
+        const products = policy?.["products"];
+        if (policy?.["installation"] === "NOT_AVAILABLE"
+          || (Array.isArray(products)
+            && !products.some((product) => typeof product === "string"
+              && product.toLowerCase() === "codex"))) return false;
+      }
+      const source = plainRecord(plugin?.["source"]);
+      const rawSource = plugin?.["source"];
+      const local = typeof rawSource === "string" ? rawSource
+        : source?.["source"] === "local" ? source["path"] : undefined;
+      if (local !== undefined) {
+        if (typeof local !== "string" || local.length === 0 || hasIdentityControlCharacter(local)) return false;
+        const relativeSource = local === "." || local === "./" ? ""
+          : local.startsWith("./") ? local.slice(2)
+            : segments[0] === ".cursor-plugin" ? local : null;
+        if (relativeSource === null || isAbsolute(relativeSource)
+          || hasExplicitTraversalSegment(relativeSource)) return false;
+        const path = resolve(root, relativeSource);
+        if (!isWithin(path, root) || !isLocalFilesystemPath(path)) return false;
+        try {
+          if (!lstatSync(path).isDirectory()) return false;
+        } catch { return false; }
+        const traversal = captureRawTraversal(path, false, "directory");
+        if (traversal === null) return false;
+        observations.push(JSON.stringify({ sourcePath: path, traversal }));
+        localSources[pluginName] = path;
+      } else if (source?.["source"] === "url" || source?.["source"] === "git-subdir") {
+        const url = source["url"];
+        const path = source["path"];
+        if (typeof url !== "string" || !isCodexGitSource(url)
+          || ["ref", "sha"].some((key) => source[key] !== undefined && typeof source[key] !== "string")
+          || (source["source"] === "git-subdir" && typeof path !== "string")
+          || (path !== undefined && (typeof path !== "string" || path.trim().length === 0
+            || isAbsolute(path) || hasIdentityControlCharacter(path)
+            || hasExplicitTraversalSegment(path.replace(/^\.\//, ""))))) return false;
+        localSources[pluginName] = null;
+      } else if (source?.["source"] === "npm") {
+        if (typeof source["package"] !== "string"
+          || !/^(?:@[a-zA-Z0-9_.-]+\/)?[a-zA-Z0-9_.-]+$/.test(source["package"])
+          || ["version", "registry"].some((key) => source[key] !== undefined
+            && (typeof source[key] !== "string" || source[key].trim().length === 0
+              || hasIdentityControlCharacter(source[key])))) return false;
+        const registry = source["registry"];
+        if (registry !== undefined && (typeof registry !== "string" || !/^https?:\/\/[^\s]+$/.test(registry))) return false;
+        localSources[pluginName] = null;
+      } else return false;
+    }
+    return { name, localSources };
+  }
+  return null;
+}
+
+function readCodexHomeMarketplace(
+  observations: string[], ownedHome?: string, resolveOsHome: () => string | null = () => {
+    try { return homedir(); } catch { return null; }
+  },
+): {
+  entry: Record<string, unknown>; manifest: CodexMarketplaceManifest;
+} | null | false {
+  const environmentHome = [process.env["HOME"], process.env["USERPROFILE"]]
+    .find((value): value is string => typeof value === "string" && value.length > 0 && isAbsolute(value));
+  const home = ownedHome ?? (environmentHome !== undefined
+    ? environmentHome
+    : resolveOsHome());
+  if (home === null || !hasLocalFilesystemShape(home)) return false;
+  const homeTraversal = captureRawTraversal(home, false, "directory");
+  if (homeTraversal === null) return false;
+  // Manifest joins normalize the root. Retain every raw HOME/USERPROFILE/OS-home component in
+  // both snapshots so a cancelled directory replacement cannot become proven marketplace absence.
+  observations.push(JSON.stringify({ homeMarketplaceRoot: home, homeTraversal }));
+  const manifest = readCodexMarketplaceManifest(home, observations);
+  if (manifest === null || manifest === false) return manifest;
+  return {
+    entry: { name: manifest.name, root: home, marketplaceSource: { sourceType: "local", source: home } },
+    manifest,
+  };
+}
+
+export interface CodexPluginMetadataBoundaries {
+  systemFiles?: readonly string[];
+  managedPreferences?: () => "absent" | "present" | "unknown";
+  resolveOsHome?: () => string | null;
+  windowsQueryFailure?: (reason: CodexWindowsQueryFailureReason) => void;
+}
+
+export type CodexWindowsQueryFailureReason =
+  | "WINDOWS_QUERY_TEMP_ROOT_UNAVAILABLE"
+  | "WINDOWS_QUERY_EXIT_NONZERO"
+  | "WINDOWS_QUERY_TIMEOUT"
+  | "WINDOWS_QUERY_OUTPUT_LIMIT"
+  | "WINDOWS_QUERY_STDERR"
+  | "WINDOWS_QUERY_OUTPUT_SHAPE"
+  | "WINDOWS_QUERY_TEMP_DRIFT"
+  | "WINDOWS_QUERY_PROFILE_DRIFT"
+  | "WINDOWS_QUERY_DECODE"
+  | "WINDOWS_QUERY_PATH_SHAPE";
+
+const CODEX_MAC_MANAGED_PREFERENCES_SCRIPT = String.raw`
+ObjC.import('Foundation');
+ObjC.bindFunction('CFPreferencesCopyAppValue', ['id', ['id', 'id']]);
+var domain = $(__DOMAIN__);
+var keys = ['config_toml_base64', 'requirements_toml_base64'];
+keys.some(function(key) { return !$.CFPreferencesCopyAppValue($(key), domain).isNil(); }) ? 'present' : 'absent';
+`;
+
+export function readCodexManagedPreferences(domain = "com.openai.codex"): "absent" | "present" | "unknown" {
+  if (process.platform !== "darwin") return "absent";
+  if (!/^com\.(?:openai\.codex|hoklims\.semctx\.test\.[a-zA-Z0-9-]+)$/.test(domain)) return "unknown";
+  // Match Codex's CFPreferencesCopyAppValue lookup, including forced preferences. Only presence
+  // is emitted; no policy bytes or credentials are copied into the report.
+  const result = runPluginDeliveryQuery(
+    ["/usr/bin/osascript", "-l", "JavaScript", "-e",
+      CODEX_MAC_MANAGED_PREFERENCES_SCRIPT.replace("__DOMAIN__", JSON.stringify(domain))],
+    process.cwd(),
+    { timeoutMs: 5000, maxBytes: 1024 },
+  );
+  if (result.code !== 0 || boundedFailure(result) !== null) return "unknown";
+  const status = result.out.trim();
+  return status === "absent" || status === "present" ? status : "unknown";
+}
+
+const CODEX_WINDOWS_PROGRAM_DATA_SCRIPT = "$ErrorActionPreference = 'Stop'; "
+  + "[Console]::Write([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("
+  + "[Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData,"
+  + "[Environment+SpecialFolderOption]::None))))";
+
+function codexWindowsQueryTemporaryRoot(protectedRoots: readonly string[]): {
+  candidate: string; path: string; traversal: RawTraversalEntry[];
+  profileCandidate: string; profilePath: string; profileTraversal: RawTraversalEntry[];
+} | null {
+  const roots = [...protectedRoots];
+  for (const host of PLUGIN_DELIVERY_HOSTS) {
+    const home = defaultResolveHostExclusionHome(host);
+    if (home === null) return null;
+    roots.push(home);
+  }
+  let profileCandidate = process.env["USERPROFILE"];
+  if (profileCandidate === undefined || profileCandidate.length === 0) {
+    try { profileCandidate = homedir(); } catch { return null; }
+  }
+  if (!hasLocalFilesystemShape(profileCandidate)
+    || roots.some((root) => isWithinTrustedRoot(profileCandidate, root))) return null;
+  const profileTraversal = captureRawTraversal(profileCandidate, false, "directory");
+  if (profileTraversal === null || profileTraversal.at(-1)?.exists !== true) return null;
+  let profilePath: string;
+  try { profilePath = realpathSync.native(resolve(profileCandidate)); } catch { return null; }
+  if (roots.some((root) => isWithinTrustedRoot(profilePath, root))) return null;
+  const candidates: string[] = [];
+  try { candidates.push(tmpdir()); } catch { /* No caller temporary location is usable. */ }
+  const windows = process.env["SystemRoot"];
+  if (windows !== undefined && hasLocalFilesystemShape(windows)) {
+    const separator = windows.endsWith("/") || windows.endsWith("\\") ? "" : sep;
+    candidates.push(`${windows}${separator}Temp`);
+  }
+  for (const candidate of candidates) {
+    if (!hasLocalFilesystemShape(candidate) || roots.some((root) => isWithinTrustedRoot(candidate, root))) continue;
+    const traversal = captureRawTraversal(candidate, false, "directory");
+    if (traversal === null || traversal.at(-1)?.exists !== true) continue;
+    try {
+      const path = realpathSync.native(resolve(candidate));
+      if (roots.some((root) => isWithinTrustedRoot(path, root))) continue;
+      return { candidate, path, traversal, profileCandidate, profilePath, profileTraversal };
+    } catch { /* An unresolved physical temporary directory cannot host the OS query. */ }
+  }
+  return null;
+}
+
+/** Read the OS known folder, independently of the mutable ProgramData environment variable. */
+export function resolveCodexWindowsProgramData(
+  protectedRoots: readonly string[] = [process.cwd()],
+  onFailure?: (reason: CodexWindowsQueryFailureReason) => void,
+): string | null {
+  if (process.platform !== "win32") return null;
+  const fail = (reason: CodexWindowsQueryFailureReason): null => {
+    onFailure?.(reason);
+    return null;
+  };
+  // PowerShell startup can create absent TEMP and USERPROFILE directories even with -NoProfile.
+  // Give it only existing physical locations outside the project and protected host trees.
+  const temporary = codexWindowsQueryTemporaryRoot(protectedRoots);
+  if (temporary === null) return fail("WINDOWS_QUERY_TEMP_ROOT_UNAVAILABLE");
+  // The precompiled CLR method calls SHGetFolderPath, a SHGetKnownFolderPath wrapper. None uses
+  // flags 0 and verifies existence without creating a directory. An unavailable root stays unknown.
+  const result = runPluginDeliveryQuery(
+    ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", CODEX_WINDOWS_PROGRAM_DATA_SCRIPT],
+    process.cwd(),
+    { timeoutMs: PLUGIN_DELIVERY_QUERY_TIMEOUT_MS, maxBytes: 16 * 1024,
+      env: { TEMP: temporary.path, TMP: temporary.path, TMPDIR: temporary.path,
+        USERPROFILE: temporary.profilePath, HOME: temporary.profilePath } },
+  );
+  if (result.timedOut === true) return fail("WINDOWS_QUERY_TIMEOUT");
+  if (result.truncated === true) return fail("WINDOWS_QUERY_OUTPUT_LIMIT");
+  if (result.code !== 0) return fail("WINDOWS_QUERY_EXIT_NONZERO");
+  if (result.err.length > 0) return fail("WINDOWS_QUERY_STDERR");
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(result.out)) return fail("WINDOWS_QUERY_OUTPUT_SHAPE");
+  if (!sameRawTraversal(temporary.candidate, false, "directory", temporary.traversal)) {
+    return fail("WINDOWS_QUERY_TEMP_DRIFT");
+  }
+  if (!sameRawTraversal(temporary.profileCandidate, false, "directory", temporary.profileTraversal)) {
+    return fail("WINDOWS_QUERY_PROFILE_DRIFT");
+  }
+  const bytes = Buffer.from(result.out, "base64");
+  if (bytes.toString("base64") !== result.out) return fail("WINDOWS_QUERY_DECODE");
+  const path = decodeCodexUtf8(bytes);
+  if (path === null) return fail("WINDOWS_QUERY_DECODE");
+  const traversal = hasLocalFilesystemShape(path) ? captureRawTraversal(path, false, "directory") : null;
+  return traversal !== null && traversal.at(-1)?.exists === true ? path : fail("WINDOWS_QUERY_PATH_SHAPE");
+}
+
+function defaultCodexSystemFiles(
+  codexHome: string,
+  observations: string[],
+  repositoryRoot: string,
+  windowsQueryFailure?: (reason: CodexWindowsQueryFailureReason) => void,
+): string[] | null {
+  if (process.platform !== "win32") {
+    let systemRoot = "/etc";
+    if (process.platform === "darwin") {
+      try {
+        const stats = lstatSync(systemRoot);
+        if (stats.isSymbolicLink()) {
+          const target = readlinkSync(systemRoot);
+          if ((target !== "private/etc" && target !== "/private/etc")
+            || realpathSync.native(systemRoot) !== "/private/etc"
+            || !isLocalFilesystemPath("/private/etc")) return null;
+          observations.push(JSON.stringify({ systemAlias: "/etc", target, dev: stats.dev, ino: stats.ino }));
+          systemRoot = "/private/etc";
+        }
+      } catch { return null; }
+    }
+    return ["config.toml", "requirements.toml", "managed_config.toml"].map((name) => join(systemRoot, "codex", name));
+  }
+  const programData = resolveCodexWindowsProgramData([repositoryRoot, codexHome], windowsQueryFailure);
+  if (programData === null) return null;
+  const traversal = captureRawTraversal(programData, false, "directory");
+  if (traversal === null || traversal.at(-1)?.exists !== true) return null;
+  // Retain the raw known-folder lineage even when joining its policy filenames cancels components.
+  observations.push(JSON.stringify({ windowsProgramData: programData, traversal }));
+  return [
+    join(programData, "OpenAI", "Codex", "config.toml"),
+    join(programData, "OpenAI", "Codex", "requirements.toml"),
+    // 0.147 reads this legacy file; 0.155 warns and ignores it. With an unobserved host version,
+    // conservatively refuse a relevant legacy layer rather than assume the latter behavior.
+    join(codexHome, "managed_config.toml"),
+  ];
+}
+
+function codexLayerHasPluginAuthority(observation: OptionalMetadataFile): boolean | null {
+  if (observation.status === "unsafe") return null;
+  if (observation.status === "absent") return false;
+  let layer: Record<string, unknown> | null;
+  const text = decodeCodexUtf8(observation.bytes);
+  if (text === null) return null;
+  try { layer = codexTomlTable(Bun.TOML.parse(text)); } catch { return null; }
+  if (layer === null) return null;
+  const rawFeatures = layer["features"];
+  if (rawFeatures !== undefined) {
+    const features = codexTomlTable(rawFeatures);
+    if (features === null || (features["plugins"] !== undefined
+      && typeof features["plugins"] !== "boolean")) return null;
+    if (features["plugins"] !== undefined) return true;
+  }
+  return ["plugins", "marketplaces", "profile", "profiles", "projects", "project_root_markers"]
+    .some((key) => layer[key] !== undefined);
+}
+
+function validCodexGitHead(bytes: Buffer): boolean {
+  if (bytes.byteLength === 0 || bytes.byteLength > 1024) return false;
+  const decoded = decodeCodexUtf8(bytes);
+  if (decoded === null) return false;
+  const value = decoded.replace(/\n$/, "");
+  if (/^[0-9a-f]{40}$/.test(value) || /^[0-9a-f]{64}$/.test(value)) return true;
+  if (!value.startsWith("ref: ")) return false;
+  const ref = value.slice(5);
+  return /^refs\/[a-zA-Z0-9._/-]+$/.test(ref)
+    && !ref.includes("..") && !ref.includes("//") && !ref.endsWith("/");
+}
+
+function codexGitBoundary(root: string, observations: string[]): string | null {
+  let current = root;
+  for (let depth = 0; depth < 128; depth += 1) {
+    try {
+      const gitPath = join(current, ".git");
+      const traversal = captureRawTraversal(gitPath, false, "directory");
+      if (traversal === null) return null;
+      observations.push(JSON.stringify({ gitBoundary: current, traversal }));
+      const git = lstatSync(gitPath);
+      if (git.isSymbolicLink() || !git.isDirectory()) return null;
+      const head = readCodexMetadataFile(join(gitPath, "HEAD"), gitPath, observations);
+      if (head.status !== "ok" || !validCodexGitHead(head.bytes)) return null;
+      return current;
+    } catch (cause) {
+      if (cause === null || typeof cause !== "object" || !("code" in cause)
+        || (cause as { code?: unknown }).code !== "ENOENT") return null;
+    }
+    const parent = dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
+  return null;
+}
+
+function codexAdditionalLayersAbsent(
+  root: string, gitRoot: string, codexHome: string, projects: Record<string, unknown>,
+  observations: string[], boundaries: CodexPluginMetadataBoundaries,
+): boolean {
+  const managed = (boundaries.managedPreferences ?? readCodexManagedPreferences)();
+  observations.push(`managed:${managed}`);
+  if (managed !== "absent") return false;
+  const systemFiles = boundaries.systemFiles ?? defaultCodexSystemFiles(
+    codexHome,
+    observations,
+    root,
+    boundaries.windowsQueryFailure,
+  );
+  if (systemFiles === null) return false;
+  for (const file of systemFiles) {
+    if (!hasLocalFilesystemShape(file)) return false;
+    const observed = readCodexMetadataFile(file, dirname(file), observations);
+    const authority = codexLayerHasPluginAuthority(observed);
+    if (authority === null || authority) return false;
+    if (observed.status === "ok" && file.endsWith("requirements.toml")
+      && observed.bytes.toString("utf8").trim().length > 0) return false;
+  }
+  // Trust is decided per directory. An untrusted child suppresses only that child's layer; it does
+  // not hide an effective trusted ancestor layer that Codex still loads.
+  const rootTrusted = codexProjectTrusted(projects, root, gitRoot);
+  if (rootTrusted === null) return false;
+  if (rootTrusted) {
+    const cwdLayer = readCodexMetadataFile(join(root, "config.toml"), root, observations);
+    if (codexLayerHasPluginAuthority(cwdLayer) !== false) return false;
+  }
+  let current = root;
+  while (current !== gitRoot) {
+    current = dirname(current);
+    const trusted = codexProjectTrusted(projects, current, gitRoot);
+    if (trusted === null) return false;
+    if (!trusted) continue;
+    const layer = readCodexMetadataFile(join(current, ".codex", "config.toml"), current, observations);
+    if (codexLayerHasPluginAuthority(layer) !== false) return false;
+  }
+  return true;
+}
+
+function codexProjectTrusted(projects: Record<string, unknown>, root: string, gitRoot: string): boolean | null {
+  const lookupKey = (key: string): string => process.platform === "win32"
+    ? key.replace(/[A-Z]/g, (letter) => letter.toLowerCase()) : key;
+  for (const candidate of [root, gitRoot]) {
+    const candidateKey = lookupKey(candidate);
+    const exact = plainRecord(projects[candidateKey])?.["trust_level"];
+    if (exact === "trusted" || exact === "untrusted") return exact === "trusted";
+    const decisions = Object.entries(projects).flatMap(([declared, raw]) => {
+      const decision = plainRecord(raw)?.["trust_level"];
+      if (decision !== "trusted" && decision !== "untrusted") return [];
+      return lookupKey(declared) === candidateKey ? [{ declared, decision }] : [];
+    });
+    if (decisions.length === 0) continue;
+    decisions.sort((left, right) => left.declared < right.declared ? -1 : left.declared > right.declared ? 1 : 0);
+    // Match the pinned loader's deterministic first normalized raw key without resolving declared
+    // dot segments into a decision the host never made.
+    return decisions[0]?.decision === "trusted";
+  }
+  return false;
+}
+
+interface CodexMetadataSnapshot { inventory: CodexPluginMetadataInventory; observations: string[] }
+
+function readCodexPluginMetadataOnce(
+  repositoryRoot: string,
+  codexHome: string,
+  homeMarketplaceRoot?: string,
+  boundaries: CodexPluginMetadataBoundaries = {},
+): CodexMetadataSnapshot | null {
+  const observations: string[] = [];
+  if (!hasLocalFilesystemShape(codexHome)
+    || !hasLocalRepositoryRootShape(repositoryRoot)
+    || !isLocalFilesystemPath(codexHome)) return null;
+  const repositoryTraversal = captureRawTraversal(repositoryRoot, true, "directory");
+  const homeTraversal = captureRawTraversal(codexHome, false, "directory");
+  if (repositoryTraversal === null || homeTraversal === null) return null;
+  observations.push(JSON.stringify({ repositoryRoot, repositoryTraversal, codexHome, homeTraversal }));
+  const root = resolve(repositoryRoot);
+  if (!isLocalFilesystemPath(root)) return null;
+  const gitRoot = codexGitBoundary(root, observations);
+  if (gitRoot === null) return null;
+  const user = parseCodexConfig(readCodexMetadataFile(join(codexHome, "config.toml"), codexHome, observations));
+  if (user === null) return null;
+  const userProjects = user["projects"] === undefined ? {} : codexTomlTable(user["projects"]);
+  if (userProjects === null || !validCodexProjects(userProjects)) return null;
+  const trusted = codexProjectTrusted(userProjects, root, gitRoot);
+  if (trusted === null) return null;
+  if (!codexAdditionalLayersAbsent(root, gitRoot, codexHome, userProjects, observations, boundaries)) return null;
+  // Codex ignores repository config until the user has explicitly trusted that repository.
+  const project = trusted
+    ? parseCodexConfig(readCodexMetadataFile(join(root, ".codex", "config.toml"), root, observations))
+    : {};
+  if (project === null) return null;
+  const effective = effectiveCodexConfigTables(mergeCodexTomlTables(user, project));
+  if (effective === null) return null;
+  const marketplaceTables = effective.marketplaces;
+  const pluginTables = effective.plugins;
+  if (!Object.prototype.hasOwnProperty.call(marketplaceTables, MARKETPLACE_NAME)
+    && !codexUnregisteredSelectedSnapshotIsSafe(codexHome, observations)) return null;
+  // Native installation targets this cache even when TOML contains no plugin registration.
+  // Its physical ancestors and absence therefore belong to both read-only snapshots.
+  const semctxCache = readCodexCachedVersion(codexHome, MARKETPLACE_NAME, CODEX_PLUGIN, observations);
+  if (semctxCache === false) return null;
+  const marketplaces: Record<string, unknown>[] = [];
+  const manifests = new Map<string, CodexMarketplaceManifest>();
+  const homeMarketplace = readCodexHomeMarketplace(
+    observations,
+    homeMarketplaceRoot,
+    boundaries.resolveOsHome,
+  );
+  if (homeMarketplace === false) return null;
+  if (homeMarketplace !== null) {
+    const name = homeMarketplace.manifest.name;
+    if (Object.prototype.hasOwnProperty.call(marketplaceTables, name)) return null;
+    const configured = plainRecord(homeMarketplace.entry["marketplaceSource"]);
+    const expected = codexMarketplaceIdentity(configured?.["sourceType"], configured?.["source"], undefined, []);
+    const sidecar = expected === null ? false : readCodexMarketplaceSidecar(expected.source, observations);
+    if (expected === null || sidecar === false || (sidecar !== null && !sameCodexMarketplaceIdentity(expected, sidecar))) return null;
+    homeMarketplace.entry["sparsePaths"] = expected.sparsePaths;
+    marketplaces.push(homeMarketplace.entry);
+    manifests.set(name, homeMarketplace.manifest);
+  }
+  for (const [name, raw] of Object.entries(marketplaceTables)) {
+    if (!CODEX_ENTRY_NAME.test(name)) return null;
+    const entry = plainRecord(raw);
+    const sourceType = entry?.["source_type"];
+    const source = entry?.["source"];
+    const ref = entry?.["ref"];
+    const sparse = entry?.["sparse_paths"];
+    const expected = codexMarketplaceIdentity(sourceType, source, ref, sparse === undefined ? [] : sparse);
+    if (expected === null
+      || (ref !== undefined && typeof ref !== "string")
+      || ["last_updated", "last_revision"].some((key) => entry?.[key] !== undefined && typeof entry[key] !== "string")) return null;
+    const marketplaceRoot = expected.sourceType === "git"
+      ? join(codexHome, ".tmp", "marketplaces", name)
+      : codexLocalSourceRoot(expected.source);
+    if (marketplaceRoot === null) return null;
+    const manifest = readCodexMarketplaceManifest(marketplaceRoot, observations);
+    if (manifest === null || manifest === false || manifest.name !== name) return null;
+    const sidecar = readCodexMarketplaceSidecar(marketplaceRoot, observations);
+    if (sidecar === false || (sidecar !== null && !sameCodexMarketplaceIdentity(expected, sidecar))) return null;
+    manifests.set(name, manifest);
+    marketplaces.push({
+      name,
+      root: marketplaceRoot,
+      marketplaceSource: { sourceType: expected.sourceType, source: expected.source },
+      ...(ref === undefined ? {} : { ref }),
+      sparsePaths: expected.sparsePaths,
+    });
+  }
+  const plugins: Record<string, unknown>[] = [];
+  for (const [pluginId, raw] of Object.entries(pluginTables)) {
+    const separator = pluginId.lastIndexOf("@");
+    const plugin = pluginId.slice(0, separator);
+    const marketplace = pluginId.slice(separator + 1);
+    const entry = plainRecord(raw);
+    if (!CODEX_ENTRY_NAME.test(plugin) || !CODEX_ENTRY_NAME.test(marketplace)
+      || entry === null || typeof entry["enabled"] !== "boolean"
+      || !marketplaces.some((item) => item["name"] === marketplace)) return null;
+    const cached = pluginId === CODEX_PLUGIN_ID ? semctxCache
+      : readCodexCachedVersion(codexHome, marketplace, plugin, observations);
+    if (cached === false) return null;
+    const version = cached?.version ?? null;
+    const marketplaceEntry = marketplaces.find((item) => item["name"] === marketplace);
+    const marketplaceRoot = marketplaceEntry?.["root"];
+    const marketplaceSource = plainRecord(marketplaceEntry?.["marketplaceSource"]);
+    const sourcePath = manifests.get(marketplace)?.localSources[plugin];
+    if (sourcePath === undefined) return null;
+    if (pluginId === CODEX_PLUGIN_ID && version !== null
+      && isSemctxSource(marketplaceSource?.["source"])) {
+      if (!VERSION_SEGMENT.test(version)) return null;
+      if (typeof marketplaceRoot !== "string") return null;
+      if (sourcePath === null
+        || lexicalPathIdentity(sourcePath) !== lexicalPathIdentity(join(marketplaceRoot, "plugins", CODEX_PLUGIN))) return null;
+    }
+    plugins.push({
+      pluginId,
+      installed: version !== null,
+      enabled: entry["enabled"],
+      ...(version === null ? {} : { version }),
+      ...(cached === null ? {} : {
+        cacheDirectory: cached.directory,
+        cachePath: join(codexHome, "plugins", "cache", marketplace, plugin, cached.directory),
+      }),
+      ...(sourcePath === null ? {} : { source: { path: sourcePath } }),
+    });
+  }
+  if (!Object.prototype.hasOwnProperty.call(pluginTables, CODEX_PLUGIN_ID) && semctxCache !== null) {
+    plugins.push({
+      pluginId: CODEX_PLUGIN_ID,
+      installed: true,
+      registered: false,
+      version: semctxCache.version,
+      cacheDirectory: semctxCache.directory,
+      cachePath: join(codexHome, "plugins", "cache", MARKETPLACE_NAME, CODEX_PLUGIN, semctxCache.directory),
+    });
+  }
+  return { inventory: { marketplaces, plugins }, observations };
+}
+
+/**
+ * Read pinned Codex 0.147/0.155 declarative state without starting the host CLI. The second read
+ * refuses visible drift, and every traversed file is bounded and link-free. A truly absent native
+ * sidecar is allowed; a present sidecar must match the configured source/ref/sparse identity.
+ * No profile is created.
+ */
+export function readCodexPluginMetadataInventory(
+  repositoryRoot: string,
+  codexHome: string,
+  afterObservation?: () => void,
+  homeMarketplaceRoot?: string,
+  boundaries: CodexPluginMetadataBoundaries = {},
+): CodexPluginMetadataInventory | null {
+  const before = readCodexPluginMetadataOnce(repositoryRoot, codexHome, homeMarketplaceRoot, boundaries);
+  if (before === null) return null;
+  afterObservation?.();
+  const after = readCodexPluginMetadataOnce(repositoryRoot, codexHome, homeMarketplaceRoot, boundaries);
+  return after !== null && JSON.stringify(before) === JSON.stringify(after) ? after.inventory : null;
 }
 
 function lexicalPathIdentity(path: string): string {
@@ -2100,7 +3230,7 @@ function bundleDigests(distRoot: string, root: string): Record<string, string | 
 }
 
 /**
- * Codex records the resolved source, ref and revision in the marketplace root; both hosts also
+ * Codex records the resolved source, ref, sparse paths and revision in the marketplace root; both hosts also
  * leave a Git checkout there. The declarative file is preferred because it needs no subprocess.
  */
 function defaultReadMarketplaceSnapshot(
@@ -2115,34 +3245,49 @@ function defaultReadMarketplaceSnapshot(
   let commit: string | null = null;
   let ref: string | null = null;
   let source: string | null = null;
-  try {
-    const metadata = readConfinedFile(
-      join(canonicalRoot, ".codex-marketplace-install.json"),
-      canonicalRoot,
-      PLUGIN_DELIVERY_MAX_MANIFEST_BYTES,
-    );
-    const raw = metadata === null ? undefined : parseJsonValue(metadata.toString("utf8"));
-    if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
-      const record = raw as Record<string, unknown>;
-      commit = safeText(record["revision"]);
-      ref = safeText(record["ref_name"]);
-      source = safeText(record["source"]);
+  let codexSidecar: CodexMarketplaceSidecar | null = null;
+  const sidecarObservations: string[] = [];
+  const sidecar = join(canonicalRoot, ".codex-marketplace-install.json");
+  if (host === "codex") {
+    const metadata = readCodexMarketplaceSidecar(canonicalRoot, sidecarObservations);
+    if (metadata === false) return null;
+    codexSidecar = metadata;
+    if (metadata !== null) {
+      commit = metadata.revision === "" ? null : metadata.revision;
+      ref = metadata.ref;
+      source = metadata.source;
     }
-  } catch {
-    // No declarative metadata; fall back to the checkout below.
+  } else {
+    try {
+      const metadata = readConfinedFile(sidecar, canonicalRoot, PLUGIN_DELIVERY_MAX_MANIFEST_BYTES);
+      const raw = metadata === null ? undefined : parseJsonValue(metadata.toString("utf8"));
+      if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
+        const record = raw as Record<string, unknown>;
+        commit = safeText(record["revision"]);
+        ref = safeText(record["ref_name"]);
+        source = safeText(record["source"]);
+      }
+    } catch {
+      // Claude's existing fallback remains independent of Codex metadata refusal.
+    }
   }
-  if (commit === null) {
+  if (commit === null && codexSidecar === null) {
     const head = runQuery(["git", "--no-replace-objects", "rev-parse", "HEAD"], canonicalRoot, LOCAL_READ_LIMITS);
     if (head.code === 0) commit = safeText(head.out.trim());
   }
-  if (ref === null) {
+  if (ref === null && codexSidecar === null) {
     const branch = runQuery(
       ["git", "--no-replace-objects", "rev-parse", "--abbrev-ref", "HEAD"],
       canonicalRoot,
       LOCAL_READ_LIMITS,
     );
     if (branch.code === 0) {
-      const name = safeText(branch.out.trim());
+      const decoded = branch.bytes === undefined
+        ? branch.out
+        : branch.bytes === null ? null : decodeCodexUtf8(Buffer.from(branch.bytes));
+      const name = decoded === null ? null
+        : decoded.endsWith("\r\n") ? decoded.slice(0, -2)
+          : decoded.endsWith("\n") ? decoded.slice(0, -1) : decoded;
       ref = name === "HEAD" ? null : name;
     }
   }
@@ -2152,20 +3297,34 @@ function defaultReadMarketplaceSnapshot(
   const layout = RELEASE_PLUGIN[host];
   const pluginRoot = canonicalDirectoryWithin(join(canonicalRoot, "plugins", layout.directory), canonicalRoot);
   if (pluginRoot === null) return null;
-  const version = readJsonField(join(pluginRoot, layout.manifest, "plugin.json"), "version", canonicalRoot);
-
-  return { commit, ref, source, version, bundles: bundleDigests(join(pluginRoot, "dist"), canonicalRoot) };
+  const manifest = readPluginManifestIdentity(
+    join(pluginRoot, layout.manifest, "plugin.json"), canonicalRoot, host,
+  );
+  const version = host === "codex" ? manifest.codex?.version ?? null : manifest.version;
+  const bundles = bundleDigests(join(pluginRoot, "dist"), canonicalRoot);
+  if (host === "codex") {
+    const after: string[] = [];
+    if (readCodexMarketplaceSidecar(canonicalRoot, after) === false
+      || JSON.stringify(sidecarObservations) !== JSON.stringify(after)) return null;
+  }
+  return { commit, ref, source, version, bundles, pluginIdentity: manifest.codex,
+    ...(codexSidecar === null ? {} : { sourceType: codexSidecar.sourceType, sparsePaths: codexSidecar.sparsePaths }) };
 }
 
-function readJsonField(file: string, field: string, root: string): string | null {
+function readPluginManifestIdentity(
+  file: string,
+  root: string,
+  host: PluginDeliveryHost,
+): { codex: CodexPluginManifestIdentity | null; version: string | null } {
   // A manifest is a small JSON document. A file claiming to be one while being far larger is
   // refused by the bounded read rather than parsed.
-  const bytes = readConfinedFile(file, root, PLUGIN_DELIVERY_MAX_MANIFEST_BYTES);
-  if (bytes === null) return null;
-  const raw = parseJsonValue(bytes.toString("utf8"));
-  return raw !== null && typeof raw === "object" && !Array.isArray(raw)
-    ? safeText((raw as Record<string, unknown>)[field])
-    : null;
+  const record = host === "codex" ? readCodexMetadataObject(file, root)
+    : decodeMetadataObject(readConfinedFile(file, root, PLUGIN_DELIVERY_MAX_MANIFEST_BYTES));
+  if (host === "codex") {
+    const codex = codexPluginManifestIdentity(record, CODEX_PLUGIN);
+    return { codex, version: codex?.version ?? null };
+  }
+  return { codex: null, version: record === null ? null : safeText(record["version"]) };
 }
 
 function defaultReadInstalledPayload(
@@ -2175,13 +3334,18 @@ function defaultReadInstalledPayload(
   if (!isLocalFilesystemPath(path) || !existsSync(path)) return null;
   const canonicalRoot = canonicalDirectoryWithin(path, path);
   if (canonicalRoot === null) return null;
-  const version = readJsonField(
+  const manifest = readPluginManifestIdentity(
     join(canonicalRoot, RELEASE_PLUGIN[host].manifest, "plugin.json"),
-    "version",
     canonicalRoot,
+    host,
   );
+  const version = host === "codex" ? manifest.codex?.version ?? null : manifest.version;
   if (version === null) return null;
-  return { version, bundles: bundleDigests(join(canonicalRoot, "dist"), canonicalRoot) };
+  return {
+    pluginIdentity: manifest.codex,
+    version,
+    bundles: bundleDigests(join(canonicalRoot, "dist"), canonicalRoot),
+  };
 }
 
 function defaultReadRepositoryChannel(
@@ -2251,6 +3415,12 @@ function jsonField(out: string, field: string): string | null {
     : null;
 }
 
+function boundedReleasePayload(outcome: PluginDeliveryQueryOutcome, maxBytes: number): Buffer | null {
+  if (outcome.code !== 0 || boundedFailure(outcome) !== null) return null;
+  const payload = outcome.bytes ?? new TextEncoder().encode(outcome.out);
+  return payload.byteLength <= maxBytes ? Buffer.from(payload) : null;
+}
+
 /** Why a release could not be read as one coherent artifact. */
 type ReleaseArtifactFailure = "unreadable" | "diverged";
 
@@ -2276,30 +3446,32 @@ function readReleaseArtifacts(
   env: Readonly<Record<string, string | null>> | undefined,
 ): ReleaseArtifacts | ReleaseArtifactFailure {
   const read = releaseBlobReader(gitDir, cwd, commit, runQuery, env);
-  const payloadOf = (outcome: PluginDeliveryQueryOutcome, maxBytes: number): Uint8Array | null => {
-    if (outcome.code !== 0 || boundedFailure(outcome) !== null) return null;
-    const payload = outcome.bytes ?? new TextEncoder().encode(outcome.out);
-    return payload.byteLength <= maxBytes ? payload : null;
-  };
 
   const manifest = read("apps/cli/package.json");
-  if (payloadOf(manifest, PLUGIN_DELIVERY_MAX_MANIFEST_BYTES) === null) return "unreadable";
-  const version = jsonField(manifest.out, "version");
+  const version = codexVersionIdentity(decodeCodexMetadataObject(boundedReleasePayload(manifest,
+    PLUGIN_DELIVERY_MAX_MANIFEST_BYTES))?.["version"]);
   if (version === null) return "unreadable";
 
   const bundles = { codex: {}, claude: {} } as PublicReleaseBundleWitnesses;
   for (const host of PLUGIN_DELIVERY_HOSTS) {
     const layout = RELEASE_PLUGIN[host];
     const pluginManifest = read(`plugins/${layout.directory}/${layout.manifest}/plugin.json`);
-    if (payloadOf(pluginManifest, PLUGIN_DELIVERY_MAX_MANIFEST_BYTES) === null) return "unreadable";
-    if (jsonField(pluginManifest.out, "version") !== version) return "diverged";
+    const manifestBytes = boundedReleasePayload(pluginManifest, PLUGIN_DELIVERY_MAX_MANIFEST_BYTES);
+    if (manifestBytes === null) return "unreadable";
+    const codexIdentity = host === "codex"
+      ? codexPluginManifestIdentity(decodeCodexMetadataObject(manifestBytes), CODEX_PLUGIN)
+      : null;
+    const declared = host === "codex" ? codexIdentity?.version ?? null
+      : jsonField(pluginManifest.out, "version");
+    if (host === "codex" && declared === null) return "unreadable";
+    if (declared !== version) return "diverged";
 
     const record: Record<string, string | null> = {};
     for (const name of PLUGIN_RUNTIME_BUNDLES) {
       const artifact = read(`plugins/${layout.directory}/dist/${name}`);
       // Raw bytes only. A decoded string would not round-trip to the stored bytes, so a digest
       // taken from it would be a digest of something the release does not contain.
-      const payload = payloadOf(artifact, PLUGIN_DELIVERY_MAX_BUNDLE_BYTES);
+      const payload = boundedReleasePayload(artifact, PLUGIN_DELIVERY_MAX_BUNDLE_BYTES);
       record[name] = payload !== null && payload.length > 0
         ? createHash("sha256").update(payload).digest("hex")
         : null;
@@ -2644,9 +3816,9 @@ function storeExceeds(root: string, maxBytes: number): boolean {
 /**
  * Report the already-fetched `origin/stable` of the inspected project.
  *
- * This path is informational by construction, so it stops at commit and version: bundle digests
- * could never license anything here, and reading several megabytes of Git objects to compute
- * witnesses that are then discarded would be cost without evidence.
+ * This path is informational by construction. It still validates both host manifests and their
+ * bundle presence as one coherent release artifact, but discards the computed bundle witnesses:
+ * a local mirror has no freshness authority and therefore cannot license delivery convergence.
  */
 function mirrorPublicRelease(repositoryRoot: string, runQuery: QueryRunner): PublicReleaseProbe {
   const origin = runQuery(["git", "config", "--get", "remote.origin.url"], repositoryRoot, LOCAL_READ_LIMITS);
@@ -2680,20 +3852,19 @@ function mirrorPublicRelease(repositoryRoot: string, runQuery: QueryRunner): Pub
   if (commit === null || !COMMIT_ID.test(commit)) {
     return unresolvedRelease("absent", "PUBLIC_RELEASE_REF_ABSENT");
   }
-  const manifest = releaseBlobReader(null, repositoryRoot, commit, runQuery, LOCAL_READ_ENVIRONMENT)(
-    "apps/cli/package.json",
-  );
-  if (manifest.code !== 0 || boundedFailure(manifest) !== null) {
+  const artifacts = readReleaseArtifacts(null, repositoryRoot, commit, runQuery, LOCAL_READ_ENVIRONMENT);
+  if (artifacts === "unreadable") {
     return unresolvedRelease("absent", "PUBLIC_RELEASE_MANIFEST_UNREADABLE");
   }
-  const version = jsonField(manifest.out, "version");
-  if (version === null) return unresolvedRelease("absent", "PUBLIC_RELEASE_MANIFEST_UNREADABLE");
+  if (artifacts === "diverged") {
+    return unresolvedRelease("absent", "PUBLIC_RELEASE_VERSION_DIVERGED");
+  }
 
   return {
     // The mirror proves what was fetched, not that no newer public stable commit exists.
     authority: "local-mirror",
     status: "unknown",
-    version,
+    version: artifacts.version,
     commit,
     // A remote-tracking ref is a local mirror: it is only as current as the last fetch.
     source: "git-remote-tracking-ref",

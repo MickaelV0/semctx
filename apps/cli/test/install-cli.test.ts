@@ -31,6 +31,7 @@ import {
 } from "../src/commands/install";
 import {
   readClaudePluginMetadataInventory,
+  type CodexPluginMetadataInventory,
   type ClaudePluginMetadataInventory,
 } from "@semantic-context/app-services";
 
@@ -87,7 +88,10 @@ function probe(
   overrides: Record<string, CodexBundleProbe> = {},
 ): CodexPayloadProbe {
   return {
-    ...(version === undefined ? {} : { version }),
+    ...(version === undefined ? {} : {
+      identity: { name: "semctx-control", version },
+      version,
+    }),
     bundles: bundleDigests(overrides),
   };
 }
@@ -118,6 +122,7 @@ interface FakeOptions {
   setup?: SetupExecution;
   preflight?: SetupExecution;
   claudeMetadata?: ClaudePluginMetadataInventory | null;
+  codexMetadata?: CodexPluginMetadataInventory | null;
   /** Per-command outcome overrides, keyed by the joined argv, applied before any hardcoded branch. */
   queryOutcomes?: Record<string, Partial<CommandResult>>;
 }
@@ -151,6 +156,9 @@ function fakeRuntime(
       ? {
           readClaudePluginMetadata: () => options.claudeMetadata ?? null,
         }
+      : {}),
+    ...(Object.prototype.hasOwnProperty.call(options, "codexMetadata")
+      ? { readCodexPluginMetadata: () => options.codexMetadata ?? null }
       : {}),
     run(command, _cwd) {
       const argv = [...command];
@@ -796,6 +804,162 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  test("Codex dry-run never starts the host CLI and leaves fresh or malformed profiles intact", () => {
+    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "semctx-install-readonly-codex-")));
+    const profile = join(root, "profile");
+    const project = join(root, "project");
+    const bin = join(root, "bin");
+    const unexpected = join(root, "unexpected-codex-invocation");
+    mkdirSync(profile);
+    mkdirSync(bin);
+    mkdirSync(join(project, ".git"), { recursive: true });
+    writeFileSync(join(project, ".git", "HEAD"), "ref: refs/heads/main\n");
+    const script = join(bin, "codex-shim.js");
+    writeFileSync(script,
+      `require("node:fs").writeFileSync(${JSON.stringify(unexpected)}, "called"); process.exit(9);\n`);
+    if (process.platform === "win32") {
+      const compiled = Bun.spawnSync(
+        [process.execPath, "build", "--compile", script, "--outfile", join(bin, "codex.exe")],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      expect(compiled.exitCode).toBe(0);
+    } else {
+      writeFileSync(join(bin, "codex"), `#!/bin/sh\n"${process.execPath}" "${script}" "$@"\n`);
+      chmodSync(join(bin, "codex"), 0o755);
+    }
+    const environment = fixtureEnvironmentWithPath(bin);
+    environment["CODEX_HOME"] = profile;
+    environment["HOME"] = join(root, "home");
+    // The read-only Windows OS query requires an existing home, never startup-created caller state.
+    mkdirSync(environment["HOME"]);
+    environment["USERPROFILE"] = environment["HOME"];
+    const entrypoint = resolve(import.meta.dir, "../src/index.ts");
+    const run = (dryRun = true) => Bun.spawnSync([
+      process.execPath, entrypoint, "install", "--root", project, "--host", "codex",
+      ...(dryRun ? ["--dry-run"] : []), "--skip-setup", "--json",
+    ], { env: environment, stdout: "pipe", stderr: "pipe" });
+    try {
+      const fresh = run();
+      if (fresh.exitCode !== 0) {
+        console.error("Codex read-only fixture child failed", JSON.stringify({
+          exitCode: fresh.exitCode,
+          stdout: new TextDecoder().decode(fresh.stdout).slice(0, 8192),
+          stderr: new TextDecoder().decode(fresh.stderr).slice(0, 8192),
+        }));
+      }
+      expect(fresh.exitCode).toBe(0);
+      expect((JSON.parse(new TextDecoder().decode(fresh.stdout)) as InstallReport).hosts.codex.status)
+        .toBe("planned");
+      expect((JSON.parse(new TextDecoder().decode(fresh.stdout)) as InstallReport).hosts.codex.version)
+        .toBeNull();
+      expect(existsSync(unexpected)).toBe(false);
+      expect(readdirSync(profile)).toEqual([]);
+
+      const config = join(profile, "config.toml");
+      writeFileSync(config, "[plugins.'semctx-control@semctx-stable'\n");
+      const malformed = run();
+      expect(malformed.exitCode).toBe(1);
+      expect((JSON.parse(new TextDecoder().decode(malformed.stdout)) as InstallReport).hosts.codex.error)
+        .toContain("declarative plugin metadata safely");
+      expect(existsSync(unexpected)).toBe(false);
+      expect(readdirSync(profile)).toEqual(["config.toml"]);
+      expect(readFileSync(config, "utf8")).toBe("[plugins.'semctx-control@semctx-stable'\n");
+
+      const foreign = `[marketplaces.semctx-stable]\nsource_type = 'git'\nsource = 'someone/else'\n`;
+      writeFileSync(config, foreign);
+      const manifestRoot = join(profile, ".tmp", "marketplaces", "semctx-stable", ".agents", "plugins");
+      mkdirSync(manifestRoot, { recursive: true });
+      writeFileSync(join(manifestRoot, "marketplace.json"), JSON.stringify({ name: "semctx-stable", plugins: [] }));
+      const conflict = run();
+      expect(conflict.exitCode).toBe(1);
+      expect((JSON.parse(new TextDecoder().decode(conflict.stdout)) as InstallReport).hosts.codex.status)
+        .toBe("conflict");
+      expect(existsSync(unexpected)).toBe(false);
+      expect(readFileSync(config, "utf8")).toBe(foreign);
+
+      const canonical = `[marketplaces.semctx-stable]\nsource_type = 'git'\nsource = 'hoklims/semctx'\n`;
+      writeFileSync(config, canonical);
+      const pluginRoot = join(profile, ".tmp", "marketplaces", "semctx-stable", "plugins", "semctx-control");
+      mkdirSync(pluginRoot, { recursive: true });
+      const manifest = (products: string[] | null) => ({
+        name: "semctx-stable",
+        plugins: [{
+          name: "semctx-control",
+          source: { source: "local", path: "./plugins/semctx-control" },
+          policy: { installation: "AVAILABLE", products },
+        }],
+      });
+      for (const products of [[], ["CHATGPT"]]) {
+        writeFileSync(join(manifestRoot, "marketplace.json"), JSON.stringify(manifest(products)));
+        for (const dryRun of [true, false]) {
+          const excluded = run(dryRun);
+          const excludedReport = JSON.parse(new TextDecoder().decode(excluded.stdout)) as InstallReport;
+          expect(excluded.exitCode).toBe(1);
+          expect(excludedReport.hosts.codex.status).toBe("failed");
+          expect(existsSync(unexpected)).toBe(false);
+        }
+      }
+      writeFileSync(join(manifestRoot, "marketplace.json"), JSON.stringify(manifest(["CODEX"])));
+      const supported = run();
+      expect(supported.exitCode).toBe(0);
+      expect((JSON.parse(new TextDecoder().decode(supported.stdout)) as InstallReport).hosts.codex.status)
+        .toBe("planned");
+      expect(existsSync(unexpected)).toBe(false);
+      for (const directory of ["local", packageJson.version]) {
+        const cacheRoot = join(profile, "plugins", "cache", "semctx-stable", "semctx-control", directory);
+        mkdirSync(join(cacheRoot, ".codex-plugin"), { recursive: true });
+        const cacheManifest = join(cacheRoot, ".codex-plugin", "plugin.json");
+        writeFileSync(cacheManifest, JSON.stringify({ name: "semctx-control", version: packageJson.version }));
+        for (const dryRun of [true, false]) {
+          const orphan = run(dryRun);
+          const orphanReport = JSON.parse(new TextDecoder().decode(orphan.stdout)) as InstallReport;
+          expect(orphan.exitCode).toBe(1);
+          expect(orphanReport.hosts.codex.status).toBe("conflict");
+          expect(orphanReport.hosts.codex.error).toContain(directory === "local"
+            ? "local Semctx development cache overrides" : "without a plugin registration");
+          expect(existsSync(unexpected)).toBe(false);
+        }
+        for (const name of [undefined, 123, "foreign-control"]) {
+          writeFileSync(cacheManifest, JSON.stringify({ name, version: packageJson.version }));
+          for (const dryRun of [true, false]) {
+            const malformedCache = run(dryRun);
+            const cacheReport = JSON.parse(new TextDecoder().decode(malformedCache.stdout)) as InstallReport;
+            expect(malformedCache.exitCode).toBe(1);
+            expect(cacheReport.hosts.codex.status).toBe("failed");
+            expect(existsSync(unexpected)).toBe(false);
+          }
+        }
+        rmSync(cacheRoot, { recursive: true, force: true });
+      }
+      const foreignCache = join(root, "foreign-cache");
+      mkdirSync(foreignCache);
+      rmSync(join(profile, "plugins"), { recursive: true, force: true });
+      symlinkSync(foreignCache, join(profile, "plugins"), process.platform === "win32" ? "junction" : "dir");
+      for (const dryRun of [true, false]) {
+        const linkedCache = run(dryRun);
+        expect(linkedCache.exitCode).toBe(1);
+        expect(existsSync(unexpected)).toBe(false);
+        expect(readdirSync(foreignCache)).toEqual([]);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a local Codex development cache conflicts explicitly before stable installation", () => {
+    const runtime = fakeRuntime({ codexMetadata: {
+      marketplaces: [{ name: "semctx-stable", marketplaceSource: { sourceType: "git", source: SEMCTX_SOURCE } }],
+      plugins: [{ pluginId: "semctx-control@semctx-stable", installed: true, enabled: true,
+        version: "0.3.4", cacheDirectory: "local" }],
+    } });
+    const report = executeInstall("C:\\work\\project",
+      parseArgs(["install", "--host", "codex", "--dry-run", "--skip-setup"]), runtime);
+    expect(report.ok).toBe(false);
+    expect(report.hosts.codex.status).toBe("conflict");
+    expect(report.hosts.codex.error).toContain("local Semctx development cache overrides");
+    expect(runtime.commands.filter((command) => command[0] === "codex")).toEqual([["codex", "--version"]]);
   });
 
   test("malformed Claude project identity blocks dry-run and apply before every mutation", () => {
@@ -1476,6 +1640,146 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
     expect(runtime.deferredCacheCleanups).toEqual([]);
   });
 
+  for (const first of ["stable", "absent"] as const) {
+    test(`Codex ${first} identity remains the operation plan across aggregate preflight`, () => {
+      const marketplace = (ref: string): CodexPluginMetadataInventory => ({
+        marketplaces: [{
+          name: "semctx-stable",
+          marketplaceSource: { sourceType: "git", source: SEMCTX_SOURCE },
+          ref,
+          sparsePaths: ["plugins/semctx-control"],
+        }],
+        plugins: [],
+      });
+      const initial: CodexPluginMetadataInventory = first === "absent"
+        ? { marketplaces: [], plugins: [] }
+        : marketplace("stable");
+      const runtime = fakeRuntime({
+        codex: true,
+        claude: true,
+        codexMetadata: initial,
+        claudeMetadata: { marketplaces: [], plugins: [], settingsValid: true, effectiveEnablement: {} },
+      });
+      let reads = 0;
+      runtime.readCodexPluginMetadata = () => {
+        reads += 1;
+        return reads === 1 ? initial : marketplace("changed-ref");
+      };
+
+      const report = executeInstall(
+        "C:\\work\\project",
+        parseArgs(["install", "--host", "all", "--skip-setup"]),
+        runtime,
+      );
+
+      expect(reads).toBe(2);
+      expect(report.ok).toBe(false);
+      expect(report.hosts.codex.error).toContain("changed after the installation plan was admitted");
+      expect(runtime.commands.some((command) => command.some((token) =>
+        ["add", "install", "update", "upgrade", "remove", "enable"].includes(token)))).toBe(false);
+      expect(runtime.setupRoots).toEqual([]);
+    });
+  }
+
+  const finalCodexMetadata = (
+    plugin: Record<string, unknown> | null = {
+      pluginId: "semctx-control@semctx-stable",
+      installed: true,
+      enabled: true,
+      version: packageJson.version,
+      cacheDirectory: packageJson.version,
+    },
+  ): CodexPluginMetadataInventory => ({
+    marketplaces: [{
+      name: "semctx-stable",
+      marketplaceSource: { sourceType: "git", source: SEMCTX_SOURCE },
+      ref: "stable",
+      sparsePaths: [],
+    }],
+    plugins: plugin === null ? [] : [plugin],
+  });
+
+  for (const [name, final] of [
+    ["disabled plugin", finalCodexMetadata({
+      pluginId: "semctx-control@semctx-stable", installed: true, enabled: false,
+      version: packageJson.version, cacheDirectory: packageJson.version,
+    })],
+    ["higher selected cache", finalCodexMetadata({
+      pluginId: "semctx-control@semctx-stable", installed: true, enabled: true,
+      version: "0.3.8", cacheDirectory: "0.3.8",
+    })],
+    ["missing registration", finalCodexMetadata(null)],
+  ] as const) {
+    test(`final declarative inventory refuses ${name} before repository setup`, () => {
+      const initial = finalCodexMetadata();
+      const runtime = fakeRuntime({
+        codex: true,
+        claude: false,
+        codexMetadata: initial,
+        codexPluginsAfter: codexPluginsAfter({}),
+      });
+      let reads = 0;
+      runtime.readCodexPluginMetadata = () => {
+        reads += 1;
+        return reads < 4 ? initial : final;
+      };
+
+      const report = executeInstall("C:\\work\\project", parseArgs(["install"]), runtime);
+
+      expect(reads).toBeGreaterThanOrEqual(4);
+      expect(report.ok).toBe(false);
+      expect(report.hosts.codex.status).toBe("failed");
+      expect(report.hosts.codex.steps.find((step) => step.action === "verify Semctx Codex plugin")?.status)
+        .toBe("failed");
+      expect(runtime.setupRoots).toEqual([]);
+      expect(runtime.deferredCacheCleanups).toEqual([]);
+    });
+  }
+
+  test("a coherent final declarative inventory permits repository setup", () => {
+    const metadata = finalCodexMetadata();
+    const runtime = fakeRuntime({ codex: true, claude: false, codexMetadata: metadata,
+      codexPluginsAfter: codexPluginsAfter({}) });
+    const report = executeInstall("C:\\work\\project", parseArgs(["install"]), runtime);
+    expect(report.ok).toBe(true);
+    expect(runtime.setupRoots).toEqual(["C:\\work\\project"]);
+  });
+
+  for (const [name, final] of [
+    ["disabled plugin", finalCodexMetadata({
+      pluginId: "semctx-control@semctx-stable", installed: true, enabled: false,
+      version: packageJson.version, cacheDirectory: packageJson.version,
+    })],
+    ["higher selected cache", finalCodexMetadata({
+      pluginId: "semctx-control@semctx-stable", installed: true, enabled: true,
+      version: "0.3.8", cacheDirectory: "0.3.8",
+    })],
+  ] as const) {
+    test(`cache-lock recovery refuses final declarative ${name} before cleanup`, () => {
+      const initial = finalCodexMetadata({
+        pluginId: "semctx-control@semctx-stable", installed: true, enabled: true,
+        version: "0.1.17", cacheDirectory: "0.1.17",
+      });
+      const runtime = installWithLockedAdd({
+        codexMetadata: initial,
+        codexPluginsAfter: codexPluginsAfter({}),
+      });
+      let reads = 0;
+      runtime.readCodexPluginMetadata = () => {
+        reads += 1;
+        return reads < 4 ? initial : final;
+      };
+
+      const report = executeInstall("C:\\work\\project", parseArgs(["install"]), runtime);
+
+      expect(reads).toBeGreaterThanOrEqual(4);
+      expect(report.ok).toBe(false);
+      expect(report.hosts.codex.status).toBe("failed");
+      expect(runtime.deferredCacheCleanups).toEqual([]);
+      expect(runtime.setupRoots).toEqual([]);
+    });
+  }
+
   test("an ordinary inventory query failure keeps the generic remedy, not the host-CLI upgrade message", () => {
     const runtime = fakeRuntime({
       codex: true,
@@ -1827,6 +2131,45 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
       version: "0.1.17",
       keepVersion: packageJson.version,
     }]);
+  });
+
+  test("locked-cache convergence refuses a foreign plugin manifest with matching version and bytes", () => {
+    const metadata: CodexPluginMetadataInventory = {
+      marketplaces: [{
+        name: "semctx-stable",
+        marketplaceSource: { sourceType: "git", source: SEMCTX_SOURCE },
+        ref: "stable",
+        sparsePaths: [],
+      }],
+      plugins: [{
+        pluginId: "semctx-control@semctx-stable",
+        installed: true,
+        enabled: true,
+        version: "0.1.17",
+      }],
+    };
+    const runtime = installWithLockedAdd({
+      codexMetadata: metadata,
+      codexPluginsAfter: codexPluginsAfter({}),
+      codexPayloads: {
+        [CODEX_SNAPSHOT_PATH]: probe(),
+        [CODEX_CACHE_PATH]: {
+          ...probe(),
+          identity: { name: "foreign-plugin", version: packageJson.version },
+        },
+      },
+    });
+
+    const report = executeInstall(
+      "C:\\work\\project",
+      parseArgs(["install", "--skip-setup"]),
+      runtime,
+    );
+
+    expect(report.ok).toBe(false);
+    expect(report.hosts.codex.error).toContain("does not declare the expected plugin identity");
+    expect(runtime.deferredCacheCleanups).toEqual([]);
+    expect(runtime.setupRoots).toEqual([]);
   });
 
   test("survives a malformed plugin list with a structured failure", () => {
