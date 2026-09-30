@@ -32,7 +32,7 @@ interface WorkflowJob {
   "timeout-minutes"?: number;
   strategy?: {
     "fail-fast"?: boolean;
-    matrix?: Record<string, unknown>;
+    matrix?: Record<string, unknown> | string;
   };
   env?: Record<string, unknown>;
   steps: WorkflowStep[];
@@ -124,23 +124,29 @@ describe("CI governance", () => {
     expect(ci).not.toContain("pull_request_target");
   });
 
-  test("runs the canonical verifier on the full cross-platform matrix", () => {
-    const verify = job(ciWorkflow, "verify");
-    const checkout = verify.steps.find((step) =>
+  test("selects a bounded matrix from a full-depth immutable diff", () => {
+    const plan = job(ciWorkflow, "plan");
+    const gates = job(ciWorkflow, "gates");
+    const checkout = plan.steps.find((step) =>
       step.uses?.startsWith("actions/checkout@"),
     );
-    const python = verify.steps.find((step) =>
+    const python = gates.steps.find((step) =>
       step.uses?.startsWith("actions/setup-python@"),
     );
-    const bun = verify.steps.find((step) =>
+    const bun = gates.steps.find((step) =>
       step.uses?.startsWith("oven-sh/setup-bun@"),
     );
 
-    expect(verify.strategy).toEqual({
+    expect(plan["runs-on"]).toBe("ubuntu-latest");
+    expect(plan["timeout-minutes"]).toBe(5);
+    expect(plan.steps.find((step) => step.run === "bun scripts/ci-plan.ts")?.name)
+      .toBe("Select required verification lanes");
+    expect(gates.needs).toBe("plan");
+    expect(gates.strategy).toEqual({
       "fail-fast": false,
-      matrix: { os: ["ubuntu-latest", "windows-latest", "macos-15"] },
+      matrix: "${{ fromJSON(needs.plan.outputs.matrix) }}",
     });
-    expect(verify["runs-on"]).toBe("${{ matrix.os }}");
+    expect(gates["runs-on"]).toBe("${{ matrix.os }}");
     expect(checkout?.with).toEqual({
       ref: "${{ github.event.pull_request.head.sha || github.sha }}",
       "fetch-depth": 0,
@@ -149,9 +155,14 @@ describe("CI governance", () => {
     expect(python?.with?.["python-version"]).toBe("3.10");
     expect(bun?.with?.["bun-version"]).toBe("1.4.0");
     expect(ci).toContain("bun install --frozen-lockfile");
-    expect(ci).toContain("bun run verify:pr");
-    expect(verify["timeout-minutes"]).toBe(180);
-    expect(verify.env?.SEMCTX_VERIFY_BASE).toBe(
+    expect(gates.steps.find((step) => step.name === "Run selected verification lane")?.run)
+      .toBe("bun scripts/ci-gate.ts");
+    expect(ci).not.toContain("bench:index-workers 24 100");
+    expect(gates["timeout-minutes"]).toBe(60);
+    expect(plan.env?.SEMCTX_VERIFY_BASE).toBe(
+      "${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}",
+    );
+    expect(gates.env?.SEMCTX_VERIFY_BASE).toBe(
       "${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}",
     );
   });
@@ -163,12 +174,35 @@ describe("CI governance", () => {
     expect(ciWorkflow.jobs["semctx-required"]).toMatchObject({
       name: "semctx-required",
       if: "always()",
-      needs: "verify",
+      needs: ["plan", "gates"],
       "runs-on": "ubuntu-latest",
       "timeout-minutes": 5,
     });
-    expect(ci).toContain('test "$VERIFY_RESULT" = "success"');
+    const required = job(ciWorkflow, "semctx-required").steps[0];
+    expect(required?.env).toEqual({
+      PLAN_RESULT: "${{ needs.plan.result }}",
+      GATES_RESULT: "${{ needs.gates.result }}",
+    });
+    expect(required?.run).toBe('test "$PLAN_RESULT" = "success"\ntest "$GATES_RESULT" = "success"\n');
     expect(ci).not.toMatch(/uses:\s+\S+@v\d/);
+  });
+
+  test("refuses wiring mutants that drop the planner or accept skipped gates", () => {
+    const assertRequired = (source: string) => {
+      const workflow = Bun.YAML.parse(source) as Workflow;
+      const required = job(workflow, "semctx-required");
+      expect(required.if).toBe("always()");
+      expect(required.needs).toEqual(["plan", "gates"]);
+      expect(required.steps[0]?.run).toBe('test "$PLAN_RESULT" = "success"\ntest "$GATES_RESULT" = "success"\n');
+    };
+    assertRequired(ci);
+    for (const mutant of [
+      ci.replace("needs: [plan, gates]", "needs: [gates]"),
+      ci.replace('test "$GATES_RESULT" = "success"', "true"),
+      ci.replace("if: always()", "if: success()"),
+    ]) {
+      expect(() => assertRequired(mutant)).toThrow();
+    }
   });
 
   test("removes superseded workflow entry points", () => {
@@ -467,7 +501,7 @@ describe("contributor governance", () => {
     expect(codeowners).toContain("/plugins/claude-code/.mcp.json @hoklims");
     expect(codeowners).toContain("/plugins/semctx-control/.mcp.json @hoklims");
     expect(codeowners).not.toMatch(/^\*\s/m);
-    expect(template).toContain("bun run verify:pr");
+    expect(template).toContain("semctx-required");
     expect(template).toContain(
       "Public CLI, MCP, schema, or plugin contract changes",
     );

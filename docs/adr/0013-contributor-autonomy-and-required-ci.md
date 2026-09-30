@@ -1,5 +1,8 @@
 # ADR 0013 — Govern public changes with one local gate and one required CI result
 
+The fixed PR matrix and mandatory local full-gate clauses below were superseded by
+[ADR 0031](0031-change-scoped-ci-gates.md). The release-source gate and authority boundaries remain active.
+
 - Status: accepted
 - Date: 2026-08-02
 - Related: ADR 0006 (GitHub Action), ADR 0008 (versioned machine output),
