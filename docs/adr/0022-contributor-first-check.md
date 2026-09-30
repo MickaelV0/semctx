@@ -1,5 +1,8 @@
 # ADR 0022: contributor checks are explicit and cannot replace verify:pr
 
+The mandatory local full-gate clause below was superseded by
+[ADR 0031](0031-change-scoped-ci-gates.md). The helper still labels targeted checks honestly.
+
 Status: accepted for implementation by the maintainer-delegated Codex lead, 2026-09-08.
 Sources: HOK-637, HOK-642, HOK-643, CONTRIBUTING.md and ADR 0013.
 

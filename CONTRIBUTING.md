@@ -1,8 +1,8 @@
 # Contributing to semctx
 
 For a clean clone, start with [your first check](docs/contributing/first-check.md). It diagnoses
-prerequisites and runs explicit existing test scopes; the canonical `bun run verify:pr` gate below
-remains mandatory. The [packaged first-use demo](docs/contributing/first-use-demo.md) exercises the
+prerequisites and runs explicit existing test scopes; the required CI plan selects the affected
+gates under [ADR 0031](docs/adr/0031-change-scoped-ci-gates.md). The [packaged first-use demo](docs/contributing/first-use-demo.md) exercises the
 public journey without writing authored declarations or installing a global plugin. The
 [packaged continuity demo](docs/contributing/continuity-demo.md) exercises task/plan/reconcile,
 Control Handoff v2 capture/explain, staleness detection, and a refused resume, end to end.
@@ -40,7 +40,8 @@ bun test packages/mcp-server
 bun run plugin:build && bun run plugin:check
 ```
 
-Before opening or updating a PR, run the sole repository pre-PR gate:
+Before opening or updating a PR, run the affected local checks and inspect the required CI plan.
+Use the complete local gate for a release, uncertain impact or an uncovered obligation:
 
 ```bash
 bun run verify:pr
@@ -50,7 +51,8 @@ Stage every intended new file first. The gate rejects any remaining non-ignored 
 that a contributor cannot accidentally omit new source, tests, documentation, or generated output
 from the reviewed change.
 
-Do not substitute an informal combination of commands for `verify:pr`. See the
+The selected CI gates and `semctx-required` must pass on the exact PR SHA. Targeted local checks
+must state what they cover; they do not count as a full `verify:pr` result. See the
 [public-contract contributor guide](docs/contributing/public-contracts.md) for change tiers,
 authority, design, compatibility, test, and generated-artifact requirements.
 
@@ -81,7 +83,7 @@ authority, design, compatibility, test, and generated-artifact requirements.
 - Update affected documentation and generated artifacts in the same PR.
 - Record each applicable public-contract requirement in the PR evidence. Mark a requirement
   `N/A` only with a reason.
-- Do not open or update a PR while `bun run verify:pr` is failing.
+- Do not open or update a PR with a known failing affected check.
 - Changes to the **public MCP surface** (tool registration, error catalogue, structured
   schemas, agent success gates, annotations, visibility, root confinement, plugin parity)
   should also follow
