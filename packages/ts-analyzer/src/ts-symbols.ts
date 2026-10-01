@@ -119,6 +119,15 @@ const COMPILER_OPTIONS: ts.CompilerOptions = {
   strict: false,
 };
 
+/** Internal semantic context; intentionally not exported from the package root. */
+export function createExtractionProgram(rootAbsPaths: string[]): ts.Program {
+  const host = ts.createCompilerHost(COMPILER_OPTIONS);
+  // Match tsc's semantic parsing: retain type-error JSDoc, avoid prose ASTs in dependencies.
+  // Semctx reads its JSDoc/markers from source text, independently of these compiler nodes.
+  host.jsDocParsingMode = ts.JSDocParsingMode.ParseForTypeErrors;
+  return ts.createProgram(rootAbsPaths, COMPILER_OPTIONS, host);
+}
+
 function isExported(node: ts.Node): boolean {
   return (ts.getCombinedModifierFlags(node as ts.Declaration) & ts.ModifierFlags.Export) !== 0;
 }
@@ -178,7 +187,7 @@ function canonicalTypeScriptFileKey(filePath: string): string {
 
 /** Extract modules, symbols, imports and best-effort resolved calls from source/test files. */
 export function extractTypeScript(rootAbsPaths: string[], repoRoot: string): TsExtraction {
-  const program = ts.createProgram(rootAbsPaths, COMPILER_OPTIONS);
+  const program = createExtractionProgram(rootAbsPaths);
   const checker = program.getTypeChecker();
   const rootSet = new Set(rootAbsPaths.map((p) => normalizePath(p)));
 
