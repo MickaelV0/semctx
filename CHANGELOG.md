@@ -9,6 +9,21 @@ GitHub Release advance together through the tag-driven lockstep workflow documen
 
 ## [Unreleased]
 
+## [0.3.8] - 2026-10-01
+
+### Changed
+
+- TypeScript extraction uses the compiler's semantic JSDoc parsing mode. It avoids allocating
+  prose JSDoc trees in loaded dependencies while retaining types, libraries, resolution, raw
+  comments and Semctx markers. Matched local mono-worker probes observed 6–14% lower peak RSS
+  with byte-identical structured facts; this is not a Lobby crash reproduction or a statistical
+  performance estimate. Explicit workers still duplicate their semantic contexts.
+
+### Fixed
+
+- The compatibility regression fixture removes every Bun provisioning occurrence, preserving
+  its missing-provisioning scenario after CI moved to a multi-job matrix.
+
 ## [0.3.7] - 2026-09-28
 
 ### Fixed

@@ -35,6 +35,9 @@ import {
   type ClaudePluginMetadataInventory,
 } from "@semantic-context/app-services";
 
+const newerVersionParts = packageJson.version.split(".").map(Number);
+const newerFixtureVersion = `${newerVersionParts[0]}.${newerVersionParts[1]}.${newerVersionParts[2]! + 1}`;
+
 const SEMCTX_SOURCE = "https://github.com/hoklims/semctx.git";
 // Absolute on every platform, and never touched on disk: the fake runtime answers all probes.
 const CODEX_HOME = join(tmpdir(), "semctx-fake-codex");
@@ -1706,7 +1709,7 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
     })],
     ["higher selected cache", finalCodexMetadata({
       pluginId: "semctx-control@semctx-stable", installed: true, enabled: true,
-      version: "0.3.8", cacheDirectory: "0.3.8",
+      version: newerFixtureVersion, cacheDirectory: newerFixtureVersion,
     })],
     ["missing registration", finalCodexMetadata(null)],
   ] as const) {
@@ -1752,7 +1755,7 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
     })],
     ["higher selected cache", finalCodexMetadata({
       pluginId: "semctx-control@semctx-stable", installed: true, enabled: true,
-      version: "0.3.8", cacheDirectory: "0.3.8",
+      version: newerFixtureVersion, cacheDirectory: newerFixtureVersion,
     })],
   ] as const) {
     test(`cache-lock recovery refuses final declarative ${name} before cleanup`, () => {
@@ -2937,8 +2940,7 @@ process.stdout.write(JSON.stringify({ installed: [{
         stdout: "pipe",
         stderr: "pipe",
         env: {
-          ...process.env,
-          PATH: `${shim.directory}${delimiter}${process.env["PATH"] ?? ""}`,
+          ...fixtureEnvironmentWithPath(shim.directory),
           SEMCTX_JANITOR_BUN: process.execPath,
           SEMCTX_JANITOR_COUNTER: shim.counter,
           SEMCTX_JANITOR_SELECTED_VERSIONS: JSON.stringify(versions),
