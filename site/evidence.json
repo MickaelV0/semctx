@@ -2,18 +2,18 @@
   "schemaVersion": 1,
   "kind": "semctx-public-evidence-v1",
   "phase": "candidate",
-  "generatedAt": "2026-09-28T22:28:42.649Z",
+  "generatedAt": "2026-10-01T18:54:46.323Z",
   "evidenceState": "OBSERVED",
   "releaseCommit": null,
   "demo": {
     "status": "COMPLETED",
-    "observedAt": "2026-09-28T22:28:32.913Z",
-    "packageVersion": "0.3.7",
-    "runtimeDigest": "sha256:f87a330eba922bc9d76dc908e77d1c033a515c4226766b6bc42ade8ce5b17bad",
+    "observedAt": "2026-10-01T18:50:16.812Z",
+    "packageVersion": "0.3.8",
+    "runtimeDigest": "sha256:bfdcafd244119908e2872eddce494f270bc90a07ccb411a72e12648e51fd2d19",
     "fixtureBaseDigest": "sha256:0c127641db744e3655fb139ad4b1c29d337820f31bfa83ae16d5f21a166e8b82",
     "fixtureChangedDigest": "sha256:8070230105396980b0ec842b455c498e6ba026770f230dc61963432c621c8334",
     "fixtureCommit": {
-      "value": "9f4774e3fc55a93ca4ff0ba673ac545da287b105",
+      "value": "dbc4267671b133565d02fd8c64e823968512911f",
       "authority": "caller-asserted"
     },
     "verdict": "WARN",
