@@ -30,7 +30,7 @@ const CURRENT_ACTION_FILES = [
   "plugins/semctx-control/dist/semctx.js",
 ] as const;
 
-const RELEASE_DATE = "2026-09-28";
+const RELEASE_DATE = "2026-10-01";
 
 const CANONICAL_PAGES_PUBLISH_RUN = [
   "gh auth setup-git",
