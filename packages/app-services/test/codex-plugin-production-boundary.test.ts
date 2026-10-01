@@ -10,6 +10,7 @@ import {
   type PluginDeliveryReportV2,
 } from "../src/plugin-delivery";
 import type { InstallReport } from "../../../apps/cli/src/commands/install";
+import packageJson from "../../../apps/cli/package.json";
 
 type RawHomeSource = "HOME" | "USERPROFILE" | "CODEX_HOME" | "OS_HOME";
 interface ProductionObservation {
@@ -63,6 +64,10 @@ function productionFixture(source: RawHomeSource, drift: boolean, orphan: boolea
   const installUrl = pathToFileURL(join(import.meta.dir, "../../../apps/cli/src/commands/install.ts")).href;
   const argsUrl = pathToFileURL(join(import.meta.dir, "../../../apps/cli/src/args.ts")).href;
   const root = resolve(parse(process.cwd()).root, "semctx-production-boundary-fixture");
+  // Status/order cases keep their fixed version corpus; installation tracks the release SSOT.
+  const fixtureVersion = caller === "install" ? packageJson.version : "0.3.7";
+  const [major, minor, patch] = fixtureVersion.split(".").map(Number);
+  const newerFixtureVersion = `${major}.${minor}.${patch! + 1}`;
   const program = `
     import { mock } from "bun:test";
     import * as fs from "node:fs";
@@ -74,6 +79,7 @@ function productionFixture(source: RawHomeSource, drift: boolean, orphan: boolea
     const systemPolicy = ${JSON.stringify(systemPolicy)}, caller = ${JSON.stringify(caller)};
     const fallbackFault = ${JSON.stringify(fallbackFault)};
     const jsonFixture = ${JSON.stringify(jsonFixture ?? null)};
+    const fixtureVersion = ${JSON.stringify(fixtureVersion)}, newerFixtureVersion = ${JSON.stringify(newerFixtureVersion)};
     const gitRoot = join(root, "repo"), home = join(root, "profile");
     const repo = jsonFixture?.unsupportedLayer?.location === "ancestor" ? join(gitRoot, "child") : gitRoot;
     const osHome = join(root, "os-home"), cancelled = join(root, "cancelled");
@@ -86,7 +92,7 @@ function productionFixture(source: RawHomeSource, drift: boolean, orphan: boolea
     let identity = 1, phase = 0, systemPhase = 0, windowsQueryPhase = 0, rawHits = 0, nextDescriptor = 100;
     let cacheManifestOpens = 0;
     const selectedCache = join(codexHome, "plugins", "cache", "semctx-stable", "semctx-control",
-      jsonFixture?.artifacts?.localCache ? "local" : "0.3.7");
+      jsonFixture?.artifacts?.localCache ? "local" : fixtureVersion);
     const nativeCalls = [], nativeOptions = [], descriptors = new Map();
     const originalSpawnSync = Bun.spawnSync, originalNow = Date.now;
     let nativeClockAdvance = 0;
@@ -120,7 +126,7 @@ function productionFixture(source: RawHomeSource, drift: boolean, orphan: boolea
     if (systemPolicy === "disabled") addFile(join(knownFolder, "OpenAI", "Codex", "config.toml"),
       "[features]\\nplugins = false\\n");
     if (orphan) addFile(join(cachePath, ".codex-plugin", "plugin.json"),
-      JSON.stringify({ name: "semctx-control", version: "0.3.7" }));
+      JSON.stringify({ name: "semctx-control", version: fixtureVersion }));
     if (jsonFixture !== null) {
       const marketplace = join(codexHome, ".tmp", "marketplaces", "semctx-stable");
       addDirectory(join(marketplace, "plugins", "semctx-control"));
@@ -147,10 +153,10 @@ function productionFixture(source: RawHomeSource, drift: boolean, orphan: boolea
         const versionedCache = selectedCache;
         if (!jsonFixture.artifacts.unregistered || jsonFixture.artifacts.orphanCache) {
           addFile(join(versionedCache, ".codex-plugin", "plugin.json"), jsonFixture.artifacts.payloadManifest
-            ?? JSON.stringify({ name: "semctx-control", version: "0.3.7" }));
+            ?? JSON.stringify({ name: "semctx-control", version: fixtureVersion }));
         }
         addFile(join(marketplace, "plugins", "semctx-control", ".codex-plugin", "plugin.json"),
-          jsonFixture.artifacts.snapshotManifest ?? JSON.stringify({ name: "semctx-control", version: "0.3.7" }));
+          jsonFixture.artifacts.snapshotManifest ?? JSON.stringify({ name: "semctx-control", version: fixtureVersion }));
         if (jsonFixture.artifacts.sidecar !== undefined) addFile(join(marketplace, ".codex-marketplace-install.json"),
           jsonFixture.artifacts.sidecar);
         if (jsonFixture.artifacts.localSidecar) addFile(join(marketplace, ".codex-marketplace-install.json"),
@@ -179,7 +185,7 @@ function productionFixture(source: RawHomeSource, drift: boolean, orphan: boolea
         if (!jsonFixture.artifacts?.unregistered) addFile(join(codexHome, "plugins", "cache", "semctx-stable", "semctx-control", "0.3.6", ".codex-plugin", "plugin.json"),
           JSON.stringify({ name: "semctx-control", version: "0.3.6" }));
         addFile(join(marketplace, "plugins", "semctx-control", ".codex-plugin", "plugin.json"),
-          jsonFixture.recovery.snapshotManifest ?? JSON.stringify({ name: "semctx-control", version: "0.3.7" }));
+          jsonFixture.recovery.snapshotManifest ?? JSON.stringify({ name: "semctx-control", version: fixtureVersion }));
         for (const bundle of ["semctx-index-worker.js", "semctx-mcp.js", "semctx-shared.js", "semctx.js"]) {
           addFile(join(marketplace, "plugins", "semctx-control", "dist", bundle), "same bundle: " + bundle);
         }
@@ -370,9 +376,9 @@ function productionFixture(source: RawHomeSource, drift: boolean, orphan: boolea
             if (jsonFixture.recovery.sidecarAfterAdd !== undefined) addFile(
               join(codexHome, ".tmp", "marketplaces", "semctx-stable", ".codex-marketplace-install.json"),
               jsonFixture.recovery.sidecarAfterAdd);
-            const versioned = join(codexHome, "plugins", "cache", "semctx-stable", "semctx-control", "0.3.7");
+            const versioned = join(codexHome, "plugins", "cache", "semctx-stable", "semctx-control", fixtureVersion);
             addFile(join(versioned, ".codex-plugin", "plugin.json"), jsonFixture.recovery.cacheManifest
-              ?? JSON.stringify({ name: "semctx-control", version: "0.3.7" }));
+              ?? JSON.stringify({ name: "semctx-control", version: fixtureVersion }));
             for (const bundle of ["semctx-index-worker.js", "semctx-mcp.js", "semctx-shared.js", "semctx.js"]) {
               addFile(join(versioned, "dist", bundle), "same bundle: " + bundle);
             }
@@ -385,7 +391,7 @@ function productionFixture(source: RawHomeSource, drift: boolean, orphan: boolea
           if (argv[1] === "plugin" && argv[2] === "list") {
             const reply = {
               exitCode: 0, stderr: Buffer.alloc(0), stdout: Buffer.from(JSON.stringify({ installed: [{
-              pluginId: "semctx-control@semctx-stable", installed: true, enabled: true, version: "0.3.7",
+              pluginId: "semctx-control@semctx-stable", installed: true, enabled: true, version: fixtureVersion,
               source: { path: join(codexHome, ".tmp", "marketplaces", "semctx-stable", "plugins", "semctx-control") },
             }] })),
             };
@@ -393,9 +399,9 @@ function productionFixture(source: RawHomeSource, drift: boolean, orphan: boolea
               const config = join(codexHome, "config.toml");
               addFile(config, files.get(config).toString("utf8").replace("enabled = true", "enabled = false"));
             } else if (jsonFixture.recovery.afterNativeList === "higher-cache") {
-              const newer = join(codexHome, "plugins", "cache", "semctx-stable", "semctx-control", "0.3.8");
+              const newer = join(codexHome, "plugins", "cache", "semctx-stable", "semctx-control", newerFixtureVersion);
               addFile(join(newer, ".codex-plugin", "plugin.json"),
-                JSON.stringify({ name: "semctx-control", version: "0.3.8" }));
+                JSON.stringify({ name: "semctx-control", version: newerFixtureVersion }));
             }
             return reply;
           }
@@ -418,7 +424,7 @@ function productionFixture(source: RawHomeSource, drift: boolean, orphan: boolea
       report = executeInstall(repo, parseArgs(["install", "--host", "codex", "--skip-setup",
         ...(jsonFixture?.dryRun === false ? [] : ["--dry-run"])]));
     } else report = pluginDeliveryStatus(
-      { repositoryRoot: repo, version: "0.3.7", scope: "codex" },
+      { repositoryRoot: repo, version: fixtureVersion, scope: "codex" },
       {
         findHostExecutable: () => join(root, "bin", "codex"),
         ...(jsonFixture?.artifacts?.payloadManifest === undefined && jsonFixture?.artifacts?.fixedInventory !== true ? {} : {
@@ -427,8 +433,8 @@ function productionFixture(source: RawHomeSource, drift: boolean, orphan: boolea
             marketplaces: [{ name: "semctx-stable", root: join(codexHome, ".tmp", "marketplaces", "semctx-stable"),
               marketplaceSource: { sourceType: "git", source: "hoklims/semctx" }, ref: "stable",
               sparsePaths: jsonFixture.artifacts.configuredSparse ?? [] }],
-            plugins: [{ pluginId: "semctx-control@semctx-stable", installed: true, enabled: true, version: "0.3.7",
-              cachePath: join(codexHome, "plugins", "cache", "semctx-stable", "semctx-control", "0.3.7") }],
+            plugins: [{ pluginId: "semctx-control@semctx-stable", installed: true, enabled: true, version: fixtureVersion,
+              cachePath: join(codexHome, "plugins", "cache", "semctx-stable", "semctx-control", fixtureVersion) }],
           }),
         }),
         readRepositoryChannel: () => ({ commit: null, originIsSemctx: false }),
@@ -1055,7 +1061,7 @@ describe("default installer Windows cache-lock payload convergence", () => {
   }
 
   test.skipIf(process.platform !== "win32")("plain current payloads prove recovery through the default reader", () => {
-    const observed = recover("snapshotManifest", '{"name":"semctx-control","version":"0.3.7"}');
+    const observed = recover("snapshotManifest", JSON.stringify({ name: "semctx-control", version: packageJson.version }));
     expect(observed.report.ok).toBe(true);
     expect(observed.report.hosts.codex.cleanupDeferred).toBe(true);
     expect(observed.nativeCalls).toContain("cleanup-scheduled");
@@ -1149,7 +1155,7 @@ describe("default installer bounds actual native host executables", () => {
       const mutation = argv[1] === "marketplace", readback = argv[1] === "list";
       const finish = () => {
         if (readback) process.stdout.write(JSON.stringify({ installed: [{
-          pluginId: "semctx-control@semctx-stable", installed: true, enabled: true, version: "0.3.7",
+          pluginId: "semctx-control@semctx-stable", installed: true, enabled: true, version: ${JSON.stringify(packageJson.version)},
           source: { path: process.env.SEMCTX_NATIVE_SNAPSHOT } }] }));
         else process.stdout.write("{}");
         process.exit(0);
