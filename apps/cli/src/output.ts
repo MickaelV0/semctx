@@ -50,6 +50,22 @@ export function fail(message: string): void {
   process.stderr.write(`${c.red("ERROR")} ${message}\n`);
 }
 
+/**
+ * Describe a failure from the error itself. Some Bun versions can materialize a stack whose
+ * header has lost or retained a stale message, so the stack is used only for optional frames.
+ */
+export function describeError(
+  err: unknown,
+  env: Record<string, string | undefined> = process.env,
+): string {
+  if (!(err instanceof Error)) return String(err);
+  const summary = err.message === "" ? err.name : `${err.name}: ${err.message}`;
+  if (env["SEMCTX_DEBUG"] !== "1") return summary;
+  const stackLines = (err.stack ?? "").split("\n");
+  const firstFrame = stackLines.findIndex((line) => line.startsWith("    at "));
+  return firstFrame === -1 ? summary : [summary, ...stackLines.slice(firstFrame)].join("\n");
+}
+
 export function json(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
 }
