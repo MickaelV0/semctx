@@ -23,7 +23,7 @@ function replace(root: string, file: string, before: string, after: string): voi
   const path = join(root, file);
   const text = readFileSync(path, "utf8");
   expect(text).toContain(before);
-  writeFileSync(path, text.replace(before, after));
+  writeFileSync(path, text.replaceAll(before, after));
 }
 
 describe("compatibility declaration gate", () => {
