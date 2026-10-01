@@ -9,6 +9,28 @@ GitHub Release advance together through the tag-driven lockstep workflow documen
 
 ## [Unreleased]
 
+## [0.3.9] - 2026-10-02
+
+### Fixed
+
+- Ordinary CLI errors use their actual name and message instead of a stale Bun stack header.
+  `SEMCTX_DEBUG=1` retains useful stack frames; SemctxError handling and exit codes are preserved.
+- Plane-A index health groups canonical scopes instead of repeatedly digesting each pair,
+  retaining producer checks, cardinality and output order.
+
+### Changed
+
+- MCP server SDK 2.2.0 interoperates with the retained client/core 2.0 baseline. Generated
+  CLI/MCP bundles include the update; Zod 3 and the SDK Zod 4 alias remain unchanged.
+- ESLint, typescript-eslint, Ruff, zizmor and Bun development types receive their maintenance
+  updates. Runtime/build Bun 1.4.0 and TypeScript 5.9.3 remain the tested baseline.
+
+### Verification
+
+- Two real processes exercise atomic writes, with safe Windows refusals explicitly bounded.
+- Worker benchmark equivalence now refuses a sample that took the wrong execution path.
+  The canonical test scheduler and change-scoped CI policy remain unchanged.
+
 ## [0.3.8] - 2026-10-01
 
 ### Changed
