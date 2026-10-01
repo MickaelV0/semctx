@@ -1,9 +1,9 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import ts from "typescript";
-import { createExtractionProgram, extractTypeScript } from "../src/ts-symbols";
+import { extractionContext, extractTypeScript } from "../src/ts-symbols";
 
 const temporary: string[] = [];
 function fixture(files: Record<string, string>): { root: string; paths: string[] } {
@@ -24,15 +24,28 @@ afterEach(() => {
 test("omits prose JSDoc ASTs while retaining source comments and type-error links", () => {
   const text = "/** prose documentation */\nexport function plain() {}\n"
     + "/** @see plain */\nexport function linked() { plain() }\n";
-  const { paths } = fixture({ "source.ts": text });
-  const program = createExtractionProgram(paths);
-  program.getTypeChecker();
-  const source = program.getSourceFile(paths[0]!)!;
-  const [plain, linked] = source.statements;
-  expect(ts.getJSDocCommentsAndTags(plain!)).toHaveLength(0);
-  expect(ts.getJSDocCommentsAndTags(linked!)).toHaveLength(1);
-  expect(source.getFullText()).toBe(text);
-  expect(program.getSourceFiles().some((file) => file.fileName.endsWith("lib.es2022.d.ts"))).toBe(true);
+  const { root, paths } = fixture({ "source.ts": text });
+  const createProgram = extractionContext.createProgram;
+  const programs: ts.Program[] = [];
+  const observe = spyOn(extractionContext, "createProgram").mockImplementation((roots) => {
+    const program = createProgram(roots);
+    programs.push(program);
+    return program;
+  });
+  try {
+    const extraction = extractTypeScript(paths, root);
+    expect(observe).toHaveBeenCalledTimes(1);
+    const program = programs[0]!;
+    const source = program.getSourceFile(paths[0]!)!;
+    const [plain, linked] = source.statements;
+    expect(ts.getJSDocCommentsAndTags(plain!)).toHaveLength(0);
+    expect(ts.getJSDocCommentsAndTags(linked!)).toHaveLength(1);
+    expect(source.getFullText()).toBe(text);
+    expect(extraction.symbols[0]!.jsdoc).toBe("/** prose documentation */");
+    expect(program.getSourceFiles().some((file) => file.fileName.endsWith("lib.es2022.d.ts"))).toBe(true);
+  } finally {
+    observe.mockRestore();
+  }
 });
 
 test("preserves TSX, raw markers, aliases and calls through shared declarations", () => {
