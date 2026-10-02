@@ -9,6 +9,16 @@ GitHub Release advance together through the tag-driven lockstep workflow documen
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-02
+
+### Fixed
+
+- MCP stdio accepts inline diffs above the SDK's former 10 MiB default within an explicit
+  32 MiB wire-message limit. Oversized messages close the transport with a payload-free stderr
+  diagnostic directing callers to omit `gitDiff` and read the diff from Git.
+- The dual-era MCP factory and ordinary Git-backed verification remain unchanged. Providing a
+  diff still does not establish its Git source identity or prove runtime/business correctness.
+
 ## [0.4.0] - 2026-10-02
 
 ### Changed

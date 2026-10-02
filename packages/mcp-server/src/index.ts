@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
+import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import { optionalProcessBoundRoot } from "./repository-root";
 import { createSemctxServer } from "./server";
 
@@ -23,7 +24,20 @@ export { registerChangeAuthorizationVerifierTools } from "./change-authorization
 /** Entry point: serve semctx over stdio, optionally pre-bound by SEMCTX_ROOT. */
 export function main(): void {
   const root = optionalProcessBoundRoot(process.env["SEMCTX_ROOT"]);
-  serveStdio(() => createSemctxServer(root), { legacy: "serve" });
+  // Inline diffs can exceed the SDK's 10 MiB default. Keep a finite wire-byte bound;
+  // larger changes can still be read from Git without putting the diff on the wire.
+  const maxBufferSize = 32 * 1024 * 1024;
+  const transport = new StdioServerTransport(process.stdin, process.stdout, { maxBufferSize });
+  serveStdio(() => createSemctxServer(root), {
+    legacy: "serve",
+    transport,
+    onerror: (error) => {
+      if (error.message !== `ReadBuffer exceeded maximum size of ${maxBufferSize} bytes`) return;
+      process.stderr.write("semctx MCP message exceeds 32 MiB; omit gitDiff to read the diff from Git.\n");
+      // Release an oversized sender blocked on pipe backpressure as the SDK closes the wire.
+      process.stdin.destroy();
+    },
+  });
   // stderr, so it never corrupts the stdio JSON-RPC channel.
   process.stderr.write(
     root === undefined
