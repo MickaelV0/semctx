@@ -8,6 +8,7 @@ import {
   parseTaskDocument,
   defaultTaskExtractor,
   extractionContext,
+  fetchProviderCandidates,
   fetchCandidatesFromProvider,
   validateProviderCandidate,
   type PriorityContext,
@@ -289,5 +290,31 @@ describe("atomic provider attestation", () => {
       sourceRepositorySealHash: sourceSeal,
       capturedAt: NOW,
     })).toEqual(raw);
+  });
+});
+
+describe("optional provider failures", () => {
+  it("does not convert a failure from an observed available provider into an empty result", async () => {
+    const originalSpawnSync = Bun.spawnSync;
+    Bun.spawnSync = ((argv: string[], _options?: Parameters<typeof Bun.spawnSync>[1]) => {
+      if (argv.at(-1) === "version") {
+        return { exitCode: 0, stdout: Buffer.from("0.2.41\n"), stderr: Buffer.alloc(0) };
+      }
+      return { exitCode: 7, stdout: Buffer.alloc(0), stderr: Buffer.from("search failed") };
+    }) as typeof Bun.spawnSync;
+    try {
+      let caught: unknown;
+      try {
+        await fetchProviderCandidates({
+          ...sampleConfig(),
+          semanticProvider: "cocoindex",
+        }, "find code", 2);
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toMatchObject({ code: "PROCESS_FAILURE" });
+    } finally {
+      Bun.spawnSync = originalSpawnSync;
+    }
   });
 });
