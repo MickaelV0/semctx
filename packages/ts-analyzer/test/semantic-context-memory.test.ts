@@ -1,9 +1,9 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import ts from "typescript";
-import { extractionContext, extractTypeScript } from "../src/ts-symbols";
+import { extractionContext, extractTypeScript, extractTypeScriptParallel } from "../src/ts-symbols";
 
 const temporary: string[] = [];
 function fixture(files: Record<string, string>): { root: string; paths: string[] } {
@@ -19,6 +19,35 @@ function fixture(files: Record<string, string>): { root: string; paths: string[]
 }
 afterEach(() => {
   for (const root of temporary.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+test.each([false, true])("repository directory aliases preserve imports and worker facts (reference=%s)", async (reference) => {
+  const { root, paths } = fixture({
+    "src/source.ts": (reference ? "/// <reference path='./shared.d.ts' />\n" : "")
+      + "import { target } from './dependency';\nimport { typed } from 'trusted-tooling';\nexport function run() { target(); typed(); }\n",
+    "src/shared.d.ts": "declare const shared: string;\n",
+    "src/dependency.ts": "export function target() {}\n",
+    "src/independent.ts": "export function independent() {}\n",
+    "node_modules/trusted-tooling/package.json": "{\"name\":\"trusted-tooling\",\"types\":\"index.d.ts\"}\n",
+    "node_modules/trusted-tooling/index.d.ts": "export declare function typed(): string;\n",
+  });
+  const aliasBase = mkdtempSync(join(tmpdir(), "semctx-semantic-alias-"));
+  temporary.push(aliasBase);
+  const aliasRoot = join(aliasBase, "repository");
+  symlinkSync(root, aliasRoot, process.platform === "win32" ? "junction" : "dir");
+  const roots = paths.slice(0, 4);
+  const aliasPaths = roots.map((path) => join(aliasRoot, relative(root, path)));
+  const expected = extractTypeScript(roots, root);
+  expect(expected.modules).toEqual(["src/dependency.ts", "src/source.ts", "src/independent.ts"]);
+  expect(expected.imports.map((item) => item.resolvedRelPath)).toEqual([
+    "src/dependency.ts", "node_modules/trusted-tooling/index.d.ts",
+  ]);
+  expect(extractTypeScript(aliasPaths, aliasRoot)).toEqual(expected);
+  const parallel = await extractTypeScriptParallel(aliasPaths, aliasRoot, 2);
+  expect(parallel.parallelism).toMatchObject(reference
+    ? { used: 1, mode: "preflight-fallback" }
+    : { used: 2, mode: "parallel" });
+  expect(parallel.extraction).toEqual(expected);
 });
 
 test("omits prose JSDoc ASTs while retaining source comments and type-error links", () => {
