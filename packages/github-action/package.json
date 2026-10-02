@@ -7,6 +7,7 @@
   "license": "Apache-2.0",
   "files": [
     "action.yml",
+    "dist",
     "src/adapter.mjs",
     "README.md"
   ]

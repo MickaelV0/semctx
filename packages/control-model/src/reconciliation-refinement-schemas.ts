@@ -39,19 +39,19 @@ export const ReconciliationEvidenceKindV1Schema = z.enum([
   "commit",
 ]);
 
-const Sha256DigestV1Schema = z.object({
+export const ReconciliationSha256DigestV1Schema = z.object({
   algorithm: z.literal("sha256"),
-  value: z.string().regex(/^[0-9a-f]{64}$/),
+  value: z.string().regex(/^[0-9a-f]{64}$/, "expected 64 lowercase sha256 hex characters"),
 }).strict();
 
-const EvidenceRefV1Schema = z.object({
+export const ReconciliationEvidenceRefV1Schema = z.object({
   schemaVersion: z.literal(1),
   kind: ReconciliationEvidenceKindV1Schema,
   locator: z.string().min(1),
-  digest: Sha256DigestV1Schema,
+  digest: ReconciliationSha256DigestV1Schema,
 }).strict();
 
-const RelationEndpointV1Schema = z.discriminatedUnion("plane", [
+export const ReconciliationRelationEndpointV1Schema = z.discriminatedUnion("plane", [
   z.object({
     plane: z.literal("B"),
     kind: z.literal("semantic_node"),
@@ -68,11 +68,11 @@ export const ReconciliationRefinementRelationV1Schema = z.object({
   schemaVersion: z.literal(1),
   id: z.string().min(1),
   kind: ReconciliationRefinementRelationKindV1Schema,
-  source: RelationEndpointV1Schema,
-  target: RelationEndpointV1Schema,
+  source: ReconciliationRelationEndpointV1Schema,
+  target: ReconciliationRelationEndpointV1Schema,
   epistemicStatus: z.enum(ReconciliationEpistemicStatuses),
   provenance: ReconciliationRelationProvenanceV1Schema,
-  evidenceRefs: z.array(EvidenceRefV1Schema).min(1),
+  evidenceRefs: z.array(ReconciliationEvidenceRefV1Schema).min(1),
   relationDigest: Sha256HashSchema.optional(),
 }).strict().superRefine((value, context) => {
   const keys = value.evidenceRefs.map(evidenceKey);
@@ -93,7 +93,7 @@ export const ReconciliationRefinementRelationV1Schema = z.object({
   }
   if (
     value.relationDigest !== undefined
-    && computeRefinementRelationDigest(value as RefinementRelationV1)
+    && computeRefinementRelationDigest(value)
       !== value.relationDigest
   ) {
     context.addIssue({
@@ -102,7 +102,7 @@ export const ReconciliationRefinementRelationV1Schema = z.object({
       message: "relation digest mismatch",
     });
   }
-});
+}) satisfies z.ZodType<RefinementRelationV1>;
 
 function evidenceKey(evidence: EvidenceRefV1): string {
   return `${evidence.kind}\0${evidence.locator}\0${evidence.digest.value}`;

@@ -18,17 +18,25 @@ function withHandoff(content: string): string {
   return root;
 }
 
-describe("readHandoff — malformed files degrade to undefined (never crash resume)", () => {
-  it("rejects a literal null", () => {
-    expect(readHandoff(withHandoff("null"))).toBeUndefined();
+describe("readHandoff — absence and malformed artifacts remain distinct", () => {
+  it("returns undefined only when the handoff is absent", () => {
+    root = mkdtempSync(join(tmpdir(), "semctx-handoff-"));
+    expect(readHandoff(root)).toBeUndefined();
   });
 
-  it("rejects a structurally partial object (older schema, missing array fields)", () => {
-    expect(readHandoff(withHandoff('{"version":1,"createdAt":"2026-01-01"}'))).toBeUndefined();
+  it("rejects a literal null as a partial capsule", () => {
+    expectHandoffError(() => readHandoff(withHandoff("null")), "CAPSULE_INVALID");
   });
 
-  it("rejects invalid JSON", () => {
-    expect(readHandoff(withHandoff("{not json"))).toBeUndefined();
+  it("rejects a structurally partial object with a distinct reason", () => {
+    expectHandoffError(
+      () => readHandoff(withHandoff('{"version":1,"createdAt":"2026-01-01"}')),
+      "CAPSULE_INVALID",
+    );
+  });
+
+  it("rejects invalid JSON with a distinct reason", () => {
+    expectHandoffError(() => readHandoff(withHandoff("{not json")), "INVALID_JSON");
   });
 
   it("accepts a well-formed capsule round-trip", () => {
@@ -36,3 +44,14 @@ describe("readHandoff — malformed files degrade to undefined (never crash resu
     expect(readHandoff(withHandoff(JSON.stringify(capsule)))?.createdAt).toBe("2026-07-05T00:00:00.000Z");
   });
 });
+
+function expectHandoffError(action: () => unknown, reason: string): void {
+  let caught: unknown;
+  try {
+    action();
+  } catch (error) {
+    caught = error;
+  }
+  expect((caught as { code?: string } | undefined)?.code).toBe("CONFIG_INVALID");
+  expect((caught as { details?: { reason?: string } } | undefined)?.details?.reason).toBe(reason);
+}

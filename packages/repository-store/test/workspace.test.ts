@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -10,7 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDefaultConfig, createGlobSelectionConfig } from "@semantic-context/core";
-import { initWorkspace, loadConfig, saveConfig, toDiskConfig } from "../src/workspace";
+import { initWorkspace, loadConfig, openReader, openStore, saveConfig, toDiskConfig } from "../src/workspace";
 
 const roots: string[] = [];
 
@@ -23,6 +24,36 @@ function tempRoot(): string {
   roots.push(root);
   return root;
 }
+
+describe("uninitialized workspace refusal", () => {
+  it("refuses reader and writer opens without creating .semctx", () => {
+    const root = tempRoot();
+
+    for (const open of [openReader, openStore]) {
+      let caught: unknown;
+      try {
+        open(root);
+      } catch (error) {
+        caught = error;
+      }
+      expect((caught as { code?: string } | undefined)?.code).toBe("CONFIG_NOT_FOUND");
+      expect(existsSync(join(root, ".semctx"))).toBe(false);
+    }
+  });
+
+  it("refuses a direct config save without creating .semctx", () => {
+    const root = tempRoot();
+    let caught: unknown;
+    try {
+      saveConfig(root, createDefaultConfig(root));
+    } catch (error) {
+      caught = error;
+    }
+
+    expect((caught as { code?: string } | undefined)?.code).toBe("CONFIG_NOT_FOUND");
+    expect(existsSync(join(root, ".semctx"))).toBe(false);
+  });
+});
 
 describe("config persistence (#82)", () => {
   it("does not write repositoryRoot to config.json", () => {
@@ -40,7 +71,7 @@ describe("config persistence (#82)", () => {
   it("loads policy without repositoryRoot and injects the call root", () => {
     const root = tempRoot();
     const policy = createDefaultConfig(root);
-    saveConfig(root, policy);
+    initWorkspace(root, policy);
     const raw = JSON.parse(readFileSync(join(root, ".semctx", "config.json"), "utf8")) as Record<
       string,
       unknown
@@ -56,7 +87,7 @@ describe("config persistence (#82)", () => {
   it("ignores a legacy absolute repositoryRoot on disk", () => {
     const root = tempRoot();
     const config = createDefaultConfig(root);
-    saveConfig(root, config);
+    initWorkspace(root, config);
     const path = join(root, ".semctx", "config.json");
     const raw = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
     raw.repositoryRoot = "/some/other/machine/path";
@@ -69,7 +100,7 @@ describe("config persistence (#82)", () => {
 
   it("ignores empty-string and relative legacy repositoryRoot values", () => {
     const root = tempRoot();
-    saveConfig(root, createDefaultConfig(root));
+    initWorkspace(root, createDefaultConfig(root));
     const path = join(root, ".semctx", "config.json");
     for (const legacy of ["", "."] as const) {
       const raw = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
@@ -102,7 +133,7 @@ describe("config persistence (#82)", () => {
     expect(policy.selectionMode).toBe("globs-v1");
     expect(policy.languages).toEqual(config.languages);
 
-    saveConfig(root, config);
+    initWorkspace(root, config);
     const onDisk = JSON.parse(
       readFileSync(join(root, ".semctx", "config.json"), "utf8"),
     ) as Record<string, unknown>;

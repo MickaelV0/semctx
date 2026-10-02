@@ -12,7 +12,7 @@ import {
   assertUnlinkedWorkspace,
   dbPath,
   loadConfig,
-  saveConfig,
+  initWorkspace,
   semctxDir as resolveSemctxDir,
 } from "@semantic-context/repository-store";
 import {
@@ -412,7 +412,7 @@ function prepareSetupRepository(
   let configWritten = false;
 
   if (!already) {
-    saveConfig(root, smartConfig(root, polyglot));
+    initWorkspace(root, smartConfig(root, polyglot));
     configWritten = true;
   }
 

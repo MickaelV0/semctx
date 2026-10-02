@@ -26,7 +26,7 @@ import {
   computeTargetArchitecturePayloadHash,
   type TargetArchitectureArtifactV1,
 } from "./target-architecture-artifact";
-export { computeTargetArchitecturePayloadHash } from "./target-architecture-artifact";
+export { computeTargetArchitecturePayloadHash, parseTargetArchitectureArtifact } from "./target-architecture-artifact";
 export type {
   TargetArchitectureArtifactV1,
   TargetArchitectureRevisionRefV1,

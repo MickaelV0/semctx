@@ -12,7 +12,10 @@ import {
 } from "@semantic-context/control-model";
 import {
   deletionAuthorizationQuery,
+  explanationQuery,
+  impactQuery,
   refinementCoverageQuery,
+  traversalQuery,
   transitionAuthorizationQuery,
   type ControlQueryRuntime,
 } from "../src/control-queries";
@@ -234,6 +237,39 @@ describe("shared read-only control queries", () => {
       reasonCodes: ["INDEX_STALE"],
       payload: null,
     });
+  });
+
+  it("derives traversal, impact, and explanation seals from the observed runtime", () => {
+    const current = runtime();
+    for (const result of [
+      traversalQuery(current, { sourceId: hash, targetLevel: 6, direction: "lift" }),
+      impactQuery(current, { sourceIds: ["semantic:missing"] }),
+      explanationQuery(current, { sourceId: "semantic:missing" }),
+    ]) {
+      expect(result.terminalStatus).not.toBe("refused");
+    }
+  });
+
+  it("refuses forged traversal, impact, and explanation seals", () => {
+    const current = runtime();
+    const forged = `sha256:${"f".repeat(64)}` as const;
+    for (const result of [
+      traversalQuery(current, {
+        sourceId: hash,
+        targetLevel: 6,
+        direction: "lift",
+        sourceSeal: forged,
+        indexSeal: forged,
+      }),
+      impactQuery(current, { sourceIds: ["semantic:missing"], sourceSeal: forged, indexSeal: forged }),
+      explanationQuery(current, { sourceId: "semantic:missing", sourceSeal: forged, indexSeal: forged }),
+    ]) {
+      expect(result).toMatchObject({
+        terminalStatus: "refused",
+        reasonCodes: ["INDEX_STALE"],
+        payload: null,
+      });
+    }
   });
 
   it("rejects every attestation when the currently read index is not snapshot-bound", () => {

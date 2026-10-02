@@ -240,8 +240,18 @@ export function captureTrackedWorkingDiff(root: string): Uint8Array {
   const repositoryRoot = canonicalRepositoryRoot(root);
   const head = git(repositoryRoot, ["rev-parse", "--verify", "HEAD"]);
   if (head.code !== 0) {
-    if (findGitWorktreeRoot(repositoryRoot) !== null) return new Uint8Array();
-    if (/not a git repository/i.test(head.stderr)) return new Uint8Array();
+    if (findGitWorktreeRoot(repositoryRoot) === null && /not a git repository/i.test(head.stderr)) {
+      return new Uint8Array();
+    }
+    // An unborn repository has a valid symbolic branch whose ref does not exist yet.
+    // A failed observation or corrupt HEAD is never a clean tracked delta.
+    const symbolic = git(repositoryRoot, ["symbolic-ref", "--quiet", "HEAD"]);
+    if (symbolic.code === 0) {
+      const branch = new TextDecoder().decode(symbolic.stdout).trim();
+      const ref = git(repositoryRoot, ["show-ref", "--verify", "--quiet", branch]);
+      if (ref.code === 1 && ref.stderr.length === 0) return new Uint8Array();
+    }
+    throw new SemctxError("GIT_ERROR", "cannot observe repository HEAD", { stderr: head.stderr });
   }
   const result = git(repositoryRoot, [
     "--no-optional-locks",

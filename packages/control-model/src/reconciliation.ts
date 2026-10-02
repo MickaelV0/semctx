@@ -37,8 +37,13 @@ export {
   ReconciliationEvidenceKindV1Schema,
   ReconciliationRefinementRelationKindV1Schema,
   ReconciliationRefinementRelationV1Schema,
+  ReconciliationRefinementRelationV1Schema as RefinementRelationV1Schema,
   ReconciliationRelationProvenanceV1Schema,
 } from "./reconciliation-refinement-schemas";
+export {
+  ReconciliationCoordinateGraphReportV2Schema as CoordinateGraphReportV2Schema,
+  ReconciliationObservedDiffHunkV1Schema as ObservedDiffHunkV1Schema,
+} from "./reconciliation-observation-schemas";
 export { compareCodeUnits } from "./ordering";
 export {
   canonicalizeReconciliationReasons,
