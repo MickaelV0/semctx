@@ -1,22 +1,19 @@
 {
   "schemaVersion": 1,
   "kind": "semctx-public-evidence-v1",
-  "phase": "release",
-  "generatedAt": "2026-10-02T05:22:36.007Z",
+  "phase": "candidate",
+  "generatedAt": "2026-10-02T11:19:27.837Z",
   "evidenceState": "OBSERVED",
-  "releaseCommit": {
-    "value": "d10dbb9e264fec2393d1a444777702dee84553c4",
-    "authority": "caller-asserted"
-  },
+  "releaseCommit": null,
   "demo": {
     "status": "COMPLETED",
-    "observedAt": "2026-10-02T05:20:09.609Z",
-    "packageVersion": "0.4.0",
-    "runtimeDigest": "sha256:6a07de033b47edff696407e41e68af4b779765851468151e60aa0f4986cf536c",
+    "observedAt": "2026-10-02T11:19:17.217Z",
+    "packageVersion": "0.4.1",
+    "runtimeDigest": "sha256:697e2aa930fe985ca571a38c3d0730fb69700f0898b4399172d01b94d81779d9",
     "fixtureBaseDigest": "sha256:0c127641db744e3655fb139ad4b1c29d337820f31bfa83ae16d5f21a166e8b82",
     "fixtureChangedDigest": "sha256:8070230105396980b0ec842b455c498e6ba026770f230dc61963432c621c8334",
     "fixtureCommit": {
-      "value": "f16e3139a0c8c4229cfbf1150d379bfa19beec83",
+      "value": "8fefa96ebab4d08efb1b9064ea2fc08185143a8d",
       "authority": "caller-asserted"
     },
     "verdict": "WARN",
