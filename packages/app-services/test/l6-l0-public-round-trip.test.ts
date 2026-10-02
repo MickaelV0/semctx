@@ -34,6 +34,12 @@ const DOCUMENT_EVIDENCE = [
     new Uint8Array(readFileSync(join(SOURCE_ROOT, ...locator.split("/")))),
   ),
 }));
+// The disposable fixture binds the source bytes copied for this run. It is not an old
+// execution receipt rebound to current code; the authored repository model stays untouched.
+const TEST_EVIDENCE = {
+  locator: "packages/control-engine/test/l6-l0-refinement-round-trip.test.ts",
+  digest: sha256HashBytes(new Uint8Array(readFileSync(join(SOURCE_ROOT, "packages", "control-engine", "test", "l6-l0-refinement-round-trip.test.ts")))),
+};
 const GOAL = "semantic:goal.semctx.reconstructive-control";
 const HUNK_ID =
   "sha256:0cef0c7583115223271b46cbbe70a91b7f783884c5ef60c840649b51780815bd" as Sha256Hash;
@@ -47,7 +53,7 @@ const LOAD_BEARING_RELATIONS = [
 ];
 const EXPECTED_VERIFIED_EVIDENCE = ([
   HUNK_ID,
-  "sha256:12138c433a48aa3123593b44b01a9de91d9b71c11dee9a107f648741b437049c",
+  TEST_EVIDENCE.digest,
   "sha256:212f92327d1debf6079eba2fcfc0bf6a0ac202427a1516f73bb3413a45e2bbc2",
   "sha256:258e8e1e0efcd327af26a15d3804d975a44868baa030e3058a4314fd1509dcb8",
   "sha256:3b395f70d7f4fd8442befebfa2b55db4bf2c1a202d98bf55074c3e8e2b99dea2",
@@ -90,7 +96,7 @@ beforeEach(() => {
   initWorkspace(root);
   initSemanticScaffold(root);
   for (const relative of TRACKED_INPUTS) copyTrackedInput(relative);
-  refreshDocumentEvidenceDigests();
+  refreshFixtureEvidenceDigests();
   git("add", "-A");
   git("commit", "-q", "-m", "fixture");
   expect(git("status", "--porcelain")).toBe("");
@@ -103,6 +109,18 @@ afterEach(() => {
 }, SETUP_TIMEOUT_MS);
 
 describe("public indexed L6-to-L0 round trip", () => {
+  it("refuses coverage after the copied test source changes without rebinding fixture evidence", () => {
+    const modelPath = join(root, ".semctx", "semantic", "project", "control-plane.sem");
+    const modelBytes = readFileSync(modelPath);
+    expect(queryControlGraph(root).payload?.verifiedEvidenceDigests).toContain(TEST_EVIDENCE.digest);
+    const testPath = join(root, ...TEST_EVIDENCE.locator.split("/"));
+    writeFileSync(testPath, `${readFileSync(testPath, "utf8")}\n// post-index source drift\n`);
+    expect(queryControlRefinementCoverage(root, { sourceId: GOAL, targetLevel: 0, direction: "lower" })).toMatchObject({
+      terminalStatus: "refused", reasonCodes: ["INDEX_STALE"], payload: null,
+    });
+    expect(readFileSync(modelPath)).toEqual(modelBytes);
+  }, SETUP_TIMEOUT_MS);
+
   it(
     "resolves real evidence and round-trips through public graph and coverage services",
     () => {
@@ -287,14 +305,17 @@ function copyTrackedInput(relative: string): void {
   copyFileSync(join(SOURCE_ROOT, ...relative.split("/")), target);
 }
 
-function refreshDocumentEvidenceDigests(): void {
+function refreshFixtureEvidenceDigests(): void {
   const semanticPath = join(root, ".semctx", "semantic", "project", "control-plane.sem");
   let semanticSource = readFileSync(semanticPath, "utf8");
-  for (const { locator, digest } of DOCUMENT_EVIDENCE) {
-    const prefix = `evidenceRef document_span ${locator} `;
-    const pattern = new RegExp(`^${escapeRegExp(prefix)}sha256:[0-9a-f]{64}$`, "m");
+  for (const { kind, locator, digest } of [
+    ...DOCUMENT_EVIDENCE.map((entry) => ({ ...entry, kind: "document_span" })),
+    { ...TEST_EVIDENCE, kind: "test_result" },
+  ]) {
+    const prefix = `evidenceRef ${kind} ${locator} `;
+    const pattern = new RegExp(`^${escapeRegExp(prefix)}sha256:[0-9a-f]{64}$`, "gm");
     if (!pattern.test(semanticSource)) {
-      throw new Error(`missing document evidence reference for ${locator}`);
+      throw new Error(`missing fixture evidence reference for ${locator}`);
     }
     semanticSource = semanticSource.replace(pattern, `${prefix}${digest}`);
   }

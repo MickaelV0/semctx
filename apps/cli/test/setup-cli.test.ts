@@ -13,7 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { createDefaultConfig, createGlobSelectionConfig } from "@semantic-context/core";
-import { loadConfig, saveConfig } from "@semantic-context/repository-store";
+import { loadConfig, initWorkspace } from "@semantic-context/repository-store";
 import { SAMPLE_REPO } from "@semantic-context/test-fixtures";
 import { parseArgs } from "../src/args";
 import { runSetup } from "../src/commands/setup";
@@ -94,7 +94,7 @@ function expectPresetPolyglotRefusalLeavesTreeUnchanged(force: boolean): void {
     force ? "semctx-setup-preset-v1-force-refuse-" : "semctx-setup-preset-v1-refuse-",
   );
   try {
-    saveConfig(presetRoot, createDefaultConfig(presetRoot));
+    initWorkspace(presetRoot, createDefaultConfig(presetRoot));
     const before = snapshotTree(presetRoot);
     const result = captureStdout(() =>
       runSetup(
@@ -321,7 +321,7 @@ describe("semctx setup — one-command bootstrap", () => {
   it("rejects an unknown preset before evaluating an existing polyglot policy", () => {
     const presetRoot = freshPolyglotRepository("semctx-setup-preset-unknown-");
     try {
-      saveConfig(presetRoot, createDefaultConfig(presetRoot));
+      initWorkspace(presetRoot, createDefaultConfig(presetRoot));
       const before = snapshotTree(presetRoot);
 
       expect(() =>
@@ -363,7 +363,7 @@ describe("semctx setup — one-command bootstrap", () => {
       );
 
       const config = createGlobSelectionConfig(disabledRoot);
-      saveConfig(disabledRoot, {
+      initWorkspace(disabledRoot, {
         ...config,
         languages: {
           ...config.languages,
