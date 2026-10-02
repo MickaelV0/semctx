@@ -31,6 +31,15 @@ export interface TraversalBounds {
   indexSeal?: Sha256Hash;
 }
 
+export class ControlQueryRefusedError extends Error {
+  readonly reasonCode = "INDEX_STALE" as const;
+
+  constructor() {
+    super("control query refused: INDEX_STALE (matching sourceSeal and indexSeal are required)");
+    this.name = "ControlQueryRefusedError";
+  }
+}
+
 const DEFAULTS = { maxDepth: 8, maxResults: 100, maxExpansions: 10_000, maxQueue: 1_000 } as const;
 const LIMITS = { maxDepth: 100, maxResults: 10_000, maxExpansions: 100_000, maxQueue: 10_000 } as const;
 const MAX_PATHS_PER_DESTINATION = 2;
@@ -127,6 +136,7 @@ export function impact(
   sourceIds: QualifiedCoordinateId[],
   bounds: TraversalBounds = {},
 ): ImpactReport {
+  requireCurrentSeals(bounds);
   const limits = normalizeBounds(bounds);
   const admissible = graph.structuralEdges.filter((edge) =>
     IMPACT_RELATIONS.has(edge.sourceRelation ?? edge.relation));
@@ -200,6 +210,7 @@ export function explainWhy(
   sourceId: QualifiedCoordinateId,
   bounds: TraversalBounds = {},
 ): ExplanationReport {
+  requireCurrentSeals(bounds);
   const limits = normalizeBounds(bounds);
   const source = graph.nodes.find((node) => node.id === sourceId);
   const base = {
@@ -299,7 +310,7 @@ function traverseToLevel(
     targetLevel,
     compatibilityNormalization: [] as const,
   };
-  if (isStale(bounds)) {
+  if (!hasCurrentSeals(bounds)) {
     return {
       ...base,
       visitedCoordinateIds: [],
@@ -539,10 +550,17 @@ function isCertifyingRelation(
       verified.has(`sha256:${evidence.digest.value}` as Sha256Hash));
 }
 
-function isStale(bounds: TraversalBounds): boolean {
+function hasCurrentSeals(bounds: TraversalBounds): bounds is TraversalBounds & {
+  sourceSeal: Sha256Hash;
+  indexSeal: Sha256Hash;
+} {
   return bounds.sourceSeal !== undefined
     && bounds.indexSeal !== undefined
-    && bounds.sourceSeal !== bounds.indexSeal;
+    && bounds.sourceSeal === bounds.indexSeal;
+}
+
+function requireCurrentSeals(bounds: TraversalBounds): void {
+  if (!hasCurrentSeals(bounds)) throw new ControlQueryRefusedError();
 }
 
 function emptyTraversal(

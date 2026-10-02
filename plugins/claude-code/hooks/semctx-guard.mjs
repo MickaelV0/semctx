@@ -1868,12 +1868,33 @@ export function evaluateGuard({ command, cwd, sessionCwd, env, overriddenEnvKeys
   });
 }
 
+function exitForInvalidHookInput() {
+  const override = guardEnvironmentOverride(process.env);
+  const localGuard = readGuardJson(join(process.cwd(), ".semctx", "guard.json"));
+  const blockingEstablished = override ?? (
+    localGuard.status === "read" && guardEnabled(process.env, localGuard.value)
+  );
+  if (blockingEstablished) {
+    process.stderr.write(
+      "semctx guarded mode: invalid hook input; refusing because blocking is enabled for the exact hook working directory.\n",
+      () => process.exit(2),
+    );
+    return;
+  }
+  process.exit(0);
+}
+
 function main() {
-  let input = {};
+  let input;
   try {
     input = JSON.parse(readFileSync(0, "utf8"));
   } catch {
-    process.exit(0); // no/invalid input → do not block
+    exitForInvalidHookInput();
+    return;
+  }
+  if (input === null || typeof input !== "object" || Array.isArray(input)) {
+    exitForInvalidHookInput();
+    return;
   }
   const toolName = input.tool_name ?? input.toolName;
   if (toolName !== "Bash") process.exit(0);
