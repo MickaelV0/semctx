@@ -253,7 +253,7 @@ describe("semctx setup --dry-run --json", () => {
     expect(result.body).toMatchObject({
       kind: "setup_conflict",
       preset: "github-claude",
-      conflict: { code: "CONFIG_INVALID" },
+      conflict: { code: "IO_ERROR", details: { path: ".claude", reason: "SOURCE_LINK_OUTSIDE_REPOSITORY" } },
     });
     expect(readFileSync(join(outside, "semctx.md"), "utf8")).toBe("outside\n");
     expect(existsSync(join(root, ".github"))).toBe(false);

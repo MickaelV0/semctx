@@ -5,7 +5,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, write
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createDefaultConfig, createGlobSelectionConfig } from "@semantic-context/core";
-import { initWorkspace, saveConfig } from "@semantic-context/repository-store";
+import { initWorkspace } from "@semantic-context/repository-store";
 import { indexRepository } from "@semantic-context/app-services";
 import { SAMPLE_REPO } from "@semantic-context/test-fixtures";
 import packageJson from "../../../apps/cli/package.json";
@@ -238,7 +238,7 @@ describe("packaged MCP runtime", () => {
       git(notReady, "add", ".");
       git(notReady, "-c", "user.name=Semctx Test", "-c", "user.email=semctx@example.test", "commit", "-m", "fixture");
       const base = createGlobSelectionConfig(notReady);
-      saveConfig(notReady, {
+      initWorkspace(notReady, {
         ...base,
         languages: { ...base.languages, python: "off" },
       });
@@ -249,7 +249,7 @@ describe("packaged MCP runtime", () => {
       git(refuse, "init");
       git(refuse, "add", ".");
       git(refuse, "-c", "user.name=Semctx Test", "-c", "user.email=semctx@example.test", "commit", "-m", "fixture");
-      saveConfig(refuse, createDefaultConfig(refuse));
+      initWorkspace(refuse, createDefaultConfig(refuse));
 
       const environment = Object.fromEntries(
         Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),

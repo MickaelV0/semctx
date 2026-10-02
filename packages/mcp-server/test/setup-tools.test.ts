@@ -10,7 +10,7 @@ import {
   configPath,
   isInitialized,
   loadConfig,
-  saveConfig,
+  initWorkspace,
   semctxDir,
 } from "@semantic-context/repository-store";
 import { createSemctxServer } from "../src/server";
@@ -124,7 +124,7 @@ describe("semctx_setup MCP tool", () => {
 
   test("preflight polyglot on existing v1 refuses without writes", () => {
     root = freshRepo();
-    saveConfig(root, createDefaultConfig(root));
+    initWorkspace(root, createDefaultConfig(root));
     const before = loadConfig(root);
     const report = assertKind(
       setupTool(root, { polyglot: true }),
@@ -230,7 +230,7 @@ describe("semctx_setup MCP tool", () => {
 
   test("polyglot on existing v1 config returns setup_refused with guidance", () => {
     root = freshRepo();
-    saveConfig(root, createDefaultConfig(root));
+    initWorkspace(root, createDefaultConfig(root));
     const report = assertKind(
       setupTool(root, { confirm: true, polyglot: true, now: "2026-08-01T12:00:00.000Z" }),
       "setup_refused",
@@ -246,7 +246,7 @@ describe("semctx_setup MCP tool", () => {
     // Deep parity: MCP preflight and confirm paths must both consume app-services
     // evaluatePolyglotSetupPolicy — no second refuse literal in the transport.
     root = freshRepo();
-    saveConfig(root, createDefaultConfig(root));
+    initWorkspace(root, createDefaultConfig(root));
     const preflight = assertKind(
       setupTool(root, { polyglot: true }),
       "setup_refused",
@@ -283,7 +283,7 @@ describe("semctx_setup MCP tool", () => {
     git(root, "add", ".");
     git(root, "commit", "-q", "-m", "fixture");
     const base = createGlobSelectionConfig(root);
-    saveConfig(root, {
+    initWorkspace(root, {
       ...base,
       languages: { ...base.languages, python: "off" },
     });
@@ -518,7 +518,7 @@ describe("semctx_setup MCP tool", () => {
     git(root, "add", ".");
     git(root, "commit", "-q", "-m", "fixture");
     const base = createGlobSelectionConfig(root);
-    saveConfig(root, {
+    initWorkspace(root, {
       ...base,
       languages: { ...base.languages, python: "off" },
     });

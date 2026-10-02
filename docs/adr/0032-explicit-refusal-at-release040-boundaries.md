@@ -17,7 +17,8 @@ retain its existing capability and bound its execution rather than removing it.
 ## Contracts and compatibility
 
 - Reading an uninitialized workspace refuses without creating `.semctx`; explicit initialization
-  retains ownership of creation. Existing confinement remains enforced.
+  retains ownership of creation. `setup` invokes that initialization service explicitly;
+  its dry-run never invokes it. Existing confinement remains enforced.
 - Invalid semantic source is not formatted or overwritten. Corrupt active-change and handoff
   artifacts produce a named error; missing artifacts retain their documented absent state.
 - The Action refuses unusable reports and unknown failure policies with exit 2. An unreadable
