@@ -4,6 +4,7 @@
 
 | Version | Security updates |
 | --- | --- |
+| 0.4.x | Supported |
 | 0.3.x | Supported |
 | 0.2.x | Supported |
 | < 0.2.0 | Not supported; upgrade to the current release before requesting a patch |
@@ -20,6 +21,11 @@ semctx runs locally against repositories that may be untrusted. It:
   (the optional CocoIndex provider) — both with fixed argument lists, never a shell string;
 - stores results in a local SQLite file (`.semctx/semctx.db`) using bound parameters;
 - performs no network I/O in its deterministic core.
+
+TypeScript also reads its standard library and dependencies selected by normal compiler
+resolution. These files provide semantic context without being executed. Repository-authored
+relative imports and reference paths that escape the physical repository root are refused;
+valid directory aliases use that same physical identity.
 
 The opt-in configuration migration command requires a trusted local worktree without concurrent
 outside writers. It checks paths, preserves exact recovery artifacts and detects observed drift;
