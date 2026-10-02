@@ -77,3 +77,62 @@ test("preserves TSX, raw markers, aliases and calls through shared declarations"
     { name: "invoke", path: undefined, target: "invoke" },
   ]);
 });
+
+test("keeps standard libraries and declared package types available to the TypeChecker", () => {
+  const { root, paths } = fixture({
+    "src/source.ts": "import { typed } from 'trusted-tooling';\nexport function run() { return typed() }\n",
+    "node_modules/trusted-tooling/package.json": "{\"name\":\"trusted-tooling\",\"types\":\"index.d.ts\"}\n",
+    "node_modules/trusted-tooling/index.d.ts": "export declare function typed(): string;\n",
+  });
+  const createProgram = extractionContext.createProgram;
+  const programs: ts.Program[] = [];
+  const observe = spyOn(extractionContext, "createProgram").mockImplementation((roots) => {
+    const program = createProgram(roots);
+    programs.push(program);
+    return program;
+  });
+  try {
+    const extraction = extractTypeScript([paths[0]!], root);
+    expect(programs[0]!.getSourceFiles().some((file) => file.fileName.endsWith("lib.es2022.d.ts"))).toBe(true);
+    expect(programs[0]!.getSourceFiles().some((file) => file.fileName.endsWith("trusted-tooling/index.d.ts"))).toBe(true);
+    expect(extraction.imports[0]).toMatchObject({
+      moduleSpecifier: "trusted-tooling",
+      resolvedRelPath: "node_modules/trusted-tooling/index.d.ts",
+    });
+    expect(extraction.calls.find((call) => call.calleeName === "typed")).toMatchObject({
+      calleeSymbolPath: "typed",
+    });
+  } finally {
+    observe.mockRestore();
+  }
+});
+
+test.each([
+  ["relative import", "import { secret } from '../../outside/secret'; export const value = secret;\n"],
+  ["reference path", "/// <reference path='../../outside/secret.d.ts' />\nexport const value = secret;\n"],
+])("refuses a %s outside the repository before TypeScript reads it", (_label, source) => {
+  const base = mkdtempSync(join(tmpdir(), "semctx-semantic-boundary-"));
+  temporary.push(base);
+  const root = join(base, "repository");
+  const outside = join(base, "outside");
+  mkdirSync(join(root, "src"), { recursive: true });
+  mkdirSync(outside, { recursive: true });
+  const sourcePath = join(root, "src", "source.ts");
+  const externalSource = join(outside, "secret.ts");
+  const externalDeclaration = join(outside, "secret.d.ts");
+  writeFileSync(sourcePath, source, "utf8");
+  writeFileSync(externalSource, "export const secret = 'outside';\n", "utf8");
+  writeFileSync(externalDeclaration, "declare const secret: string;\n", "utf8");
+  const readFile = ts.sys.readFile.bind(ts.sys);
+  const externalReads: string[] = [];
+  const observe = spyOn(ts.sys, "readFile").mockImplementation((path, encoding) => {
+    if (path === externalSource || path === externalDeclaration) externalReads.push(path);
+    return readFile(path, encoding);
+  });
+  try {
+    expect(() => extractTypeScript([sourcePath], root)).toThrow(/OUTSIDE_REPOSITORY/);
+    expect(externalReads).toEqual([]);
+  } finally {
+    observe.mockRestore();
+  }
+});

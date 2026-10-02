@@ -13,6 +13,7 @@ import {
   discoverRepository,
   type DiscoveryResult,
 } from "@semantic-context/ts-analyzer";
+import { evaluatePlaneA } from "@semantic-context/plane-a-internal";
 import {
   buildClaims,
   GraphIndex,
@@ -337,12 +338,77 @@ describe("private integrated Plane-A runtime", () => {
       if (entry.selectionDecision === "selected" && entry.analysisOutcome === "analyzed") {
         expect(matchingResults).toHaveLength(1);
         expect(matchingBatches).toHaveLength(1);
+      } else if (entry.selectionDecision === "selected" && entry.analysisOutcome === "failed") {
+        expect(matchingResults).toEqual([expect.objectContaining({ status: "failed" })]);
+        expect(matchingBatches).toHaveLength(0);
       } else {
         expect(matchingResults).toHaveLength(0);
         expect(matchingBatches).toHaveLength(0);
       }
     }
   });
+
+  it.each(["UNSEALED", "DIRTY_KNOWN"] as const)(
+    "binds failed discovery to a failed producer result and refuses evaluation when state is %s",
+    (currentFreshness) => {
+      const root = repository();
+      const config = v2(root);
+      const discovery: DiscoveryResult = {
+        files: [],
+        candidates: [{
+          relPath: "src/unreadable.ts",
+          language: "typescript",
+          selectionDecision: "selected",
+          analysisOutcome: "failed",
+          reason: "READ_FAILED",
+        }],
+      };
+
+      const result = analyzePlaneARuntime(config, discovery);
+      const ledgerEntry = result.discoveryLedger[0]!;
+      const failedResults = result.sidecar.producerResults.filter((producerResult) =>
+        producerResult.scope.selectedPaths[0] === "src/unreadable.ts");
+
+      expect(ledgerEntry).toMatchObject({
+        analysisOutcome: "failed",
+        analysisReasons: ["PRODUCER_FAILED", "READ_FAILED"],
+        selectedProducer: { identity: "@semantic-context/ts-analyzer", version: "0.1.0" },
+      });
+      expect(failedResults).toEqual([expect.objectContaining({
+        status: "failed",
+        producer: ledgerEntry.selectedProducer,
+        scope: ledgerEntry.scope,
+      })]);
+      expect(result.sidecar.factBatches.some((batch) =>
+        batch.scope.selectedPaths[0] === "src/unreadable.ts")).toBe(false);
+
+      const decision = evaluatePlaneA({
+        request: {
+          task: "verify",
+          operation: "change",
+          factKind: "node",
+          requestedScopeDescriptor: "src/unreadable.ts",
+          candidateIdentity: ledgerEntry.candidateIdentity,
+          negativeConclusion: false,
+        },
+        scopeResolution: { status: "exact", scope: ledgerEntry.scope },
+        ledgerEntry,
+        completedResults: result.sidecar.producerResults,
+        factBatches: result.sidecar.factBatches,
+        bindingAttestation: "absent",
+        currentFreshness,
+        capabilityProfiles: result.sidecar.capabilityProfiles,
+        requiredCapability: null,
+        taskRelativeAuthority: { admissible: true },
+      });
+      expect(decision).toMatchObject({
+        outcome: "INSUFFICIENT_ANALYSIS",
+        admissible: false,
+        normalizedAnalysisOutcome: "failed",
+        primaryReason: "PRODUCER_FAILED",
+      });
+    },
+  );
 
   it("retains Python limitations as partial, negative-ineligible capability evidence", () => {
     const root = repository();

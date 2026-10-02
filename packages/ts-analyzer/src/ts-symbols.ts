@@ -1,6 +1,6 @@
 import ts from "typescript";
-import { existsSync, statSync } from "node:fs";
-import { posix, relative, resolve } from "node:path";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { dirname, isAbsolute, posix, relative, resolve } from "node:path";
 import { compareIds, normalizePath, symbolScopePath } from "@semantic-context/core";
 import type { NodeKind } from "@semantic-context/core";
 import { parseMarkers, type ParsedMarker } from "./markers";
@@ -156,7 +156,8 @@ function nameOfCallee(expr: ts.Expression): string | undefined {
   return undefined;
 }
 
-function resolveModule(
+/** Internal resolver shared with discovery confinement; intentionally absent from the package root. */
+export function resolveTypeScriptModule(
   specifier: string,
   containingFile: string,
   resolutionMode?: ts.ResolutionMode,
@@ -187,8 +188,70 @@ function canonicalTypeScriptFileKey(filePath: string): string {
   return ts.sys.useCaseSensitiveFileNames ? normalized : normalized.toLowerCase();
 }
 
+function isContainedTypeScriptPath(repoRoot: string, filePath: string): boolean {
+  const rel = relative(repoRoot, filePath);
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) && !isAbsolute(rel));
+}
+
+function canonicalFilesystemPath(filePath: string): string {
+  try {
+    return realpathSync.native(filePath);
+  } catch {
+    return resolve(filePath);
+  }
+}
+
+/**
+ * Refuse repository-authored relative dependency traversal before TypeScript can read the target.
+ * Bare package imports, configured type packages and the standard library remain delegated to the
+ * normal compiler host so the analyzer keeps the same TypeChecker environment for admitted input.
+ */
+function assertConfinedTypeScriptSources(rootAbsPaths: readonly string[], repoRoot: string): void {
+  const canonicalRoot = canonicalFilesystemPath(repoRoot);
+  const pending = [...rootAbsPaths];
+  const visited = new Set<string>();
+  while (pending.length > 0) {
+    const path = pending.pop()!;
+    const canonical = canonicalFilesystemPath(path);
+    if (!isContainedTypeScriptPath(canonicalRoot, canonical)) {
+      throw new Error(`SOURCE_LINK_OUTSIDE_REPOSITORY: ${normalizePath(relative(repoRoot, path))}`);
+    }
+    const key = canonicalTypeScriptFileKey(canonical);
+    if (visited.has(key)) continue;
+    visited.add(key);
+    const source = readFileSync(path, "utf8");
+    const preprocessed = ts.preProcessFile(source, true, true);
+    for (const imported of preprocessed.importedFiles) {
+      if (!imported.fileName.startsWith(".")) continue;
+      const lexical = resolve(dirname(path), imported.fileName);
+      if (!isContainedTypeScriptPath(canonicalRoot, lexical)) {
+        throw new Error(`IMPORT_OUTSIDE_REPOSITORY: ${imported.fileName}`);
+      }
+      const resolved = resolveTypeScriptModule(imported.fileName, path);
+      if (resolved === undefined) continue;
+      const resolvedCanonical = canonicalFilesystemPath(resolved);
+      if (!isContainedTypeScriptPath(canonicalRoot, resolvedCanonical)) {
+        throw new Error(`IMPORT_OUTSIDE_REPOSITORY: ${imported.fileName}`);
+      }
+      pending.push(resolved);
+    }
+    for (const referenced of preprocessed.referencedFiles) {
+      const lexical = resolve(dirname(path), referenced.fileName);
+      if (!isContainedTypeScriptPath(canonicalRoot, lexical)) {
+        throw new Error(`REFERENCE_OUTSIDE_REPOSITORY: ${referenced.fileName}`);
+      }
+      const referencedCanonical = canonicalFilesystemPath(lexical);
+      if (!isContainedTypeScriptPath(canonicalRoot, referencedCanonical)) {
+        throw new Error(`REFERENCE_OUTSIDE_REPOSITORY: ${referenced.fileName}`);
+      }
+      if (existsSync(lexical)) pending.push(lexical);
+    }
+  }
+}
+
 /** Extract modules, symbols, imports and best-effort resolved calls from source/test files. */
 export function extractTypeScript(rootAbsPaths: string[], repoRoot: string): TsExtraction {
+  assertConfinedTypeScriptSources(rootAbsPaths, repoRoot);
   const program = extractionContext.createProgram(rootAbsPaths);
   const checker = program.getTypeChecker();
   const rootSet = new Set(rootAbsPaths.map((p) => normalizePath(p)));
@@ -290,7 +353,7 @@ export function extractTypeScript(rootAbsPaths: string[], repoRoot: string): TsE
         return;
       } else if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
         const specifier = node.moduleSpecifier.text;
-        const resolvedAbs = resolveModule(specifier, sf.fileName);
+        const resolvedAbs = resolveTypeScriptModule(specifier, sf.fileName);
         const names = importedNames(node);
         imports.push({
           fromRelPath: relPath,
@@ -339,6 +402,7 @@ export async function extractTypeScriptParallel(
   repoRoot: string,
   requested: IndexWorkerSelection = "auto",
 ): Promise<ParallelTsExtraction> {
+  assertConfinedTypeScriptSources(rootAbsPaths, repoRoot);
   const workerLimit = resolveWorkerCount(requested, rootAbsPaths.length);
   if (workerLimit <= 1 || rootAbsPaths.length <= 1) {
     return {
@@ -525,7 +589,7 @@ function rootModuleComponents(
     for (const usage of literalModuleSpecifiers(source)) {
       const resolutionMode = usage.resolutionMode
         ?? program.getModeForUsageLocation(source, usage.literal);
-      const resolved = resolveModule(usage.literal.text, source.fileName, resolutionMode);
+      const resolved = resolveTypeScriptModule(usage.literal.text, source.fileName, resolutionMode);
       if (resolved === undefined) continue;
       const target = canonicalTypeScriptFileKey(resolved);
       if (loadedSources.has(target)) union(from, target);

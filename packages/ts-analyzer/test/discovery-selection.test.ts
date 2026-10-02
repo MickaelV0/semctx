@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { createDefaultConfig, type SemctxConfig } from "@semantic-context/core";
 import {
   discoverFiles,
@@ -199,5 +199,107 @@ describe("versioned source selection", () => {
     expect(() => discoverRepository(globConfig(missing))).toThrow(
       expect.objectContaining({ code: "IO_ERROR" }),
     );
+  });
+
+  it("fails closed when either discovery version cannot enumerate a repository directory", () => {
+    const root = fixture();
+    const original = fs.readdirSync;
+    const probe = spyOn(fs, "readdirSync").mockImplementation(((path, options) => {
+      if (String(path) === join(root, "services")) {
+        throw Object.assign(new Error("directory access denied"), { code: "EACCES" });
+      }
+      return original(path, options as never);
+    }) as typeof fs.readdirSync);
+    try {
+      for (const config of [createDefaultConfig(root), globConfig(root)]) {
+        expect(() => discoverRepository(config)).toThrow(expect.objectContaining({ code: "IO_ERROR" }));
+      }
+    } finally {
+      probe.mockRestore();
+    }
+  });
+
+  it("records unreadable selected files as READ_FAILED instead of silently dropping them", () => {
+    const root = fixture();
+    const unreadable = join(root, "src", "legacy.ts");
+    const original = fs.readFileSync;
+    const probe = spyOn(fs, "readFileSync").mockImplementation(((path, options) => {
+      if (String(path) === unreadable) {
+        throw Object.assign(new Error("file access denied"), { code: "EACCES" });
+      }
+      return original(path, options as never);
+    }) as typeof fs.readFileSync);
+    try {
+      for (const config of [createDefaultConfig(root), globConfig(root)]) {
+        const result = discoverRepository(config);
+        expect(result.files.map((file) => file.relPath)).not.toContain("src/legacy.ts");
+        expect(result.candidates.find((candidate) => candidate.relPath === "src/legacy.ts"))
+          .toMatchObject({
+            selectionDecision: "selected",
+            analysisOutcome: "failed",
+            reason: "READ_FAILED",
+          });
+      }
+    } finally {
+      probe.mockRestore();
+    }
+  });
+
+  it("records relative imports and reference paths escaping the repository as failed", () => {
+    const root = fixture();
+    const outside = join(dirname(root), `${root.split(/[\\/]/).at(-1)}-outside`);
+    roots.push(outside);
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(outside, "imported.ts"), "export const secret = 'outside';\n");
+    writeFileSync(join(outside, "types.d.ts"), "declare const externalType: string;\n");
+    writeFileSync(
+      join(root, "src", "legacy.ts"),
+      "import { secret } from '../../" + outside.split(/[\\/]/).at(-1) + "/imported';\n"
+        + "export const value = secret;\n",
+    );
+    writeFileSync(
+      join(root, "src", "referenced.ts"),
+      "/// <reference path='../../" + outside.split(/[\\/]/).at(-1) + "/types.d.ts' />\n"
+        + "export const value = externalType;\n",
+    );
+
+    for (const config of [
+      createDefaultConfig(root),
+      globConfig(root, { include: ["src/**/*.ts"] }),
+    ]) {
+      const result = discoverRepository(config);
+      expect(result.files.map((file) => file.relPath)).not.toContain("src/legacy.ts");
+      expect(result.files.map((file) => file.relPath)).not.toContain("src/referenced.ts");
+      expect(result.candidates.find((candidate) => candidate.relPath === "src/legacy.ts"))
+        .toMatchObject({ analysisOutcome: "failed", reason: "IMPORT_OUTSIDE_REPOSITORY" });
+      expect(result.candidates.find((candidate) => candidate.relPath === "src/referenced.ts"))
+        .toMatchObject({ analysisOutcome: "failed", reason: "REFERENCE_OUTSIDE_REPOSITORY" });
+    }
+  });
+
+  it("records a source link escaping the repository without reading its target", () => {
+    const root = fixture();
+    const outside = mkdtempSync(join(tmpdir(), "semctx-selection-outside-"));
+    roots.push(outside);
+    writeFileSync(join(outside, "linked.ts"), "export const secret = 'outside';\n");
+    symlinkSync(outside, join(root, "linked-sources"), process.platform === "win32" ? "junction" : "dir");
+    writeFileSync(
+      join(root, "src", "consumer.ts"),
+      "import { secret } from '../linked-sources/linked'; export const value = secret;\n",
+    );
+
+    for (const config of [
+      createDefaultConfig(root),
+      globConfig(root, { include: ["**/*.ts"] }),
+    ]) {
+      const result = discoverRepository(config);
+      expect(result.files.map((file) => file.relPath)).not.toContain("linked-sources/linked.ts");
+      expect(result.files.map((file) => file.relPath)).not.toContain("src/consumer.ts");
+      expect(result.candidates.find((candidate) => candidate.relPath === "linked-sources"))
+        .toMatchObject({ analysisOutcome: "failed", reason: "SOURCE_LINK_OUTSIDE_REPOSITORY" });
+      expect(result.candidates.find((candidate) => candidate.relPath === "src/consumer.ts"))
+        .toMatchObject({ analysisOutcome: "failed", reason: "IMPORT_OUTSIDE_REPOSITORY" });
+      expect(() => countTypeScriptFiles(config)).toThrow(expect.objectContaining({ code: "IO_ERROR" }));
+    }
   });
 });
