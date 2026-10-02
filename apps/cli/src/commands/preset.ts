@@ -27,7 +27,7 @@ interface RunPresetOptions {
 }
 
 const WORKFLOW = `# semctx PR gate: BLOCK fails the check, WARN does not. Read-only, no secrets.
-# Uses the semctx GitHub Action from hoklims/semctx, pinned at v0.4.0.
+# Uses the semctx GitHub Action from hoklims/semctx, pinned at v0.4.1.
 name: Semctx
 
 on:

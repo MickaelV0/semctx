@@ -9,7 +9,7 @@ ${a.bold(e)}
 `),o=r.findIndex((i)=>i.startsWith("    at "));return o===-1?t:[t,...r.slice(o)].join(`
 `)}function v(e){process.stdout.write(`${JSON.stringify(e,null,2)}
 `)}function E(){return new Date().toISOString()}import{existsSync as Tn,lstatSync as ci}from"fs";import{join as Le}from"path";var di=`# semctx PR gate: BLOCK fails the check, WARN does not. Read-only, no secrets.
-# Uses the semctx GitHub Action from hoklims/semctx, pinned at v0.4.0.
+# Uses the semctx GitHub Action from hoklims/semctx, pinned at v0.4.1.
 name: Semctx
 
 on:
