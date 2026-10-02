@@ -1,6 +1,6 @@
 # Semctx roadmap
 
-> Revised 2026-10-02. Source baseline: **v0.4.0** (candidate). Publication and host delivery are gated separately.
+> Revised 2026-10-02. Source baseline: **v0.4.1** (candidate). Publication and host delivery are gated separately.
 > Future versions are outcome targets, not available features or promised dates.
 
 ## Understand the risk of a change before running the checks
@@ -32,7 +32,7 @@ without deciding any proof. The release briefs for [0.3.0](docs/releases/v0.3.0.
 budgets, Mac/lobby performance and independent human outcomes remain open; publication does not
 complete the whole 0.3 roadmap.
 
-Version 0.3.9 remains the current public release. The 0.4.0 candidate tightens refusal boundaries;
+Version 0.4.0 remains the current public release. The 0.4.1 candidate fixes bounded MCP stdio admission;
 it is not public until the release workflow, registry read-back and fresh-host delivery complete.
 
 TypeScript is the semantic baseline. Python support is bounded through Python 3.12; Markdown and

@@ -160,3 +160,22 @@ C into execution authority.
 
 Tasks and HTTP remain honest future work behind explicit upstream, identity, isolation, and
 security gates.
+
+## Accepted corrective transport bound — 0.4.1
+
+The maintainer-approved 0.4.1 correction supplies a finite 32 MiB serialized-message buffer to
+the existing `serveStdio` factory. The SDK's implicit 10 MiB default closed a valid connection
+when a caller provided the reproduced 17,664,355-byte diff. The source of truth is the MCP
+entrypoint's transport construction; both plugin bundles regenerate from that entrypoint.
+
+This widens message admission without changing a tool schema, result version, era negotiation,
+root binding or analysis authority. The JSON envelope and escaped content count toward the
+bound; it is not a total-memory guarantee. Larger inputs close the transport and receive a
+payload-free stderr diagnostic directing callers to omit `gitDiff` and use the existing Git-read
+path. Caller-provided diffs still do not establish Git source identity.
+
+No consumer migration is required for previously admitted messages. Rollback to 0.4.0 restores
+the smaller SDK default, while the Git-read fallback remains available. Runtime process tests
+must cover admitted large messages, follow-up RPC, rejection above the bound, stderr-only
+guidance, and modern/legacy negotiation. Source and cross-host generated-byte parity remain
+required before publication; publication and fresh-session activation are separate evidence.
