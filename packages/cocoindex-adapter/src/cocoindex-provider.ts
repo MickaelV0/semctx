@@ -4,6 +4,22 @@ import type { SemanticCandidate, SemanticCandidateProvider, SemanticSearchInput 
 export interface CocoIndexOptions {
   /** CLI command to invoke (default: "ccc"). */
   command?: string;
+  /** Fixed command arguments before the ccc subcommand, used by wrappers and process fixtures. */
+  commandArgs?: string[];
+  versionTimeoutMs?: number;
+  searchTimeoutMs?: number;
+}
+
+export const CCC_VERSION_TIMEOUT_MS = 2_000;
+export const CCC_SEARCH_TIMEOUT_MS = 15_000;
+
+export type CocoIndexProviderErrorCode = "TIMEOUT" | "PROCESS_FAILURE" | "INVALID_OUTPUT";
+
+export class CocoIndexProviderError extends Error {
+  constructor(readonly code: CocoIndexProviderErrorCode, message: string) {
+    super(message);
+    this.name = "CocoIndexProviderError";
+  }
 }
 
 /**
@@ -17,19 +33,26 @@ export interface CocoIndexOptions {
 export class CocoIndexCandidateProvider implements SemanticCandidateProvider {
   readonly name = "cocoindex";
   private readonly command: string;
+  private readonly commandArgs: string[];
+  private readonly versionTimeoutMs: number;
+  private readonly searchTimeoutMs: number;
 
   constructor(options: CocoIndexOptions = {}) {
     this.command = options.command ?? "ccc";
+    this.commandArgs = [...(options.commandArgs ?? [])];
+    this.versionTimeoutMs = positiveBudget(options.versionTimeoutMs, CCC_VERSION_TIMEOUT_MS);
+    this.searchTimeoutMs = positiveBudget(options.searchTimeoutMs, CCC_SEARCH_TIMEOUT_MS);
   }
 
   async version(): Promise<string | null> {
     try {
-      const proc = Bun.spawnSync([this.command, "--version"], { stdout: "pipe", stderr: "pipe" });
-      if (proc.exitCode !== 0) return null;
-      const stdout = new TextDecoder().decode(proc.stdout).trim();
-      const stderr = new TextDecoder().decode(proc.stderr).trim();
-      const version = stdout.length > 0 ? stdout : stderr;
-      return version.length > 0 ? version.split(/\r?\n/, 1)[0] ?? null : null;
+      const proc = Bun.spawnSync(
+        [this.command, ...this.commandArgs, "version"],
+        { stdout: "pipe", stderr: "pipe", timeout: this.versionTimeoutMs },
+      );
+      if (proc.exitCode !== 0 || proc.exitedDueToTimeout) return null;
+      const version = new TextDecoder().decode(proc.stdout).trim();
+      return /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(version) ? version : null;
     } catch {
       return null;
     }
@@ -43,19 +66,38 @@ export class CocoIndexCandidateProvider implements SemanticCandidateProvider {
     let proc;
     try {
       proc = Bun.spawnSync(
-        [this.command, "search", input.query, "--json", "--limit", String(input.limit)],
-        { cwd: input.repositoryRoot, stdout: "pipe", stderr: "pipe" },
+        [
+          this.command,
+          ...this.commandArgs,
+          "search",
+          "--json",
+          "--limit",
+          String(input.limit),
+          "--",
+          input.query,
+        ],
+        {
+          cwd: input.repositoryRoot,
+          stdout: "pipe",
+          stderr: "pipe",
+          timeout: this.searchTimeoutMs,
+        },
       );
-    } catch {
-      return [];
+    } catch (error) {
+      throw new CocoIndexProviderError("PROCESS_FAILURE", `ccc search could not start: ${String(error)}`);
     }
-    if (proc.exitCode !== 0) return [];
+    if (proc.exitedDueToTimeout) {
+      throw new CocoIndexProviderError("TIMEOUT", `ccc search exceeded ${this.searchTimeoutMs}ms`);
+    }
+    if (proc.exitCode !== 0) {
+      throw new CocoIndexProviderError("PROCESS_FAILURE", `ccc search exited with code ${proc.exitCode}`);
+    }
     return this.parse(new TextDecoder().decode(proc.stdout).trim());
   }
 
   /** Parse raw `ccc` output into candidates. Exposed for testing. */
   parse(text: string): SemanticCandidate[] {
-    if (text.length === 0) return [];
+    if (text.length === 0) throw invalidOutput("ccc search returned empty output");
     let raw: unknown;
     try {
       raw = JSON.parse(text);
@@ -64,10 +106,11 @@ export class CocoIndexCandidateProvider implements SemanticCandidateProvider {
     }
     const rows = Array.isArray(raw)
       ? raw
-      : Array.isArray((raw as { results?: unknown[] }).results)
-        ? ((raw as { results: unknown[] }).results)
-        : [];
-    return rows.map((row) => this.toCandidate(row)).filter((c): c is SemanticCandidate => c !== undefined);
+      : isRecord(raw) && Array.isArray(raw.results)
+        ? raw.results
+        : null;
+    if (rows === null) throw invalidOutput("ccc search returned an unsupported JSON envelope");
+    return rows.map((row) => this.toCandidate(row));
   }
 
   private parseLines(text: string): SemanticCandidate[] {
@@ -77,22 +120,27 @@ export class CocoIndexCandidateProvider implements SemanticCandidateProvider {
       if (trimmed.length === 0) continue;
       try {
         const candidate = this.toCandidate(JSON.parse(trimmed));
-        if (candidate !== undefined) out.push(candidate);
+        out.push(candidate);
       } catch {
-        // skip non-JSON noise
+        throw invalidOutput("ccc search returned malformed NDJSON");
       }
     }
+    if (out.length === 0) throw invalidOutput("ccc search returned no JSON records");
     return out;
   }
 
-  private toCandidate(row: unknown): SemanticCandidate | undefined {
-    if (typeof row !== "object" || row === null) return undefined;
-    const obj = row as Record<string, unknown>;
+  private toCandidate(row: unknown): SemanticCandidate {
+    if (!isRecord(row)) throw invalidOutput("ccc candidate must be an object");
+    const obj = row;
     const filePath = pickString(obj, ["filePath", "file", "path"]);
-    if (filePath === undefined) return undefined;
+    if (filePath === undefined) throw invalidOutput("ccc candidate requires a file path");
+    const score = pickNumber(obj, ["score", "similarity", "relevance"]);
+    if (score !== undefined && (score < 0 || score > 1)) {
+      throw invalidOutput("ccc candidate score must be between 0 and 1");
+    }
     const candidate: SemanticCandidate = {
       filePath: normalizePath(filePath),
-      score: pickNumber(obj, ["score", "similarity", "relevance"]) ?? 0.5,
+      score: score ?? 0.5,
       provider: this.name,
     };
     const symbol = pickString(obj, ["symbolName", "symbol", "name"]);
@@ -100,11 +148,29 @@ export class CocoIndexCandidateProvider implements SemanticCandidateProvider {
     const snippet = pickString(obj, ["snippet", "content", "text"]);
     if (snippet !== undefined) candidate.snippet = snippet;
     const start = pickNumber(obj, ["startLine", "start_line", "start"]);
+    if (start !== undefined && (!Number.isInteger(start) || start < 1)) {
+      throw invalidOutput("ccc candidate start line must be a positive integer");
+    }
     if (start !== undefined) candidate.startLine = start;
     const end = pickNumber(obj, ["endLine", "end_line", "end"]);
+    if (end !== undefined && (!Number.isInteger(end) || end < 1 || (start !== undefined && end < start))) {
+      throw invalidOutput("ccc candidate end line must be a positive integer after start line");
+    }
     if (end !== undefined) candidate.endLine = end;
     return candidate;
   }
+}
+
+function positiveBudget(value: number | undefined, fallback: number): number {
+  return Number.isInteger(value) && value! > 0 ? value! : fallback;
+}
+
+function invalidOutput(message: string): CocoIndexProviderError {
+  return new CocoIndexProviderError("INVALID_OUTPUT", message);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function pickString(obj: Record<string, unknown>, keys: readonly string[]): string | undefined {
