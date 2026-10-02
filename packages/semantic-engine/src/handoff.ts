@@ -7,7 +7,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { compareIds } from "@semantic-context/core";
+import { compareIds, SemctxError } from "@semantic-context/core";
 import { writeFileNoFollow } from "@semantic-context/repository-store";
 import { SemanticIndex, PROVEN_STATUSES, repositoryLinkToRef } from "@semantic-context/semantic-model";
 import type { SemanticModel, ChangeContract } from "@semantic-context/semantic-model";
@@ -130,15 +130,32 @@ function isHandoffCapsule(value: unknown): value is HandoffCapsule {
   return REQUIRED_ARRAYS.every((key) => Array.isArray(v[key]));
 }
 
-/** Read a previously captured handoff capsule, if any. Rejects malformed/partial files (→ undefined). */
+/** Read a previously captured handoff capsule. Absence is optional; malformed content is not. */
 export function readHandoff(root: string): HandoffCapsule | undefined {
   assertUnlinkedSemanticTree(root);
   const path = handoffJsonPath(root);
   if (!existsSync(path)) return undefined;
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
-    return isHandoffCapsule(parsed) ? parsed : undefined;
-  } catch {
-    return undefined;
+    parsed = JSON.parse(readFileSync(path, "utf8"));
+  } catch (cause) {
+    throw new SemctxError("CONFIG_INVALID", "handoff capsule is not valid JSON", {
+      path,
+      reason: "INVALID_JSON",
+      cause: errorEvidence(cause),
+    });
   }
+  if (!isHandoffCapsule(parsed)) {
+    throw new SemctxError("CONFIG_INVALID", "handoff capsule is incomplete", {
+      path,
+      reason: "CAPSULE_INVALID",
+    });
+  }
+  return parsed;
+}
+
+function errorEvidence(error: unknown): { name: string; message: string } {
+  return error instanceof Error
+    ? { name: error.name, message: error.message }
+    : { name: "Error", message: String(error) };
 }

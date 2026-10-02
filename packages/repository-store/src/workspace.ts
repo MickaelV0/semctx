@@ -167,6 +167,9 @@ export function initWorkspace(root: string, overrides?: Partial<SemctxConfig>): 
 
 export function saveConfig(root: string, config: SemctxConfig): void {
   assertUnlinkedWorkspace(root);
+  if (!existsSync(semctxDir(root))) {
+    throw new SemctxError("CONFIG_NOT_FOUND", `repository is not initialized at ${root}`, { root });
+  }
   writeFileNoFollow(root, configPath(root), `${JSON.stringify(toDiskConfig(config), null, 2)}\n`);
 }
 
@@ -193,9 +196,15 @@ export function loadConfig(root: string): SemctxConfig {
   return { ...parsed.data, repositoryRoot: realpathSync.native(resolve(root)) };
 }
 
+function assertInitializedWorkspace(root: string): void {
+  if (!isInitialized(root)) {
+    throw new SemctxError("CONFIG_NOT_FOUND", `repository is not initialized at ${root}`, { root });
+  }
+}
+
 export function openStore(root: string): SqliteRepositoryStore {
   assertUnlinkedWorkspace(root);
-  mkdirSync(semctxDir(root), { recursive: true });
+  assertInitializedWorkspace(root);
   return SqliteRepositoryStore.open(dbPath(root));
 }
 
@@ -206,5 +215,6 @@ export function openStore(root: string): SqliteRepositoryStore {
  */
 export function openReader(root: string): SqliteRepositoryReader {
   assertUnlinkedWorkspace(root);
+  assertInitializedWorkspace(root);
   return SqliteRepositoryReader.openExisting(dbPath(root));
 }

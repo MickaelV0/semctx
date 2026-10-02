@@ -111,6 +111,10 @@ export function checkSemanticModel(args: CheckArgs): CheckReport {
   const danglingReferences = findDanglingReferences(model);
   const linkReport = graphIndexed && facts !== undefined ? resolveRepositoryLinks(model, facts) : undefined;
   const staleLinks = linkReport?.staleLinks ?? [];
+  const unobservableRepositoryLinks = graphIndexed ? 0 : [
+    ...model.nodes.flatMap((node) => node.repositoryLinks),
+    ...model.changes.flatMap((change) => change.repositoryLinks),
+  ].length;
   const anchorFindings = collectAnchorFindings(model, linkReport?.legacyAnchors ?? []);
 
   const diagnosticErrors = diagnostics.filter((d) => d.severity === "error").length;
@@ -124,7 +128,7 @@ export function checkSemanticModel(args: CheckArgs): CheckReport {
   if (duplicateIds.length > 0) reasonSet.add("DUPLICATE_SEMANTIC_ID");
   if (invalidIds.length > 0) reasonSet.add("INVALID_SEMANTIC_ID");
   if (danglingReferences.length > 0) reasonSet.add("DANGLING_SEMANTIC_REFERENCE");
-  if (staleLinks.length > 0) reasonSet.add("STALE_REPOSITORY_LINK");
+  if (staleLinks.length > 0 || unobservableRepositoryLinks > 0) reasonSet.add("STALE_REPOSITORY_LINK");
   for (const finding of anchorFindings) reasonSet.add(finding.code);
   for (const finding of lifecycleFindings) reasonSet.add(finding.code);
   const reasonCodes = [...reasonSet].sort((a, b) => reasonRank(a) - reasonRank(b));
@@ -133,6 +137,7 @@ export function checkSemanticModel(args: CheckArgs): CheckReport {
     + invalidIds.length
     + danglingReferences.length
     + staleLinks.length
+    + unobservableRepositoryLinks
     + lifecycleErrors;
   const ok =
     !hasErrors(diagnostics) &&
@@ -140,6 +145,7 @@ export function checkSemanticModel(args: CheckArgs): CheckReport {
     invalidIds.length === 0 &&
     danglingReferences.length === 0 &&
     staleLinks.length === 0 &&
+    unobservableRepositoryLinks === 0 &&
     lifecycleErrors === 0;
 
   return {

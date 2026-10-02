@@ -58,6 +58,33 @@ function check(model: SemanticModel) {
   });
 }
 
+describe("repository link observability", () => {
+  it("does not report success when required links cannot be observed", () => {
+    const report = checkSemanticModel({
+      model: { nodes: [], changes: [change("change.unobservable", [SYMBOL_REF])] },
+      diagnostics: [],
+      duplicateIds: [],
+      graphIndexed: false,
+    });
+
+    expect(report.ok).toBe(false);
+    expect(report.reasonCodes).toContain("STALE_REPOSITORY_LINK");
+    expect(report.counts.errors).toBeGreaterThan(0);
+  });
+
+  it("keeps a model without repository links valid before indexing", () => {
+    const report = checkSemanticModel({
+      model: { nodes: [node("goal", "goal.local", [])], changes: [] },
+      diagnostics: [],
+      duplicateIds: [],
+      graphIndexed: false,
+    });
+
+    expect(report.ok).toBe(true);
+    expect(report.reasonCodes).toEqual([]);
+  });
+});
+
 describe("durable intent must not anchor on a transient coordinate", () => {
   for (const kind of ["goal", "invariant", "decision"] as const) {
     it(`warns when a ${kind} anchors on sym:`, () => {

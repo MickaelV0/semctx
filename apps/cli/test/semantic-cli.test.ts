@@ -103,6 +103,30 @@ describe("semctx semantic — CLI", () => {
     expect(outcomes.some((o) => o.file.endsWith("assumptions.sem") && o.skipped)).toBe(true);
   });
 
+  it("format --write refuses a partially invalid source without rewriting it", () => {
+    const path = join(root, ".semctx", "semantic", "goals.sem");
+    const before = [
+      `goal ${GOAL}`,
+      "  statement: remains byte-identical",
+      "  status: declared",
+      "  malformed field",
+      "",
+    ].join("\n");
+    writeFileSync(path, before, "utf8");
+    try {
+      let caught: unknown;
+      try {
+        run(runSemantic, ["semantic", "format", "--write"]);
+      } catch (error) {
+        caught = error;
+      }
+      expect((caught as { code?: string } | undefined)?.code).toBe("CONFIG_INVALID");
+      expect(readFileSync(path, "utf8")).toBe(before);
+    } finally {
+      writeFileSync(path, "# restored fixture\n", "utf8");
+    }
+  });
+
   it("returns the canonical lifecycle reason order on a negative path", () => {
     const pointer = activeChangePath(root);
     writeFileSync(pointer, "not a semantic block\n", "utf8");
