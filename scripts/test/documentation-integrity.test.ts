@@ -7,7 +7,7 @@ import { checkDocumentation } from "../documentation-integrity";
 import { renderPagesWorkflow } from "../pages-workflow";
 
 const temporaryDirectories: string[] = [];
-const version = "0.3.9";
+const version = "0.4.0";
 const action = `hoklims/semctx/packages/github-action@v${version}`;
 const toolCount = 38;
 

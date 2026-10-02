@@ -9,6 +9,28 @@ GitHub Release advance together through the tag-driven lockstep workflow documen
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-02
+
+### Changed
+
+- **BREAKING NOTE:** malformed, unreadable, unsafe, stale or unsealed inputs that earlier versions
+  could accept or downgrade to success are now rejected explicitly. Valid historical capsules keep
+  their original formats, and the index-binding recovery admissibility contract is unchanged.
+- Workspace and semantic corruption, unusable GitHub Action verdicts, invalid blocking-hook stdin
+  and control queries without matching freshness seals now produce visible refusal outcomes.
+- Analyzer I/O failures and source-confinement failures remain failed producer outcomes. Admitted
+  TypeScript inputs retain libraries, resolution, types, symbols, JSDoc and cross-file calls.
+- The optional CocoIndex adapter uses the supported `ccc version` and bounded
+  `search --json --limit N -- QUERY` forms. Timeouts, process failures and invalid output stay
+  distinct from a valid empty result; an absent provider remains optional.
+
+### Fixed
+
+- Reconciliation validates committed artifacts through the existing schema and hash contracts.
+  Git capture distinguishes an unborn repository from a failed HEAD observation.
+- Guard and Action annotations no longer let malformed transport data become an advisory success
+  or an unsafe workflow-command property.
+
 ## [0.3.9] - 2026-10-02
 
 ### Fixed
