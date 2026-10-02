@@ -5,9 +5,10 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { checkDocumentation } from "../documentation-integrity";
 import { renderPagesWorkflow } from "../pages-workflow";
+import cliPackage from "../../apps/cli/package.json";
 
 const temporaryDirectories: string[] = [];
-const version = "0.4.0";
+const version = cliPackage.version;
 const action = `hoklims/semctx/packages/github-action@v${version}`;
 const toolCount = 38;
 
