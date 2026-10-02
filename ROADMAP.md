@@ -1,6 +1,6 @@
 # Semctx roadmap
 
-> Revised 2026-10-02. Source baseline: **v0.3.9**. Publication and host delivery are gated separately.
+> Revised 2026-10-02. Source baseline: **v0.4.0** (candidate). Publication and host delivery are gated separately.
 > Future versions are outcome targets, not available features or promised dates.
 
 ## Understand the risk of a change before running the checks
@@ -17,7 +17,7 @@ first useful report.
 The adoption thesis: make one real risk understandable, make the next action easy, and make
 repeated use cheaper than rediscovering the same context. We will measure that thesis.
 
-## Available today
+## Current release line
 
 [v0.3.3](https://github.com/hoklims/semctx/releases/tag/v0.3.3) provides local change-impact
 analysis, explainable PASS/WARN/BLOCK reports, source-bound index health, authored intent and
@@ -31,6 +31,9 @@ without deciding any proof. The release briefs for [0.3.0](docs/releases/v0.3.0.
 [0.3.1](docs/releases/v0.3.1.md) and [0.3.3](docs/releases/v0.3.3.md) state the delivered scope. Incremental indexing, full resource
 budgets, Mac/lobby performance and independent human outcomes remain open; publication does not
 complete the whole 0.3 roadmap.
+
+Version 0.3.9 remains the current public release. The 0.4.0 candidate tightens refusal boundaries;
+it is not public until the release workflow, registry read-back and fresh-host delivery complete.
 
 TypeScript is the semantic baseline. Python support is bounded through Python 3.12; Markdown and
 SQL provide structural facts, not equivalent semantic analysis. Suggested tests are inferred from
@@ -46,10 +49,10 @@ refutes the current impact analyzer nor demonstrates its practical benefit.
 
 | Target | User outcome | Evidence required |
 | --- | --- | --- |
-| **0.1.20 — Reliable first contact** | Install, diagnose and update without contradictory health messages or destructive recovery advice. | Tested compatibility; stale-index diagnosis; configuration preservation; registry availability and delivery proof. |
-| **0.2 — Useful in ten minutes** | Try an example, understand a risk and choose the next check, then repeat on your repository. | Reproducible demo and contributor journey, concise report, frozen replay of thirty public changes with raw results and limits; human studies waived and their outcomes unmeasured. |
-| **0.3 — Indexes you can live with** | Keep useful context across edits, branches and worktrees within a declared resource budget. | Cold/warm/update measurements; supported incremental paths match full rebuilds; drift/crash/recovery tests; matching source, artifact and consumer generations. |
-| **0.4 — Connected, evidence-aware context** | Reuse useful symbol, build, test and retrieval sources with provenance and limits. | Scoped provider conformance, failure cases, native-only comparison and independent replay evidence. Native retrieval remains a conditional research track. |
+| **0.4 — Refuse rather than pass** | Malformed, unreadable, unsafe, stale or unsealed inputs cannot become success. | Focused negative cases, exact-source release gates, independent proof review and public artifact replay. |
+| **0.5 — Know what to verify** | Turn an observed change into bounded, explainable verification obligations without granting execution authority. | Calibrated recommendations, explicit unknowns and comparison with simpler baselines. |
+| **0.6 — Incremental indexes under budget** | Reuse indexes across supported edits and worktrees with declared CPU, memory and freshness budgets. | Incremental/full equivalence, drift and crash recovery, cancellation, generation binding and measured limits. |
+| **0.7 — Sources and provenance** | Combine useful sources while preserving identity, revision, coverage, confidence and authority boundaries. | Provider conformance, failure cases, source seals and independent replay across supported hosts. |
 | **1.0 — A dependable supported contract** | Adopt the proven workflow with predictable compatibility, upgrades and support boundaries. | Support policy, migration/rollback tests, repeated independent use and evidence for every advertised capability. |
 
 Patch releases correct shipped behavior. Minor releases add a coherent capability and disclose
@@ -57,81 +60,34 @@ pre-1.0 breaking changes. Future work cannot be assigned retroactively to a publ
 Product versions, machine schemas and index generations remain distinct. Closed-issue percentages
 are not release-readiness scores.
 
-## 0.1.20: remove reasons to give up
+## 0.4: refuse rather than pass
 
-- Align doctor, index health and control readiness while preserving their different meanings.
-- Publish one tested Bun/host compatibility matrix; reconcile docs and package metadata.
-- Give existing installations configuration-preserving upgrade/recovery instructions.
-- Handle delayed npm availability before plugin-channel promotion, without duplicate publication.
+The 0.4 line makes boundary failures explicit. Corrupt workspace or semantic inputs, unusable
+Action reports, invalid blocking-hook input, unsealed control queries, analyzer I/O failures,
+provider failures and invalid reconciliation artifacts must not be projected as successful work.
+Historical capsules and their schemas remain unchanged; recovery admissibility stays separate.
 
-A supported host minimum is an explicit support decision, distinct from the oldest historically
-compatible binary. Untested versions stay unknown. No new control layer is needed for these fixes.
+## 0.5: know what to verify
 
-## 0.2: make first use and evidence reproducible
+Connect impact to the smallest useful verification obligation. Keep recommendations explainable,
+bounded and advisory until their evidence and authority are explicit. A green recommendation must
+not imply that execution, CI, review, publication or runtime activation occurred.
 
-Provide a public example with a harmless change, a meaningful risk, and an unresolved case. Show
-source, explanation, suggested checks and limits together. Pilot a frozen packaged candidate first
-(or an opt-in prerelease when supported); never move the stable channel for an experiment. After
-publication, regenerate the public demo from the exact release. Record both artifact identities;
-changed behavior requires new measurements. Screenshots alone are not evidence.
+## 0.6: incremental indexes under budget
 
-The first report should make the next action obvious. Detailed contracts and machine output remain
-accessible. Existing configured gates retain their behavior; this roadmap neither disables them
-nor authorizes new automatic blocking.
-
-Distribution starts with the README, a lightweight documentation/demo page, task-focused recipes
-for CLI/Codex/Claude, and release notes explaining a before/after outcome. Collect opt-in feedback
-on confusing or ignored findings. Public case studies require consent and reproducible examples
-or an explicit explanation of unavailable private evidence.
-
-On 2026-09-08 the maintainer explicitly waived external participant studies for this release.
-The proposed five-maintainer trial, two-contributor trial and fourteen-day follow-up are therefore
-not release gates. Adoption, retention, comprehension and human completion time remain
-**NOT_MEASURED**. Automated journeys and technical review do not substitute for human observations.
-
-Evaluate at least thirty real changes across three independent repositories against changed-files-only
-and simple dependency-neighborhood advice. Freeze source pairs, protocol, runner and package before
-replay; retain infrastructure and product failures. Cases without independent ground truth remain
-UNKNOWN and cannot produce accuracy, recall or effort-saving claims. The runner supports later
-adjudicated evaluation, but this release does not claim independent value from unlabelled changes.
-This early impact pilot does not replace P4 or unlock enforcement.
-
-## 0.3: make indexes an understandable capability
-
-An index must be current for the question, affordable to maintain and recoverable. Expose scope,
-freshness, changed inputs, resource cost and the smallest safe recovery action. An updated artifact
-does not prove that a stateful consumer loaded it.
-
-| Need | Direction |
-| --- | --- |
-| Exact text or known path | Keep direct source search available without a persistent index. |
-| Definitions and references | Reuse native language tooling; evaluate portable SCIP artifacts where useful. |
-| Dependencies and architectural neighbors | Bounded structural traversal with provenance. |
-| Intent, invariants and change impact | Semctx's source-bound semantic index and authored declarations, within their scope. |
-| Discovery by meaning | Existing content retrievers remain usable; investigate optional content-first retrieval separately. |
-
-Prioritize memory, safe reuse, update cost and worktree isolation before increasing worker counts.
+Expose scope, freshness, changed inputs, CPU, memory and the smallest safe recovery action.
 Incremental outputs must match supported full rebuilds; unsupported changes fall back visibly.
-A watcher/daemon needs measured benefit, bounded lifetime, cancellation and crash recovery.
-No global background service is required to try Semctx.
+A watcher or daemon requires measured benefit, bounded lifetime, cancellation and crash recovery.
 
-## 0.4: connect tools before replacing them
+## 0.7: sources and provenance
 
-Start with one provider selected from an observed pilot need. Reuse interchange formats and existing
-indexers; avoid building a universal language server, vector database or execution platform.
-Report provider identity, revision, coverage and confidence separately. An attestation establishes
-attribution and integrity, not semantic truth.
+Reuse native language tooling, structural sources and optional retrieval providers without
+collapsing their authority. Report provider identity, revision, coverage and confidence separately;
+an attestation establishes attribution and integrity, not semantic truth. Keep source and LSP
+fallbacks, and retain existing providers until a replacement is independently proven.
 
-Native retrieval follows [ADR 0005](docs/adr/0005-context-retrieval-pipeline-rejected.md) and the
-[content-first protocol](docs/research/content-first-context-retrieval.md): CONTINUE permits only the
-measured capability; NULL RESULT closes the direction without delaying impact/index improvements.
-
-Replacing CCC, Graphify or another persistent provider requires **REPLACEMENT_READY**, first
-claimable in 1.0 or later: 30–50 tasks on three independent repositories, every replaced use case
-measured, supported OS/host parity, generation safety, acceptable total cost, and an independently
-reproduced migration. Inventory actual tools, preview cutover, verify backups/restoration, run both
-paths in shadow, switch atomically and retain rollback through a predefined stability window.
-Keep source/LSP fallbacks. The existing provider stays until its replacement is proven.
+Qualified provider profiles remain capped by HOK-892. They have no assigned product version here;
+qualification requires observed cross-host evidence rather than a roadmap promise.
 
 ## 1.0 and beyond
 
