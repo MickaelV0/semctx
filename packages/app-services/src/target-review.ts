@@ -22,7 +22,6 @@ import {
   type CanonicalProofAttestationV1,
 } from "@semantic-context/control-model";
 import {
-  TargetArchitectureArtifactV1Schema,
   computeTargetArchitecturePayloadHash,
   computeTargetArtifactHash,
   loadTargetArtifact,
@@ -32,6 +31,7 @@ import {
   type TargetArchitectureArtifactV1,
 } from "@semantic-context/semantic-engine";
 import { canonicalRepositoryRoot } from "./freshness";
+import { parseTargetArchitectureArtifact } from "@semantic-context/semantic-engine/reconciliation-read";
 import { loadControlState } from "./control";
 
 export interface ReviewTargetArchitectureCommandV1 {
@@ -295,9 +295,7 @@ function stillSameFile(leftPath: string, rightPath: string): boolean {
 }
 
 function parseArtifact(value: unknown): TargetArchitectureArtifactV1 {
-  const parsed = TargetArchitectureArtifactV1Schema.safeParse(value);
-  if (!parsed.success) throw new SemctxError("CONFIG_INVALID", "target artifact failed schema or hash validation");
-  return parsed.data as TargetArchitectureArtifactV1;
+  return parseTargetArchitectureArtifact(value);
 }
 
 function isFresh(attestation: CanonicalProofAttestationV1, evaluatedAt: string): boolean {

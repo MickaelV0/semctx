@@ -1,6 +1,7 @@
 /** Pure, versioned contract for immutable Plane-B target architecture artifacts. */
 
 import { z } from "zod";
+import { SemctxError } from "@semantic-context/core";
 import {
   Sha256HashSchema,
   compareCodeUnits,
@@ -14,6 +15,14 @@ import {
 const TARGET_ARTIFACT_HASH_DOMAIN = "SEMCTX_TARGET_ARCHITECTURE_ARTIFACT_V1\0";
 const TARGET_ARCHITECTURE_PAYLOAD_HASH_DOMAIN = "SEMCTX_TARGET_ARCHITECTURE_PAYLOAD_V1\0";
 const SAFE_TARGET_ID = /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/;
+
+/** Canonical read-only boundary shared by review and reconciliation. */
+export function parseTargetArchitectureArtifact(value: unknown): TargetArchitectureArtifactV1 {
+  const parsed = TargetArchitectureArtifactV1Schema.safeParse(value);
+  if (!parsed.success) throw new SemctxError("CONFIG_INVALID", "target artifact failed schema or hash validation");
+  // The canonical schema checks the qualified IDs, ranges, ordering and both content hashes.
+  return parsed.data as TargetArchitectureArtifactV1;
+}
 
 export type TargetAuthorshipOriginV1 = "human" | "agent" | "imported";
 export type TargetNormativeStatusV1 = "proposed" | "accepted";
