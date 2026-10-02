@@ -85,7 +85,20 @@ outputs — the action stays read-only by default.
 2. `bun install` in the action's own checkout.
 3. A `node` step resolves `working-directory` to an absolute path; then, from the action checkout,
    `semctx init` + `semctx index --root <that path>` and `verify diff --root <that path> --base …
-   --head … --format json --output <report> --fail-on none` (always exit 0, always writes the
-   report).
+   --head … --format json --output <report> --fail-on none`. A valid report is written without
+   failing on its verdict; invalid inputs and execution errors still fail the CLI step.
 4. `src/adapter.mjs` reads the report, emits annotations + summary, sets outputs, and exits
    non-zero according to `fail-on`. The adapter is the single job-exit-code authority.
+
+The adapter validates the complete canonical report before emitting annotations, summaries or
+outputs. Its exit codes are:
+
+| Code | Meaning |
+| --- | --- |
+| `0` | A valid report is allowed by `fail-on` (`block`, `warn` or `none`). |
+| `1` | A valid report reaches the configured failure threshold. |
+| `2` | The report is unreadable or invalid, its verdict is unusable, or `fail-on` is unknown. |
+
+The standalone CLI uses `3` when a valid verification report reaches its failure threshold.
+The Action deliberately uses `1` for that job failure; invalid reports still fail with `2`,
+including when `fail-on: none` is selected.
