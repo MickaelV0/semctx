@@ -26,7 +26,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0            # merge-base with the base must be available locally
-      - uses: hoklims/semctx/packages/github-action@v0.4.0
+      - uses: hoklims/semctx/packages/github-action@v0.4.1
         with:
           base: ${{ github.event.pull_request.base.sha }}
           head: ${{ github.sha }}
