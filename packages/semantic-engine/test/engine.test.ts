@@ -1,5 +1,6 @@
 import { describe, it, expect } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RepositoryGraph, VerifyReport, VerifyReportFinding, SemanticPolicyConfig } from "@semantic-context/core";
 import type { SemanticModel, ChangeContract } from "@semantic-context/semantic-model";
@@ -14,6 +15,10 @@ import {
   buildHandoffCapsule,
   computeGitignore,
   DEFAULT_SEMANTIC_POLICY,
+  activeChangePath,
+  formatSemanticFiles,
+  loadActiveChange,
+  semanticDir,
   type RepositoryFacts,
 } from "../src/index";
 
@@ -165,6 +170,62 @@ describe("handoff capsule", () => {
     expect(capsule.pendingProofs).toEqual(["proof.p"]);
     expect(capsule.openUnknowns).toEqual(["unknown.race"]);
     expect(capsule.nextValidations.length).toBeGreaterThan(0);
+  });
+});
+
+describe("semantic artifact refusal", () => {
+  it("does not rewrite a partially parsed .sem file", () => {
+    const root = mkdtempSync(join(tmpdir(), "semctx-format-refusal-"));
+    const file = join(semanticDir(root), "goals.sem");
+    const validFile = join(semanticDir(root), "assumptions.sem");
+    mkdirSync(semanticDir(root), { recursive: true });
+    const validSource = [
+      "# formatting would remove this comment",
+      "assumption assumption.kept",
+      "  statement: preserved with the invalid sibling",
+      "  status: declared",
+      "",
+    ].join("\n");
+    const source = [
+      "goal goal.kept",
+      "  statement: preserved source",
+      "  status: declared",
+      "  malformed field",
+      "",
+    ].join("\n");
+    writeFileSync(validFile, validSource, "utf8");
+    writeFileSync(file, source, "utf8");
+    try {
+      let caught: unknown;
+      try {
+        formatSemanticFiles(root, true);
+      } catch (error) {
+        caught = error;
+      }
+      expect((caught as { code?: string } | undefined)?.code).toBe("CONFIG_INVALID");
+      expect(readFileSync(validFile, "utf8")).toBe(validSource);
+      expect(readFileSync(file, "utf8")).toBe(source);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("raises a named error for a corrupt active-change pointer", () => {
+    const root = mkdtempSync(join(tmpdir(), "semctx-active-refusal-"));
+    mkdirSync(join(root, ".semctx", "working"), { recursive: true });
+    writeFileSync(activeChangePath(root), "not a semantic block\n", "utf8");
+    try {
+      let caught: unknown;
+      try {
+        loadActiveChange(root);
+      } catch (error) {
+        caught = error;
+      }
+      expect((caught as { code?: string } | undefined)?.code).toBe("CONFIG_INVALID");
+      expect((caught as { details?: { state?: string } } | undefined)?.details?.state).toBe("invalid");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

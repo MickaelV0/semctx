@@ -3,9 +3,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { execFileSync } from "node:child_process";
-import {
-  sha256HashUtf8,
-} from "@semantic-context/control-model";
+import { SemctxError } from "@semantic-context/core";
+import { sha256HashUtf8 } from "@semantic-context/control-model";
 import {
   computeTargetArchitecturePayloadHash,
   computeTargetArtifactHash,
@@ -131,7 +130,13 @@ describe("immutable target architecture artifacts", () => {
       writeFileSync(path, "attacker-owned\n", "utf8");
     });
 
-    expect(() => createTargetProposal(root, proposalInput())).toThrow("failed to create immutable target artifact");
+    let caught: unknown;
+    try {
+      createTargetProposal(root, proposalInput());
+    } catch (error) {
+      caught = error;
+    }
+    expect((caught as { code?: string } | undefined)?.code).toBe("CONTROL_INPUTS_UNSAFE");
     const path = targetArtifactPath(root, "target.checkout", 1);
     expect(readFileSync(path, "utf8")).toBe("attacker-owned\n");
   });
@@ -142,8 +147,34 @@ describe("immutable target architecture artifacts", () => {
       if (stage === "before_post_write_validation") writeFileSync(path, "{invalid", "utf8");
     });
 
-    expect(() => createTargetProposal(root, proposalInput())).toThrow("failed to create immutable target artifact");
+    let caught: unknown;
+    try {
+      createTargetProposal(root, proposalInput());
+    } catch (error) {
+      caught = error;
+    }
+    expect((caught as { code?: string } | undefined)?.code).toBe("CONFIG_INVALID");
     expect(existsSync(targetArtifactPath(root, "target.checkout", 1))).toBe(false);
+  });
+
+  it("preserves classified target failures and their structured cause", () => {
+    for (const code of ["CONTROL_INPUTS_UNSAFE", "CONFIG_INVALID"] as const) {
+      const root = newRoot();
+      setTargetArtifactWriteTestHookForTesting((stage) => {
+        if (stage === "before_temp_open") {
+          throw new SemctxError(code, "classified target refusal", { boundary: "target-artifact" });
+        }
+      });
+
+      let caught: unknown;
+      try {
+        createTargetProposal(root, proposalInput());
+      } catch (error) {
+        caught = error;
+      }
+      expect((caught as { code?: string } | undefined)?.code).toBe(code);
+      expect((caught as { details?: { cause?: { code?: string } } } | undefined)?.details?.cause?.code).toBe(code);
+    }
   });
 
   it("refuses path identity drift, tampered hashes and duplicate-equivalent revision names", () => {
