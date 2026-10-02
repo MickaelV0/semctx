@@ -194,10 +194,19 @@ function isContainedTypeScriptPath(repoRoot: string, filePath: string): boolean 
 }
 
 function canonicalFilesystemPath(filePath: string): string {
-  try {
-    return realpathSync.native(filePath);
-  } catch {
-    return resolve(filePath);
+  const absolute = resolve(filePath);
+  let ancestor = absolute;
+  for (;;) {
+    try {
+      // Extensionless imports may not exist yet; their existing parent still resolves aliases.
+      return resolve(realpathSync.native(ancestor), relative(ancestor, absolute));
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
+      const parent = dirname(ancestor);
+      if (parent === ancestor) throw error;
+      ancestor = parent;
+    }
   }
 }
 
@@ -224,7 +233,7 @@ function assertConfinedTypeScriptSources(rootAbsPaths: readonly string[], repoRo
     for (const imported of preprocessed.importedFiles) {
       if (!imported.fileName.startsWith(".")) continue;
       const lexical = resolve(dirname(path), imported.fileName);
-      if (!isContainedTypeScriptPath(canonicalRoot, lexical)) {
+      if (!isContainedTypeScriptPath(canonicalRoot, canonicalFilesystemPath(lexical))) {
         throw new Error(`IMPORT_OUTSIDE_REPOSITORY: ${imported.fileName}`);
       }
       const resolved = resolveTypeScriptModule(imported.fileName, path);
@@ -237,7 +246,7 @@ function assertConfinedTypeScriptSources(rootAbsPaths: readonly string[], repoRo
     }
     for (const referenced of preprocessed.referencedFiles) {
       const lexical = resolve(dirname(path), referenced.fileName);
-      if (!isContainedTypeScriptPath(canonicalRoot, lexical)) {
+      if (!isContainedTypeScriptPath(canonicalRoot, canonicalFilesystemPath(lexical))) {
         throw new Error(`REFERENCE_OUTSIDE_REPOSITORY: ${referenced.fileName}`);
       }
       const referencedCanonical = canonicalFilesystemPath(lexical);
@@ -254,18 +263,19 @@ export function extractTypeScript(rootAbsPaths: string[], repoRoot: string): TsE
   assertConfinedTypeScriptSources(rootAbsPaths, repoRoot);
   const program = extractionContext.createProgram(rootAbsPaths);
   const checker = program.getTypeChecker();
-  const rootSet = new Set(rootAbsPaths.map((p) => normalizePath(p)));
+  const rootSet = new Set(rootAbsPaths.map(canonicalTypeScriptFileKey));
 
   const modules: string[] = [];
   const symbols: ExtractedSymbol[] = [];
   const imports: ExtractedImport[] = [];
   const calls: ExtractedCall[] = [];
 
-  const relOf = (abs: string): string => normalizePath(relative(repoRoot, abs));
+  const canonicalRoot = canonicalFilesystemPath(repoRoot);
+  const relOf = (abs: string): string => normalizePath(relative(canonicalRoot, canonicalFilesystemPath(abs)));
 
   for (const sf of program.getSourceFiles()) {
     if (sf.isDeclarationFile) continue;
-    if (!rootSet.has(normalizePath(sf.fileName))) continue;
+    if (!rootSet.has(canonicalTypeScriptFileKey(sf.fileName))) continue;
     const relPath = relOf(sf.fileName);
     modules.push(relPath);
 
