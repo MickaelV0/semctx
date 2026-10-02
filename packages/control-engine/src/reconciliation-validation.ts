@@ -1,4 +1,3 @@
-import { z } from "zod";
 import {
   CoordinateGraphReportV2Schema,
   ObservedDiffHunkV1Schema,
@@ -48,7 +47,9 @@ export function parseRefinementRelationV1(value: unknown): RefinementRelationV1 
   return RefinementRelationV1Schema.parse(value);
 }
 
-function formatIssues(error: z.ZodError): string {
+type CoordinateGraphParseFailure = Extract<ReturnType<typeof CoordinateGraphReportV2Schema.safeParse>, { success: false }>;
+
+function formatIssues(error: CoordinateGraphParseFailure["error"]): string {
   return error.issues
     .map((issue) => `${issue.path.length > 0 ? `${issue.path.join(".")}: ` : ""}${issue.message}`)
     .join("; ");
