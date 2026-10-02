@@ -7,8 +7,6 @@ import {
   ControlFreshnessReasonSchema,
   ControlFreshnessVerdictSchema,
   CoordinateCategorySchema,
-  CoordinateEdgeSchema,
-  DanglingSemanticReferenceSchema,
   EpistemicStatusSchema,
   ExplanationReportSchema,
   ImpactReportSchema,
@@ -20,34 +18,50 @@ import {
   RiskLevelSchema,
   SemanticLevelSchema,
   Sha256HashSchema,
-  SourceKindLevelMappingSchema,
-  StaleRepositoryLinkSchema,
-  UnsupportedCoordinateSourceSchema,
-  UnmappedCoordinateSourceSchema,
 } from "./schemas";
 import {
   computeCanonicalProofAttestationDigest,
   computeAttestationSetHash,
   computeControlFreshnessSealV2Hash,
-  computeRefinementRelationDigest,
-  createObservedDiffHunkV1,
 } from "./hashing";
 import { compareCodeUnits } from "./ordering";
 import type {
   CanonicalProofAttestationV1,
   ControlFreshnessSealV2,
-  EvidenceRefV1,
-  RefinementRelationV1,
 } from "./refinement";
+import {
+  ReconciliationEvidenceKindV1Schema as EvidenceKindV1Schema,
+  ReconciliationEvidenceRefV1Schema as EvidenceRefV1Schema,
+  ReconciliationRefinementRelationKindV1Schema as RefinementRelationKindV1Schema,
+  ReconciliationRefinementRelationV1Schema as RefinementRelationV1Schema,
+  ReconciliationRelationEndpointV1Schema as RelationEndpointV1Schema,
+  ReconciliationRelationProvenanceV1Schema as RelationProvenanceV1Schema,
+  ReconciliationSha256DigestV1Schema as Sha256DigestV1Schema,
+} from "./reconciliation-refinement-schemas";
+import {
+  ReconciliationCompatibilityNormalizationNoteV1Schema as CompatibilityNormalizationNoteV1Schema,
+  ReconciliationCoordinateGraphReportV2Schema as CoordinateGraphReportV2Schema,
+  ReconciliationCoordinateNodeV2Schema as CoordinateNodeV2Schema,
+  ReconciliationLevelCoverageV2Schema as LevelCoverageV2Schema,
+  ReconciliationObservedDiffHunkV1Schema as ObservedDiffHunkV1Schema,
+  ReconciliationObservedDiffRangeV1Schema as ObservedDiffRangeV1Schema,
+} from "./reconciliation-observation-schemas";
 
-export const RelationProvenanceV1Schema = z.enum(["author", "agent", "derived"]);
-export const RefinementRelationKindV1Schema = z.enum([
-  "decomposes_to",
-  "realizes",
-  "implements",
-  "constrained_by",
-  "proved_by",
-]);
+export {
+  EvidenceKindV1Schema,
+  EvidenceRefV1Schema,
+  RefinementRelationKindV1Schema,
+  RefinementRelationV1Schema,
+  RelationEndpointV1Schema,
+  RelationProvenanceV1Schema,
+  Sha256DigestV1Schema,
+  CompatibilityNormalizationNoteV1Schema,
+  CoordinateGraphReportV2Schema,
+  CoordinateNodeV2Schema,
+  LevelCoverageV2Schema,
+  ObservedDiffHunkV1Schema,
+  ObservedDiffRangeV1Schema,
+};
 
 export const AuthoredSemanticNodeV1Schema = z.object({
   schemaVersion: z.literal(1),
@@ -58,95 +72,6 @@ export const AuthoredSemanticNodeV1Schema = z.object({
   label: z.string(),
   epistemicStatus: EpistemicStatusSchema,
 }).strict();
-
-export const Sha256DigestV1Schema = z.object({
-  algorithm: z.literal("sha256"),
-  value: z.string().regex(/^[0-9a-f]{64}$/, "expected 64 lowercase sha256 hex characters"),
-}).strict();
-
-export const EvidenceKindV1Schema = z.enum([
-  "semantic_node",
-  "observed_diff_hunk",
-  "document_span",
-  "test_result",
-  "commit",
-]);
-
-export const EvidenceRefV1Schema = z.object({
-  schemaVersion: z.literal(1),
-  kind: EvidenceKindV1Schema,
-  locator: z.string().min(1),
-  digest: Sha256DigestV1Schema,
-}).strict();
-
-export const RelationEndpointV1Schema = z.discriminatedUnion("plane", [
-  z.object({
-    plane: z.literal("B"),
-    kind: z.literal("semantic_node"),
-    nodeId: z.string().min(1),
-  }).strict(),
-  z.object({
-    plane: z.literal("A"),
-    kind: z.literal("observed_diff_hunk"),
-    coordinateDigest: Sha256HashSchema,
-  }).strict(),
-]);
-
-export const RefinementRelationV1Schema = z.object({
-  schemaVersion: z.literal(1),
-  id: z.string().min(1),
-  kind: RefinementRelationKindV1Schema,
-  source: RelationEndpointV1Schema,
-  target: RelationEndpointV1Schema,
-  epistemicStatus: EpistemicStatusSchema,
-  provenance: RelationProvenanceV1Schema,
-  evidenceRefs: z.array(EvidenceRefV1Schema).min(1),
-  relationDigest: Sha256HashSchema.optional(),
-}).strict().superRefine((value, context) => {
-  validateCanonicalEvidence(value.evidenceRefs, context, ["evidenceRefs"]);
-  if (
-    value.relationDigest !== undefined
-    && computeRefinementRelationDigest(value as RefinementRelationV1) !== value.relationDigest
-  ) {
-    context.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["relationDigest"],
-      message: "relation digest mismatch",
-    });
-  }
-});
-
-export const ObservedDiffRangeV1Schema = z.object({
-  start: z.number().int().min(0).max(0xffff_ffff),
-  lines: z.number().int().min(0).max(0xffff_ffff),
-}).strict();
-
-export const ObservedDiffHunkV1Schema = z.object({
-  schemaVersion: z.literal(1),
-  repositoryIdentity: z.string().min(1),
-  normalizedPath: z.string().min(1),
-  oldRange: ObservedDiffRangeV1Schema,
-  newRange: ObservedDiffRangeV1Schema,
-  oldBlobId: z.string().regex(/^[\x20-\x7e]*$/).nullable(),
-  newBlobId: z.string().regex(/^[\x20-\x7e]*$/).nullable(),
-  rawHunkBytes: z.instanceof(Uint8Array),
-  identity: Sha256HashSchema,
-}).strict().superRefine((value, context) => {
-  try {
-    const canonical = createObservedDiffHunkV1(value);
-    if (canonical.identity !== value.identity) {
-      context.addIssue({ code: z.ZodIssueCode.custom, path: ["identity"], message: "observed hunk identity mismatch" });
-    }
-    if (canonical.normalizedPath !== value.normalizedPath) {
-      context.addIssue({ code: z.ZodIssueCode.custom, path: ["normalizedPath"], message: "path is not canonical" });
-    }
-  } catch (error) {
-    context.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: error instanceof Error ? error.message : "invalid observed hunk",
-    });
-  }
-});
 
 export const ObservedDiffHunkTransportV1Schema = z.object({
   schemaVersion: z.literal(1),
@@ -162,64 +87,6 @@ export const ObservedDiffHunkTransportV1Schema = z.object({
   }).strict(),
   identity: Sha256HashSchema,
 }).strict();
-
-export const CoordinateNodeV2Schema = z.object({
-  id: z.union([QualifiedCoordinateIdSchema, Sha256HashSchema]),
-  plane: z.enum(["repo", "semantic", "observed"]),
-  sourceId: z.string().min(1),
-  sourceKind: z.string().min(1),
-  appliesAtLevel: SemanticLevelSchema.nullable(),
-  category: CoordinateCategorySchema.nullable(),
-  label: z.string(),
-  epistemicStatus: EpistemicStatusSchema,
-  references: z.array(z.string()),
-  metadata: z.record(z.string()).optional(),
-}).strict().superRefine((value, context) => {
-  if (value.plane === "observed" && !value.id.startsWith("sha256:")) {
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ["id"], message: "observed coordinates require a sha256 identity" });
-  }
-  if (value.plane !== "observed" && !value.id.startsWith(`${value.plane}:`)) {
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ["id"], message: "coordinate id must match its plane" });
-  }
-  if ((value.appliesAtLevel === null) !== (value.category === null)) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: "level and category must both be explicit or both be absent" });
-  }
-});
-
-export const LevelCoverageV2Schema = z.object({
-  level: SemanticLevelSchema,
-  categories: z.array(CoordinateCategorySchema),
-  coordinateIds: z.array(z.union([QualifiedCoordinateIdSchema, Sha256HashSchema])),
-}).strict().superRefine((value, context) => {
-  validateSortedUnique(value.categories, String, context, ["categories"]);
-  validateSortedUnique(value.coordinateIds, String, context, ["coordinateIds"]);
-});
-
-export const CompatibilityNormalizationNoteV1Schema = z.object({
-  schemaVersion: z.literal(1),
-  sourceSchemaVersion: z.literal(1),
-  targetSchemaVersion: z.literal(2),
-  notes: z.array(z.string().min(1)).min(1),
-}).strict();
-
-export const CoordinateGraphReportV2Schema = z.object({
-  schemaVersion: z.literal(2),
-  nodes: z.array(CoordinateNodeV2Schema),
-  structuralEdges: z.array(CoordinateEdgeSchema),
-  refinementRelations: z.array(RefinementRelationV1Schema),
-  verifiedEvidenceDigests: z.array(Sha256HashSchema),
-  mapping: z.array(SourceKindLevelMappingSchema),
-  coverage: z.array(LevelCoverageV2Schema),
-  unsupported: z.array(UnsupportedCoordinateSourceSchema),
-  unmapped: z.array(UnmappedCoordinateSourceSchema),
-  staleLinks: z.array(StaleRepositoryLinkSchema),
-  danglingReferences: z.array(DanglingSemanticReferenceSchema),
-  compatibilityNormalization: z.array(CompatibilityNormalizationNoteV1Schema),
-}).strict().superRefine((value, context) => {
-  validateSortedUnique(value.nodes, (item) => item.id, context, ["nodes"]);
-  validateSortedUnique(value.refinementRelations, (item) => item.id, context, ["refinementRelations"]);
-  validateSortedUnique(value.verifiedEvidenceDigests, String, context, ["verifiedEvidenceDigests"]);
-});
 
 export const ControlReasonCodeV1Schema = z.enum([
   "COORDINATE_UNKNOWN",
@@ -513,18 +380,8 @@ export const ControlQueryEnvelopeV1Schema = z.union([
   envelope("authorize_deletion", DeletionAuthorizationReportV2Schema),
 ]);
 
-function evidenceKey(evidence: EvidenceRefV1): string {
-  return `${evidence.kind}\0${evidence.locator}\0${evidence.digest.value}`;
-}
 function proofReferenceKey(reference: { kind: string; uri: string; nonLlm: boolean }): string {
   return `${reference.kind}\0${reference.uri}\0${reference.nonLlm ? "1" : "0"}`;
-}
-function validateCanonicalEvidence(
-  evidence: readonly EvidenceRefV1[],
-  context: z.RefinementCtx,
-  path: (string | number)[],
-): void {
-  validateSortedUnique(evidence, evidenceKey, context, path);
 }
 function validateSortedUnique<T>(
   values: readonly T[],
