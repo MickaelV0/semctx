@@ -56,6 +56,55 @@ const bashCanRunBun =
     }
   })();
 
+const GUARD_SCRIPT = join(import.meta.dir, "..", "hooks", "semctx-guard.mjs");
+
+function runGuardProcess(
+  cwd: string,
+  stdin: string,
+  env: Record<string, string | undefined> = {},
+): { code: number; stderr: string } {
+  const child = spawnSync("node", [GUARD_SCRIPT], {
+    cwd,
+    input: stdin,
+    encoding: "utf8",
+    env: { ...process.env, ...env },
+  });
+  return { code: child.status ?? 1, stderr: child.stderr };
+}
+
+describe("guard process input boundary", () => {
+  it("refuses empty, invalid, and truncated stdin when blocking is forced", () => {
+    for (const input of ["", "not json", '{"tool_name":"Bash"', "null", "[]", "1"]) {
+      const result = runGuardProcess(process.cwd(), input, { SEMCTX_GUARD: "on" });
+      expect(result.code).toBe(2);
+      expect(result.stderr).toContain("semctx guarded mode: invalid hook input");
+    }
+  });
+
+  it("keeps invalid stdin advisory when blocking is not established", () => {
+    const root = mkdtempSync(join(tmpdir(), "semctx-guard-input-advisory-"));
+    try {
+      expect(runGuardProcess(root, "not json", { SEMCTX_GUARD: undefined })).toEqual({ code: 0, stderr: "" });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("uses only the exact process cwd guard declaration for invalid stdin", () => {
+    const root = mkdtempSync(join(tmpdir(), "semctx-guard-input-root-"));
+    const nested = join(root, "nested");
+    mkdirSync(join(root, ".semctx"), { recursive: true });
+    mkdirSync(nested);
+    writeFileSync(join(root, ".semctx", "guard.json"), JSON.stringify({ enabled: true }));
+    try {
+      expect(runGuardProcess(root, "", { SEMCTX_GUARD: undefined }).code).toBe(2);
+      expect(runGuardProcess(nested, "", { SEMCTX_GUARD: undefined })).toEqual({ code: 0, stderr: "" });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("isTerminalGitCommand — structural detection (no shell eval)", () => {
   it("detects commit and push, including global options and env assignments", () => {
     expect(isTerminalGitCommand("git commit -m 'x'")).toBe("commit");

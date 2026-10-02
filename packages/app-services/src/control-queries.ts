@@ -107,9 +107,12 @@ export function traversalQuery(
 ): Envelope<"traversal"> {
   const refused = freshnessRefusal(runtime, "traversal");
   if (refused !== null) return refused;
-  const report = query.direction === "lift"
-    ? lift(runtime.graph, query.sourceId, query.targetLevel, query)
-    : lower(runtime.graph, query.sourceId, query.targetLevel, query);
+  const { sourceId, targetLevel, direction, ...bounds } = query;
+  const sealed = sealedBounds(runtime, bounds);
+  if (sealed === null) return refusal(runtime, "traversal", "INDEX_STALE");
+  const report = direction === "lift"
+    ? lift(runtime.graph, sourceId, targetLevel, sealed)
+    : lower(runtime.graph, sourceId, targetLevel, sealed);
   return reportEnvelope(runtime, "traversal", report, report.terminalStatus, report.reasonCode);
 }
 
@@ -119,26 +122,20 @@ export function refinementCoverageQuery(
 ): Envelope<"refinement_coverage"> {
   const refused = freshnessRefusal(runtime, "refinement_coverage");
   if (refused !== null) return refused;
-  const seal = asFreshnessV2(runtime.freshnessSeal);
-  if (
-    seal === null
-    || (query.sourceSeal !== undefined && query.sourceSeal !== seal.sealHash)
-    || (query.indexSeal !== undefined && query.indexSeal !== seal.sealHash)
-  ) return refusal(runtime, "refinement_coverage", "INDEX_STALE");
   const {
-    sourceSeal: _sourceSeal,
-    indexSeal: _indexSeal,
     sourceId,
     targetLevel,
     direction,
     ...bounds
   } = query;
+  const sealed = sealedBounds(runtime, bounds);
+  if (sealed === null) return refusal(runtime, "refinement_coverage", "INDEX_STALE");
   const report = refinementCoverage(
     runtime.graph,
     sourceId,
     targetLevel,
     direction,
-    { ...bounds, sourceSeal: seal.sealHash, indexSeal: seal.sealHash },
+    sealed,
   );
   return reportEnvelope(runtime, "refinement_coverage", report, report.terminalStatus, report.reasonCode);
 }
@@ -149,7 +146,10 @@ export function impactQuery(
 ): Envelope<"impact"> {
   const refused = freshnessRefusal(runtime, "impact");
   if (refused !== null) return refused;
-  const report = impact(runtime.graph, [...query.sourceIds], query);
+  const { sourceIds, ...bounds } = query;
+  const sealed = sealedBounds(runtime, bounds);
+  if (sealed === null) return refusal(runtime, "impact", "INDEX_STALE");
+  const report = impact(runtime.graph, [...sourceIds], sealed);
   const known = new Set(runtime.graph.nodes.map((node) => node.id));
   const hasKnownSource = query.sourceIds.some((sourceId) => known.has(sourceId));
   if (!hasKnownSource) return reportEnvelope(runtime, "impact", report, "empty", "COORDINATE_UNKNOWN");
@@ -168,7 +168,10 @@ export function explanationQuery(
 ): Envelope<"explanation"> {
   const refused = freshnessRefusal(runtime, "explanation");
   if (refused !== null) return refused;
-  const report = explainWhy(runtime.graph, query.sourceId, query);
+  const { sourceId, ...bounds } = query;
+  const sealed = sealedBounds(runtime, bounds);
+  if (sealed === null) return refusal(runtime, "explanation", "INDEX_STALE");
+  const report = explainWhy(runtime.graph, sourceId, sealed);
   if (report.known) return reportEnvelope(runtime, "explanation", report, "success");
   let reason: "COORDINATE_UNKNOWN" | "BUDGET_EXHAUSTED" | "REFINEMENT_DISCONNECTED";
   if (report.unknownReason === "coordinate_missing") reason = "COORDINATE_UNKNOWN";
@@ -383,6 +386,20 @@ function asFreshnessV2(
   return seal.sealSchemaVersion === 2
     ? seal as ControlFreshnessSealV2
     : normalizeControlFreshnessSealV1(seal as ControlFreshnessSeal).value;
+}
+
+function sealedBounds(runtime: ControlQueryRuntime, bounds: TraversalBounds): TraversalBounds & {
+  sourceSeal: Sha256Hash;
+  indexSeal: Sha256Hash;
+} | null {
+  const seal = asFreshnessV2(runtime.freshnessSeal);
+  if (
+    seal === null
+    || (bounds.sourceSeal !== undefined && bounds.sourceSeal !== seal.sealHash)
+    || (bounds.indexSeal !== undefined && bounds.indexSeal !== seal.sealHash)
+  ) return null;
+  const { sourceSeal: _sourceSeal, indexSeal: _indexSeal, ...limits } = bounds;
+  return { ...limits, sourceSeal: seal.sealHash, indexSeal: seal.sealHash };
 }
 
 function freshnessRefusal<K extends ControlQueryEnvelopeV1["kind"]>(

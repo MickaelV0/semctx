@@ -23,6 +23,7 @@ import {
 
 const digest = (value: string): Sha256Hash =>
   `sha256:${value.padStart(64, "0")}` as Sha256Hash;
+const SEALED = { sourceSeal: digest("9"), indexSeal: digest("9") } as const;
 const evidence = (locator: string): EvidenceRefV1 => ({
   schemaVersion: 1,
   kind: "semantic_node",
@@ -168,7 +169,7 @@ describe("v2 coordinate projection", () => {
 describe("typed refinement traversal", () => {
   test("golden lower then lift uses typed adjacent steps and keeps governance/proof separate", () => {
     const graph = goldenGraph();
-    const lowered = lower(graph, "semantic:l6", 0);
+    const lowered = lower(graph, "semantic:l6", 0, SEALED);
     expect(lowered).toMatchObject({
       schemaVersion: 2,
       terminalStatus: "success",
@@ -185,7 +186,7 @@ describe("typed refinement traversal", () => {
     expect(lowered.governingConstraints.map((item) => item.id)).toEqual(["constraint"]);
     expect(lowered.proofs.map((item) => item.id)).toEqual(["proof"]);
 
-    const lifted = lift(graph, digest("1"), 6);
+    const lifted = lift(graph, digest("1"), 6, SEALED);
     expect(lifted.terminalStatus).toBe("success");
     expect(lifted.paths[0]?.coordinates).toEqual([
       digest("1"), "semantic:l1", "semantic:l2", "semantic:l3",
@@ -199,7 +200,7 @@ describe("typed refinement traversal", () => {
       sourceSeal: digest("2"),
       indexSeal: digest("3"),
     })).toMatchObject({ terminalStatus: "refused", reasonCode: "INDEX_STALE", visitedCoordinateIds: [] });
-    expect(lift(graph, "semantic:missing", 6)).toMatchObject({
+    expect(lift(graph, "semantic:missing", 6, SEALED)).toMatchObject({
       terminalStatus: "empty",
       reasonCode: "COORDINATE_UNKNOWN",
     });
@@ -209,17 +210,17 @@ describe("typed refinement traversal", () => {
       nodes: graph.nodes.map((item) =>
         item.id === "semantic:l1" ? { ...item, appliesAtLevel: null, category: null } : item),
     };
-    expect(lower(missing, "semantic:l1", 0)).toMatchObject({
+    expect(lower(missing, "semantic:l1", 0, SEALED)).toMatchObject({
       terminalStatus: "empty",
       reasonCode: "MAPPING_MISSING",
     });
 
     const disconnected = { ...graph, refinementRelations: [] };
-    expect(lower(disconnected, "semantic:l6", 0)).toMatchObject({
+    expect(lower(disconnected, "semantic:l6", 0, SEALED)).toMatchObject({
       terminalStatus: "empty",
       reasonCode: "REFINEMENT_DISCONNECTED",
     });
-    expect(lower(graph, "semantic:l6", 0, { maxExpansions: 1 })).toMatchObject({
+    expect(lower(graph, "semantic:l6", 0, { ...SEALED, maxExpansions: 1 })).toMatchObject({
       terminalStatus: "budget_exhausted",
       reasonCode: "BUDGET_EXHAUSTED",
     });
@@ -240,7 +241,7 @@ describe("typed refinement traversal", () => {
         relation("not-a-step", "constrained_by", endpoint("l3"), endpoint("l2")),
       ],
     };
-    const result = lower(contaminated, "semantic:l6", 0);
+    const result = lower(contaminated, "semantic:l6", 0, SEALED);
     expect(result).toMatchObject({ terminalStatus: "empty", reasonCode: "REFINEMENT_DISCONNECTED" });
     expect(result.advisoryRelations.map((item) => item.id)).toEqual(expect.arrayContaining(["jump", "llm"]));
   });
@@ -261,7 +262,7 @@ describe("typed refinement traversal", () => {
           : item),
     };
 
-    const traversal = lower(poisoned, "semantic:l6", 0);
+    const traversal = lower(poisoned, "semantic:l6", 0, SEALED);
     expect(traversal).toMatchObject({
       terminalStatus: "empty",
       reasonCode: "REFINEMENT_DISCONNECTED",
@@ -314,9 +315,23 @@ describe("typed refinement traversal", () => {
       ],
     };
 
-    expect(impact(withStructural, ["repo:a"]).affected.map((item) => item.id)).toEqual(["repo:b"]);
-    expect(explainWhy(withStructural, "semantic:l1").rationaleIds).toEqual(["semantic:rationale"]);
+    expect(impact(withStructural, ["repo:a"], SEALED).affected.map((item) => item.id)).toEqual(["repo:b"]);
+    expect(explainWhy(withStructural, "semantic:l1", SEALED).rationaleIds).toEqual(["semantic:rationale"]);
     expect(proof(withStructural, "semantic:l1").map((item) => item.id)).toEqual(["proof"]);
+  });
+
+  test("refuses omitted freshness seals before traversal, impact, or explanation", () => {
+    const graph = goldenGraph();
+    expect(lift(graph, digest("1"), 6)).toMatchObject({
+      terminalStatus: "refused",
+      reasonCode: "INDEX_STALE",
+    });
+    expect(lower(graph, "semantic:l6", 0)).toMatchObject({
+      terminalStatus: "refused",
+      reasonCode: "INDEX_STALE",
+    });
+    expect(() => impact(graph, ["semantic:l1"])).toThrow("control query refused: INDEX_STALE");
+    expect(() => explainWhy(graph, "semantic:l1")).toThrow("control query refused: INDEX_STALE");
   });
 });
 

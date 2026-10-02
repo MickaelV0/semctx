@@ -41,7 +41,7 @@ const WARN = report("WARN", [
 ]);
 const PASS = report("PASS", []);
 
-function runAdapter(rep: Report, failOn: string): { code: number; out: string; outputs: string; summary: string } {
+function runAdapter(rep: unknown, failOn: string): { code: number; out: string; err: string; outputs: string; summary: string } {
   const dir = mkdtempSync(join(tmpdir(), "semctx-action-"));
   const reportPath = join(dir, "report.json");
   const outFile = join(dir, "gh_output");
@@ -55,6 +55,7 @@ function runAdapter(rep: Report, failOn: string): { code: number; out: string; o
   return {
     code: p.exitCode ?? 1,
     out: new TextDecoder().decode(p.stdout),
+    err: new TextDecoder().decode(p.stderr),
     outputs: existsSync(outFile) ? readFileSync(outFile, "utf8") : "",
     summary: existsSync(sumFile) ? readFileSync(sumFile, "utf8") : "",
   };
@@ -85,6 +86,37 @@ describe("github-action adapter", () => {
     const r = runAdapter(WARN, "none");
     expect(r.out).toMatch(/^::warning /m);
     expect(r.out).not.toMatch(/^::error /m);
+  });
+
+  it("refuses readable reports whose verdict is absent, stale, unsealed, or unknown", () => {
+    for (const verdict of [undefined, "STALE", "UNSEALED", "UNKNOWN"]) {
+      const invalid = { ...PASS, verdict };
+      const r = runAdapter(invalid, "none");
+      expect(r.code).toBe(2);
+      expect(r.err).toContain("adapter: unusable report verdict");
+    }
+  });
+
+  it("refuses an unknown fail-on policy", () => {
+    const r = runAdapter(PASS, "bogus");
+    expect(r.code).toBe(2);
+    expect(r.err).toContain("adapter: unknown fail-on policy: bogus");
+  });
+
+  it("omits a non-numeric finding line from workflow command properties", () => {
+    const hostile = report("BLOCK", [{
+      rule: "bad_line",
+      tier: "strict",
+      severity: "block",
+      message: "invalid location line",
+      locations: [{ file: "src/a.ts", line: "5,endLine=9" as unknown as number }],
+    }]);
+
+    const r = runAdapter(hostile, "none");
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("file=src/a.ts::invalid location line");
+    expect(r.out).not.toContain("line=");
+    expect(r.out).not.toContain("endLine=");
   });
 
   it("keeps hostile finding text inside its Markdown table cell", () => {

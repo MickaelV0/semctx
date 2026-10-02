@@ -35,7 +35,7 @@ function annotationsFor(report) {
       continue;
     }
     for (const loc of locs) {
-      const line = loc.line != null ? `,line=${loc.line}` : "";
+      const line = Number.isInteger(loc.line) && loc.line > 0 ? `,line=${loc.line}` : "";
       lines.push(`::${cmd} title=${escProp(title)},file=${escProp(loc.file)}${line}::${escData(f.message)}`);
     }
   }
@@ -106,6 +106,14 @@ function main() {
     report = JSON.parse(readFileSync(reportPath, "utf8"));
   } catch (err) {
     process.stderr.write(`adapter: cannot read report at ${reportPath}: ${String(err)}\n`);
+    process.exit(2);
+  }
+  if (!report || typeof report !== "object" || !["PASS", "WARN", "BLOCK"].includes(report.verdict)) {
+    process.stderr.write(`adapter: unusable report verdict: ${String(report?.verdict)}\n`);
+    process.exit(2);
+  }
+  if (!["block", "warn", "none"].includes(failOn)) {
+    process.stderr.write(`adapter: unknown fail-on policy: ${failOn}\n`);
     process.exit(2);
   }
   const { annotations, summary, outputs, exitCode } = renderAction(report, failOn);

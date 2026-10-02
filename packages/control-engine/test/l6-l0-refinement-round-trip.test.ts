@@ -23,6 +23,7 @@ const HUNK_ID =
   "sha256:0cef0c7583115223271b46cbbe70a91b7f783884c5ef60c840649b51780815bd" as Sha256Hash;
 const CURRENT_SEAL =
   "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" as Sha256Hash;
+const SEALED = { sourceSeal: CURRENT_SEAL, indexSeal: CURRENT_SEAL } as const;
 const SEMANTIC_SOURCE = resolve(
   import.meta.dir,
   "..",
@@ -107,8 +108,8 @@ describe("tracked L6-to-L0 refinement dogfood", () => {
 
   test("lifts the sealed L0 hunk back to the same L6 goal and governing invariants", () => {
     const { graph } = trackedDogfood();
-    const lowered = lower(graph, GOAL, 0);
-    const lifted = lift(graph, HUNK_ID, 6);
+    const lowered = lower(graph, GOAL, 0, SEALED);
+    const lifted = lift(graph, HUNK_ID, 6, SEALED);
 
     expect(lowered.paths[0]?.coordinates).toEqual(EXPECTED_LOWER_COORDINATES);
     expect(lifted).toMatchObject({ terminalStatus: "success" });
@@ -156,7 +157,7 @@ describe("tracked L6-to-L0 refinement dogfood", () => {
 
   test("keeps import, proximity, LLM-only, and multi-level decoys outside the certified path", () => {
     const { graph } = trackedDogfood();
-    const certifiedRelationIds = lower(graph, GOAL, 0).paths[0]?.steps.map(
+    const certifiedRelationIds = lower(graph, GOAL, 0, SEALED).paths[0]?.steps.map(
       (step) => step.relation.id,
     );
 
@@ -178,7 +179,7 @@ describe("tracked L6-to-L0 refinement dogfood", () => {
         ),
       };
 
-      expect(lower(disconnected, GOAL, 0)).toMatchObject({
+      expect(lower(disconnected, GOAL, 0, SEALED)).toMatchObject({
         terminalStatus: "empty",
         reasonCode: "REFINEMENT_DISCONNECTED",
         paths: [],
@@ -191,8 +192,8 @@ describe("tracked L6-to-L0 refinement dogfood", () => {
     const dogfood = trackedDogfood();
     const rawHunkBefore = Buffer.from(dogfood.observedHunks[0]!.rawHunkBytes);
 
-    lower(dogfood.graph, GOAL, 0);
-    lift(dogfood.graph, HUNK_ID, 6);
+    lower(dogfood.graph, GOAL, 0, SEALED);
+    lift(dogfood.graph, HUNK_ID, 6, SEALED);
     refinementCoverage(dogfood.graph, GOAL, 0, "lower", {
       sourceSeal: CURRENT_SEAL,
       indexSeal: CURRENT_SEAL,
