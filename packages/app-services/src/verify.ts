@@ -247,10 +247,14 @@ export function resolveSource(root: string, source: VerifySource, dryRun: boolea
   };
 }
 
-function historicalCoChanges(root: string, files: readonly string[], head: string): CoChange[] {
+/** Internal observation boundary, absent from the package public index. */
+export function historicalCoChanges(root: string, files: readonly string[], head: string): CoChange[] {
   if (files.length === 0) return [];
   const log = git(root, ["log", "--no-merges", "--name-status", "--find-renames", "--format=%x1e", "-n", "400", head, "--"]);
-  return log.code === 0 ? computeCoChanges(parseNameStatusLog(log.out), files) : [];
+  if (log.code !== 0) {
+    throw new SemctxError("GIT_ERROR", "cannot observe co-change history", { head, stderr: log.err.trim() });
+  }
+  return computeCoChanges(parseNameStatusLog(log.out), files);
 }
 
 export function planVerify(root: string, source: VerifySource): VerifyReportGitMeta {

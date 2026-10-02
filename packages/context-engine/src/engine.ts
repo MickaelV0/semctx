@@ -85,7 +85,7 @@ export function prepareContextPack(args: PrepareArgs): ContextPack {
 
 /**
  * Fetch optional semantic-provider candidates for a query. Returns [] when the provider
- * is "none", unavailable, or errors — the deterministic core is never blocked on it.
+ * is "none" or unavailable. Once a provider is observed available, its failures remain visible.
  */
 export async function fetchProviderCandidates(
   config: SemctxConfig,
@@ -95,12 +95,8 @@ export async function fetchProviderCandidates(
 ): Promise<SemanticCandidate[]> {
   if (config.semanticProvider === "none") return [];
   const provider = resolveProvider(config.semanticProvider);
-  try {
-    const input = { query, repositoryRoot: config.repositoryRoot, limit };
-    return await fetchCandidatesFromProvider(provider, input, capture);
-  } catch {
-    return [];
-  }
+  const input = { query, repositoryRoot: config.repositoryRoot, limit };
+  return await fetchCandidatesFromProvider(provider, input, capture);
 }
 
 /** Execute one provider while preserving the atomic attested-result trust boundary. */

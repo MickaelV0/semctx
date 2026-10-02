@@ -2,29 +2,28 @@ import { describe, it, expect } from "bun:test";
 import { mkdtempSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import type { VerifyReport } from "@semantic-context/core";
 
 const ADAPTER = join(import.meta.dir, "..", "src", "adapter.mjs");
 const ACTION_YML = join(import.meta.dir, "..", "action.yml");
 
-interface Report {
-  schemaVersion: number;
-  verdict: "PASS" | "WARN" | "BLOCK";
-  range: string | null;
-  changedFiles: string[];
-  changedSymbols: Array<{ name: string }>;
-  recommendedTests: Array<{ name: string; file?: string }>;
-  findings: Array<{ rule: string; tier: string; severity: string; message: string; locations: Array<{ file: string; line?: number }> }>;
-  summary: { blockCount: number; warnCount: number };
-}
+type Report = VerifyReport;
 
 function report(verdict: Report["verdict"], findings: Report["findings"]): Report {
   return {
     schemaVersion: 1,
     verdict,
+    base: "origin/main",
+    head: "HEAD",
+    mergeBase: "abc",
     range: "abc..def",
     changedFiles: ["src/a.ts"],
-    changedSymbols: [{ name: "compute" }],
+    changedSymbols: [{ id: "symbol:compute", name: "compute", kind: "function", file: "src/a.ts" }],
+    impactedContracts: [],
+    impactedInvariants: [],
     recommendedTests: [{ name: "a.test.ts", file: "test/a.test.ts" }],
+    contradictions: [],
+    unknowns: [],
     findings,
     summary: {
       blockCount: findings.filter((f) => f.severity === "block").length,
@@ -34,14 +33,14 @@ function report(verdict: Report["verdict"], findings: Report["findings"]): Repor
 }
 
 const BLOCK = report("BLOCK", [
-  { rule: "invariant_touched_without_test", tier: "strict", severity: "block", message: "invariant-constrained code changed without a covering test: compute", locations: [{ file: "src/a.ts", line: 5 }] },
+  { rule: "invariant_touched_without_test", tier: "strict", severity: "block", message: "invariant-constrained code changed without a covering test: compute", nodeIds: [], locations: [{ file: "src/a.ts", line: 5 }] },
 ]);
 const WARN = report("WARN", [
-  { rule: "contract_changed_without_test", tier: "advisory", severity: "warn", message: "exported contract changed without a covering test: PublicPort", locations: [{ file: "src/a.ts", line: 8 }] },
+  { rule: "contract_changed_without_test", tier: "advisory", severity: "warn", message: "exported contract changed without a covering test: PublicPort", nodeIds: [], locations: [{ file: "src/a.ts", line: 8 }] },
 ]);
 const PASS = report("PASS", []);
 
-function runAdapter(rep: Report, failOn: string): { code: number; out: string; outputs: string; summary: string } {
+function runAdapter(rep: unknown, failOn: string): { code: number; out: string; err: string; outputs: string; summary: string } {
   const dir = mkdtempSync(join(tmpdir(), "semctx-action-"));
   const reportPath = join(dir, "report.json");
   const outFile = join(dir, "gh_output");
@@ -55,6 +54,7 @@ function runAdapter(rep: Report, failOn: string): { code: number; out: string; o
   return {
     code: p.exitCode ?? 1,
     out: new TextDecoder().decode(p.stdout),
+    err: new TextDecoder().decode(p.stderr),
     outputs: existsSync(outFile) ? readFileSync(outFile, "utf8") : "",
     summary: existsSync(sumFile) ? readFileSync(sumFile, "utf8") : "",
   };
@@ -87,20 +87,65 @@ describe("github-action adapter", () => {
     expect(r.out).not.toMatch(/^::error /m);
   });
 
+  it("refuses readable reports whose verdict is absent, stale, unsealed, or unknown", () => {
+    for (const verdict of [undefined, "STALE", "UNSEALED", "UNKNOWN"]) {
+      const invalid = { ...PASS, verdict };
+      const r = runAdapter(invalid, "none");
+      expect(r.code).toBe(2);
+      expect(r.err).toContain("adapter: unusable verify report");
+    }
+  });
+
+  it("refuses incomplete, null, array, and future-schema readable reports", () => {
+    for (const invalid of [{ verdict: "PASS" }, null, [], { ...PASS, schemaVersion: 2 }]) {
+      const r = runAdapter(invalid, "none");
+      expect(r.code).toBe(2);
+      expect(r.err).toContain("adapter: unusable verify report");
+      expect(r.out).toBe("");
+      expect(r.outputs).toBe("");
+      expect(r.summary).toBe("");
+    }
+  });
+
+  it("refuses an unknown fail-on policy", () => {
+    const r = runAdapter(PASS, "bogus");
+    expect(r.code).toBe(2);
+    expect(r.err).toContain("adapter: unknown fail-on policy: bogus");
+  });
+
+  it("refuses a non-numeric finding line before emitting workflow commands", () => {
+    const hostile = report("BLOCK", [{
+      rule: "bad_line",
+      tier: "strict",
+      severity: "block",
+      message: "invalid location line",
+      nodeIds: [],
+      locations: [{ file: "src/a.ts", line: "5,endLine=9" as unknown as number }],
+    }]);
+
+    const r = runAdapter(hostile, "none");
+    expect(r.code).toBe(2);
+    expect(r.err).toContain("adapter: unusable verify report");
+    expect(r.out).toBe("");
+    expect(r.out).not.toContain("line=");
+    expect(r.out).not.toContain("endLine=");
+  });
+
   it("keeps hostile finding text inside its Markdown table cell", () => {
     const hostile = report("WARN", [
       {
         rule: "unsafe|<rule>",
-        tier: "advisory|strict&raw",
+        tier: "advisory",
         severity: "warn",
         message: "before\\|<details>&after\rnext\nlast\r\nend",
+        nodeIds: [],
         locations: [],
       },
     ]);
 
     const r = runAdapter(hostile, "none");
     expect(r.summary).toContain(
-      "| advisory&#124;strict&amp;raw | `unsafe&#124;&lt;rule&gt;` | before\\&#124;&lt;details&gt;&amp;after<br>next<br>last<br>end |",
+      "| advisory | `unsafe&#124;&lt;rule&gt;` | before\\&#124;&lt;details&gt;&amp;after<br>next<br>last<br>end |",
     );
     expect(r.summary).not.toContain("<details>");
     expect(r.summary).not.toContain("\r");

@@ -137,7 +137,15 @@ export function readActiveChangePointer(root: string): ActiveChangePointerResult
 
 /** The working active change contract, if one valid pointer is open. */
 export function loadActiveChange(root: string): ChangeContract | undefined {
-  return readActiveChangePointer(root).change;
+  const pointer = readActiveChangePointer(root);
+  if (pointer.state === "invalid") {
+    throw new SemctxError("CONFIG_INVALID", "active-change pointer is malformed", {
+      path: activeChangePath(root),
+      state: pointer.state,
+      diagnostics: pointer.diagnostics,
+    });
+  }
+  return pointer.change;
 }
 
 /** Compare pointer and versioned contract content while ignoring their different source locations. */
@@ -197,10 +205,21 @@ export interface FormatOutcome {
  */
 export function formatSemanticFiles(root: string, write: boolean): FormatOutcome[] {
   assertUnlinkedSemanticTree(root);
-  const out: FormatOutcome[] = [];
-  for (const file of listSemFiles(semanticDir(root))) {
+  const parsedFiles = listSemFiles(semanticDir(root)).map((file) => {
     const before = readFileSync(file, "utf8");
-    const parsed = parseSemanticSource(before, relFile(root, file));
+    return { file, before, parsed: parseSemanticSource(before, relFile(root, file)) };
+  });
+  const invalid = parsedFiles
+    .flatMap(({ file, parsed }) => parsed.diagnostics
+      .filter((diagnostic) => diagnostic.severity === "error")
+      .map((diagnostic) => ({ file: relFile(root, file), diagnostic })));
+  if (invalid.length > 0) {
+    throw new SemctxError("CONFIG_INVALID", "semantic source contains errors and cannot be formatted", {
+      invalid,
+    });
+  }
+  const out: FormatOutcome[] = [];
+  for (const { file, before, parsed } of parsedFiles) {
     if (parsed.model.nodes.length === 0 && parsed.model.changes.length === 0) {
       out.push({ file: relFile(root, file), changed: false, skipped: true });
       continue;

@@ -4,6 +4,7 @@
 // summary, and action outputs, then owns the fail-on exit code. The verify engine runs under
 // Bun in a prior composite step and writes the report; this adapter never analyses anything.
 import { readFileSync, appendFileSync } from "node:fs";
+import { VerifyReportSchema } from "../dist/verify-report.mjs";
 
 /** Escape a GitHub workflow-command data segment. */
 export function escData(text) {
@@ -35,7 +36,7 @@ function annotationsFor(report) {
       continue;
     }
     for (const loc of locs) {
-      const line = loc.line != null ? `,line=${loc.line}` : "";
+      const line = Number.isInteger(loc.line) && loc.line > 0 ? `,line=${loc.line}` : "";
       lines.push(`::${cmd} title=${escProp(title)},file=${escProp(loc.file)}${line}::${escData(f.message)}`);
     }
   }
@@ -106,6 +107,16 @@ function main() {
     report = JSON.parse(readFileSync(reportPath, "utf8"));
   } catch (err) {
     process.stderr.write(`adapter: cannot read report at ${reportPath}: ${String(err)}\n`);
+    process.exit(2);
+  }
+  const parsed = VerifyReportSchema.safeParse(report);
+  if (!parsed.success) {
+    process.stderr.write(`adapter: unusable verify report: ${parsed.error.issues[0]?.message ?? "schema mismatch"}\n`);
+    process.exit(2);
+  }
+  report = parsed.data;
+  if (!["block", "warn", "none"].includes(failOn)) {
+    process.stderr.write(`adapter: unknown fail-on policy: ${failOn}\n`);
     process.exit(2);
   }
   const { annotations, summary, outputs, exitCode } = renderAction(report, failOn);

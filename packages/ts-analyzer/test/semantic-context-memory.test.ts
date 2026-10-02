@@ -1,9 +1,9 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import ts from "typescript";
-import { extractionContext, extractTypeScript } from "../src/ts-symbols";
+import { extractionContext, extractTypeScript, extractTypeScriptParallel } from "../src/ts-symbols";
 
 const temporary: string[] = [];
 function fixture(files: Record<string, string>): { root: string; paths: string[] } {
@@ -19,6 +19,35 @@ function fixture(files: Record<string, string>): { root: string; paths: string[]
 }
 afterEach(() => {
   for (const root of temporary.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+test.each([false, true])("repository directory aliases preserve imports and worker facts (reference=%s)", async (reference) => {
+  const { root, paths } = fixture({
+    "src/source.ts": (reference ? "/// <reference path='./shared.d.ts' />\n" : "")
+      + "import { target } from './dependency';\nimport { typed } from 'trusted-tooling';\nexport function run() { target(); typed(); }\n",
+    "src/shared.d.ts": "declare const shared: string;\n",
+    "src/dependency.ts": "export function target() {}\n",
+    "src/independent.ts": "export function independent() {}\n",
+    "node_modules/trusted-tooling/package.json": "{\"name\":\"trusted-tooling\",\"types\":\"index.d.ts\"}\n",
+    "node_modules/trusted-tooling/index.d.ts": "export declare function typed(): string;\n",
+  });
+  const aliasBase = mkdtempSync(join(tmpdir(), "semctx-semantic-alias-"));
+  temporary.push(aliasBase);
+  const aliasRoot = join(aliasBase, "repository");
+  symlinkSync(root, aliasRoot, process.platform === "win32" ? "junction" : "dir");
+  const roots = paths.slice(0, 4);
+  const aliasPaths = roots.map((path) => join(aliasRoot, relative(root, path)));
+  const expected = extractTypeScript(roots, root);
+  expect(expected.modules).toEqual(["src/dependency.ts", "src/source.ts", "src/independent.ts"]);
+  expect(expected.imports.map((item) => item.resolvedRelPath)).toEqual([
+    "src/dependency.ts", "node_modules/trusted-tooling/index.d.ts",
+  ]);
+  expect(extractTypeScript(aliasPaths, aliasRoot)).toEqual(expected);
+  const parallel = await extractTypeScriptParallel(aliasPaths, aliasRoot, 2);
+  expect(parallel.parallelism).toMatchObject(reference
+    ? { used: 1, mode: "preflight-fallback" }
+    : { used: 2, mode: "parallel" });
+  expect(parallel.extraction).toEqual(expected);
 });
 
 test("omits prose JSDoc ASTs while retaining source comments and type-error links", () => {
@@ -76,4 +105,63 @@ test("preserves TSX, raw markers, aliases and calls through shared declarations"
     { name: "run", path: "src/dependency.ts", target: "Service.run" },
     { name: "invoke", path: undefined, target: "invoke" },
   ]);
+});
+
+test("keeps standard libraries and declared package types available to the TypeChecker", () => {
+  const { root, paths } = fixture({
+    "src/source.ts": "import { typed } from 'trusted-tooling';\nexport function run() { return typed() }\n",
+    "node_modules/trusted-tooling/package.json": "{\"name\":\"trusted-tooling\",\"types\":\"index.d.ts\"}\n",
+    "node_modules/trusted-tooling/index.d.ts": "export declare function typed(): string;\n",
+  });
+  const createProgram = extractionContext.createProgram;
+  const programs: ts.Program[] = [];
+  const observe = spyOn(extractionContext, "createProgram").mockImplementation((roots) => {
+    const program = createProgram(roots);
+    programs.push(program);
+    return program;
+  });
+  try {
+    const extraction = extractTypeScript([paths[0]!], root);
+    expect(programs[0]!.getSourceFiles().some((file) => file.fileName.endsWith("lib.es2022.d.ts"))).toBe(true);
+    expect(programs[0]!.getSourceFiles().some((file) => file.fileName.endsWith("trusted-tooling/index.d.ts"))).toBe(true);
+    expect(extraction.imports[0]).toMatchObject({
+      moduleSpecifier: "trusted-tooling",
+      resolvedRelPath: "node_modules/trusted-tooling/index.d.ts",
+    });
+    expect(extraction.calls.find((call) => call.calleeName === "typed")).toMatchObject({
+      calleeSymbolPath: "typed",
+    });
+  } finally {
+    observe.mockRestore();
+  }
+});
+
+test.each([
+  ["relative import", "import { secret } from '../../outside/secret'; export const value = secret;\n"],
+  ["reference path", "/// <reference path='../../outside/secret.d.ts' />\nexport const value = secret;\n"],
+])("refuses a %s outside the repository before TypeScript reads it", (_label, source) => {
+  const base = mkdtempSync(join(tmpdir(), "semctx-semantic-boundary-"));
+  temporary.push(base);
+  const root = join(base, "repository");
+  const outside = join(base, "outside");
+  mkdirSync(join(root, "src"), { recursive: true });
+  mkdirSync(outside, { recursive: true });
+  const sourcePath = join(root, "src", "source.ts");
+  const externalSource = join(outside, "secret.ts");
+  const externalDeclaration = join(outside, "secret.d.ts");
+  writeFileSync(sourcePath, source, "utf8");
+  writeFileSync(externalSource, "export const secret = 'outside';\n", "utf8");
+  writeFileSync(externalDeclaration, "declare const secret: string;\n", "utf8");
+  const readFile = ts.sys.readFile.bind(ts.sys);
+  const externalReads: string[] = [];
+  const observe = spyOn(ts.sys, "readFile").mockImplementation((path, encoding) => {
+    if (path === externalSource || path === externalDeclaration) externalReads.push(path);
+    return readFile(path, encoding);
+  });
+  try {
+    expect(() => extractTypeScript([sourcePath], root)).toThrow(/OUTSIDE_REPOSITORY/);
+    expect(externalReads).toEqual([]);
+  } finally {
+    observe.mockRestore();
+  }
 });

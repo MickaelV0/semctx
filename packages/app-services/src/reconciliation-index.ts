@@ -79,6 +79,7 @@ import {
 import {
   loadSemanticModel,
   loadTargetArtifact,
+  parseTargetArchitectureArtifact,
   type TargetArchitectureArtifactV1,
 } from "@semantic-context/semantic-engine/reconciliation-read";
 import {
@@ -1886,7 +1887,8 @@ function computeAttestationSetHashLocally(entries: readonly unknown[]): Sha256Ha
   return sha256HashCanonicalJson([...new Set(digests)].sort(compareCodeUnits));
 }
 
-function assertTargetProposalContained(
+/** Internal committed-artifact boundary, absent from the package public index. */
+export function assertTargetProposalContained(
   root: string,
   proposal: NonNullable<TargetArchitectureArtifactV1["supersedesRef"]>,
   commit: string,
@@ -1894,11 +1896,11 @@ function assertTargetProposalContained(
   const relativePath = `.semctx/semantic/targets/${proposal.targetId}/r${proposal.revision}.target.json`;
   let committed: TargetArchitectureArtifactV1;
   try {
-    committed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(
+    committed = parseTargetArchitectureArtifact(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(
       gitBytes(root, ["show", `${commit}:${relativePath}`]),
-    )) as TargetArchitectureArtifactV1;
+    )));
   } catch {
-    refuse("accepted target proposal is absent from its attested commit");
+    refuse("accepted target proposal is absent or invalid in its attested commit");
   }
   if (
     committed.targetId !== proposal.targetId

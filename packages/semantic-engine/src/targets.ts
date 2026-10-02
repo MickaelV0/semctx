@@ -216,13 +216,28 @@ function createImmutableArtifact(root: string, artifact: TargetArchitectureArtif
       targetId: artifact.targetId,
       revision: artifact.revision,
     });
+    if (
+      error instanceof SemctxError
+      && (error.code === "CONTROL_INPUTS_UNSAFE" || error.code === "CONFIG_INVALID")
+    ) {
+      throw new SemctxError(error.code, error.message, {
+        ...error.details,
+        cause: error.toJSON(),
+      });
+    }
     throw new SemctxError("IO_ERROR", "failed to create immutable target artifact", {
       path,
-      cause: error instanceof Error ? error.message : String(error),
+      cause: errorEvidence(error),
     });
   } finally {
     if (existsSync(tmp)) unlinkSync(tmp);
   }
+}
+
+function errorEvidence(error: unknown): unknown {
+  if (error instanceof SemctxError) return error.toJSON();
+  if (error instanceof Error) return { name: error.name, message: error.message };
+  return { name: "Error", message: String(error) };
 }
 
 function readTargetArtifact(location: TargetArtifactLocationV1): TargetArchitectureArtifactV1 {

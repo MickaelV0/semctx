@@ -253,7 +253,7 @@ describe("semctx setup --dry-run --json", () => {
     expect(result.body).toMatchObject({
       kind: "setup_conflict",
       preset: "github-claude",
-      conflict: { code: "CONFIG_INVALID" },
+      conflict: { code: "IO_ERROR", details: { path: ".claude", reason: "SOURCE_LINK_OUTSIDE_REPOSITORY" } },
     });
     expect(readFileSync(join(outside, "semctx.md"), "utf8")).toBe("outside\n");
     expect(existsSync(join(root, ".github"))).toBe(false);
@@ -306,6 +306,6 @@ describe("semctx setup --dry-run --json", () => {
     expect(applied.code).toBe(1); // no Git seal: files are written, analysis remains not ready
     expect(existsSync(join(root, ".github", "workflows", "semctx.yml"))).toBe(true);
     expect(existsSync(join(root, ".claude", "semctx.md"))).toBe(true);
-    expect(readFileSync(join(root, ".github", "workflows", "semctx.yml"), "utf8")).toContain("github-action@v0.3.9");
+    expect(readFileSync(join(root, ".github", "workflows", "semctx.yml"), "utf8")).toContain("github-action@v0.4.0");
   });
 });

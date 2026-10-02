@@ -12,7 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDefaultConfig, createGlobSelectionConfig } from "@semantic-context/core";
-import { isInitialized, loadConfig, saveConfig } from "@semantic-context/repository-store";
+import { isInitialized, loadConfig, initWorkspace } from "@semantic-context/repository-store";
 import { SAMPLE_REPO } from "@semantic-context/test-fixtures";
 import {
   SETUP_POLYGLOT_V1_REFUSE_NEXT_STEPS,
@@ -215,7 +215,7 @@ describe("setupRepository (shared SSoT)", () => {
     git(root, "add", ".");
     git(root, "commit", "-q", "-m", "fixture");
     const base = createGlobSelectionConfig(root);
-    saveConfig(root, {
+    initWorkspace(root, {
       ...base,
       languages: { ...base.languages, python: "off" },
     });
@@ -242,7 +242,7 @@ describe("setupRepository (shared SSoT)", () => {
 
   it("refuses polyglot against an existing v1 config without writing a v2 overwrite", () => {
     root = freshSample();
-    saveConfig(root, createDefaultConfig(root));
+    initWorkspace(root, createDefaultConfig(root));
     expect(isInitialized(root)).toBe(true);
 
     const report = asRefused(setupRepository(root, { polyglot: true, now: "2026-08-01T12:00:00.000Z" }));
@@ -382,7 +382,7 @@ describe("setupRepository (shared SSoT)", () => {
     git(root, "commit", "-q", "-m", "fixture");
 
     const base = createGlobSelectionConfig(root);
-    saveConfig(root, {
+    initWorkspace(root, {
       ...base,
       languages: {
         ...base.languages,
