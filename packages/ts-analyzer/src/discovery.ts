@@ -1,7 +1,9 @@
-import { readdirSync, lstatSync, readFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { normalizePath, SemctxError } from "@semantic-context/core";
 import type { SemctxConfig } from "@semantic-context/core";
+import ts from "typescript";
+import { resolveTypeScriptModule } from "./ts-symbols";
 
 export type FileRole = "source" | "test" | "document" | "migration" | "other";
 export type SourceLanguage = "typescript" | "python" | "markdown" | "sql" | "unknown";
@@ -35,6 +37,9 @@ export interface DiscoveryCandidate {
     | "LANGUAGE_DISABLED"
     | "LANGUAGE_UNSUPPORTED"
     | "READ_FAILED"
+    | "IMPORT_OUTSIDE_REPOSITORY"
+    | "REFERENCE_OUTSIDE_REPOSITORY"
+    | "SOURCE_LINK_OUTSIDE_REPOSITORY"
     | "SELECTED";
 }
 
@@ -147,7 +152,43 @@ function isNestedGitWorktree(directory: string, root: string): boolean {
   }
 }
 
-function walk(dir: string, root: string, acc: string[], strict = false): void {
+function isContained(root: string, candidate: string): boolean {
+  const rel = relative(root, candidate);
+  return rel === "" || (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`));
+}
+
+function canonicalPath(path: string): string {
+  try {
+    return realpathSync.native(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
+function escapedDependencyReason(
+  absPath: string,
+  root: string,
+  content: string,
+): "IMPORT_OUTSIDE_REPOSITORY" | "REFERENCE_OUTSIDE_REPOSITORY" | undefined {
+  const canonicalRoot = canonicalPath(root);
+  const preprocessed = ts.preProcessFile(content, true, true);
+  for (const imported of preprocessed.importedFiles) {
+    if (!imported.fileName.startsWith(".")) continue;
+    const lexical = resolve(dirname(absPath), imported.fileName);
+    if (!isContained(canonicalRoot, canonicalPath(lexical))) return "IMPORT_OUTSIDE_REPOSITORY";
+    const resolved = resolveTypeScriptModule(imported.fileName, absPath);
+    if (resolved !== undefined && !isContained(canonicalRoot, canonicalPath(resolved))) {
+      return "IMPORT_OUTSIDE_REPOSITORY";
+    }
+  }
+  for (const referenced of preprocessed.referencedFiles) {
+    const lexical = resolve(dirname(absPath), referenced.fileName);
+    if (!isContained(canonicalRoot, canonicalPath(lexical))) return "REFERENCE_OUTSIDE_REPOSITORY";
+  }
+  return undefined;
+}
+
+function walk(dir: string, root: string, acc: string[], strict = false, refusedLinks?: string[]): void {
   let entries: string[];
   try {
     entries = readdirSync(dir).sort();
@@ -177,10 +218,15 @@ function walk(dir: string, root: string, acc: string[], strict = false): void {
     }
     // Containment: never follow symlinks — they could point outside the repository root
     // and leak external file content into the graph/pack (CWE-59).
-    if (stat.isSymbolicLink()) continue;
+    if (stat.isSymbolicLink()) {
+      if (refusedLinks !== undefined && !isContained(canonicalPath(root), canonicalPath(abs))) {
+        refusedLinks.push(abs);
+      }
+      continue;
+    }
     if (stat.isDirectory()) {
       if (isNestedGitWorktree(abs, root)) continue;
-      walk(abs, root, acc, strict);
+      walk(abs, root, acc, strict, refusedLinks);
     } else if (stat.isFile()) {
       acc.push(abs);
     }
@@ -195,11 +241,26 @@ function walk(dir: string, root: string, acc: string[], strict = false): void {
  */
 export function countTypeScriptFiles(config: SemctxConfig): number {
   if (config.version === 2) {
-    return discoverRepository(config).files.filter((file) => file.language === "typescript").length;
+    const discovery = discoverRepository(config);
+    const failure = discovery.candidates.find((candidate) => candidate.analysisOutcome === "failed");
+    if (failure !== undefined) {
+      throw new SemctxError("IO_ERROR", "repository discovery refused an unreadable or unsafe source", {
+        path: failure.relPath,
+        reason: failure.reason,
+      });
+    }
+    return discovery.files.filter((file) => file.language === "typescript").length;
   }
   const root = config.repositoryRoot;
   const absPaths: string[] = [];
-  walk(root, root, absPaths);
+  const refusedLinks: string[] = [];
+  walk(root, root, absPaths, true, refusedLinks);
+  if (refusedLinks.length > 0) {
+    throw new SemctxError("IO_ERROR", "repository discovery refused a source link outside the repository", {
+      path: normalizePath(relative(root, refusedLinks[0]!)),
+      reason: "SOURCE_LINK_OUTSIDE_REPOSITORY",
+    });
+  }
   let count = 0;
   for (const absPath of absPaths) {
     const relPath = normalizePath(relative(root, absPath));
@@ -215,27 +276,71 @@ export function countTypeScriptFiles(config: SemctxConfig): number {
  */
 export function discoverFiles(config: SemctxConfig): DiscoveredFile[] {
   if (config.version === 2) return discoverRepository(config).files;
+  const result = discoverLegacyRepository(config);
+  const failure = result.candidates.find((candidate) => candidate.analysisOutcome === "failed");
+  if (failure !== undefined) {
+    throw new SemctxError("IO_ERROR", "repository discovery refused an unreadable or unsafe source", {
+      path: failure.relPath,
+      reason: failure.reason,
+    });
+  }
+  return result.files;
+}
+
+function discoverLegacyRepository(config: Extract<SemctxConfig, { version: 1 }>): DiscoveryResult {
   const root = config.repositoryRoot;
   const absPaths: string[] = [];
-  walk(root, root, absPaths);
-  absPaths.sort();
-
+  const refusedLinks: string[] = [];
+  walk(root, root, absPaths, true, refusedLinks);
   const files: DiscoveredFile[] = [];
-  for (const absPath of absPaths) {
+  const candidates: DiscoveryCandidate[] = [];
+
+  for (const absPath of absPaths.sort()) {
     const relPath = normalizePath(relative(root, absPath));
     if (isExcludedLegacy(relPath, config)) continue;
-    if (!TS_FILE_RE.test(relPath) && !MARKDOWN_RE.test(relPath) && !SQL_RE.test(relPath)) continue;
+    const language = sourceLanguage(relPath);
+    if (!TS_FILE_RE.test(relPath) && !MARKDOWN_RE.test(relPath) && !SQL_RE.test(relPath)) {
+      candidates.push({
+        relPath,
+        language,
+        selectionDecision: "excluded",
+        analysisOutcome: "not_applicable",
+        reason: "LEGACY_UNSUPPORTED_EXTENSION",
+      });
+      continue;
+    }
     let content: string;
     try {
       content = readFileSync(absPath, "utf8");
     } catch {
+      candidates.push({ relPath, language, selectionDecision: "selected", analysisOutcome: "failed", reason: "READ_FAILED" });
+      continue;
+    }
+    const boundaryFailure = TS_FILE_RE.test(relPath)
+      ? escapedDependencyReason(absPath, root, content)
+      : undefined;
+    if (boundaryFailure !== undefined) {
+      candidates.push({ relPath, language, selectionDecision: "selected", analysisOutcome: "failed", reason: boundaryFailure });
       continue;
     }
     const role = classify(relPath, content, config);
     if (role === "other") continue;
+    candidates.push({ relPath, language, selectionDecision: "selected", reason: "SELECTED" });
     files.push({ absPath, relPath, role, content });
   }
-  return files;
+  for (const absPath of refusedLinks.sort()) {
+    const relPath = normalizePath(relative(root, absPath));
+    if (isExcludedLegacy(relPath, config)) continue;
+    candidates.push({
+      relPath,
+      language: sourceLanguage(relPath),
+      selectionDecision: "selected",
+      analysisOutcome: "failed",
+      reason: "SOURCE_LINK_OUTSIDE_REPOSITORY",
+    });
+  }
+  candidates.sort((left, right) => left.relPath < right.relPath ? -1 : left.relPath > right.relPath ? 1 : 0);
+  return { files, candidates };
 }
 
 /**
@@ -246,32 +351,13 @@ export function discoverFiles(config: SemctxConfig): DiscoveredFile[] {
  */
 export function discoverRepository(config: SemctxConfig): DiscoveryResult {
   if (config.version === 1) {
-    const files = discoverFiles(config);
-    const selected = new Set(files.map((file) => file.relPath));
-    const absPaths: string[] = [];
-    walk(config.repositoryRoot, config.repositoryRoot, absPaths);
-    const candidates = absPaths
-      .map((absPath) => normalizePath(relative(config.repositoryRoot, absPath)))
-      .filter((relPath) => !isExcludedLegacy(relPath, config))
-      .sort()
-      .map((relPath): DiscoveryCandidate => {
-        const language = sourceLanguage(relPath);
-        return selected.has(relPath)
-          ? { relPath, language, selectionDecision: "selected", reason: "SELECTED" }
-          : {
-              relPath,
-              language,
-              selectionDecision: "excluded",
-              analysisOutcome: "not_applicable",
-              reason: "LEGACY_UNSUPPORTED_EXTENSION",
-            };
-      });
-    return { files, candidates };
+    return discoverLegacyRepository(config);
   }
 
   const root = config.repositoryRoot;
   const absPaths: string[] = [];
-  walk(root, root, absPaths, true);
+  const refusedLinks: string[] = [];
+  walk(root, root, absPaths, true, refusedLinks);
   const files: DiscoveredFile[] = [];
   const candidates: DiscoveryCandidate[] = [];
 
@@ -326,6 +412,19 @@ export function discoverRepository(config: SemctxConfig): DiscoveryResult {
       });
       continue;
     }
+    const boundaryFailure = language === "typescript"
+      ? escapedDependencyReason(absPath, root, content)
+      : undefined;
+    if (boundaryFailure !== undefined) {
+      candidates.push({
+        relPath,
+        language,
+        selectionDecision: "selected",
+        analysisOutcome: "failed",
+        reason: boundaryFailure,
+      });
+      continue;
+    }
     const role = classify(relPath, content, config);
     if (role === "other" || language === "unknown") {
       candidates.push({
@@ -340,6 +439,18 @@ export function discoverRepository(config: SemctxConfig): DiscoveryResult {
     candidates.push({ relPath, language, selectionDecision: "selected", reason: "SELECTED" });
     files.push({ absPath, relPath, role, content, language });
   }
+
+  for (const absPath of refusedLinks.sort()) {
+    const relPath = normalizePath(relative(root, absPath));
+    candidates.push({
+      relPath,
+      language: sourceLanguage(relPath),
+      selectionDecision: "selected",
+      analysisOutcome: "failed",
+      reason: "SOURCE_LINK_OUTSIDE_REPOSITORY",
+    });
+  }
+  candidates.sort((left, right) => left.relPath < right.relPath ? -1 : left.relPath > right.relPath ? 1 : 0);
 
   return { files, candidates };
 }

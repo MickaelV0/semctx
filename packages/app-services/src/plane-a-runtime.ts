@@ -267,6 +267,34 @@ function composePlaneARuntime(
   producerResults.push(...legacySidecar.producerResults.filter((result) =>
     repositoryBatchIds.has(result.factBatchId)));
 
+  const failedProducerByPath = new Map<string, ProducerIdentity>();
+  for (const candidate of discovery.candidates) {
+    if (candidate.selectionDecision !== "selected" || candidate.analysisOutcome !== "failed") continue;
+    const producer = candidate.language === "python" ? PYTHON_PRODUCER : TYPESCRIPT_PRODUCER;
+    const scope = scopeForCandidate(
+      repositoryIdentity,
+      candidate,
+      filesByPath.get(candidate.relPath),
+      workspaceUnitByPath.get(candidate.relPath),
+    );
+    const failureId = digestCanonical({
+      status: "failed",
+      producer,
+      scope,
+      reason: candidate.reason,
+      producerConfigurationDigest,
+      factSchemaDigest,
+    });
+    producerResults.push({
+      resultId: failureId,
+      status: "failed",
+      producer,
+      scope,
+      factBatchId: failureId,
+    });
+    failedProducerByPath.set(candidate.relPath, producer);
+  }
+
   const orderedPerPath = [...perPath].sort((left, right) =>
     compareText(left.candidate.relPath, right.candidate.relPath));
   for (const item of orderedPerPath) {
@@ -350,8 +378,9 @@ function composePlaneARuntime(
       const analysisReasons = outcome === "analyzed"
         ? perPath.find((item) => item.candidate.relPath === candidate.relPath)?.analysisReasons ?? []
         : outcome === "failed"
-          ? forcedAnalysisReasons.get(candidate.relPath) ?? ["PRODUCER_FAILED"]
+          ? forcedAnalysisReasons.get(candidate.relPath) ?? ["PRODUCER_FAILED", candidate.reason]
           : [candidate.reason];
+      const selectedProducer = completed?.producer ?? failedProducerByPath.get(candidate.relPath);
       return normalizeDiscoveryLedgerEntry({
         candidateIdentity: `${candidate.language}:${candidate.relPath}`,
         scope: scopeForCandidate(
@@ -364,7 +393,7 @@ function composePlaneARuntime(
         analysisOutcome: outcome,
         selectionReasons: candidate.reason === "SELECTED" ? [] : [candidate.reason],
         analysisReasons,
-        ...(completed === undefined ? {} : { selectedProducer: completed.producer }),
+        ...(selectedProducer === undefined ? {} : { selectedProducer }),
       });
     })
     .sort((left, right) => compareText(left.candidateIdentity, right.candidateIdentity));
