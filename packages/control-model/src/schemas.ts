@@ -4,60 +4,40 @@ import { z } from "zod";
 import { MIGRATION_STEP_PROFILES } from "./constants";
 import { classifyControlFreshnessSeal, CONTROL_FRESHNESS_REASON_ORDER } from "./freshness";
 import { UnresolvedRepositoryLinkSchema } from "./link-resolution";
-import { Sha256HashSchema } from "./primitive-schemas";
+import {
+  CoordinateCategorySchema,
+  CoordinateEdgeSchema,
+  CoordinatePlaneSchema,
+  DanglingSemanticReferenceSchema,
+  EpistemicStatusSchema,
+  QualifiedCoordinateIdSchema,
+  SemanticLevelSchema,
+  Sha256HashSchema,
+  SourceKindLevelMappingSchema,
+  UnsupportedCoordinateSourceSchema,
+  UnmappedCoordinateSourceSchema,
+} from "./primitive-schemas";
 import type { AuthoredSemanticLevel, ControlFreshnessSeal } from "./types";
-export { Sha256HashSchema } from "./primitive-schemas";
+export {
+  CoordinateCategorySchema,
+  CoordinateEdgeSchema,
+  CoordinatePlaneSchema,
+  DanglingSemanticReferenceSchema,
+  EpistemicStatusSchema,
+  QualifiedCoordinateIdSchema,
+  RepositoryCoordinateIdSchema,
+  SemanticCoordinateIdSchema,
+  SemanticLevelSchema,
+  Sha256HashSchema,
+  SourceKindLevelMappingSchema,
+  UnsupportedCoordinateSourceSchema,
+  UnmappedCoordinateSourceSchema,
+} from "./primitive-schemas";
 
-export const SemanticLevelSchema = z.number().int().min(0).max(6);
 export const AuthoredSemanticLevelSchema = SemanticLevelSchema.refine(
   (level): level is AuthoredSemanticLevel => level > 0,
   "authored semantics cannot occupy observed L0",
 );
-export const CoordinatePlaneSchema = z.enum(["repo", "semantic"]);
-export const RepositoryCoordinateIdSchema = z.string().regex(/^repo:.+$/, "expected repo:<repository-node-id>");
-export const SemanticCoordinateIdSchema = z.string().regex(/^semantic:.+$/, "expected semantic:<semantic-node-id>");
-export const QualifiedCoordinateIdSchema = z.union([RepositoryCoordinateIdSchema, SemanticCoordinateIdSchema]);
-
-export const EpistemicStatusSchema = z.enum([
-  "human_declared",
-  "statically_observed",
-  "dynamically_observed",
-  "test_observed",
-  "historically_observed",
-  "llm_inferred",
-  "hypothetical",
-]);
-
-export const CoordinateCategorySchema = z.enum([
-  "syntax",
-  "code_entity",
-  "module",
-  "bounded_context",
-  "capability",
-  "invariant",
-  "policy",
-  "goal",
-  "decision",
-  "system",
-  "strategy",
-]);
-
-export const SourceKindLevelMappingSchema = z.object({
-  plane: CoordinatePlaneSchema,
-  sourceKind: z.string().min(1),
-  level: SemanticLevelSchema.nullable(),
-  category: CoordinateCategorySchema.nullable(),
-  supported: z.boolean(),
-  reason: z.string().min(1).optional(),
-}).strict().superRefine((value, context) => {
-  if (value.supported && (value.level === null || value.category === null)) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: "supported mappings require level and category" });
-  }
-  if (!value.supported && (value.level !== null || value.category !== null)) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: "unsupported mappings cannot assign an implicit level" });
-  }
-});
-
 export const CoordinateNodeSchema = z.object({
   id: QualifiedCoordinateIdSchema,
   plane: CoordinatePlaneSchema,
@@ -75,14 +55,6 @@ export const CoordinateNodeSchema = z.object({
   }
 });
 
-export const CoordinateEdgeSchema = z.object({
-  from: QualifiedCoordinateIdSchema,
-  to: QualifiedCoordinateIdSchema,
-  relation: z.string().min(1),
-  sourceRelation: z.string().min(1).optional(),
-  evidenceRefs: z.array(z.string()),
-}).strict();
-
 export const CoordinatePathSchema = z.object({
   nodes: z.array(QualifiedCoordinateIdSchema).min(1),
   edges: z.array(CoordinateEdgeSchema),
@@ -98,22 +70,7 @@ export const LevelCoverageSchema = z.object({
   coordinateIds: z.array(QualifiedCoordinateIdSchema),
 }).strict();
 
-export const UnsupportedCoordinateSourceSchema = z.object({
-  plane: CoordinatePlaneSchema,
-  sourceId: z.string().min(1),
-  sourceKind: z.string().min(1),
-  reason: z.string().min(1),
-}).strict();
-
-export const UnmappedCoordinateSourceSchema = UnsupportedCoordinateSourceSchema;
-
 export const StaleRepositoryLinkSchema = UnresolvedRepositoryLinkSchema;
-
-export const DanglingSemanticReferenceSchema = z.object({
-  ownerId: z.string().min(1),
-  field: z.string().min(1),
-  ref: z.string().min(1),
-}).strict();
 
 export const CoordinateGraphReportSchema = z.object({
   schemaVersion: z.literal(1),
