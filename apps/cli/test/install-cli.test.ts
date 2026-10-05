@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -13,11 +14,13 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve, sep } from "node:path";
+import { pathToFileURL } from "node:url";
 import { parseArgs } from "../src/args";
 import packageJson from "../package.json";
 import {
   executeInstall,
   DEFERRED_CODEX_CACHE_CLEANUP_SCRIPT,
+  resolveInstallHostCommand,
   resolveCodexCacheEntry,
   resolveCodexHome,
   setupExecutionFromCommandResult,
@@ -334,6 +337,223 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
     expect(environment["PATH"]).toBe(`C:\\fixture-bin${delimiter}C:\\system-bin`);
     expect(environment["CLAUDE_CONFIG_DIR"]).toBe("C:\\profile");
   });
+
+  test("resolves a Windows npm Codex shim to Node and preserves argv boundaries", () => {
+    const root = mkdtempSync(join(tmpdir(), "semctx-codex-launcher-"));
+    const launcher = join(root, "codex.cmd");
+    const batchLauncher = join(root, "codex.bat");
+    const node = process.platform === "win32" ? process.execPath : join(root, "node.exe");
+    if (process.platform !== "win32") {
+      copyFileSync(process.execPath, node);
+      chmodSync(node, 0o755);
+    }
+    const entrypoint = join(root, "node_modules", "@openai", "codex", "bin", "codex.js");
+    const args = ["plugin", "marketplace", "add", "source with spaces", "--ref", "stable&literal"];
+    mkdirSync(resolve(entrypoint, ".."), { recursive: true });
+    writeFileSync(launcher, "@echo off\r\nexit /b 99\r\n");
+    writeFileSync(batchLauncher, "@echo off\r\nexit /b 99\r\n");
+    writeFileSync(entrypoint, "process.stdout.write(JSON.stringify(process.argv.slice(2)));\n");
+    try {
+      const resolved = resolveInstallHostCommand(
+        ["codex", ...args],
+        "win32",
+        (name) => name === "codex" ? launcher : name === "node" ? node : null,
+      );
+      expect(resolved).toEqual([node, entrypoint, ...args]);
+      const child = Bun.spawnSync([...resolved!], { stdout: "pipe", stderr: "pipe" });
+      expect(child.exitCode).toBe(0);
+      expect(JSON.parse(new TextDecoder().decode(child.stdout))).toEqual(args);
+      expect(resolveInstallHostCommand(
+        ["codex", ...args],
+        "win32",
+        (name) => name === "codex" ? batchLauncher : name === "node" ? node : null,
+      )).toEqual([node, entrypoint, ...args]);
+      expect(resolveInstallHostCommand(
+        ["codex", ...args],
+        "win32",
+        (name) => name === "codex" ? launcher : null,
+      )).toBeNull();
+      rmSync(entrypoint);
+      expect(resolveInstallHostCommand(
+        ["codex", ...args],
+        "win32",
+        (name) => name === "codex" ? launcher : name === "node" ? node : null,
+      )).toBeNull();
+      expect(resolveInstallHostCommand(["codex", ...args], "linux", () => launcher))
+        .toEqual(["codex", ...args]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test.skipIf(process.platform !== "win32")("default runtime and legacy janitor execute the owned npm entrypoint", () => {
+    const root = mkdtempSync(join(tmpdir(), "semctx windows & consumers-"));
+    const repo = join(root, "repo with spaces & literal");
+    const home = join(root, "profile with spaces & literal");
+    const bin = join(root, "npm bin with spaces & literal");
+    const entrypoint = join(bin, "node_modules", "@openai", "codex", "bin", "codex.js");
+    const launcher = join(bin, "codex.cmd");
+    const log = join(root, "argv.jsonl");
+    const capture = join(root, "legacy-spawn.json");
+    const programData = join(root, "program data & literal");
+    const snapshot = join(home, ".tmp", "marketplaces", "semctx-stable", "plugins", "semctx-control");
+    const cachePath = join(home, "plugins", "cache", "semctx-stable", "semctx-control", packageJson.version);
+    for (const directory of [repo, home, programData, resolve(entrypoint, ".."), snapshot, cachePath]) {
+      mkdirSync(directory, { recursive: true });
+    }
+    mkdirSync(join(repo, ".git"));
+    writeFileSync(join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
+    for (const directory of [snapshot, cachePath]) {
+      mkdirSync(join(directory, ".codex-plugin"), { recursive: true });
+      mkdirSync(join(directory, "dist"), { recursive: true });
+      writeFileSync(join(directory, ".codex-plugin", "plugin.json"),
+        JSON.stringify({ name: "semctx-control", version: packageJson.version }));
+      for (const bundle of ["semctx-index-worker.js", "semctx-mcp.js", "semctx-shared.js", "semctx.js"]) {
+        writeFileSync(join(directory, "dist", bundle), `same ${bundle}`);
+      }
+    }
+    writeFileSync(launcher, "@echo off\r\nnode \"%~dp0\\node_modules\\@openai\\codex\\bin\\codex.js\" %*\r\n");
+    writeFileSync(entrypoint, `
+      const fs = require("node:fs"), args = process.argv.slice(2);
+      fs.appendFileSync(${JSON.stringify(log)},
+        JSON.stringify({ executable: process.execPath, entrypoint: process.argv[1], argv: args }) + "\\n");
+      if (args[0] === "--version") { process.stdout.write("codex-cli 0.160.0\\n"); process.exit(0); }
+      if (process.env.SEMCTX_DEFERRED === "1") {
+        process.stdout.write(args[1] === "marketplace" ? '{"marketplaces":[]}' : '{"installed":[]}');
+        process.exit(0);
+      }
+      if (args[0] === "plugin" && args[1] === "list") {
+        process.stdout.write(JSON.stringify({ installed: [{
+          pluginId: "semctx-control@semctx-stable", installed: true, enabled: true,
+          version: ${JSON.stringify(packageJson.version)}, source: { path: ${JSON.stringify(snapshot)} },
+        }] }));
+        process.exit(0);
+      }
+      if (args[1] === "remove" && args[2] === "semctx-control@personal") {
+        process.stderr.write("failed to remove existing cache entry (os error 32)"); process.exit(1);
+      }
+      process.stdout.write("{}");
+    `);
+    const installUrl = pathToFileURL(join(import.meta.dir, "../src/commands/install.ts")).href;
+    const argsUrl = pathToFileURL(join(import.meta.dir, "../src/args.ts")).href;
+    const program = `
+      import { mock } from "bun:test";
+      import { writeFileSync } from "node:fs";
+      const services = await import("@semantic-context/app-services");
+      const repo = ${JSON.stringify(repo)}, home = ${JSON.stringify(home)}, bin = ${JSON.stringify(bin)};
+      const entrypoint = ${JSON.stringify(entrypoint)}, launcher = ${JSON.stringify(launcher)};
+      const capture = ${JSON.stringify(capture)}, programData = ${JSON.stringify(programData)};
+      const snapshot = ${JSON.stringify(snapshot)}, cachePath = ${JSON.stringify(cachePath)};
+      const version = ${JSON.stringify(packageJson.version)};
+      const inventory = {
+        marketplaces: [
+          { name: "semctx-stable", marketplaceSource: { sourceType: "git", source: "hoklims/semctx" },
+            ref: "stable", sparsePaths: [] },
+          { name: "personal", marketplaceSource: { sourceType: "git", source: "hoklims/semctx" },
+            ref: "stable", sparsePaths: [] },
+        ],
+        plugins: [
+          { pluginId: "semctx-control@semctx-stable", installed: true, enabled: true, version,
+            cacheDirectory: version, cachePath, source: { path: snapshot } },
+          { pluginId: "semctx-control@personal", installed: true, enabled: true, version: "0.4.0" },
+        ],
+      };
+      mock.module("@semantic-context/app-services", () => ({
+        ...services,
+        readCodexPluginMetadataInventory: () => inventory,
+      }));
+      process.env.CODEX_HOME = home;
+      process.env.HOME = ${JSON.stringify(root)};
+      process.env.USERPROFILE = process.env.HOME;
+      process.env.ProgramData = programData;
+      process.env.PROGRAMDATA = programData;
+      process.env.SEMCTX_CONSUMER_LOG = ${JSON.stringify(log)};
+      process.env.PATH = bin + ";" + (process.env.PATH ?? "");
+      const originalSpawnSync = Bun.spawnSync;
+      Bun.which = (name) => name === "codex" ? launcher
+        : name === "node" ? ${JSON.stringify(Bun.which("node"))}
+        : name === "powershell" ? bin + "\\\\powershell.exe" : null;
+      Bun.spawnSync = (argv, options = {}) => {
+        if (String(argv[0]).toLowerCase().endsWith("powershell.exe")) {
+          return { exitCode: 0, stdout: Buffer.from(Buffer.from(programData).toString("base64")), stderr: Buffer.alloc(0) };
+        }
+        if (argv[0] === "git" && argv.includes("--show-toplevel")) {
+          return { exitCode: 0, stdout: Buffer.from(repo), stderr: Buffer.alloc(0) };
+        }
+        return originalSpawnSync(argv, options);
+      };
+      Bun.spawn = (argv, options) => {
+        writeFileSync(capture, JSON.stringify({ argv, cwd: options.cwd }));
+        return { pid: 123, unref() {} };
+      };
+      const { executeInstall } = await import(${JSON.stringify(installUrl)});
+      const { parseArgs } = await import(${JSON.stringify(argsUrl)});
+      const report = executeInstall(repo, parseArgs(["install", "--host", "codex", "--skip-setup"]));
+      process.stdout.write(JSON.stringify({ report }));
+    `;
+    try {
+      const child = Bun.spawnSync([process.execPath, "-e", program], { stdout: "pipe", stderr: "pipe" });
+      expect(new TextDecoder().decode(child.stderr)).toBe("");
+      expect(child.exitCode).toBe(0);
+      const result = JSON.parse(new TextDecoder().decode(child.stdout)) as { report: InstallReport };
+      expect(result.report.ok).toBe(true);
+      expect(result.report.hosts.codex.status).toBe("migrated");
+      const initial = readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+      expect(initial.every((item) => item.executable === Bun.which("node") && item.entrypoint === entrypoint)).toBe(true);
+      expect(initial.map((item) => item.argv)).toEqual([
+        ["plugin", "marketplace", "upgrade", "semctx-stable", "--json"],
+        ["plugin", "add", "semctx-control@semctx-stable", "--json"],
+        ["plugin", "list", "--json"],
+        ["plugin", "remove", "semctx-control@personal", "--json"],
+      ]);
+
+      const entrypointBytes = readFileSync(entrypoint);
+      rmSync(entrypoint);
+      const disconnectedDefault = Bun.spawnSync([process.execPath, "-e", program], {
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(disconnectedDefault.exitCode).toBe(0);
+      const disconnectedReport = JSON.parse(new TextDecoder().decode(disconnectedDefault.stdout)) as {
+        report: InstallReport;
+      };
+      expect(disconnectedReport.report.ok).toBe(false);
+      expect(disconnectedReport.report.hosts.codex.error).toContain("cannot resolve a safe native Codex launcher");
+      expect(readFileSync(log, "utf8").trim().split("\n")).toHaveLength(initial.length);
+      writeFileSync(entrypoint, entrypointBytes);
+
+      const deferred = JSON.parse(readFileSync(capture, "utf8")) as { argv: string[]; cwd: string };
+      expect(deferred.cwd).toBe(repo);
+      const replay = Bun.spawnSync(deferred.argv, {
+        cwd: deferred.cwd,
+        stdout: "pipe",
+        stderr: "pipe",
+        env: {
+          ...fixtureEnvironmentWithPath(bin),
+          SEMCTX_CONSUMER_LOG: log,
+          SEMCTX_DEFERRED: "1",
+        },
+      });
+      expect(replay.exitCode).toBe(0);
+      const afterReplay = readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+      expect(afterReplay.slice(initial.length).map((item) => item.argv)).toEqual([
+        ["plugin", "list", "--json"],
+        ["plugin", "marketplace", "list", "--json"],
+      ]);
+
+      rmSync(entrypoint);
+      const disconnected = Bun.spawnSync(deferred.argv, {
+        cwd: deferred.cwd,
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...fixtureEnvironmentWithPath(bin), SEMCTX_CONSUMER_LOG: log, SEMCTX_DEFERRED: "1" },
+      });
+      expect(disconnected.exitCode).toBe(1);
+      expect(readFileSync(log, "utf8").trim().split("\n")).toHaveLength(afterReplay.length);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
 
   test("preserves a structured nonzero setup report instead of flattening it into stderr", () => {
     const report = {
@@ -814,26 +1034,38 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
     const profile = join(root, "profile");
     const project = join(root, "project");
     const bin = join(root, "bin");
+    const programData = join(root, "program-data");
     const unexpected = join(root, "unexpected-codex-invocation");
     mkdirSync(profile);
     mkdirSync(bin);
+    mkdirSync(programData);
     mkdirSync(join(project, ".git"), { recursive: true });
     writeFileSync(join(project, ".git", "HEAD"), "ref: refs/heads/main\n");
     const script = join(bin, "codex-shim.js");
     writeFileSync(script,
       `require("node:fs").writeFileSync(${JSON.stringify(unexpected)}, "called"); process.exit(9);\n`);
     if (process.platform === "win32") {
-      const compiled = Bun.spawnSync(
-        [process.execPath, "build", "--compile", script, "--outfile", join(bin, "codex.exe")],
-        { stdout: "pipe", stderr: "pipe" },
-      );
-      expect(compiled.exitCode).toBe(0);
+      const powershellProbe = join(bin, "powershell-probe.js");
+      writeFileSync(powershellProbe,
+        `process.stdout.write(Buffer.from(${JSON.stringify(programData)}).toString("base64"));\n`);
+      for (const [source, executable] of [
+        [script, join(bin, "codex.exe")],
+        [powershellProbe, join(bin, "powershell.exe")],
+      ] as const) {
+        const compiled = Bun.spawnSync(
+          [process.execPath, "build", "--compile", source, "--outfile", executable],
+          { stdout: "pipe", stderr: "pipe" },
+        );
+        expect(compiled.exitCode).toBe(0);
+      }
     } else {
       writeFileSync(join(bin, "codex"), `#!/bin/sh\n"${process.execPath}" "${script}" "$@"\n`);
       chmodSync(join(bin, "codex"), 0o755);
     }
     const environment = fixtureEnvironmentWithPath(bin);
     environment["CODEX_HOME"] = profile;
+    environment["ProgramData"] = programData;
+    environment["PROGRAMDATA"] = programData;
     environment["HOME"] = join(root, "home");
     // The read-only Windows OS query requires an existing home, never startup-created caller state.
     mkdirSync(environment["HOME"]);
@@ -2889,14 +3121,19 @@ describe("obsolete Codex cache janitor", () => {
     return { home, root, entry };
   }
 
-  function codexShim(): { directory: string; script: string; counter: string } {
-    const directory = mkdtempSync(join(tmpdir(), "semctx-janitor-codex-"));
+  function codexShim(): { directory: string; script: string; counter: string; log: string } {
+    const directory = mkdtempSync(join(tmpdir(), "semctx janitor & codex-"));
     trees.push(directory);
-    const script = join(directory, "codex-shim.js");
+    const script = process.platform === "win32"
+      ? join(directory, "node_modules", "@openai", "codex", "bin", "codex.js")
+      : join(directory, "codex-shim.js");
     const counter = join(directory, "counter.txt");
+    const log = join(directory, "argv.jsonl");
+    mkdirSync(resolve(script, ".."), { recursive: true });
     writeFileSync(
       script,
-      `const { readFileSync, writeFileSync } = await import("node:fs");
+      `const { appendFileSync, readFileSync, writeFileSync } = require("node:fs");
+appendFileSync(process.env.SEMCTX_JANITOR_LOG, JSON.stringify({ executable: process.execPath, argv: process.argv.slice(2) }) + "\\n");
 const versions = JSON.parse(process.env.SEMCTX_JANITOR_SELECTED_VERSIONS ?? "[]");
 let index = 0;
 try { index = Number(readFileSync(process.env.SEMCTX_JANITOR_COUNTER, "utf8")); } catch {}
@@ -2913,7 +3150,7 @@ process.stdout.write(JSON.stringify({ installed: [{
     if (process.platform === "win32") {
       writeFileSync(
         join(directory, "codex.cmd"),
-        "@echo off\r\n\"%SEMCTX_JANITOR_BUN%\" \"%SEMCTX_JANITOR_SHIM%\" %*\r\n",
+        "@echo off\r\nnode \"%~dp0\\node_modules\\@openai\\codex\\bin\\codex.js\" %*\r\n",
       );
     } else {
       const executable = join(directory, "codex");
@@ -2923,13 +3160,13 @@ process.stdout.write(JSON.stringify({ installed: [{
       );
       chmodSync(executable, 0o755);
     }
-    return { directory, script, counter };
+    return { directory, script, counter, log };
   }
 
-  function runJanitor(
+  function runJanitorObserved(
     request: Record<string, string>,
     selectedVersions: string | string[] = request["keepVersion"] ?? "",
-  ): number {
+  ): { exitCode: number; shim: ReturnType<typeof codexShim>; invocations: Array<{ executable: string; argv: string[] }> } {
     const payload = Buffer.from(JSON.stringify(request), "utf8").toString("base64url");
     const shim = codexShim();
     const versions = Array.isArray(selectedVersions) ? selectedVersions : [selectedVersions];
@@ -2943,12 +3180,23 @@ process.stdout.write(JSON.stringify({ installed: [{
           ...fixtureEnvironmentWithPath(shim.directory),
           SEMCTX_JANITOR_BUN: process.execPath,
           SEMCTX_JANITOR_COUNTER: shim.counter,
+          SEMCTX_JANITOR_LOG: shim.log,
           SEMCTX_JANITOR_SELECTED_VERSIONS: JSON.stringify(versions),
           SEMCTX_JANITOR_SHIM: shim.script,
         },
       },
     );
-    return child.exitCode ?? 1;
+    const invocations = existsSync(shim.log)
+      ? readFileSync(shim.log, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line))
+      : [];
+    return { exitCode: child.exitCode ?? 1, shim, invocations };
+  }
+
+  function runJanitor(
+    request: Record<string, string>,
+    selectedVersions: string | string[] = request["keepVersion"] ?? "",
+  ): number {
+    return runJanitorObserved(request, selectedVersions).exitCode;
   }
 
   test("retires only the obsolete entry and is idempotent", () => {
@@ -2967,6 +3215,42 @@ process.stdout.write(JSON.stringify({ installed: [{
     // Re-running against an already-retired entry is a no-op success, not an error.
     expect(runJanitor(request)).toBe(0);
     expect(existsSync(join(entry("0.1.17"), "dist", "semctx.js"))).toBe(true);
+  });
+
+  test.skipIf(process.platform !== "win32")("cache janitor executes the owned npm entrypoint with literal argv", () => {
+    const { root, entry } = cacheTree(["0.1.16", "0.1.17"]);
+    const request = {
+      cacheRoot: root,
+      path: entry("0.1.16"),
+      version: "0.1.16",
+      keepVersion: "0.1.17",
+    };
+    const observed = runJanitorObserved(request);
+    expect(observed.exitCode).toBe(0);
+    expect(observed.shim.directory).toContain("semctx janitor & codex-");
+    expect(observed.invocations).toEqual([
+      { executable: Bun.which("node")!, argv: ["plugin", "list", "--json"] },
+      { executable: Bun.which("node")!, argv: ["plugin", "list", "--json"] },
+    ]);
+
+    const before = observed.invocations.length;
+    rmSync(observed.shim.script);
+    const payload = Buffer.from(JSON.stringify(request), "utf8").toString("base64url");
+    const disconnected = Bun.spawnSync([process.execPath, "-e", DEFERRED_CODEX_CACHE_CLEANUP_SCRIPT, payload], {
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+      env: {
+        ...fixtureEnvironmentWithPath(observed.shim.directory),
+        SEMCTX_JANITOR_BUN: process.execPath,
+        SEMCTX_JANITOR_COUNTER: observed.shim.counter,
+        SEMCTX_JANITOR_LOG: observed.shim.log,
+        SEMCTX_JANITOR_SELECTED_VERSIONS: JSON.stringify([request.keepVersion]),
+        SEMCTX_JANITOR_SHIM: observed.shim.script,
+      },
+    });
+    expect(disconnected.exitCode).toBe(1);
+    expect(readFileSync(observed.shim.log, "utf8").trim().split("\n")).toHaveLength(before);
   });
 
   test("sweeps a leftover from an interrupted attempt", () => {
