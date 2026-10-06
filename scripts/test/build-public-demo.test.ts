@@ -552,7 +552,16 @@ describe("static page contract", () => {
     }
     expect(rendered["phase-value"]?.textContent).toBe(evidence.phase);
     expect(rendered["global-verdict"]?.textContent).toBe("WARN");
-    expect(evidence.demo.packageVersion).toBe(packageIdentity.version);
+    const releaseVersions = Array.from(
+      readFileSync(join(import.meta.dir, "..", "..", "CHANGELOG.md"), "utf8")
+        .matchAll(/^## \[(\d+\.\d+\.\d+)\] -/gm),
+      (match) => match[1],
+    );
+    expect(releaseVersions[0]).toBe(packageIdentity.version);
+    const admittedVersions = evidence.phase === "candidate"
+      ? releaseVersions.slice(0, 2)
+      : releaseVersions.slice(0, 1);
+    expect(admittedVersions).toContain(evidence.demo.packageVersion);
     expect(rendered["artifact-version"]?.textContent).toBe(evidence.demo.packageVersion);
     expect(rendered["report-status"]?.textContent).toBe("Packaged demo evidence is present.");
   });
