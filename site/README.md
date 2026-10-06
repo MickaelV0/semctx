@@ -15,7 +15,9 @@ Omit `--demo` and `--pilot` to emit the honest `NOT_OBSERVED` state. Release evi
 requires a completed packaged demo. `--commit` and `--fixture-commit` accept only full lowercase Git
 commits and label them `caller-asserted`; this builder does not authenticate them.
 
-The required PR gate accepts either lifecycle phase when it matches the package version. Pages is
+The required PR gate accepts a candidate projection for the current or immediately preceding
+published package. A release projection must match the current package version. Its observed
+version and artifact identity remain unchanged in the browser. Pages is
 published only through the manually dispatched `publish Pages` workflow, which requires the
 post-release projection before it updates the existing `gh-pages` source branch. Run the same gate
 locally first:

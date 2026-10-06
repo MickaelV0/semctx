@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import cliPackage from "../package.json";
 
 const entrypoint = resolve(import.meta.dir, "../src/index.ts");
 const roots: string[] = [];
@@ -306,6 +307,6 @@ describe("semctx setup --dry-run --json", () => {
     expect(applied.code).toBe(1); // no Git seal: files are written, analysis remains not ready
     expect(existsSync(join(root, ".github", "workflows", "semctx.yml"))).toBe(true);
     expect(existsSync(join(root, ".claude", "semctx.md"))).toBe(true);
-    expect(readFileSync(join(root, ".github", "workflows", "semctx.yml"), "utf8")).toContain("github-action@v0.4.1");
+    expect(readFileSync(join(root, ".github", "workflows", "semctx.yml"), "utf8")).toContain(`github-action@v${cliPackage.version}`);
   });
 });
