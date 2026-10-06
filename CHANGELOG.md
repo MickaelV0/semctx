@@ -9,6 +9,24 @@ GitHub Release advance together through the tag-driven lockstep workflow documen
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-10-06
+
+### Fixed
+
+- Codex installation accepts valid inactive execution profiles. Selected profiles, authority or
+  discovery settings, malformed values and unsupported reasoning-summary or verbosity values
+  still refuse before installation.
+- Plugin metadata follows native Codex cache selection, including a direct local override and
+  the selected version. Residual unselected versions no longer block a valid installation;
+  missing or incoherent selected payloads still refuse.
+- The reserved `latest` alias must be stable and point directly to the selected confined cache.
+  Raw traversal segments and other unsupported links refuse before following their targets.
+- Windows installation and deferred cleanup resolve verified Codex `.cmd`/`.bat` launchers to
+  Node and the adjacent JavaScript entrypoint while preserving arguments and safety deadlines.
+
+Publication, installation and active-session loading retain their separate evidence. This patch
+does not change semantic coverage, freshness requirements, execution permissions or proof gates.
+
 ## [0.4.1] - 2026-10-02
 
 ### Fixed

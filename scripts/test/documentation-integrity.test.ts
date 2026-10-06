@@ -40,7 +40,7 @@ function fixture(): string {
     "packages/mcp-server/src/tool-contract.ts",
     `const TOOL_NAMES = [\n${Array.from({ length: toolCount }, (_, index) => `  "tool-${index}",`).join("\n")}\n] as const;\n`,
   );
-  write(root, "CHANGELOG.md", `## [${version}] - 2026-10-02\n\n## [0.3.8] - 2026-10-01\n`);
+  write(root, "CHANGELOG.md", `## [${version}] - 2026-10-06\n\n## [0.3.8] - 2026-10-01\n`);
   write(root, "ROADMAP.md", `Source baseline: **v${version}**\n`);
   write(root, "docs/README.md", "# Docs\n");
   write(root, "docs/troubleshooting.md", "# Troubleshooting\n");

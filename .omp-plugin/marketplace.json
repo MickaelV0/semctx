@@ -12,10 +12,10 @@
         "source": "git-subdir",
         "url": "https://github.com/hoklims/semctx.git",
         "path": "plugins/claude-code",
-        "ref": "v0.4.1"
+        "ref": "v0.4.2"
       },
       "description": "Trace repository impact, authored intent and fail-closed migration plans in Oh My Pi.",
-      "version": "0.4.1",
+      "version": "0.4.2",
       "author": {
         "name": "hoklims",
         "email": "hoklims@gmail.com"
