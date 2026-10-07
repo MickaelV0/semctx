@@ -782,6 +782,65 @@ describe("persistent crash recovery", () => {
     expect(existsSync(activeDir(root))).toBe(true);
   });
 
+  it.each([
+    { state: "BEGIN", at: "now", transactionId: "id", entries: "invalid" },
+    { state: "BEGIN", at: "now", transactionId: "id", entries: [] },
+    { state: "PREPARED", at: "now", transactionId: 42, entries: [] },
+  ])("rejects out-of-schema journal fields before restoring authored files: %j", (record) => {
+    const { root } = twoCrashFiles();
+    expect(crashMigration(root, "after-first-replace")).toBe(86);
+    const journal = join(activeDir(root), "journal.ndjson");
+    const lines = readFileSync(journal, "utf8").trimEnd().split("\n");
+    lines[0] = JSON.stringify(record);
+    writeFileSync(journal, `${lines.join("\n")}\n`, "utf8");
+    const beforeA = readFileSync(semanticPath(root, "a.sem"));
+    const beforeB = readFileSync(semanticPath(root, "b.sem"));
+    expect(() => recoverAnchorMigration(root)).toThrow(/journal is corrupt/);
+    expect(readFileSync(semanticPath(root, "a.sem"))).toEqual(beforeA);
+    expect(readFileSync(semanticPath(root, "b.sem"))).toEqual(beforeB);
+    expect(existsSync(activeDir(root))).toBe(true);
+  });
+
+  it.each([null, [], 42, "record", {}, { state: "BEGIN", transactionId: "id" }, { state: "UNKNOWN", at: "now" }].map((value) => ({ value })))("rejects malformed journal records with the journal path and line: %j", ({ value }) => {
+    const { root } = twoCrashFiles();
+    expect(crashMigration(root, "after-first-replace")).toBe(86);
+    const journal = join(activeDir(root), "journal.ndjson");
+    const lines = readFileSync(journal, "utf8").trimEnd().split("\n");
+    lines[0] = JSON.stringify(value);
+    writeFileSync(journal, `${lines.join("\n")}\n`, "utf8");
+    const beforeA = readFileSync(semanticPath(root, "a.sem"));
+    let caught: unknown;
+    try { recoverAnchorMigration(root); } catch (error) { caught = error; }
+    expect(caught).toMatchObject({
+      code: "STORE_ERROR", details: { reason: "TRANSACTION_JOURNAL_CORRUPT", path: journal, line: 1 },
+    });
+    expect(readFileSync(semanticPath(root, "a.sem"))).toEqual(beforeA);
+    expect(existsSync(activeDir(root))).toBe(true);
+  });
+
+  it.each([
+    { beforeHash: ["a".repeat(64)] },
+    { afterHash: ["a".repeat(64)] },
+    { beforeHash: null },
+    { relPath: 42 },
+    { mode: "420" },
+    { mode: 1.5 },
+  ])("rejects malformed prepared entries before restoring authored files: %j", (patch) => {
+    const { root } = twoCrashFiles();
+    expect(crashMigration(root, "after-first-replace")).toBe(86);
+    const journal = join(activeDir(root), "journal.ndjson");
+    const records = readFileSync(journal, "utf8").trimEnd().split("\n").map((line) => JSON.parse(line));
+    const prepared = records.find((record) => record.state === "PREPARED");
+    prepared.entries[0] = { ...prepared.entries[0], ...patch };
+    writeFileSync(journal, `${records.map((record) => JSON.stringify(record)).join("\n")}\n`, "utf8");
+    const beforeA = readFileSync(semanticPath(root, "a.sem"));
+    const beforeB = readFileSync(semanticPath(root, "b.sem"));
+    expect(() => recoverAnchorMigration(root)).toThrow(/journal is corrupt/);
+    expect(readFileSync(semanticPath(root, "a.sem"))).toEqual(beforeA);
+    expect(readFileSync(semanticPath(root, "b.sem"))).toEqual(beforeB);
+    expect(existsSync(activeDir(root))).toBe(true);
+  });
+
   it("fails closed on a third target hash before restoring any sibling", () => {
     const { root } = twoCrashFiles();
     expect(crashMigration(root, "after-first-replace")).toBe(86);

@@ -49,6 +49,7 @@ import {
 import { TargetArchitectureArtifactV1Schema } from "@semantic-context/semantic-engine";
 import { SETUP_POLYGLOT_V1_REFUSE_REASON_CODE } from "@semantic-context/app-services";
 import { ControlExplorerOutputSchema } from "./control-explorer";
+import { HandoffCapsuleSchema } from "@semantic-context/semantic-engine";
 import { mcpSchema } from "./schema-boundary";
 import type { SemctxToolName } from "./tool-contract";
 
@@ -414,21 +415,15 @@ const SemanticInspectionSchema = z.object({
   linkResolutions: described(z.array(LinkResolutionSchema), "Repository-link resolutions."),
 }).strict();
 
-const HandoffSchema = z.object({
-  version: described(z.literal(1), "Handoff-capsule schema version."),
-  createdAt: described(z.string(), "ISO capture timestamp."),
-  activeChangeId: described(z.string().optional(), "Optional active change identifier."),
-  changeLifecycle: described(z.string().optional(), "Optional active change lifecycle."),
-  statement: described(z.string().optional(), "Optional active change statement."),
-  touchedInvariants: stringArray("Invariants to preserve."),
-  proofsObtained: stringArray("Evidence already proven."),
-  pendingProofs: stringArray("Evidence still pending."),
-  activeAssumptions: stringArray("Active assumption identifiers."),
-  exploredLinks: stringArray("Repository links already explored."),
-  openUnknowns: stringArray("Open unknown identifiers."),
-  nextValidations: stringArray("Next required validations."),
-  note: described(z.string().optional(), "Optional handoff note."),
-}).strict();
+const convertedHandoffSchema = mcpSchema(HandoffCapsuleSchema);
+const versionDescription = HandoffCapsuleSchema.shape.version.description;
+const HandoffSchema = convertedHandoffSchema instanceof z.ZodObject
+  && convertedHandoffSchema.shape.version instanceof z.ZodType
+  && versionDescription !== undefined
+  ? convertedHandoffSchema.safeExtend({
+      version: convertedHandoffSchema.shape.version.describe(versionDescription),
+    })
+  : convertedHandoffSchema;
 
 const ResumeSchema = z.union([
   HandoffSchema,
