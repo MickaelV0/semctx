@@ -4,12 +4,14 @@ import {
   codexPluginManifestIdentity,
   isCanonicalClaudeMarketplaceRecord,
   isHostInterfaceUnsupportedFailure,
+  normalizeGitSource,
   PLUGIN_DELIVERY_MAX_HOST_OUTPUT_BYTES,
   PLUGIN_DELIVERY_QUERY_TIMEOUT_MS,
   PLUGIN_DELIVERY_RELEASE_URL,
   readCodexMetadataObject,
   readCodexPluginMetadataInventory,
   readClaudePluginMetadataInventory,
+  redactUrlUserInfo,
   resolveClaudePluginHome,
   runPluginDeliveryQuery,
   sameCodexMarketplaceIdentity,
@@ -808,6 +810,19 @@ function hostReport(requested: boolean): HostInstallReport {
   };
 }
 
+function redactHostReport(report: HostInstallReport): void {
+  if (typeof report.version === "string") report.version = redactUrlUserInfo(report.version);
+  if (report.error !== undefined) report.error = redactUrlUserInfo(report.error);
+  for (const step of report.steps) {
+    step.action = redactUrlUserInfo(step.action);
+    step.command = step.command.map(redactUrlUserInfo);
+    if (step.detail !== undefined) step.detail = redactUrlUserInfo(step.detail);
+  }
+  for (const deferral of report.deferrals ?? []) {
+    deferral.detail = redactUrlUserInfo(deferral.detail);
+  }
+}
+
 function selected(selection: HostSelection, host: Host): boolean {
   return selection === "auto" || selection === "all" || selection === host;
 }
@@ -836,8 +851,12 @@ function parseSelection(args: ParsedArgs): HostSelection {
   );
 }
 
-function compactError(result: CommandResult): string {
+function rawCommandError(result: CommandResult): string {
   return (result.err || result.out || `command exited ${result.code}`).trim();
+}
+
+function compactError(result: CommandResult): string {
+  return redactUrlUserInfo(rawCommandError(result));
 }
 
 function runMutation(
@@ -872,7 +891,7 @@ interface CodexCleanupOperation {
 }
 
 function isLockedCodexCacheRemoval(result: CommandResult): boolean {
-  const detail = compactError(result).toLowerCase();
+  const detail = rawCommandError(result).toLowerCase();
   return detail.includes("failed to remove existing")
     && detail.includes("cache entry")
     && detail.includes("os error 32");
@@ -944,7 +963,7 @@ function isLockedCodexCacheReplacement(
   result: CommandResult,
 ): boolean {
   if (runtime.platform !== "win32") return false;
-  const detail = compactError(result).toLowerCase();
+  const detail = rawCommandError(result).toLowerCase();
   return detail.includes("cache entry")
     && (detail.includes("failed to back up") || detail.includes("failed to remove existing"))
     && CODEX_CACHE_LOCK_PATTERN.test(detail);
@@ -1205,16 +1224,6 @@ function parseCodexPlugins(result: CommandResult): CodexPlugin[] | null {
   return result.code === 0 && Array.isArray(installed)
     ? objectEntries<CodexPlugin>(installed)
     : null;
-}
-
-function normalizeGitSource(value: unknown): string {
-  if (typeof value !== "string") return "";
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/^git@github\.com:/, "https://github.com/")
-    .replace(/\/+$/, "")
-    .replace(/\.git$/, "");
 }
 
 function isSemctxSource(value: unknown): boolean {
@@ -1819,6 +1828,7 @@ export function executeInstall(
       }
       else installClaude(root, inspectionDryRun, runtime, report);
     }
+    for (const report of Object.values(inspected)) redactHostReport(report);
     return inspected;
   };
   const hostsAdmissible = (candidate: Record<Host, HostInstallReport>): boolean => {
