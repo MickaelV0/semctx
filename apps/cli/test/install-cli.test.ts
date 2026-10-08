@@ -3557,3 +3557,24 @@ process.stdout.write(JSON.stringify({ installed: [{
     expect(existsSync(join(entry("0.1.17"), "dist", "semctx.js"))).toBe(true);
   });
 });
+
+describe("Claude inventory JSON boundary", () => {
+  for (const entry of [null, 1, "plugin", []]) {
+    for (const inventory of ["claudeMarketplaces", "claudePlugins"] as const) {
+      test(`rejects ${inventory} entry ${JSON.stringify(entry)} before mutation`, () => {
+        const runtime = fakeRuntime({ codex: false, claude: true, [inventory]: [entry] });
+        const report = executeInstall("C:\\work\\project", parseArgs(["install", "--host", "claude", "--skip-setup"]), runtime);
+        expect(report.ok).toBe(false);
+        expect(report.hosts.claude.status).toBe("failed");
+        expect(report.hosts.claude.error).toContain(inventory === "claudeMarketplaces" ? "cannot inspect Claude marketplaces" : "cannot inspect Claude plugins");
+        expect(runtime.commands.some((command) => command.includes("add") || command.includes("install") || command.includes("enable"))).toBe(false);
+      });
+    }
+  }
+  test("rejects a malformed final inventory through a structured failure", () => {
+    const runtime = fakeRuntime({ codex: false, claude: true, claudePluginsAfter: [null] });
+    const report = executeInstall("C:\\work\\project", parseArgs(["install", "--host", "claude", "--skip-setup"]), runtime);
+    expect(report.ok).toBe(false);
+    expect(report.hosts.claude.error).toContain("cannot inspect final Claude plugin state");
+  });
+});
