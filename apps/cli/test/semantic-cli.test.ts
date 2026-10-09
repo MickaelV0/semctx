@@ -1,14 +1,19 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
-import { cpSync, rmSync, mkdtempSync, writeFileSync, existsSync, readFileSync } from "node:fs";
+import { cpSync, rmSync, mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SAMPLE_REPO } from "@semantic-context/test-fixtures";
 import { activeChangePath, loadActiveChange, loadSemanticModel } from "@semantic-context/semantic-engine";
-import { parseArgs } from "../src/args";
+import { parseArgs, type ParsedArgs } from "../src/args";
 import { runInit } from "../src/commands/init";
 import { runIndex } from "../src/commands/index-cmd";
 import { runSemantic } from "../src/commands/semantic";
 import { runChange } from "../src/commands/change";
+import { createGlobSelectionConfig } from "@semantic-context/core";
+import { initWorkspace } from "@semantic-context/repository-store";
+import { indexRepository, openChange } from "@semantic-context/app-services";
+import { initSemanticScaffold, changeFilePath } from "@semantic-context/semantic-engine";
+import { changeVerifyTool, changeCloseTool } from "../../../packages/mcp-server/src/semantic-tools";
 
 let root: string;
 
@@ -44,7 +49,7 @@ function git(...args: string[]): void {
 }
 
 /** Run a CLI command, capturing stdout so we can assert on JSON payloads and verdicts. */
-function run(fn: (root: string, args: ReturnType<typeof parseArgs>) => number, argv: string[]): { code: number; out: string } {
+function run(fn: (root: string, args: ParsedArgs) => number, argv: string[], targetRoot = root): { code: number; out: string } {
   const originalWrite = process.stdout.write.bind(process.stdout);
   let out = "";
   (process.stdout.write as unknown) = (chunk: string): boolean => {
@@ -52,7 +57,7 @@ function run(fn: (root: string, args: ReturnType<typeof parseArgs>) => number, a
     return true;
   };
   try {
-    const code = fn(root, parseArgs([...argv, "--root", root]));
+    const code = fn(targetRoot, parseArgs([...argv, "--root", targetRoot]));
     return { code, out };
   } finally {
     process.stdout.write = originalWrite;
@@ -227,5 +232,73 @@ describe("semctx change — CLI end-to-end (PARTIAL → VERIFIED)", () => {
     expect(loadActiveChange(root)).toBeUndefined();
     const model = loadSemanticModel(root);
     expect(model.model.changes.find((x) => x.id === CHANGE)?.lifecycle).toBe("verified");
+  });
+});
+
+describe("Python authored proof at CLI and MCP consumer boundaries", () => {
+  it("returns equivalent PARTIAL reports, honors fail-on partial, and refuses both closes without writes", () => {
+    const fixture = mkdtempSync(join(tmpdir(), "semctx-python-consumers-"));
+    const change = "change.python-consumers";
+    try {
+      mkdirSync(join(fixture, "src"));
+      writeFileSync(join(fixture, ".gitignore"), ".semctx/\n");
+      writeFileSync(join(fixture, "src", "service.py"), "def service():\n    return 1\n");
+      writeFileSync(join(fixture, "src", "test_service.py"),
+        "from service import service\n\ndef test_service():\n    assert service() == 1\n");
+      for (const args of [["init", "-q"], ["add", "."], ["commit", "-q", "-m", "fixture"]]) {
+        const result = Bun.spawnSync(["git", "-c", "user.name=Semctx Test",
+          "-c", "user.email=semctx@example.test", ...args],
+        { cwd: fixture, stdout: "pipe", stderr: "pipe" });
+        if (result.exitCode !== 0) throw new Error(new TextDecoder().decode(result.stderr));
+      }
+      initWorkspace(fixture, { ...createGlobSelectionConfig(fixture), include: ["src/**/*.py"],
+        languages: { typescript: "on", python: "on", markdown: "on", sql: "on" } });
+      initSemanticScaffold(fixture);
+      writeFileSync(join(fixture, ".semctx", "semantic", "invariants.sem"),
+        "invariant invariant.python.stable\n  statement: Service behavior remains stable.\n  status: declared\n  tag: critical\n  link: file:src/service.py\n  proved_by: evidence.python.test\n");
+      writeFileSync(join(fixture, ".semctx", "semantic", "evidence.sem"),
+        "evidence evidence.python.test\n  statement: Preservation regression is tested.\n  status: tested\n  link: test:src/test_service.py\n");
+      writeFileSync(join(fixture, "src", "service.py"),
+        "def service():\n    import importlib\n    importlib.import_module('math')\n    return 1\n");
+      openChange(fixture, { id: change, statement: "Preserve Python service", provenance: "author",
+        preserves: ["invariant.python.stable"], requiresEvidence: ["evidence.python.test"] });
+      indexRepository(fixture, "2026-10-09T10:01:00.000Z");
+      const contractPath = changeFilePath(fixture, change);
+      const pointerPath = activeChangePath(fixture);
+      const contractBefore = readFileSync(contractPath, "utf8");
+      const pointerBefore = readFileSync(pointerPath, "utf8");
+
+      const cli = run(runChange, ["change", "verify", change, "--format", "json"], fixture);
+      const strict = run(runChange, ["change", "verify", change, "--format", "json",
+        "--fail-on", "partial"], fixture);
+      const mcp = changeVerifyTool(fixture, { changeId: change });
+
+      expect(cli.code).toBe(0);
+      expect(strict.code).toBe(3);
+      expect(JSON.parse(cli.out)).toEqual(mcp);
+      expect(JSON.parse(strict.out)).toEqual(mcp);
+      expect(mcp.verdict).toBe("PARTIAL");
+      expect(mcp.preserved).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: "invariant.python.stable", critical: true, state: "proved" }),
+      ]));
+      expect(mcp.underlying.verdict).toBe("WARN");
+      expect(mcp.underlying.findings).toEqual(expect.arrayContaining([
+        expect.objectContaining({ rule: "analysis_scope_incomplete", severity: "warn" }),
+      ]));
+      expect(mcp.underlying.unknowns.some((unknown) =>
+        unknown.includes("No complete negative reference"))).toBe(true);
+      expect(readFileSync(contractPath, "utf8")).toBe(contractBefore);
+      expect(readFileSync(pointerPath, "utf8")).toBe(pointerBefore);
+      expect(() => run(runChange, ["change", "close", change], fixture))
+        .toThrow("composed verification is PARTIAL");
+      expect(readFileSync(contractPath, "utf8")).toBe(contractBefore);
+      expect(readFileSync(pointerPath, "utf8")).toBe(pointerBefore);
+      expect(() => changeCloseTool(fixture, { id: change }))
+        .toThrow("composed verification is PARTIAL");
+      expect(readFileSync(contractPath, "utf8")).toBe(contractBefore);
+      expect(readFileSync(pointerPath, "utf8")).toBe(pointerBefore);
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
   });
 });

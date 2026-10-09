@@ -29,13 +29,20 @@ then folds in the contract:
    tests, PASS/WARN/BLOCK), embedded verbatim under `underlying`. An underlying **BLOCK** contributes
    a `block` finding; an underlying **WARN** contributes a `warn` finding — so the composite can
    never be more optimistic than the impact analysis it composes (a WARN floors it at PARTIAL).
-2. **Preserved invariants** — for each `preserves` id, the invariant's Plane-A **footprint** (its
-   linked `inv:`/`sym:` ids, expanded through `constrained_by`) is intersected with the underlying
-   findings: touched with a blocking **or advisory** finding (i.e. changed without a covering test,
-   regardless of the repo's rule tier) → `unproven`; touched with no finding on it (covered) →
-   `proved`; not in the diff → `untouched`; declared `contradicted` → `contradicted`; not declared →
-   `missing`. A `critical`-tagged invariant that is `unproven` is BLOCK-worthy **even when the repo
-   relaxed its rule to warn** — the semantic layer asserts its own criticality.
+2. **Preserved invariants** — resolve each invariant's typed repository links with the shared
+   resolver. Only actual graph-node targets form its Plane-A **footprint**, including indexed nodes
+   expanded from file links and incoming `constrained_by` symbols, deduplicated and sorted.
+   Unresolved links stay stale; claims and evidence records do not invent graph footprints.
+   A declared contradiction → `contradicted`; an absent declaration → `missing`; an invariant
+   outside the changed-symbol/finding footprint → `untouched`, even if it has authored proof.
+   For a touched invariant, genuine missing coverage → `unproven`, including advisory findings.
+   Missing coverage means exactly `invariant_touched_without_test`,
+   `critical_contract_changed_without_test`, `contract_changed_without_test` or
+   `security_surface_without_verification`, classified by rule, not severity or wording.
+   Blocking findings and other adverse/unknown WARN findings also prevent automatic proof, without
+   falsely claiming that tests are absent. Otherwise a covered touch → `proved`.
+   Under `analysis_scope_incomplete`, use the bounded authored-test admission below instead.
+   A critical-tagged `unproven` invariant still blocks even if the repository rule is advisory.
 3. **Required evidence** — each `requires_evidence` id must have a *proven* status
    (`tested`/`statically_verified`/`runtime_verified`); otherwise it is a pending proof obligation.
 4. **Open unknowns** — listed; non-critical contribute PARTIAL, critical (tagged) escalate. An
@@ -58,6 +65,28 @@ verdict = BLOCKED  if any block finding      (underlying BLOCK, critical unprove
                                               unknown, non-critical unproven invariant)
         | VERIFIED otherwise
 ```
+
+### Authored test proof under incomplete analysis
+
+A scoped `analysis_scope_incomplete` finding applies through its indexed node footprint; an
+unscoped one conservatively applies to every touched invariant. It does not assert missing tests
+and does not authorize the covered-touch shortcut. Preservation is `proved` only if the invariant
+has an outgoing `proved_by` to evidence required by the selected contract, that node has kind
+`evidence` and a `PROVEN_STATUSES` status, every repository link on both nodes resolves, and at
+least one evidence target is an actual indexed graph node of kind `test`.
+
+A resolved test-file link can qualify; a source path, test-like name, non-test target or one good
+link alongside a stale/ambiguous link cannot. Missing/reversed relevance, unrequired evidence or
+an unproven status cannot qualify either. Without admissible proof, report insufficient proof
+under incomplete analysis, not absent tests. Unknown WARN rules do not authorize proof.
+Underlying BLOCK, blocking footprint findings, genuine missing coverage and contradicted
+invariants override admission. Other independent gates remain authoritative.
+
+This proves authored preservation only: the underlying report stays verbatim and WARN still
+floors the aggregate at PARTIAL. Python negative incompleteness remains; no `tested_by`/`covers`
+edge, test runner, execution attestation or additional freshness mechanism is invented. Close
+still refuses PARTIAL/BLOCKED/STALE. See the fork-local accepted clarification in
+[ADR 0009](../adr/0009-semantic-layer-is-separate-from-the-repository-graph.md).
 
 Crucially, `change verify` **never turns PARTIAL into VERIFIED on its own**. `semctx` is static; a
 required proof becomes obtained only when you run the test and record the evidence node's status as

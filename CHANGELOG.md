@@ -9,6 +9,18 @@ GitHub Release advance together through the tag-driven lockstep workflow documen
 
 ## [Unreleased]
 
+### Fixed
+
+- Composed change verification resolves typed invariant links into indexed graph footprints,
+  including file-link expansion, rather than treating stripped file paths as graph IDs.
+- Genuine missing coverage is classified by its four exact rules, separately from incomplete
+  analysis and adverse/unknown advisory findings, so incomplete analysis no longer claims tests
+  are absent. Under incomplete analysis, touched preservation admits only an outgoing authored
+  `proved_by` to required proven evidence with fully resolved links and an actual indexed test.
+  Underlying reports remain unchanged; WARN still yields at least PARTIAL. Missing coverage,
+  blocking/contradiction, stale/freshness and close gates remain authoritative; no Python coverage
+  edge or execution attestation is fabricated.
+
 ## [0.4.2] - 2026-10-06
 
 ### Fixed

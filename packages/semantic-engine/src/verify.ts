@@ -10,9 +10,9 @@ import { compareIds } from "@semantic-context/core";
 import type { VerifyReport, SemanticPolicyConfig } from "@semantic-context/core";
 import { GraphIndex } from "@semantic-context/context-engine";
 import { SemanticIndex, PROVEN_STATUSES } from "@semantic-context/semantic-model";
-import type { SemanticModel, ChangeContract, ChangeLifecycle } from "@semantic-context/semantic-model";
-import type { RepositoryFacts } from "./links";
-import { resolveRepositoryLinks } from "./links";
+import type { SemanticModel, SemanticNode, RepositoryLink, ChangeContract, ChangeLifecycle } from "@semantic-context/semantic-model";
+import type { RepositoryFacts, RepositoryLinkIndex } from "./links";
+import { buildRepositoryLinkIndex, resolveRepositoryLink } from "./links";
 
 export const CHANGE_VERIFY_SCHEMA_VERSION = 1 as const;
 
@@ -87,29 +87,78 @@ export interface VerifyChangeArgs {
   policy: SemanticPolicyConfig;
 }
 
-/** Map a semantic invariant onto Plane-A graph ids: its direct links plus symbols they constrain. */
-function invariantFootprint(linkedRefs: readonly string[], index: GraphIndex): string[] {
+/** Map typed links onto resolved Plane-A nodes plus symbols they constrain. */
+function invariantFootprint(links: readonly RepositoryLink[], linkIndex: RepositoryLinkIndex, index: GraphIndex): string[] {
   const ids = new Set<string>();
-  for (const ref of linkedRefs) {
-    if (!index.has(ref)) continue;
-    ids.add(ref);
-    // A linked repo invariant expands to the symbols it constrains (`constrained_by` edges point sym→inv).
-    for (const edge of index.inEdges(ref, ["constrained_by"])) ids.add(edge.from);
+  for (const link of links) {
+    const resolution = resolveRepositoryLink(link, linkIndex);
+    if (!resolution.resolved) continue;
+    for (const target of resolution.targets) {
+      if (target.kind !== "repository_node") continue;
+      ids.add(target.id);
+      // `constrained_by` edges point sym→inv.
+      for (const edge of index.inEdges(target.id, ["constrained_by"])) ids.add(edge.from);
+    }
   }
   return [...ids].sort(compareIds);
 }
 
-function underlyingBlockNodeIds(report: VerifyReport): Set<string> {
-  const ids = new Set<string>();
-  for (const f of report.findings) if (f.severity === "block") for (const id of f.nodeIds) ids.add(id);
-  return ids;
+const MISSING_COVERAGE_RULES: Record<string, true> = {
+  invariant_touched_without_test: true,
+  critical_contract_changed_without_test: true,
+  contract_changed_without_test: true,
+  security_surface_without_verification: true,
+};
+
+/** Incompleteness and other adverse findings are not claims that tests are absent. */
+function classifyUnderlyingFindings(report: VerifyReport) {
+  const missingCoverage = new Set<string>();
+  const blocking = new Set<string>();
+  const incomplete = new Set<string>();
+  const otherWarn = new Set<string>();
+  let unscopedIncomplete = false;
+  let unscopedOtherWarn = false;
+  for (const finding of report.findings) {
+    if (finding.severity === "block") for (const id of finding.nodeIds) blocking.add(id);
+    if (Object.hasOwn(MISSING_COVERAGE_RULES, finding.rule)) {
+      for (const id of finding.nodeIds) missingCoverage.add(id);
+    } else if (finding.rule === "analysis_scope_incomplete") {
+      for (const id of finding.nodeIds) incomplete.add(id);
+      if (finding.nodeIds.length === 0) unscopedIncomplete = true;
+    } else if (finding.severity === "warn") {
+      for (const id of finding.nodeIds) otherWarn.add(id);
+      if (finding.nodeIds.length === 0) unscopedOtherWarn = true;
+    }
+  }
+  return { missingCoverage, blocking, incomplete, otherWarn, unscopedIncomplete, unscopedOtherWarn };
 }
 
-/** Node ids flagged by an *advisory* (warn) underlying finding — touched, but not test-backed. */
-function underlyingWarnNodeIds(report: VerifyReport): Set<string> {
-  const ids = new Set<string>();
-  for (const f of report.findings) if (f.severity === "warn") for (const id of f.nodeIds) ids.add(id);
-  return ids;
+/** Authored relevance plus a required obtained proof with a real indexed test target. */
+function hasExplicitTestProof(
+  invariant: SemanticNode,
+  requiredEvidence: ReadonlySet<string>,
+  semIndex: SemanticIndex,
+  linkIndex: RepositoryLinkIndex,
+  graphIndex: GraphIndex,
+): boolean {
+  if (invariant.repositoryLinks.some((link) => !resolveRepositoryLink(link, linkIndex).resolved)) return false;
+  for (const relation of invariant.relations) {
+    if (relation.kind !== "proved_by" || !requiredEvidence.has(relation.to)) continue;
+    const evidence = semIndex.node(relation.to);
+    if (evidence?.kind !== "evidence" || !PROVEN_STATUSES.has(evidence.status)) continue;
+    let allResolved = true;
+    let hasTest = false;
+    for (const link of evidence.repositoryLinks) {
+      const resolution = resolveRepositoryLink(link, linkIndex);
+      if (!resolution.resolved) {
+        allResolved = false;
+        break;
+      }
+      if (resolution.targets.some((target) => target.kind === "repository_node" && graphIndex.node(target.id)?.kind === "test")) hasTest = true;
+    }
+    if (allResolved && hasTest) return true;
+  }
+  return false;
 }
 
 function underlyingTouchedIds(report: VerifyReport): Set<string> {
@@ -126,12 +175,13 @@ export function verifyChangeContract(args: VerifyChangeArgs): ChangeVerifyReport
   const { contract, model, facts, verifyReport, policy } = args;
   const semIndex = new SemanticIndex(model);
   const graphIndex = new GraphIndex(facts.graph);
+  const linkIndex = buildRepositoryLinkIndex(facts);
+  const requiredEvidence = new Set(contract.requiresEvidence);
   const criticalTags = new Set(policy.criticalInvariantTags);
   const findings: SemanticFinding[] = [];
   const stale: SemanticFinding[] = [];
 
-  const blockNodeIds = underlyingBlockNodeIds(verifyReport);
-  const warnNodeIds = underlyingWarnNodeIds(verifyReport);
+  const underlying = classifyUnderlyingFindings(verifyReport);
   const touchedIds = underlyingTouchedIds(verifyReport);
 
   // --- underlying verdict: fold in BLOCK *and* WARN so the composite is never more optimistic than
@@ -154,24 +204,31 @@ export function verifyChangeContract(args: VerifyChangeArgs): ChangeVerifyReport
       continue;
     }
     const critical = node.tags.some((t) => criticalTags.has(t));
-    const footprint = invariantFootprint(node.repositoryLinks.map((l) => l.ref), graphIndex);
+    const footprint = invariantFootprint(node.repositoryLinks, linkIndex, graphIndex);
     let state: PreservedState;
     if (node.status === "contradicted") {
       state = "contradicted";
       findings.push({ kind: "invariant_contradicted", severity: "block", message: `preserved invariant "${invId}" is marked contradicted`, refs: [invId] });
-    } else if (intersects(footprint, blockNodeIds) || intersects(footprint, warnNodeIds)) {
-      // Touched with no covering test. The underlying finding may be strict (block) or advisory
-      // (warn) per repo config, but either way this invariant is NOT proven for this change — never
-      // label it "proved". The semantic layer asserts its own criticality: a critical invariant is
-      // BLOCK-worthy even when the repo relaxed the rule to warn.
-      state = "unproven";
-      if (critical) findings.push({ kind: "critical_invariant_unproven", severity: "block", message: `critical invariant "${invId}" is touched by the change with no covering test`, refs: [invId, ...footprint] });
-      else if (policy.requireProofForActiveChange && contract.lifecycle === "active") findings.push({ kind: "invariant_unproven", severity: "warn", message: `invariant "${invId}" is touched with no covering test`, refs: [invId, ...footprint] });
-    } else if (intersects(footprint, touchedIds)) {
-      // Touched by the diff with no block/warn finding referencing it → covered.
-      state = "proved";
-    } else {
+    } else if (!intersects(footprint, touchedIds)) {
       state = "untouched";
+    } else {
+      let unprovenReason: string | undefined;
+      if (intersects(footprint, underlying.missingCoverage)) {
+        unprovenReason = "is touched with no covering test";
+      } else if (verifyReport.verdict === "BLOCK" || intersects(footprint, underlying.blocking)) {
+        unprovenReason = "is touched while underlying verification has a blocking finding";
+      } else if (intersects(footprint, underlying.otherWarn) || underlying.unscopedOtherWarn) {
+        unprovenReason = "is touched with an adverse or unknown underlying advisory finding";
+      } else if (intersects(footprint, underlying.incomplete) || underlying.unscopedIncomplete) {
+        if (!hasExplicitTestProof(node, requiredEvidence, semIndex, linkIndex, graphIndex)) {
+          unprovenReason = "is touched but analysis is incomplete and no admissible authored test proof is available";
+        }
+      }
+      state = unprovenReason === undefined ? "proved" : "unproven";
+      if (unprovenReason !== undefined) {
+        if (critical) findings.push({ kind: "critical_invariant_unproven", severity: "block", message: `critical invariant "${invId}" ${unprovenReason}`, refs: [invId, ...footprint] });
+        else if (policy.requireProofForActiveChange && contract.lifecycle === "active") findings.push({ kind: "invariant_unproven", severity: "warn", message: `invariant "${invId}" ${unprovenReason}`, refs: [invId, ...footprint] });
+      }
     }
     preserved.push({ id: invId, statement: node.statement, critical, state, footprint });
   }
@@ -221,10 +278,14 @@ export function verifyChangeContract(args: VerifyChangeArgs): ChangeVerifyReport
 
   // --- stale links affecting this change or the nodes it references
   const scopeIds = new Set<string>([contract.id, ...contract.preserves, ...contract.requiresEvidence, ...contract.serves, ...contract.openUnknowns]);
-  const linkReport = resolveRepositoryLinks(model, facts);
-  for (const s of linkReport.staleLinks) {
-    if (!scopeIds.has(s.ownerId)) continue;
-    const finding: SemanticFinding = { kind: "stale_link", severity: "stale", message: `link ${s.link.kind} "${s.link.ref}" on "${s.ownerId}" no longer resolves (${s.reason ?? "unresolved"})`, refs: [s.ownerId, s.link.ref] };
+  const scopedLinks = [...model.nodes, ...model.changes]
+    .filter((owner) => scopeIds.has(owner.id))
+    .flatMap((owner) => owner.repositoryLinks.map((link) => ({ ownerId: owner.id, link })))
+    .sort((a, b) => compareIds(a.ownerId, b.ownerId) || compareIds(a.link.kind, b.link.kind) || compareIds(a.link.ref, b.link.ref));
+  for (const { ownerId, link } of scopedLinks) {
+    const resolution = resolveRepositoryLink(link, linkIndex);
+    if (resolution.resolved) continue;
+    const finding: SemanticFinding = { kind: "stale_link", severity: "stale", message: `link ${link.kind} "${link.ref}" on "${ownerId}" no longer resolves (${resolution.reason ?? "unresolved"})`, refs: [ownerId, link.ref] };
     findings.push(finding);
     stale.push(finding);
   }

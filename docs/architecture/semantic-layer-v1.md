@@ -248,8 +248,18 @@ surfaces share the same strict schemas, reason precedence and canonical serializ
 never bypasses, `verify diff`:
 
 1. Run the existing `analyzeDiff` → `buildVerifyReport` (Plane-A impact/verdict), reused verbatim.
-2. `preserves`: each preserved invariant is checked resolvable and proven (linked repo invariant is
-   covered / not among untested-touched).
+2. `preserves`: resolve typed links into actual indexed graph-node footprints, expanding file links
+   and incoming `constrained_by` edges with deterministic deduplication. Missing/contradicted
+   declarations retain their states; invariants outside the changed-symbol/finding footprint remain
+   untouched. Exact missing-coverage rules keep touched preservation unproven at any severity.
+   Blocking and other adverse/unknown WARN findings do not manufacture proof or a missing-test claim.
+   Under `analysis_scope_incomplete`, a touched invariant needs an outgoing `proved_by` to
+   selected-contract-required evidence with a proven status, all invariant/evidence links resolved
+   and a real indexed test target. Otherwise it is unproven because analysis and proof are
+   insufficient. Unscoped incompleteness applies conservatively to touched invariants.
+   See [change-contracts.md](./change-contracts.md#authored-test-proof-under-incomplete-analysis)
+   for the admission and rejection predicates; underlying BLOCK and genuine coverage gaps override
+   authored proof.
 3. `requiresEvidence`: each required evidence node must have a *proved* status
    (`tested`/`statically_verified`/`runtime_verified`); otherwise it is an open proof obligation.
 4. `openUnknowns`: listed; non-critical → PARTIAL, critical → escalates.
@@ -258,16 +268,21 @@ never bypasses, `verify diff`:
 Verdict policy (config-driven, Section 6), and **never more optimistic than the data**:
 
 ```
-VERIFIED  all preserved invariants proved, all required evidence proved, no open blocking unknown,
-          no stale/contradiction, underlying verdict ≠ BLOCK
-PARTIAL   open non-critical unknowns or unproven required evidence, but nothing blocking
+VERIFIED  all preserved invariants proved/untouched, all required evidence proved, no open unknown,
+          no stale/contradiction or policy finding, underlying verdict = PASS
+PARTIAL   underlying WARN, open non-critical unknowns or unproven required evidence, but no block/stale
 BLOCKED   underlying BLOCK, a critical preserved invariant with no proof, a contradicted invariant,
-          or (per config) a superseded decision used by an active change
+          a blocking open unknown or (per config) a superseded decision in use
 STALE     a repository link no longer resolves, or evidence points at a removed/renamed test
 ```
 
 Output is a versioned `ChangeVerifyReport` (schemaVersion 1) that embeds the underlying
-`VerifyReport` and adds the semantic verdict, preserved/proved/partial/stale breakdowns.
+`VerifyReport` verbatim and adds the semantic verdict, preserved/proved/partial/stale breakdowns.
+Precedence remains `BLOCKED > STALE > PARTIAL > VERIFIED`. Authored test proof can establish
+preservation, not aggregate completeness: WARN stays PARTIAL, Python negative incompleteness stays
+honest, and no inferred coverage edge or execution attestation is added. Freshness refusal, stale
+links, required evidence and close gates remain unchanged; only a fresh VERIFIED result can close
+as verified.
 
 ## Config (additive, backward-compatible)
 

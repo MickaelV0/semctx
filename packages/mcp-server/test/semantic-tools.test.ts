@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
-import { cpSync, rmSync, mkdtempSync, writeFileSync } from "node:fs";
+import { cpSync, rmSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SAMPLE_REPO } from "@semantic-context/test-fixtures";
+import { createGlobSelectionConfig } from "@semantic-context/core";
 import { indexRepository } from "@semantic-context/app-services";
 import { initWorkspace } from "@semantic-context/repository-store";
-import { activeChangePath, initSemanticScaffold } from "@semantic-context/semantic-engine";
+import { activeChangePath, changeFilePath, initSemanticScaffold, loadSemanticModel } from "@semantic-context/semantic-engine";
 import {
   semanticSliceTool,
   changeOpenTool,
@@ -17,6 +18,8 @@ import {
   handoffTool,
   resumeTool,
 } from "../src/semantic-tools";
+import { parseArgs } from "../../../apps/cli/src/args";
+import { runChange } from "../../../apps/cli/src/commands/change";
 
 let root: string;
 const CHANGE = "change.payment-webhook-retry";
@@ -205,4 +208,120 @@ describe("MCP-supplied diff text carries no provenance", () => {
       "composed verification is BLOCKED",
     );
   });
+});
+
+describe("CLI and MCP close require fresh VERIFIED proof", () => {
+  for (const consumer of ["CLI", "MCP"] as const) {
+    it.each(["BLOCKED", "STALE", "VERIFIED"] as const)(
+      `${consumer} closes only VERIFIED and preserves contract/pointer on %s refusal`,
+      (verdict) => {
+        const fixture = mkdtempSync(join(tmpdir(), "semctx-close-consumer-"));
+        const change = "change.close-consumer";
+        try {
+          cpSync(SAMPLE_REPO, fixture, { recursive: true,
+            filter: (src) => !src.includes(".semctx") && !src.includes("node_modules") });
+          writeFileSync(join(fixture, ".gitignore"), ".semctx/\n");
+          git(fixture, "init", "-q");
+          git(fixture, "add", ".");
+          git(fixture, "commit", "-q", "-m", "fixture");
+          initWorkspace(fixture);
+          initSemanticScaffold(fixture);
+          changeOpenTool(fixture, { id: change, statement: "Close through real verification",
+            links: verdict === "STALE" ? ["file:src/removed.ts"] : [] });
+          indexRepository(fixture, "2026-10-09T10:02:00.000Z");
+          const contractPath = changeFilePath(fixture, change);
+          const pointerPath = activeChangePath(fixture);
+          const contractBefore = readFileSync(contractPath, "utf8");
+          const pointerBefore = readFileSync(pointerPath, "utf8");
+          // A supplied diff has no source identity on either surface. Keep it outside the indexed
+          // fixture so the refusal cannot accidentally be caused by an untracked source file.
+          const diffPath = join(tmpdir(), `${fixture.split("/").at(-1)}.diff`);
+          try {
+            if (verdict === "BLOCKED") writeFileSync(diffPath, SUPPLIED_DIFF);
+            const input = { changeId: change,
+              ...(verdict === "BLOCKED" ? { gitDiff: SUPPLIED_DIFF } : {}) };
+            const report = changeVerifyTool(fixture, input);
+            expect(report.verdict).toBe(verdict);
+            if (verdict === "BLOCKED") {
+              expect(report.underlying.findings).toEqual(expect.arrayContaining([
+                expect.objectContaining({ rule: "index_binding_stale",
+                  message: expect.stringContaining("SOURCE_IDENTITY_ABSENT") }),
+              ]));
+            }
+            expect(readFileSync(contractPath, "utf8")).toBe(contractBefore);
+            expect(readFileSync(pointerPath, "utf8")).toBe(pointerBefore);
+            const close = () => consumer === "MCP"
+              ? changeCloseTool(fixture, { id: change,
+                ...(verdict === "BLOCKED" ? { gitDiff: SUPPLIED_DIFF } : {}) })
+              : runChange(fixture, parseArgs(["change", "close", change, "--root", fixture,
+                ...(verdict === "BLOCKED" ? ["--from-file", diffPath] : [])]));
+
+            if (verdict === "VERIFIED") {
+              close();
+              expect(loadSemanticModel(fixture).model.changes.find((node) => node.id === change)?.lifecycle)
+                .toBe("verified");
+              expect(existsSync(pointerPath)).toBe(false);
+            } else {
+              expect(close).toThrow(`composed verification is ${verdict}`);
+              expect(readFileSync(contractPath, "utf8")).toBe(contractBefore);
+              expect(readFileSync(pointerPath, "utf8")).toBe(pointerBefore);
+            }
+          } finally {
+            rmSync(diffPath, { force: true });
+          }
+        } finally {
+          rmSync(fixture, { recursive: true, force: true });
+        }
+      },
+    );
+    it(`${consumer} reruns verification instead of closing from a previously VERIFIED report`, () => {
+      const fixture = mkdtempSync(join(tmpdir(), "semctx-close-freshness-"));
+      const change = "change.fresh-close";
+      try {
+        mkdirSync(join(fixture, "src"));
+        writeFileSync(join(fixture, "src", "service.py"),
+          "# @invariant stable-service: Service behavior remains stable.\ndef service():\n    return 1\n");
+        writeFileSync(join(fixture, ".gitignore"), ".semctx/\n");
+        git(fixture, "init", "-q");
+        git(fixture, "add", ".");
+        git(fixture, "commit", "-q", "-m", "fixture");
+        initWorkspace(fixture, { ...createGlobSelectionConfig(fixture), include: ["src/**/*.py"],
+          languages: { typescript: "on", python: "on", markdown: "on", sql: "on" } });
+        initSemanticScaffold(fixture);
+        writeFileSync(join(fixture, ".semctx", "semantic", "invariants.sem"),
+          "invariant invariant.python.stable\n  statement: Service behavior remains stable.\n  status: declared\n  tag: critical\n  link: file:src/service.py\n");
+        changeOpenTool(fixture, { id: change, statement: "Close only current source",
+          preserves: ["invariant.python.stable"] });
+        indexRepository(fixture, "2026-10-09T10:03:00.000Z");
+        const initiallyVerified = changeVerifyTool(fixture, { changeId: change });
+        expect(initiallyVerified.verdict).toBe("VERIFIED");
+        expect(initiallyVerified.preserved).toEqual(expect.arrayContaining([
+          expect.objectContaining({ id: "invariant.python.stable", critical: true, state: "untouched" }),
+        ]));
+        expect(initiallyVerified.preserved.find((node) => node.id === "invariant.python.stable")?.footprint.length)
+          .toBeGreaterThan(0);
+        const contractPath = changeFilePath(fixture, change);
+        const pointerPath = activeChangePath(fixture);
+        const contractBefore = readFileSync(contractPath, "utf8");
+        const pointerBefore = readFileSync(pointerPath, "utf8");
+        // Unlike an unrelated EOF comment, this changes the behavior constrained by the indexed
+        // Python invariant and the contract's explicit preservation obligation.
+        writeFileSync(join(fixture, "src", "service.py"),
+          "# @invariant stable-service: Service behavior remains stable.\ndef service():\n    return 2\n");
+
+        if (consumer === "MCP") {
+          expect(() => changeCloseTool(fixture, { id: change }))
+            .toThrow("composed verification is BLOCKED");
+        } else {
+          expect(() => runChange(fixture, parseArgs(["change", "close", change, "--root", fixture])))
+            .toThrow("composed verification is BLOCKED");
+        }
+
+        expect(readFileSync(contractPath, "utf8")).toBe(contractBefore);
+        expect(readFileSync(pointerPath, "utf8")).toBe(pointerBefore);
+      } finally {
+        rmSync(fixture, { recursive: true, force: true });
+      }
+    });
+  }
 });

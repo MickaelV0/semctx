@@ -161,6 +161,81 @@ describe("composed change verification — the four verdicts", () => {
   });
 });
 
+describe("composed verification resolves typed repository footprints", () => {
+  it("a production file anchor makes a changed contained symbol subject to its coverage finding", () => {
+    const m = model({ invTags: ["critical"], evidenceStatus: "tested" });
+    const invariant = m.nodes.find((node) => node.kind === "invariant")!;
+    invariant.repositoryLinks = [{ kind: "file", ref: "x.ts" }];
+    invariant.relations.push({ kind: "proved_by", to: "proof.p" });
+    const repositoryFacts = facts();
+    repositoryFacts.graph.nodes.push({
+      id: "sym:function:x.ts:second", kind: "function", name: "second", filePath: "x.ts",
+      evidence: [], tags: [], metadata: {},
+    });
+    const underlying = report("WARN", [{
+      rule: "contract_changed_without_test", severity: "warn", tier: "advisory", message: "second lacks coverage",
+      nodeIds: ["sym:function:x.ts:second"], locations: [],
+    }], [{ id: "sym:function:x.ts:second", name: "second", kind: "function", file: "x.ts" }]);
+    const r = verifyChangeContract({ contract: m.changes[0]!, model: m, facts: repositoryFacts, verifyReport: underlying, policy: POLICY });
+    expect(r.preserved[0]?.footprint).toEqual(["sym:function:x.ts:danger:5", "sym:function:x.ts:second"]);
+    expect(r.preserved[0]?.state).toBe("unproven");
+    expect(r.verdict).toBe("BLOCKED");
+  });
+
+  it("expands incoming constrained_by anchors into sorted deduplicated actual graph IDs", () => {
+    const m = model({ invTags: ["critical"], evidenceStatus: "tested" });
+    const invariant = m.nodes.find((node) => node.kind === "invariant")!;
+    invariant.repositoryLinks = [
+      { kind: "symbol", ref: "sym:function:x.ts:danger:5" },
+      { kind: "invariant", ref: "inv:x" },
+      { kind: "file", ref: "x.ts" },
+      { kind: "invariant", ref: "inv:x" },
+    ];
+    const repositoryFacts = facts();
+    repositoryFacts.graph.nodes.unshift({
+      id: "sym:function:y.ts:caller", kind: "function", name: "caller", filePath: "y.ts",
+      evidence: [], tags: [], metadata: {},
+    });
+    repositoryFacts.graph.edges.unshift({
+      id: "e2", kind: "constrained_by", from: "sym:function:y.ts:caller", to: "inv:x", evidence: [], metadata: {},
+    });
+    const underlying = report("PASS", [], [{ id: "sym:function:y.ts:caller", name: "caller", kind: "function", file: "y.ts" }]);
+    const r = verifyChangeContract({ contract: m.changes[0]!, model: m, facts: repositoryFacts, verifyReport: underlying, policy: POLICY });
+    expect(r.preserved[0]?.footprint).toEqual(["inv:x", "sym:function:x.ts:danger:5", "sym:function:y.ts:caller"]);
+    expect(r.preserved[0]?.state).toBe("proved");
+    expect(r.verdict).toBe("VERIFIED");
+  });
+
+  it.each([
+    { path: "test/x.test.ts", state: "proved", verdict: "PARTIAL" },
+    { path: "x.ts", state: "unproven", verdict: "BLOCKED" },
+  ])("resolved file proof at $path yields $state according to indexed target kind", ({ path, state, verdict }) => {
+    const m = model({ invTags: ["critical"], evidenceStatus: "tested" });
+    m.nodes.find((node) => node.kind === "invariant")!.relations.push({ kind: "proved_by", to: "proof.p" });
+    m.nodes.find((node) => node.kind === "evidence")!.repositoryLinks = [{ kind: "file", ref: path }];
+    const underlying = report("WARN", [{
+      rule: "analysis_scope_incomplete", severity: "warn", tier: "advisory", message: "incomplete",
+      nodeIds: ["sym:function:x.ts:danger:5"], locations: [],
+    }]);
+    const r = verifyChangeContract({ contract: m.changes[0]!, model: m, facts: facts(), verifyReport: underlying, policy: POLICY });
+    expect(r.preserved[0]?.state).toBe(state);
+    expect(r.verdict).toBe(verdict);
+    expect(r.stale).toEqual([]);
+  });
+
+  it("obtained required proof does not turn an untouched invariant into proved under unscoped incomplete analysis", () => {
+    const m = model({ invTags: ["critical"], evidenceStatus: "tested" });
+    m.nodes.find((node) => node.kind === "invariant")!.relations.push({ kind: "proved_by", to: "proof.p" });
+    const underlying = report("WARN", [{
+      rule: "analysis_scope_incomplete", severity: "warn", tier: "advisory", message: "incomplete", nodeIds: [], locations: [],
+    }], [{ id: "sym:function:other.ts:unrelated", name: "unrelated", kind: "function", file: "other.ts" }]);
+    const r = verifyChangeContract({ contract: m.changes[0]!, model: m, facts: facts(), verifyReport: underlying, policy: POLICY });
+    expect(r.preserved[0]?.state).toBe("untouched");
+    expect(r.provedEvidence.map((evidence) => evidence.id)).toEqual(["proof.p"]);
+    expect(r.verdict).toBe("PARTIAL");
+  });
+});
+
 describe("handoff capsule", () => {
   it("captures the active change, pending proofs and next validations", () => {
     const m = model({ withUnknown: true });

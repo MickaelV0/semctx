@@ -65,3 +65,71 @@ Introduce a **Semantic Layer** as a strictly separate plane, and keep the bounda
   schema is extended so a `semantic` block is no longer silently stripped.
 - Cost of the boundary: authored truth must be **written and maintained** by humans/agents; the tool
   will not invent it. That is the point — the alternative (inference) is what ADR 0005 rejected.
+
+## Fork-local clarification: explicit test proof under incomplete analysis
+
+- Status: accepted by the fork operator on 2026-10-09, by selecting
+  **Accepter la clarification**.
+- Baseline: upstream v0.4.2 / `745bac2`. This acceptance governs the fork only,
+  **not upstream**; it records a decision, not observed implementation evidence.
+
+Incomplete analysis is not evidence that tests are absent. Determine whether a
+preserved invariant is touched from the actual changed-symbol/finding footprint,
+using the shared typed repository-link resolver. Collect only resolved graph-node
+targets, retain incoming `constrained_by` expansion, and deduplicate/sort them.
+File links expand into indexed IDs; stripped paths and authored claims/evidence
+are not graph footprints. Unresolved links remain stale, never guessed.
+
+For a touched invariant affected by incomplete analysis, preservation may be
+`proved` through authored evidence if and only if:
+
+1. The invariant has an outgoing `proved_by` relation to that evidence.
+2. The selected contract requires that evidence, and its semantic kind is `evidence`.
+3. Its status is in the existing `PROVEN_STATUSES`: `tested`, `statically_verified`
+   or `runtime_verified`.
+4. Every repository link on both invariant and evidence resolves, and at least one
+   evidence target is an actual indexed node of kind `test`. One good link does
+   not excuse a stale/ambiguous link. Source paths, misleading names and non-test
+   graph targets alone are insufficient.
+5. No underlying BLOCK, contradictory invariant, blocking footprint finding or
+   genuine missing-coverage finding overrides this route.
+
+Relevance comes from the authored relation, not an invented Python coverage edge.
+Semctx tracks an obtained authored status; it does not attest execution, assertion
+quality or additional freshness.
+
+### Honesty, compatibility and delivery
+
+- Classify findings by their actual `rule`. Missing coverage is exactly
+  `invariant_touched_without_test`, `critical_contract_changed_without_test`,
+  `contract_changed_without_test` or `security_surface_without_verification`.
+  These keep touched preservation unproven, including advisory findings and
+  otherwise valid authored proof. Critical unproven invariants still block.
+- `analysis_scope_incomplete` is different. Scoped findings apply through their
+  node footprint; unscoped incompleteness conservatively applies to touched
+  invariants. Without admissible proof, report insufficient proof under incomplete
+  analysis, not absent tests. Unknown WARN rules neither assert missing coverage
+  nor authorize proof. Contradictions and other adverse findings retain their
+  actual reasons.
+- Embed the underlying report unchanged. WARN still floors the aggregate at
+  PARTIAL; BLOCK, stale/source-binding refusal, contradictions, open unknowns,
+  required evidence and superseded-decision policy remain independent. Keep
+  `BLOCKED > STALE > PARTIAL > VERIFIED`. Untouched invariants remain untouched;
+  genuinely covered PASS behavior remains. Python negative incompleteness and
+  `negativeEvidenceEligible: false` remain; no fabricated `tested_by`/`covers`.
+- This is a GOVERNED clarification under the public-contract contributor guide.
+  Schema version 1 retains existing fields, enums and meanings: proved preservation
+  is not aggregate completeness. Corrected outcomes/reasons can change, but no
+  authored-data migration or historical-report rewrite is authorized. Any later
+  incompatible meaning change requires ADR 0008 versioning/migration treatment.
+- Pure policy remains in semantic-engine with the existing resolver/status/rule
+  vocabulary. App-services owns coordination; CLI/MCP share its result. Verify
+  does not mutate lifecycle. Close still refuses PARTIAL/BLOCKED/STALE; only fresh
+  VERIFIED derives `verified`. Existing exit and `--fail-on partial` behavior stays.
+- Before delivery, prove the positive route and all rejection boundaries, file
+  footprint expansion, untouched meaning, current-source refusal and CLI/MCP
+  verify/close parity. Regenerate canonical plugin outputs with exactly Bun 1.4.0
+  and prove generated-artifact/Claude Code/Codex parity and exact-SHA CI. Never
+  hand-edit generated bundles or installed caches. These are obligations, not
+  claimed test/build/publication results. Reverting the correction requires
+  regeneration, not rewriting authored data.
