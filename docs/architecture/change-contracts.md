@@ -79,8 +79,10 @@ A resolved test-file link can qualify; a source path, test-like name, non-test t
 link alongside a stale/ambiguous link cannot. Missing/reversed relevance, unrequired evidence or
 an unproven status cannot qualify either. Without admissible proof, report insufficient proof
 under incomplete analysis, not absent tests. Unknown WARN rules do not authorize proof.
-Underlying BLOCK, blocking footprint findings, genuine missing coverage and contradicted
-invariants override admission. Other independent gates remain authoritative.
+Underlying BLOCK, blocking footprint findings, genuine missing coverage, contradicted invariants
+and adverse/unknown WARN override admission. Scoped adverse/unknown WARN vetoes proof on its node
+footprint; unscoped adverse/unknown WARN vetoes proof for touched invariants. Other independent
+gates remain authoritative.
 
 This proves authored preservation only: the underlying report stays verbatim and WARN still
 floors the aggregate at PARTIAL. Python negative incompleteness remains; no `tested_by`/`covers`

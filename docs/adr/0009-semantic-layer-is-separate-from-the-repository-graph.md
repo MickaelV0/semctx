@@ -91,8 +91,10 @@ For a touched invariant affected by incomplete analysis, preservation may be
    evidence target is an actual indexed node of kind `test`. One good link does
    not excuse a stale/ambiguous link. Source paths, misleading names and non-test
    graph targets alone are insufficient.
-5. No underlying BLOCK, contradictory invariant, blocking footprint finding or
-   genuine missing-coverage finding overrides this route.
+5. No underlying BLOCK, contradictory invariant, blocking footprint finding,
+   genuine missing-coverage finding or adverse/unknown WARN overrides this route.
+   Scoped adverse/unknown WARN vetoes proof on its node footprint; unscoped
+   adverse/unknown WARN vetoes proof for touched invariants.
 
 Relevance comes from the authored relation, not an invented Python coverage edge.
 Semctx tracks an obtained authored status; it does not attest execution, assertion
