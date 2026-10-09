@@ -12,12 +12,15 @@ import {
   indexHealthStatus,
   indexRepository,
   runVerify,
+  openChange,
+  verifyAuthoredChange,
 } from "../src";
 import type { IndexHealthReportV1 } from "../src";
 import {
   CONTROL_INDEX_SNAPSHOT_META_KEY,
   PLANE_A_INDEX_SNAPSHOT_META_KEY,
 } from "../src/freshness";
+import { initSemanticScaffold } from "@semantic-context/semantic-engine";
 
 const roots: string[] = [];
 
@@ -657,6 +660,49 @@ describe("IndexHealth persistence and verification preflight", () => {
     ]));
     expect(computation.result.unknowns.some((unknown) =>
       unknown.includes("No complete negative reference"))).toBe(true);
+  });
+
+  it("admits authored Python test proof without upgrading incomplete analysis or inventing coverage", () => {
+    const { root } = repository();
+    writeFileSync(join(root, "src", "test_service.py"),
+      "from service import service\n\ndef test_service():\n    assert service() == 1\n");
+    git(root, "add", ".");
+    git(root, "-c", "user.name=Semctx Test", "-c", "user.email=semctx@example.test",
+      "commit", "-q", "-m", "add preservation test");
+    writeFileSync(join(root, "src", "service.py"),
+      "def service():\n    import importlib\n    importlib.import_module('math')\n    return 1\n");
+    initSemanticScaffold(root);
+    writeFileSync(join(root, ".semctx", "semantic", "invariants.sem"),
+      "invariant invariant.python.stable\n  statement: Service behavior remains stable.\n  status: declared\n  tag: critical\n  link: file:src/service.py\n  proved_by: evidence.python.test\n");
+    writeFileSync(join(root, ".semctx", "semantic", "evidence.sem"),
+      "evidence evidence.python.test\n  statement: Service preservation regression is tested.\n  status: tested\n  link: test:src/test_service.py\n");
+    openChange(root, { id: "change.python-proof", statement: "Preserve Python service", provenance: "author",
+      preserves: ["invariant.python.stable"], requiresEvidence: ["evidence.python.test"] });
+    indexRepository(root, "2026-10-09T10:00:00.000Z");
+    const store = openStore(root);
+    let graph: RepositoryGraph;
+    try { graph = store.loadGraph(); } finally { store.close(); }
+    expect(graph.nodes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "test", filePath: "src/test_service.py" }),
+    ]));
+    expect(graph.edges.some((edge) => edge.kind === "tested_by" || edge.kind === "covers")).toBe(false);
+    const original = runVerify(root, { kind: "working-tree" }).report;
+
+    const report = verifyAuthoredChange(root, "change.python-proof", { kind: "working-tree" });
+
+    expect(report.verdict).toBe("PARTIAL");
+    expect(report.preserved).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "invariant.python.stable", critical: true, state: "proved" }),
+    ]));
+    expect(report.underlying).toEqual(original);
+    expect(report.underlying.verdict).toBe("WARN");
+    expect(report.underlying.findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ rule: "analysis_scope_incomplete", severity: "warn" }),
+    ]));
+    expect(report.underlying.unknowns.some((unknown) =>
+      unknown.includes("No complete negative reference"))).toBe(true);
+    const after = openStore(root);
+    try { expect(after.loadGraph()).toEqual(graph); } finally { after.close(); }
   });
 
   it("withdraws historical Python admissibility after current source mutation", () => {
