@@ -235,7 +235,7 @@ describe("CLI and MCP close require fresh VERIFIED proof", () => {
           const pointerBefore = readFileSync(pointerPath, "utf8");
           // A supplied diff has no source identity on either surface. Keep it outside the indexed
           // fixture so the refusal cannot accidentally be caused by an untracked source file.
-          const diffPath = join(tmpdir(), `${fixture.split("/").at(-1)}.diff`);
+          const diffPath = `${fixture}.diff`;
           try {
             if (verdict === "BLOCKED") writeFileSync(diffPath, SUPPLIED_DIFF);
             const input = { changeId: change,
