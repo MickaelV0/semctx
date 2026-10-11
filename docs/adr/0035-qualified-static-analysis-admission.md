@@ -109,7 +109,7 @@ their dependency links are extracted. Actual attached JSDoc AST nodes make selec
 producers partial and prevent broad qualified scope from silently omitting an importer.
 Ordinary prose mentions of imports and nonsemantic TypeScript JSDoc are not dependencies.
 
-Namespace test associations use explicit calls or constructions whose receiver is the
+Namespace test associations use static member references whose receiver is the
 actual namespace import binding and whose target has an existing modeled declaration.
 Canonical leaf/default coordinates are preserved through barrels. Dynamic whole reads,
 local shadows and unmodeled object members do not provide `tested_by`/`covers` evidence.
@@ -151,11 +151,20 @@ including transparent aliases and URL-valued arguments; no worker dependency edg
 invented. Other known SDK constructor boundaries retain their domain.
 
 Browser SDK setTimeout/setInterval calls with string, possibly string, any/unknown or
-generic handlers are unsupported runtime evaluation. Known function callbacks remain
-eligible under the existing opaque SDK boundary. Timer aliases and destructuring are
+generic handlers are unsupported runtime evaluation. Known function callbacks are also
+unsupported because callback invocation edges are not extracted; earlier callback
+controls remain visible as explicit BLOCK cases. Timer aliases and destructuring are
 tracked; helpers and value escapes without a proven safe direct call are refused.
 Local/own methods and Node timer imports do not acquire the browser SDK origin merely
 from their spelling. Ordinary TypeScript without retained inputs remains unchanged.
+SDK Object.defineProperty accessor descriptors and unproved descriptor/function
+escapes are unsupported. Only a direct data-descriptor literal containing known own
+value/writable/enumerable/configurable fields retains its boundary; get/set, spreads,
+unknown fields and a prototype-setting field do not prove accessor absence. A mutable const descriptor
+alias is not an absence proof. Own homonyms and type-only SDK references stay distinct.
+Retained bodyless-only function declarations are not evidence of a runtime lexical
+shadow and are unsupported. A binder overload set with a real implementation remains
+distinct; ordinary signature facts and SDK/declaration boundaries are preserved.
 
 Tagged-template invocations have no extracted callee edges and are explicitly unsupported:
 JavaScript producers report `JAVASCRIPT_TAGGED_TEMPLATE_UNSUPPORTED`, while qualified

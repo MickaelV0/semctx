@@ -29,6 +29,28 @@ for (const extension of ["js", "ts"]) test(`namespace member calls create canoni
   expect(result.edges).toContainEqual(expect.objectContaining({ kind: "covers", from: tester.id, to: helper.id }));
   expect(result.edges.some(edge => edge.kind === "tested_by" && edge.from === unused.id)).toBe(false);
 });
+for (const extension of ["js", "ts"]) test(`namespace member values create static canonical test association in ${extension}`, () => {
+  const result = graph({ "lib.mjs": "export function helper() { return 1; } export function unused() { return 2; }", [`lib.test.${extension}`]: "import * as api from './lib.mjs'; expect(api.helper).toBeDefined();" });
+  const helper = result.nodes.find(node => node.name === "helper")!;
+  const unused = result.nodes.find(node => node.name === "unused")!;
+  const tester = result.nodes.find(node => node.kind === "test")!;
+  expect(result.edges).toContainEqual(expect.objectContaining({ kind: "tested_by", from: helper.id, to: tester.id }));
+  expect(result.edges).toContainEqual(expect.objectContaining({ kind: "covers", from: tester.id, to: helper.id }));
+  expect(result.edges.some(edge => edge.kind === "tested_by" && edge.from === unused.id)).toBe(false);
+});
+test("non-call namespace members retain barrel/default owners and reject shadows or unmodeled homonyms", () => {
+  const result = graph({ "leaf.mjs": "export default function namedFn() { return 1; }", "barrel.mjs": "export { default as facade } from './leaf.mjs';", "leaf.test.js": "import * as api from './barrel.mjs'; expect(api.facade).toBeDefined();" });
+  const helper = result.nodes.find(node => node.name === "namedFn")!; const tester = result.nodes.find(node => node.kind === "test")!;
+  expect(result.edges).toContainEqual(expect.objectContaining({ kind: "tested_by", from: helper.id, to: tester.id }));
+  for (const testSource of [
+    "import * as api from './lib.mjs'; function ordinary(api) { expect(api.helper).toBeDefined(); }",
+    "import * as api from './lib.mjs'; expect(api.obj.helper).toBeDefined();",
+    "import type * as api from './lib.mjs'; export type Fn = typeof api.helper;",
+  ]) {
+    const negative = graph({ "lib.mjs": "export function helper() { return 1; } export const obj = { helper() { return 2; } };", "lib.test.ts": testSource });
+    expect(negative.edges.some(edge => edge.kind === "tested_by" || edge.kind === "covers")).toBe(false);
+  }
+});
 test("namespace test coverage follows actual leaf aliases and excludes a shadowed namespace", () => {
   const result = graph({ "leaf.mjs": "export function helper() { return 1; }", "barrel.mjs": "export { helper as facade } from './leaf.mjs';", "leaf.test.js": "import * as lib from './barrel.mjs'; lib.facade();" });
   const helper = result.nodes.find(node => node.name === "helper")!; const tester = result.nodes.find(node => node.kind === "test")!;

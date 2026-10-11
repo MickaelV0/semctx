@@ -379,7 +379,7 @@ export function extractTypeScript(rootAbsPaths: string[], repoRoot: string, supp
     const relPath = relOf(sf.fileName);
     modules.push(relPath);
     const exportedDeclarations = new Set<ts.Declaration>();
-    const namespaceReferences = staticModuleLinksEnabled ? namespaceCallReferences(sf, checker) : undefined;
+    const namespaceReferences = staticModuleLinksEnabled ? namespaceMemberReferences(sf, checker) : undefined;
     if (staticModuleLinksEnabled) {
       const moduleSymbol = checker.getSymbolAtLocation(sf);
       if (moduleSymbol !== undefined) {
@@ -1024,14 +1024,14 @@ function valueImportBindings(node: ts.ImportDeclaration): ts.Identifier[] {
   return bindings;
 }
 
-/** Called member references keyed by their actual lexical receiver binding, never its spelling. */
-function namespaceCallReferences(source: ts.SourceFile, checker: ts.TypeChecker): Map<ts.Symbol, ts.Expression[]> {
+/** Static modeled member references keyed by their actual lexical receiver binding, never its spelling. */
+function namespaceMemberReferences(source: ts.SourceFile, checker: ts.TypeChecker): Map<ts.Symbol, ts.Expression[]> {
   const references = new Map<ts.Symbol, ts.Expression[]>();
   const unwrap = unwrapStaticExpression;
   const visit = (node: ts.Node): void => {
-    if (ts.isCallExpression(node) || ts.isNewExpression(node)) {
-      const member = unwrap(node.expression);
-      if (ts.isPropertyAccessExpression(member)) {
+    if (ts.isTypeNode(node)) return;
+    if (ts.isPropertyAccessExpression(node) || (ts.isElementAccessExpression(node) && ts.isStringLiteralLike(node.argumentExpression))) {
+      const member = node;
         let target = checker.getSymbolAtLocation(member);
         if (target !== undefined && (target.flags & ts.SymbolFlags.Alias) !== 0) target = checker.getAliasedSymbol(target);
         const declaration = target?.getDeclarations()?.[0];
@@ -1041,13 +1041,12 @@ function namespaceCallReferences(source: ts.SourceFile, checker: ts.TypeChecker)
           || (ts.isVariableDeclaration(declaration) && declaration.initializer !== undefined && isFunctionLike(declaration.initializer)));
         if (!modeled) { ts.forEachChild(node, visit); return; }
         let receiver = unwrap(member.expression);
-        while (ts.isPropertyAccessExpression(receiver)) receiver = unwrap(receiver.expression);
+        while (ts.isPropertyAccessExpression(receiver) || ts.isElementAccessExpression(receiver)) receiver = unwrap(receiver.expression);
         const binding = checker.getSymbolAtLocation(receiver);
         if (binding !== undefined) {
           const targets = references.get(binding) ?? [];
           targets.push(member); references.set(binding, targets);
         }
-      }
     }
     ts.forEachChild(node, visit);
   };

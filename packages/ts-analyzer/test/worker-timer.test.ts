@@ -34,17 +34,25 @@ for (const content of [
   expect(inspectModuleConfiguration(path, "/fixture", new Map([[path, content]]))).toContain("SOURCE_TIMER_EVALUATION_UNSUPPORTED");
 });
 
-test("known callbacks, ordinary names, Node timers and nonworker SDK constructors preserve their domain", () => {
+test("known native timer callbacks are explicitly unsupported until their invocation is modeled", () => {
   for (const content of [
     "export function start() { return setTimeout(() => 1, 0); }",
     "export function start() { return (setTimeout)(() => 1, 0); }",
     "const later = (setTimeout); export function start() { return later(() => 1, 0); }",
     "const later = globalThis.setTimeout; export function start(callback: () => void) { return later(callback, 0); }",
+  ]) expect(inspectModuleConfiguration(path, "/fixture", new Map([[path, content]]))).toContain("SOURCE_TIMER_CALLBACK_UNSUPPORTED");
+  expect(inspectJavaScriptSource("/fixture/main.js", "export function start() { return setTimeout(() => 1, 0); }").reasons).toContain("JAVASCRIPT_TIMER_CALLBACK_UNSUPPORTED");
+});
+test("ordinary names, Node timers and nonworker SDK constructors preserve their domain", () => {
+  for (const content of [
     "const setTimeout = (value: string) => value; export function start() { return setTimeout('ordinary'); }",
     "const own = { setTimeout(value: string) { return value; } }; export function start() { return own.setTimeout('ordinary'); }",
     "import { setTimeout } from 'node:timers'; export function start() { return setTimeout('ordinary', 0); }",
-  ]) expect(inspectModuleConfiguration(path, "/fixture", new Map([[path, content]]))).not.toContain("SOURCE_TIMER_EVALUATION_UNSUPPORTED");
+  ]) {
+    const reasons = inspectModuleConfiguration(path, "/fixture", new Map([[path, content]]));
+    expect(reasons).not.toContain("SOURCE_TIMER_EVALUATION_UNSUPPORTED");
+    expect(reasons).not.toContain("SOURCE_TIMER_CALLBACK_UNSUPPORTED");
+  }
   const content = "const Worker = Map; export function start() { return [new Worker(), new Error('x'), new URL('https://example.invalid')]; }";
   expect(inspectModuleConfiguration(path, "/fixture", new Map([[path, content]]))).not.toContain("SOURCE_WORKER_LOADER_UNSUPPORTED");
-  expect(inspectJavaScriptSource("/fixture/main.js", "export function start() { return setTimeout(() => 1, 0); }").reasons).not.toContain("JAVASCRIPT_TIMER_EVALUATION_UNSUPPORTED");
 });
