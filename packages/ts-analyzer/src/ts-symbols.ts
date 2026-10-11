@@ -20,6 +20,7 @@ function snapshotSystem(snapshot: CompilerInputSnapshot): ts.System {
   for (const path of retained.keys()) {
     for (let directory = posix.dirname(path); ; directory = posix.dirname(directory)) {
       directories.add(directory);
+      directories.add(canonicalTypeScriptFileKey(directory));
       if (posix.dirname(directory) === directory) break;
     }
   }

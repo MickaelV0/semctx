@@ -24,6 +24,7 @@ export function inspectSemanticDependencies(source: ts.SourceFile, snapshot?: Co
     return false;
   };
   const inspectSyntax = (node: ts.Node): void => {
+    if (ts.isCallExpression(node)) needsChecker = true;
     if (ts.isVariableDeclarationList(node) && (node.flags & ts.NodeFlags.Using) !== 0) reasons.add("SOURCE_DISPOSAL_UNSUPPORTED");
     if (ts.isElementAccessExpression(node) || ts.isComputedPropertyName(node)) needsChecker = true;
     if (ts.isTemplateExpression(node) || (ts.isBinaryExpression(node) && [ts.SyntaxKind.PlusToken, ts.SyntaxKind.PlusEqualsToken].includes(node.operatorToken.kind))
@@ -235,6 +236,63 @@ export function inspectSemanticDependencies(source: ts.SourceFile, snapshot?: Co
     const target = unwrapStaticExpression(expression);
     return (ts.isPropertyAccessExpression(target) || ts.isElementAccessExpression(target)) && sdkCallableMember(target.expression, staticMemberName(target));
   };
+  const actualValue = (expression: ts.Expression, seen = new Set<ts.Node>()): ts.Expression => {
+    const value = unwrapStaticExpression(expression);
+    if (seen.has(value)) return value;
+    seen.add(value);
+    for (const origin of declarations(value)) if (ts.isVariableDeclaration(origin) && ts.isVariableDeclarationList(origin.parent)
+      && (origin.parent.flags & ts.NodeFlags.Const) !== 0 && origin.initializer !== undefined) return actualValue(origin.initializer, seen);
+    return value;
+  };
+  const sdkOrigin = (expression: ts.Expression, seen = new Set<ts.Node>()): boolean => {
+    const value = actualValue(expression);
+    if (seen.has(value)) return false;
+    seen.add(value);
+    if (ts.isArrayLiteralExpression(value) || ts.isStringLiteralLike(value)) return true;
+    if (ts.isNewExpression(value)) return sdkConstruction(sdkValue(actualValue(value.expression)));
+    if (ts.isPropertyAccessExpression(value) || ts.isElementAccessExpression(value)) return sdkOrigin(value.expression, seen) && sdkValue(value) !== undefined;
+    const origins = declarations(value);
+    return (origins.length > 0 && origins.every(origin => program.isSourceFileDefaultLibrary(origin.getSourceFile())))
+      || (ts.isIdentifier(value) && value.text === "globalThis" && origins.length === 0 && checker.getSymbolAtLocation(value) !== undefined);
+  };
+  const callableType = (expression: ts.Expression): ts.Type => {
+    const value = actualValue(expression);
+    if (ts.isPropertyAccessExpression(value) || ts.isElementAccessExpression(value)) {
+      const receiver = actualValue(value.expression); const name = staticMemberName(value);
+      const symbol = name === undefined ? undefined : checker.getPropertyOfType(checker.getTypeAtLocation(receiver), name);
+      if (symbol !== undefined) return checker.getTypeOfSymbolAtLocation(symbol, receiver);
+    }
+    return checker.getTypeAtLocation(value);
+  };
+  const callbackType = (type: ts.Type): boolean => type.getCallSignatures().length > 0 || type.getConstructSignatures().length > 0
+    || (type.isUnionOrIntersection() && type.types.some(callbackType))
+    || (type.getSymbol()?.getName() === "Function" && type.getSymbol()!.getDeclarations()?.every(origin => program.isSourceFileDefaultLibrary(origin.getSourceFile())) === true);
+  const sdkCallbackSignature = (type: ts.Type): boolean => [...type.getCallSignatures(), ...type.getConstructSignatures()].some(signature => {
+    const declaration = signature.getDeclaration();
+    return declaration !== undefined && program.isSourceFileDefaultLibrary(declaration.getSourceFile())
+      && signature.getParameters().some(parameter => callbackType(checker.getTypeOfSymbolAtLocation(parameter, declaration)));
+  });
+  const inspectSdkCallbacks = (node: ts.CallExpression | ts.NewExpression): void => {
+    const callee = actualValue(node.expression);
+    if ((ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee)) && ["call", "apply", "bind"].includes(staticMemberName(callee) ?? "")) {
+      const receiver = actualValue(callee.expression); const name = staticMemberName(callee)!;
+      const helper = checker.getPropertyOfType(callableType(receiver), name);
+      if (helper?.getDeclarations()?.some(declaration => program.isSourceFileDefaultLibrary(declaration.getSourceFile())
+        && ts.isInterfaceDeclaration(declaration.parent) && ["Function", "CallableFunction", "NewableFunction"].includes(declaration.parent.name.text))
+        && sdkCallbackSignature(callableType(receiver))) reasons.add("SOURCE_SDK_CALLBACK_UNSUPPORTED");
+    }
+    const type = callableType(callee);
+    const signatures = ts.isNewExpression(node) ? type.getConstructSignatures() : type.getCallSignatures();
+    for (const signature of signatures) {
+      const declaration = signature.getDeclaration();
+      if (declaration === undefined || !program.isSourceFileDefaultLibrary(declaration.getSourceFile())) continue;
+      for (const [index, parameter] of signature.getParameters().entries()) {
+        const argument = node.arguments?.[index]; if (argument === undefined) continue;
+        if (callbackType(checker.getTypeOfSymbolAtLocation(parameter, declaration)) && (!sdkOrigin(callee)
+          || (!primitiveValue(actualValue(argument)) && !(sdkOrigin(argument) && callbackType(callableType(argument)))))) reasons.add("SOURCE_SDK_CALLBACK_UNSUPPORTED");
+      }
+    }
+  };
   const descriptorFactory = (expression: ts.Expression, seen = new Set<ts.Node>()): boolean => {
     const value = unwrapStaticExpression(expression);
     if (seen.has(value)) return false;
@@ -435,6 +493,7 @@ export function inspectSemanticDependencies(source: ts.SourceFile, snapshot?: Co
   };
   const visit = (node: ts.Node): void => {
     if (ts.isTypeNode(node) || ts.isInterfaceDeclaration(node)) return;
+    if (ts.isCallExpression(node) || ts.isNewExpression(node)) inspectSdkCallbacks(node);
     if (ts.isFunctionDeclaration(node) && node.body === undefined && (node.name === undefined || !declarations(node.name).some(origin =>
       ts.isFunctionDeclaration(origin) && origin.body !== undefined && internal(origin)
       && !ts.getModifiers(origin)?.some(modifier => modifier.kind === ts.SyntaxKind.DeclareKeyword)))) reasons.add("SOURCE_AMBIENT_FUNCTION_UNSUPPORTED");

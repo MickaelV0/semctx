@@ -284,6 +284,15 @@ are unsupported. This source-level refusal applies before for-of, await-for-of,
 destructuring, delegated yield or spread eligibility; it does not fabricate protocol
 edges. Unmodified intrinsic origins retain their boundary, and string properties
 named `iterator` or own homonyms are distinct from actual SDK protocol symbols.
+Actual SDK call and constructor signatures with callable callback parameters are
+unsupported when their supplied callback is internal or unproven: the extractor
+does not model the implicit invocation. This includes array callback APIs and a
+native Promise executor; eligibility of the resulting native promise value does
+not prove the executor dependency. Primitive/noncallback SDK operations and real
+own source APIs remain distinct. No callback or constructor edge is fabricated.
+JavaScript files under migration directories are currently classified as executable
+sources, unlike TypeScript migration-role files; directory spelling alone does not
+turn them into structural migrations or silently remove their executable facts.
 
 Computed property access/names require a proven primitive key or actual SDK symbol
 origin, without relying on a Symbol/string annotation. Resource declarations carrying

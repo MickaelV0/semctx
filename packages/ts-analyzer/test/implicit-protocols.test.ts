@@ -55,6 +55,13 @@ test("real intrinsic values and native promise origins preserve their boundaries
     expect(reasons).not.toContain("SOURCE_INSTANCEOF_UNSUPPORTED");
   }
 });
+
+test("native promise value eligibility does not model its executor invocation", () => {
+  const content = "export async function start() { return await new Promise(resolve => resolve(1)); }";
+  const reasons = inspectModuleConfiguration(path, "/fixture", new Map([[path, content]]));
+  expect(reasons).not.toContain("SOURCE_AWAIT_UNSUPPORTED");
+  expect(reasons).toContain("SOURCE_SDK_CALLBACK_UNSUPPORTED");
+});
 test("named extends is consumed globally but project references do not read compiler options", () => {
   const content = "export function main() { return 1; }";
   const snapshot = new Map([[path, content], ["/fixture/other/main.ts", content],
