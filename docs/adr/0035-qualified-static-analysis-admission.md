@@ -293,6 +293,18 @@ own source APIs remain distinct. No callback or constructor edge is fabricated.
 JavaScript files under migration directories are currently classified as executable
 sources, unlike TypeScript migration-role files; directory spelling alone does not
 turn them into structural migrations or silently remove their executable facts.
+The same SDK signature boundary covers iterable parameters: internal or uncertain
+iterable arguments are unsupported because their protocol invocation has no edge.
+Literal arrays/strings and the existing proven SDK collection origins remain distinct.
+SDK `Object.assign` cannot restore native callable authority after an internal or
+unknown patch; callable/protocol writes and uncertain sources on SDK targets refuse.
+Ordinary data patches and actual own APIs keep their boundary. Numeric unary,
+arithmetic/bitwise/relational and loose-comparison coercions require primitive value
+proof; strict identity, logical truthiness, `typeof` and `void` are distinct.
+Actual SDK Worklet `addModule` loaders are unsupported without a module link.
+Retained configurations that actually emit imported runtime helpers are unsupported:
+the pinned SDK emitter observes helper metadata and the emitted `tslib` dependency,
+without manufacturing an edge. Configurations emitting no helpers remain eligible.
 
 Computed property access/names require a proven primitive key or actual SDK symbol
 origin, without relying on a Symbol/string annotation. Resource declarations carrying

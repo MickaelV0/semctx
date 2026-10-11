@@ -395,6 +395,7 @@ export function inspectModuleConfiguration(path: string, repositoryRoot?: string
   // NodeNext bytes does not authorize analyzing them under overwritten Bundler semantics.
   if (compilerInputs !== undefined && parsed !== undefined) {
     if (inspectedSource !== undefined) reasons.push(...inspectAutomaticJsxRuntime(inspectedSource, parsed.options));
+    if (inspectedSource !== undefined) reasons.push(...inspectImportedRuntimeHelpers(inspectedSource, parsed.options));
     if (parsed.options.module !== undefined && parsed.options.module !== ts.ModuleKind.ESNext) {
       reasons.push(`SOURCE_CONFIGURATION_MODULE_UNSUPPORTED:${ts.ModuleKind[parsed.options.module]}`);
     }
@@ -406,6 +407,20 @@ export function inspectModuleConfiguration(path: string, repositoryRoot?: string
     reasons.push(...inspectQualifiedModuleScope(source, path));
   }
   return reasons;
+}
+
+function inspectImportedRuntimeHelpers(source: ts.SourceFile, options: ts.CompilerOptions): string[] {
+  if (options.importHelpers !== true) return [];
+  let externalHelpers = false;
+  const emitted = ts.transpileModule(source.text, {
+    fileName: source.fileName, compilerOptions: options,
+    transformers: { after: [() => node => {
+      externalHelpers ||= ts.getEmitHelpers(node)?.some(helper => !helper.scoped) === true;
+      return node;
+    }] },
+  });
+  return externalHelpers && ts.preProcessFile(emitted.outputText, true, true).importedFiles.some(file => file.fileName === "tslib")
+    ? ["SOURCE_CONFIGURATION_HELPERS_UNSUPPORTED"] : [];
 }
 
 function hasUnsupportedDefaultExpression(source: ts.SourceFile): boolean {

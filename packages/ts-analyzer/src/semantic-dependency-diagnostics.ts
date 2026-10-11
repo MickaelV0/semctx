@@ -17,6 +17,18 @@ export function inspectSemanticDependencies(source: ts.SourceFile, snapshot?: Co
   let needsChecker = false;
   const assignment = (node: ts.Node): node is ts.BinaryExpression => ts.isBinaryExpression(node)
     && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment;
+  const numericUnary = (node: ts.Node): node is ts.PrefixUnaryExpression | ts.PostfixUnaryExpression => (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node))
+    && [ts.SyntaxKind.PlusToken, ts.SyntaxKind.MinusToken, ts.SyntaxKind.TildeToken, ts.SyntaxKind.PlusPlusToken, ts.SyntaxKind.MinusMinusToken].includes(node.operator);
+  const coercingBinary = (node: ts.Node): node is ts.BinaryExpression => ts.isBinaryExpression(node) && [
+    ts.SyntaxKind.PlusToken, ts.SyntaxKind.MinusToken, ts.SyntaxKind.AsteriskToken, ts.SyntaxKind.SlashToken, ts.SyntaxKind.PercentToken, ts.SyntaxKind.AsteriskAsteriskToken,
+    ts.SyntaxKind.LessThanLessThanToken, ts.SyntaxKind.GreaterThanGreaterThanToken, ts.SyntaxKind.GreaterThanGreaterThanGreaterThanToken,
+    ts.SyntaxKind.AmpersandToken, ts.SyntaxKind.BarToken, ts.SyntaxKind.CaretToken,
+    ts.SyntaxKind.LessThanToken, ts.SyntaxKind.LessThanEqualsToken, ts.SyntaxKind.GreaterThanToken, ts.SyntaxKind.GreaterThanEqualsToken,
+    ts.SyntaxKind.EqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsToken,
+    ts.SyntaxKind.PlusEqualsToken, ts.SyntaxKind.MinusEqualsToken, ts.SyntaxKind.AsteriskEqualsToken, ts.SyntaxKind.SlashEqualsToken, ts.SyntaxKind.PercentEqualsToken,
+    ts.SyntaxKind.AsteriskAsteriskEqualsToken, ts.SyntaxKind.LessThanLessThanEqualsToken, ts.SyntaxKind.GreaterThanGreaterThanEqualsToken,
+    ts.SyntaxKind.GreaterThanGreaterThanGreaterThanEqualsToken, ts.SyntaxKind.AmpersandEqualsToken, ts.SyntaxKind.BarEqualsToken, ts.SyntaxKind.CaretEqualsToken,
+  ].includes(node.operatorToken.kind);
   const asyncOwner = (node: ts.Node): boolean => {
     for (let owner: ts.Node | undefined = node.parent; owner !== undefined; owner = owner.parent) if (ts.isFunctionLike(owner)) {
       return ts.canHaveModifiers(owner) && ts.getModifiers(owner)?.some(modifier => modifier.kind === ts.SyntaxKind.AsyncKeyword) === true;
@@ -27,7 +39,7 @@ export function inspectSemanticDependencies(source: ts.SourceFile, snapshot?: Co
     if (ts.isCallExpression(node)) needsChecker = true;
     if (ts.isVariableDeclarationList(node) && (node.flags & ts.NodeFlags.Using) !== 0) reasons.add("SOURCE_DISPOSAL_UNSUPPORTED");
     if (ts.isElementAccessExpression(node) || ts.isComputedPropertyName(node)) needsChecker = true;
-    if (ts.isTemplateExpression(node) || (ts.isBinaryExpression(node) && [ts.SyntaxKind.PlusToken, ts.SyntaxKind.PlusEqualsToken].includes(node.operatorToken.kind))
+    if (ts.isTemplateExpression(node) || coercingBinary(node) || numericUnary(node)
       || (ts.isReturnStatement(node) && asyncOwner(node))
       || (ts.isArrowFunction(node) && ts.getModifiers(node)?.some(modifier => modifier.kind === ts.SyntaxKind.AsyncKeyword))) needsChecker = true;
     if ((ts.isIdentifier(node) || ts.isStringLiteral(node)) && node.text === "register") needsChecker = true;
@@ -267,6 +279,18 @@ export function inspectSemanticDependencies(source: ts.SourceFile, snapshot?: Co
   const callbackType = (type: ts.Type): boolean => type.getCallSignatures().length > 0 || type.getConstructSignatures().length > 0
     || (type.isUnionOrIntersection() && type.types.some(callbackType))
     || (type.getSymbol()?.getName() === "Function" && type.getSymbol()!.getDeclarations()?.every(origin => program.isSourceFileDefaultLibrary(origin.getSourceFile())) === true);
+  const iterableType = (type: ts.Type, seen = new Set<ts.Type>()): boolean => {
+    if (seen.has(type)) return false;
+    seen.add(type);
+    if (type.isUnionOrIntersection()) return type.types.some(part => iterableType(part, new Set(seen)));
+    const constraint = checker.getBaseConstraintOfType(type);
+    if (constraint !== undefined && constraint !== type && iterableType(constraint, new Set(seen))) return true;
+    return type.getProperties().some(property => property.getDeclarations()?.some(declaration => program.isSourceFileDefaultLibrary(declaration.getSourceFile())
+      && (ts.isMethodSignature(declaration) || ts.isPropertySignature(declaration)) && ts.isComputedPropertyName(declaration.name)
+      && iteratorKey(declaration.name.expression)));
+  };
+  const iterableParameter = (parameter: ts.Symbol, declaration: ts.SignatureDeclaration): boolean => !parameter.getDeclarations()?.some(origin => ts.isParameter(origin) && origin.dotDotDotToken !== undefined)
+    && iterableType(checker.getTypeOfSymbolAtLocation(parameter, declaration));
   const sdkCallbackSignature = (type: ts.Type): boolean => [...type.getCallSignatures(), ...type.getConstructSignatures()].some(signature => {
     const declaration = signature.getDeclaration();
     return declaration !== undefined && program.isSourceFileDefaultLibrary(declaration.getSourceFile())
@@ -280,6 +304,13 @@ export function inspectSemanticDependencies(source: ts.SourceFile, snapshot?: Co
       if (helper?.getDeclarations()?.some(declaration => program.isSourceFileDefaultLibrary(declaration.getSourceFile())
         && ts.isInterfaceDeclaration(declaration.parent) && ["Function", "CallableFunction", "NewableFunction"].includes(declaration.parent.name.text))
         && sdkCallbackSignature(callableType(receiver))) reasons.add("SOURCE_SDK_CALLBACK_UNSUPPORTED");
+      if (helper?.getDeclarations()?.some(declaration => program.isSourceFileDefaultLibrary(declaration.getSourceFile())
+        && ts.isInterfaceDeclaration(declaration.parent) && ["Function", "CallableFunction", "NewableFunction"].includes(declaration.parent.name.text))
+        && [...callableType(receiver).getCallSignatures(), ...callableType(receiver).getConstructSignatures()].some(signature => {
+          const declaration = signature.getDeclaration();
+          return declaration !== undefined && program.isSourceFileDefaultLibrary(declaration.getSourceFile())
+            && signature.getParameters().some(parameter => iterableParameter(parameter, declaration));
+        })) reasons.add("SOURCE_SDK_ITERATION_UNSUPPORTED");
     }
     const type = callableType(callee);
     const signatures = ts.isNewExpression(node) ? type.getConstructSignatures() : type.getCallSignatures();
@@ -288,8 +319,51 @@ export function inspectSemanticDependencies(source: ts.SourceFile, snapshot?: Co
       if (declaration === undefined || !program.isSourceFileDefaultLibrary(declaration.getSourceFile())) continue;
       for (const [index, parameter] of signature.getParameters().entries()) {
         const argument = node.arguments?.[index]; if (argument === undefined) continue;
+        if (iterableParameter(parameter, declaration) && !intrinsicIterable(argument)) reasons.add("SOURCE_SDK_ITERATION_UNSUPPORTED");
         if (callbackType(checker.getTypeOfSymbolAtLocation(parameter, declaration)) && (!sdkOrigin(callee)
           || (!primitiveValue(actualValue(argument)) && !(sdkOrigin(argument) && callbackType(callableType(argument)))))) reasons.add("SOURCE_SDK_CALLBACK_UNSUPPORTED");
+      }
+    }
+  };
+  const mutationFactory = (expression: ts.Expression): boolean => {
+    const value = actualValue(expression);
+    if ((ts.isPropertyAccessExpression(value) || ts.isElementAccessExpression(value)) && staticMemberName(value) === "assign"
+      && sdkValue(actualValue(value.expression))?.getName() === "Object") return true;
+    const symbol = sdkValue(value);
+    return symbol?.getName() === "assign" && symbol.getDeclarations()?.some(declaration => program.isSourceFileDefaultLibrary(declaration.getSourceFile())
+      && ts.isInterfaceDeclaration(declaration.parent) && declaration.parent.name.text === "ObjectConstructor") === true;
+  };
+  const inspectMutationUse = (node: ts.Identifier | ts.PropertyAccessExpression | ts.ElementAccessExpression): void => {
+    if (!mutationFactory(node)) return;
+    if (ts.isIdentifier(node) && ((ts.isPropertyAccessExpression(node.parent) && node.parent.name === node)
+      || (ts.isVariableDeclaration(node.parent) && node.parent.name === node) || ts.isBindingElement(node.parent))) return;
+    let usage: ts.Expression = node;
+    while (ts.isParenthesizedExpression(usage.parent) || ts.isAsExpression(usage.parent) || ts.isTypeAssertionExpression(usage.parent)
+      || ts.isNonNullExpression(usage.parent) || ts.isSatisfiesExpression(usage.parent)) usage = usage.parent;
+    const container = usage.parent;
+    if (ts.isVariableDeclaration(container) && container.initializer === usage && ts.isIdentifier(container.name)
+      && ts.isVariableDeclarationList(container.parent) && (container.parent.flags & ts.NodeFlags.Const) !== 0) return;
+    if (!ts.isCallExpression(container) || container.expression !== usage || container.arguments[0] === undefined) {
+      reasons.add("SOURCE_SDK_MUTATION_UNSUPPORTED"); return;
+    }
+    const target = actualValue(container.arguments[0]);
+    for (const argument of container.arguments.slice(1)) {
+      const source = unwrapStaticExpression(argument);
+      if (!ts.isObjectLiteralExpression(source)) {
+        if (sdkOrigin(target)) reasons.add("SOURCE_SDK_MUTATION_UNSUPPORTED");
+        continue;
+      }
+      for (const property of source.properties) {
+        if (ts.isSpreadAssignment(property)) {
+          if (sdkOrigin(target)) reasons.add("SOURCE_SDK_MUTATION_UNSUPPORTED");
+          continue;
+        }
+        const name = propertyName(property.name);
+        const value = ts.isPropertyAssignment(property) ? property.initializer : ts.isShorthandPropertyAssignment(property) ? property.name : undefined;
+        if ((ts.isComputedPropertyName(property.name) && iteratorKey(property.name.expression))
+          || (name === "then" && (value === undefined || !primitiveValue(value)))
+          || (name !== undefined && sdkCallableMember(target, name) && (value === undefined || !primitiveValue(value)))
+          || (name === undefined && sdkOrigin(target))) reasons.add("SOURCE_SDK_MUTATION_UNSUPPORTED");
       }
     }
   };
@@ -345,6 +419,14 @@ export function inspectSemanticDependencies(source: ts.SourceFile, snapshot?: Co
     const symbol = sdkValue(expression);
     return symbol?.getName() === "register" && (symbol.getDeclarations() ?? []).some(declaration => program.isSourceFileDefaultLibrary(declaration.getSourceFile())
       && ts.isInterfaceDeclaration(declaration.parent) && declaration.parent.name.text === "ServiceWorkerContainer");
+  };
+  const workletLoader = (expression: ts.Expression): boolean => {
+    const value = actualValue(expression);
+    const name = staticMemberName(value);
+    const symbol = (ts.isPropertyAccessExpression(value) || ts.isElementAccessExpression(value)) && name !== undefined
+      ? checker.getPropertyOfType(checker.getTypeAtLocation(actualValue(value.expression)), name) : sdkValue(value);
+    return symbol?.getName() === "addModule" && symbol.getDeclarations()?.some(declaration => program.isSourceFileDefaultLibrary(declaration.getSourceFile())
+      && ts.isInterfaceDeclaration(declaration.parent) && declaration.parent.name.text === "Worklet") === true;
   };
   const proxyFactory = (expression: ts.Expression): boolean => {
     const value = unwrapStaticExpression(expression);
@@ -506,15 +588,18 @@ export function inspectSemanticDependencies(source: ts.SourceFile, snapshot?: Co
       if (ts.isElementAccessExpression(target) && iteratorKey(target.argumentExpression)) reasons.add("SOURCE_ITERATOR_MUTATION_UNSUPPORTED");
       if (sdkCallableProperty(target) && !primitiveValue(node.right)) reasons.add("SOURCE_SDK_CALLABLE_MUTATION_UNSUPPORTED");
     }
-    if ((ts.isBinaryExpression(node) && [ts.SyntaxKind.PlusToken, ts.SyntaxKind.PlusEqualsToken].includes(node.operatorToken.kind)
+    if ((coercingBinary(node)
       && (!primitiveValue(node.left) || !primitiveValue(node.right)))
+      || (numericUnary(node) && !primitiveValue(node.operand))
       || (ts.isTemplateExpression(node) && node.templateSpans.some(span => !primitiveValue(span.expression)))) reasons.add("SOURCE_COERCION_UNSUPPORTED");
     if ((ts.isReturnStatement(node) && node.expression !== undefined && asyncOwner(node) && !safeAwaitValue(node.expression))
       || (ts.isArrowFunction(node) && !ts.isBlock(node.body) && ts.getModifiers(node)?.some(modifier => modifier.kind === ts.SyntaxKind.AsyncKeyword)
         && !safeAwaitValue(node.body))) reasons.add("SOURCE_ASYNC_RETURN_UNSUPPORTED");
     if ((ts.isIdentifier(node) || ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) && serviceWorkerLoader(node)) reasons.add("SOURCE_SERVICE_WORKER_LOADER_UNSUPPORTED");
+    if ((ts.isIdentifier(node) || ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) && workletLoader(node)) reasons.add("SOURCE_WORKLET_LOADER_UNSUPPORTED");
     if ((ts.isIdentifier(node) || ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) && sdkValue(node)?.getName() === "importScripts") reasons.add("SOURCE_WORKER_LOADER_UNSUPPORTED");
     if (ts.isIdentifier(node) || ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) inspectDescriptorUse(node);
+    if (ts.isIdentifier(node) || ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) inspectMutationUse(node);
     if ((ts.isIdentifier(node) || ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) && proxyFactory(node)) reasons.add("SOURCE_PROXY_UNSUPPORTED");
     if (ts.isAwaitExpression(node) && !safeAwaitValue(node.expression)) reasons.add("SOURCE_AWAIT_UNSUPPORTED");
     if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.InstanceOfKeyword
