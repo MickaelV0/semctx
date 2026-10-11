@@ -9,6 +9,11 @@ GitHub Release advance together through the tag-driven lockstep workflow documen
 
 ## [Unreleased]
 
+### Fixed
+
+- The `VerifyComputation` characterization test no longer depends on the developer's global Git
+  configuration (it failed under `commit.gpgsign=true`).
+
 ## [0.4.2] - 2026-10-06
 
 ### Fixed
