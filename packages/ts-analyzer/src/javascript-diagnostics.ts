@@ -455,7 +455,7 @@ function hasSemanticJSDocImport(source: ts.SourceFile): boolean {
 
 function inspectQualifiedModuleScope(source: ts.SourceFile, path: string): string[] {
   const reasons: string[] = [];
-  if (/\.cts$/.test(path)) reasons.push("SOURCE_COMMONJS_EXTENSION_UNSUPPORTED");
+  if (/\.(?:cts|cjs)$/.test(path)) reasons.push("SOURCE_COMMONJS_EXTENSION_UNSUPPORTED");
   const visit = (node: ts.Node): void => {
     if (ts.isModuleDeclaration(node) && (node.flags & ts.NodeFlags.GlobalAugmentation) !== 0) reasons.push("SOURCE_GLOBAL_AUGMENTATION_UNSUPPORTED");
     if (ts.isModuleDeclaration(node) && ts.isStringLiteral(node.name)) reasons.push("SOURCE_MODULE_AUGMENTATION_UNSUPPORTED");

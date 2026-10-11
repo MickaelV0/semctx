@@ -106,7 +106,36 @@ for (const [source, member] of [
   expect(reasons).toContain(`JAVASCRIPT_NATIVE_MODULE_MEMBER_UNSUPPORTED:${member}`);
   expect(reasons).not.toContain("JAVASCRIPT_COMMONJS_UNSUPPORTED");
 });
-test("ordinary Node APIs and unrelated factories remain ordinary static JavaScript", () => {
+const unprovedValueExports = [
+  "import { builtinModules } from 'node:module'; export const known = builtinModules;",
+  "import { default as p } from 'node:process'; export const ordinary = p.platform;",
+  "const { platform } = process; export const ordinary = platform;",
+  "const p = await import('node:process'); export const ordinary = p.platform;",
+  "const process = { getBuiltinModule(value) { return value; } }; const { getBuiltinModule: get } = process; export const ordinary = get(1);",
+  "const globalThis = { process: { getBuiltinModule(value) { return value; } } }; export const ordinary = globalThis.process.getBuiltinModule(1);",
+  "const globalThis = { process: { getBuiltinModule(value) { return value; } } }; const { process: p } = globalThis; export const ordinary = p.getBuiltinModule(1);",
+  "export const ordinary = globalThis.process.platform;",
+  "const global = { process: { getBuiltinModule(value) { return value; } } }; export const ordinary = global.process.getBuiltinModule(1);",
+  "const globalThis = { global: { process: { getBuiltinModule(value) { return value; } } } }; export const ordinary = globalThis.global.process.getBuiltinModule(1);",
+  "export const ordinary = process.env; export function cwd() { return process.cwd(); } export const args = process.argv;",
+  "const process = { mainModule: { require(value) { return value; } } }; export const ordinary = process.mainModule.require(1);",
+  "const process = { getBuiltinModule(value) { return value; } }; const get = Reflect.get(process, 'getBuiltinModule'); export const ordinary = get(1);",
+  "export const streams = [process.stdout, process.stderr]; export const runtime = process.versions; export const executable = process.execPath; process.exitCode = 0; export function exit() { process.exit(0); }",
+  "const require = (value) => value; const load = require; export const ordinary = load(1);",
+  "const module = { isBuiltin(value) { return value; } }; export const ordinary = module.isBuiltin(1);",
+  "const globalThis = { require(value) { return value; } }; const load = globalThis.require; export const ordinary = load(1);",
+  "const process = { binding(value) { return value; } }; export const ordinary = process.binding(1);",
+] as const;
+for (const source of unprovedValueExports) test(`ordinary native bindings do not prove value-export completeness: ${source}`, () => {
+  const ast = ts.createSourceFile("/fixture/main.mjs", source, ts.ScriptTarget.Latest, true);
+  expect(inspectNativeModuleBindings(ast)).toEqual({ commonJsUnsupported: false, unmodeledMembers: [] });
+  const reasons = inspectJavaScriptSource("/fixture/main.mjs", source).reasons;
+  expect(reasons).toContain("JAVASCRIPT_CALLABLE_EXPORT_UNSUPPORTED");
+  expect(reasons).not.toContain("JAVASCRIPT_COMMONJS_UNSUPPORTED");
+  expect(reasons.some(reason => reason.startsWith("JAVASCRIPT_NATIVE_MODULE_MEMBER_UNSUPPORTED"))).toBe(false);
+});
+
+test("ordinary Node APIs and unrelated factories retain modeled function or known-literal boundaries", () => {
   for (const source of [
     "import * as nodeModule from 'node:module'; export function known(name) { return nodeModule.isBuiltin(name); }",
     "function createRequire(value) { return value; } export function known() { return createRequire(1); }",
@@ -123,37 +152,37 @@ test("ordinary Node APIs and unrelated factories remain ordinary static JavaScri
     "import * as m from 'node:module'; const { default: M } = m; export function known(name) { return M.isBuiltin(name); }",
     "import * as m from 'node:module'; const { 'isBuiltin': known } = m; export function query(name) { return known(name); }",
     "import { default as M } from 'node:module'; export function known(M) { return M.isBuiltin(1); }",
-    "import { builtinModules } from 'node:module'; export const known = builtinModules;",
+    "import { builtinModules } from 'node:module'; export function known() { return builtinModules; }",
     "import { _resolveFilename } from 'node:module'; export const unused = 1;",
     "import { _resolveFilename as resolveName } from 'node:module'; export function known(resolveName) { return resolveName(1); }",
     "const process = { getBuiltinModule(value) { return value; } }; export function known() { return process.getBuiltinModule(1); }",
     "export function known(process) { return process.getBuiltinModule(1); }",
     "import P from 'node:process'; export function known() { return P.platform; }",
     "import { getBuiltinModule as get } from 'node:process'; export const unused = 1;",
-    "import { default as p } from 'node:process'; export const ordinary = p.platform;",
-    "const { platform } = process; export const ordinary = platform;",
+    "import { default as p } from 'node:process'; export function ordinary() { return p.platform; }",
+    "const { platform } = process; export function ordinary() { return platform; }",
     "export { platform } from 'node:process';",
-    "const p = await import('node:process'); export const ordinary = p.platform;",
-    "const process = { getBuiltinModule(value) { return value; } }; const { getBuiltinModule: get } = process; export const ordinary = get(1);",
+    "const p = await import('node:process'); export function ordinary() { return p.platform; }",
+    "const process = { getBuiltinModule(value) { return value; } }; const { getBuiltinModule: get } = process; export function ordinary() { return get(1); }",
     "import { default as p } from 'node:process'; export function ordinary(p) { return p.getBuiltinModule(1); }",
-    "const globalThis = { process: { getBuiltinModule(value) { return value; } } }; export const ordinary = globalThis.process.getBuiltinModule(1);",
+    "const globalThis = { process: { getBuiltinModule(value) { return value; } } }; export function ordinary() { return globalThis.process.getBuiltinModule(1); }",
     "export function ordinary(globalThis) { return globalThis.process.getBuiltinModule(1); }",
-    "const globalThis = { process: { getBuiltinModule(value) { return value; } } }; const { process: p } = globalThis; export const ordinary = p.getBuiltinModule(1);",
-    "export const ordinary = globalThis.process.platform;",
-    "const global = { process: { getBuiltinModule(value) { return value; } } }; export const ordinary = global.process.getBuiltinModule(1);",
+    "const globalThis = { process: { getBuiltinModule(value) { return value; } } }; const { process: p } = globalThis; export function ordinary() { return p.getBuiltinModule(1); }",
+    "export function ordinary() { return globalThis.process.platform; }",
+    "const global = { process: { getBuiltinModule(value) { return value; } } }; export function ordinary() { return global.process.getBuiltinModule(1); }",
     "export function ordinary(global) { return global.process.getBuiltinModule(1); }",
-    "const globalThis = { global: { process: { getBuiltinModule(value) { return value; } } } }; export const ordinary = globalThis.global.process.getBuiltinModule(1);",
+    "const globalThis = { global: { process: { getBuiltinModule(value) { return value; } } } }; export function ordinary() { return globalThis.global.process.getBuiltinModule(1); }",
     "export function ordinary(global) { return global.globalThis.process.getBuiltinModule(1); }",
     "export const ordinary = globalThis.console;",
-    "export const ordinary = process.env; export function cwd() { return process.cwd(); } export const args = process.argv;",
-    "const process = { mainModule: { require(value) { return value; } } }; export const ordinary = process.mainModule.require(1);",
-    "const process = { getBuiltinModule(value) { return value; } }; const get = Reflect.get(process, 'getBuiltinModule'); export const ordinary = get(1);",
-    "export const streams = [process.stdout, process.stderr]; export const runtime = process.versions; export const executable = process.execPath; process.exitCode = 0; export function exit() { process.exit(0); }",
+    "export function environment() { return process.env; } export function cwd() { return process.cwd(); } export function args() { return process.argv; }",
+    "const process = { mainModule: { require(value) { return value; } } }; export function ordinary() { return process.mainModule.require(1); }",
+    "const process = { getBuiltinModule(value) { return value; } }; const get = Reflect.get(process, 'getBuiltinModule'); export function ordinary() { return get(1); }",
+    "export function streams() { return [process.stdout, process.stderr]; } export function runtime() { return process.versions; } export function executable() { return process.execPath; } process.exitCode = 0; export function exit() { process.exit(0); }",
     "import { binding } from 'node:process'; export const unused = 1;",
-    "const require = (value) => value; const load = require; export const ordinary = load(1);",
-    "const module = { isBuiltin(value) { return value; } }; export const ordinary = module.isBuiltin(1);",
-    "const globalThis = { require(value) { return value; } }; const load = globalThis.require; export const ordinary = load(1);",
-    "const process = { binding(value) { return value; } }; export const ordinary = process.binding(1);",
+    "const require = (value) => value; const load = require; export function ordinary() { return load(1); }",
+    "const module = { isBuiltin(value) { return value; } }; export function ordinary() { return module.isBuiltin(1); }",
+    "const globalThis = { require(value) { return value; } }; const load = globalThis.require; export function ordinary() { return load(1); }",
+    "const process = { binding(value) { return value; } }; export function ordinary() { return process.binding(1); }",
   ]) expect(inspectJavaScriptSource("/fixture/main.mjs", source).reasons).toEqual([]);
 });
 test("type-only native bindings are inert and the compatibility predicate makes no opaque-member execution claim", () => {

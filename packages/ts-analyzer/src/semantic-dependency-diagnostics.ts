@@ -22,6 +22,8 @@ export function inspectSemanticDependencies(source: ts.SourceFile, snapshot?: Co
     return false;
   };
   const inspectSyntax = (node: ts.Node): void => {
+    if (ts.isVariableDeclarationList(node) && (node.flags & ts.NodeFlags.Using) !== 0) reasons.add("SOURCE_DISPOSAL_UNSUPPORTED");
+    if (ts.isElementAccessExpression(node) || ts.isComputedPropertyName(node)) needsChecker = true;
     if (ts.isTemplateExpression(node) || (ts.isBinaryExpression(node) && [ts.SyntaxKind.PlusToken, ts.SyntaxKind.PlusEqualsToken].includes(node.operatorToken.kind))
       || (ts.isReturnStatement(node) && asyncOwner(node))
       || (ts.isArrowFunction(node) && ts.getModifiers(node)?.some(modifier => modifier.kind === ts.SyntaxKind.AsyncKeyword))) needsChecker = true;
@@ -171,8 +173,31 @@ export function inspectSemanticDependencies(source: ts.SourceFile, snapshot?: Co
     return declarations(value).some(declaration => ts.isVariableDeclaration(declaration) && ts.isVariableDeclarationList(declaration.parent)
       && (declaration.parent.flags & ts.NodeFlags.Const) !== 0 && declaration.initializer !== undefined && primitiveValue(declaration.initializer, new Set(seen)));
   };
+  const constantString = (expression: ts.Expression, seen = new Set<ts.Node>()): string | undefined => {
+    const value = unwrapStaticExpression(expression);
+    if (seen.has(value)) return undefined;
+    seen.add(value);
+    if (ts.isStringLiteralLike(value)) return value.text;
+    for (const declaration of declarations(value)) if (ts.isVariableDeclaration(declaration) && ts.isVariableDeclarationList(declaration.parent)
+      && (declaration.parent.flags & ts.NodeFlags.Const) !== 0 && declaration.initializer !== undefined) {
+      const name = constantString(declaration.initializer, seen); if (name !== undefined) return name;
+    }
+    return undefined;
+  };
   const staticMemberName = (expression: ts.Expression): string | undefined => ts.isPropertyAccessExpression(expression) ? expression.name.text
-    : ts.isElementAccessExpression(expression) && ts.isStringLiteralLike(expression.argumentExpression) ? expression.argumentExpression.text : undefined;
+    : ts.isElementAccessExpression(expression) ? constantString(expression.argumentExpression) : undefined;
+  const propertyKey = (expression: ts.Expression, seen = new Set<ts.Node>()): boolean => {
+    const value = unwrapStaticExpression(expression);
+    if (seen.has(value)) return false;
+    seen.add(value);
+    if (primitiveValue(value)) return true;
+    if ((ts.isPropertyAccessExpression(value) || ts.isElementAccessExpression(value)) && sdkValue(value.expression)?.getName() === "Symbol") {
+      const symbol = sdkValue(value);
+      if (symbol !== undefined && (checker.getTypeAtLocation(value).flags & ts.TypeFlags.ESSymbolLike) !== 0) return true;
+    }
+    return declarations(value).some(declaration => ts.isVariableDeclaration(declaration) && ts.isVariableDeclarationList(declaration.parent)
+      && (declaration.parent.flags & ts.NodeFlags.Const) !== 0 && declaration.initializer !== undefined && propertyKey(declaration.initializer, seen));
+  };
   const serviceWorkerLoader = (expression: ts.Expression): boolean => {
     const value = unwrapStaticExpression(expression);
     if ((ts.isPropertyAccessExpression(value) || ts.isElementAccessExpression(value)) && staticMemberName(value) === "register"
@@ -242,7 +267,9 @@ export function inspectSemanticDependencies(source: ts.SourceFile, snapshot?: Co
     if (seen.has(value)) return false;
     seen.add(value);
     if (ts.isAwaitExpression(value)) return safeAwaitValue(value.expression, seen);
-    if (primitiveValue(value) || intrinsicIterable(value)) return true;
+    // Iterable objects remain mutable even behind a const binding; an initializer is
+    // not proof that a then override or prototype cannot participate in assimilation.
+    if (primitiveValue(value)) return true;
     if (ts.isNewExpression(value) && sdkValue(value.expression)?.getName() === "Promise") return true;
     if (ts.isCallExpression(value)) {
       const callee = unwrapStaticExpression(value.expression);
@@ -315,8 +342,19 @@ export function inspectSemanticDependencies(source: ts.SourceFile, snapshot?: Co
       || ts.isFunctionDeclaration(declaration)) && internal(declaration)) || (ts.isVariableDeclaration(declaration)
       && declaration.initializer !== undefined && internalBase(declaration.initializer, seen)));
   };
+  const runtimeProperty = (node: ts.Node): boolean => {
+    if (node.getSourceFile().isDeclarationFile) return false;
+    for (let owner: ts.Node | undefined = node; owner !== undefined; owner = owner.parent) {
+      if (ts.canHaveModifiers(owner) && ts.getModifiers(owner)?.some(modifier => modifier.kind === ts.SyntaxKind.DeclareKeyword)) return false;
+    }
+    return true;
+  };
   const visit = (node: ts.Node): void => {
-    if (ts.isTypeNode(node)) return;
+    if (ts.isTypeNode(node) || ts.isInterfaceDeclaration(node)) return;
+    if (runtimeProperty(node) && ((ts.isElementAccessExpression(node) && !propertyKey(node.argumentExpression))
+      || (ts.isComputedPropertyName(node) && !propertyKey(node.expression)))) reasons.add("SOURCE_PROPERTY_KEY_UNSUPPORTED");
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment
+      && staticMemberName(unwrapStaticExpression(node.left)) === "then" && !primitiveValue(node.right)) reasons.add("SOURCE_THENABLE_MUTATION_UNSUPPORTED");
     if ((ts.isBinaryExpression(node) && [ts.SyntaxKind.PlusToken, ts.SyntaxKind.PlusEqualsToken].includes(node.operatorToken.kind)
       && (!primitiveValue(node.left) || !primitiveValue(node.right)))
       || (ts.isTemplateExpression(node) && node.templateSpans.some(span => !primitiveValue(span.expression)))) reasons.add("SOURCE_COERCION_UNSUPPORTED");

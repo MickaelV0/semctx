@@ -250,6 +250,20 @@ qualification uses the separately named `primitive-safe-esm` domain with literal
 operands, the same tool pins/topology/static call chain, and test copy describing its fixed
 primitive value. Historical/current artifact pairs use identical explicit fixture domains;
 earlier receipts remain bound to their original sources and are never relabeled.
+Array/collection initialization behind a const binding does not prove an immutable
+object or exclude a later `then` override. Those iterable objects are outside safe
+await/async-return eligibility; primitive values and unmodified native promise origins
+retain their boundary. Explicit nonprimitive `then` writes, including immutable static
+key aliases, are unsupported. A native promise's own `then` override is not invoked by
+direct native await, but it can be invoked by async-return assimilation; the mutation
+refusal conservatively prevents that missing dependency.
+
+Computed property access/names require a proven primitive key or actual SDK symbol
+origin, without relying on a Symbol/string annotation. Resource declarations carrying
+the SDK Using/AwaitUsing flags are unsupported implicit disposal, while ordinary
+identifiers named `using` remain distinct. CommonJS JavaScript `.cjs` is unsupported
+in retained broad module scope even with ESM-looking syntax; its existing selected
+JavaScript-producer refusal remains in place. No property-coercion/disposal edges are added.
 
 Retained named `tsconfig*.json` files whose options are not actually consumed are
 unsupported. Conventional `tsconfig.json` reads and their SDK-parsed `extends` read set
