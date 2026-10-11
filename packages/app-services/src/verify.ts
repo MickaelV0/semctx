@@ -1,11 +1,15 @@
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { digestCanonical } from "@semantic-context/plane-a-internal";
-import { SemctxError, type VerifyReport } from "@semantic-context/core";
+import { SemctxError, type SemctxConfig, type VerifyReport } from "@semantic-context/core";
 import { loadConfig } from "@semantic-context/repository-store";
 import { discoverRepository, isPathSelected } from "@semantic-context/ts-analyzer";
 import {
   GraphIndex,
   analyzeDiff,
+  analyzeLostGuards,
+  diffRemovesBaseLines,
   buildVerifyReport,
   computeCoChanges,
   parseUnifiedDiffScopePaths,
@@ -14,6 +18,7 @@ import {
   type VerifyReportGitMeta,
   type VerifyResult,
 } from "@semantic-context/context-engine";
+import { analyzeAndBuildClaims } from "./indexing";
 import { openReadyRepository } from "./readiness";
 import { indexHealth, type IndexHealthReportV1 } from "./index-health";
 import { controlStatusWithSemanticInputs } from "./control";
@@ -571,6 +576,58 @@ function discloseUnresolvedReferences(
   );
 }
 
+/**
+ * Analyse the tree of `commit` without touching the repository's worktree, index or store: the tree
+ * is read into a private Git index and checked out under a throwaway directory.
+ */
+function analyzeCommitTree(root: string, commit: string, config: SemctxConfig): GraphIndex {
+  const scratch = mkdtempSync(join(tmpdir(), "semctx-base-"));
+  try {
+    const tree = join(scratch, "tree");
+    const env = { ...process.env, GIT_INDEX_FILE: join(scratch, "index") };
+    for (const args of [["read-tree", commit], ["checkout-index", "-a", "-f", `--prefix=${tree}/`]]) {
+      const proc = Bun.spawnSync(["git", ...args], { cwd: root, env, stdout: "pipe", stderr: "pipe" });
+      if (proc.exitCode !== 0) {
+        throw new SemctxError("GIT_ERROR", `cannot read the base tree ${commit.slice(0, 12)}`, {
+          stderr: new TextDecoder().decode(proc.stderr).trim(),
+        });
+      }
+    }
+    return new GraphIndex(analyzeAndBuildClaims({ ...config, repositoryRoot: tree }).analysis.graph);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
+/**
+ * A committed range is indexed at its head, so a guard the change deletes, strips or moves is not in
+ * the graph the head-side analysis reads. Recover those from the merge-base and add them as findings.
+ */
+function applyLostGuards(
+  root: string,
+  config: SemctxConfig,
+  result: VerifyResult,
+  headIndex: GraphIndex,
+  mergeBase: string,
+  diffText: string,
+): VerifyResult {
+  if (!diffRemovesBaseLines(diffText)) return result;
+  const lost = analyzeLostGuards({
+    baseIndex: analyzeCommitTree(root, mergeBase, config),
+    headIndex,
+    config,
+    diffText,
+  });
+  if (lost.findings.length === 0) return result;
+  const findings = [...result.findings, ...lost.findings];
+  return {
+    ...result,
+    findings,
+    unknowns: [...new Set([...result.unknowns, ...lost.unknowns])],
+    verdict: findings.some((f) => f.severity === "block") ? "BLOCK" : "WARN",
+  };
+}
+
 /** Shared CLI/MCP verification use case. Always returns the ADR-0008 report. */
 export function runVerify(root: string, source: VerifySource): VerifyComputation {
   const store = openReadyRepository(root);
@@ -581,8 +638,9 @@ export function runVerify(root: string, source: VerifySource): VerifyComputation
     const claims = store.loadClaims();
     const analyzedRepositoryFactsHash = fingerprintRepositoryFacts({ graph, claims, evidence: store.loadEvidence() });
     const analyzedIndexSnapshotHash = digestCanonical(store.getMeta(CONTROL_INDEX_SNAPSHOT_META_KEY) ?? null);
-    const baseResult = analyzeDiff({
-      index: new GraphIndex(graph),
+    const headIndex = new GraphIndex(graph);
+    const headResult = analyzeDiff({
+      index: headIndex,
       claims,
       config,
       diffText: resolved.diffText ?? "",
@@ -590,6 +648,9 @@ export function runVerify(root: string, source: VerifySource): VerifyComputation
       // analysed against its indexed head, so its graph ranges use the diff's new coordinates.
       nodeRangeSide: source.kind === "range" ? "new" : "old",
     });
+    const baseResult = source.kind === "range" && resolved.git.mergeBase !== null
+      ? applyLostGuards(root, config, headResult, headIndex, resolved.git.mergeBase, resolved.diffText ?? "")
+      : headResult;
     const afterAnalysis = verifyAnalysisBarrierForTesting;
     verifyAnalysisBarrierForTesting = undefined;
     afterAnalysis?.();

@@ -7,7 +7,10 @@ import { initWorkspace } from "@semantic-context/repository-store";
 import { indexRepository, runVerify } from "../src";
 
 /**
- * A PR is checked as a committed range against its base, with the index built at the PR head.
+ * A PR is checked as a committed range against its base, with the index built at the PR head. What
+ * the PR removes is therefore absent from the indexed graph, so every guard it deletes, strips or
+ * moves has to be recovered from the base commit instead. Each case below is the same change a
+ * working-tree check already refuses; a range check must not be the easier path.
  */
 
 const roots: string[] = [];
@@ -72,6 +75,8 @@ function verifyPullRequest(edit: (root: string) => void) {
   return runVerify(root, { kind: "range", base: "main" }).result;
 }
 
+const rulesOf = (result: ReturnType<typeof verifyPullRequest>): string[] => result.findings.map((finding) => finding.rule);
+
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
@@ -83,5 +88,62 @@ describe("a diff with no content hunks", () => {
     expect(unknowns).not.toContain("No changes detected");
     expect(unknowns).toContain("no content hunks");
     expect(unknowns).toContain("src/cart.ts");
+  });
+});
+
+describe("a pull request that removes a guard", () => {
+  it("blocks deleting the file that holds an untested @invariant", () => {
+    const result = verifyPullRequest((root) => git(root, "rm", "-q", "src/money.ts"));
+    expect(rulesOf(result)).toContain("invariant_touched_without_test");
+    expect(result.verdict).toBe("BLOCK");
+  });
+
+  it("warns on deleting an exported interface that no test covers", () => {
+    const result = verifyPullRequest((root) => write(root, "src/cart.ts", ""));
+    expect(rulesOf(result)).toContain("contract_changed_without_test");
+    expect(result.verdict).toBe("WARN");
+  });
+
+  it("warns on a pure rename of a file that exports an uncovered interface, and does not claim nothing changed", () => {
+    const result = verifyPullRequest((root) => git(root, "mv", "src/cart.ts", "src/cart2.ts"));
+    expect(rulesOf(result)).toContain("contract_changed_without_test");
+    expect(result.verdict).toBe("WARN");
+    expect(result.unknowns.join("\n")).not.toContain("No changes detected");
+  });
+
+  it("blocks stripping the @invariant marker while changing the body", () => {
+    const result = verifyPullRequest((root) =>
+      write(root, "src/money.ts", "export function clamp(x: number): number {\n  return x;\n}\n"));
+    expect(rulesOf(result)).toContain("invariant_touched_without_test");
+    expect(result.verdict).toBe("BLOCK");
+  });
+});
+
+describe("a pull request that must keep passing", () => {
+  it("still blocks a body change under a surviving @invariant", () => {
+    const result = verifyPullRequest((root) => write(root, "src/money.ts", MONEY.replace("? 0 : x", "? 1 : x")));
+    expect(result.verdict).toBe("BLOCK");
+  });
+
+  it("passes deleting an unguarded function that is not an exported contract", () => {
+    const result = verifyPullRequest((root) => git(root, "rm", "-q", "src/helper.ts"));
+    expect(result.verdict).toBe("PASS");
+  });
+
+  it("passes changing a guarded body when the same PR adds a test that imports it", () => {
+    const result = verifyPullRequest((root) => {
+      write(root, "src/money.ts", MONEY.replace("? 0 : x", "? 1 : x"));
+      write(
+        root,
+        "test/money.test.ts",
+        'import { expect, test } from "bun:test";\nimport { clamp } from "../src/money";\ntest("clamp", () => expect(clamp(-1)).toBe(1));\n',
+      );
+    });
+    expect(result.verdict).toBe("PASS");
+  });
+
+  it("passes a pure addition", () => {
+    const result = verifyPullRequest((root) => write(root, "src/extra.ts", "export function extra(): number {\n  return 3;\n}\n"));
+    expect(result.verdict).toBe("PASS");
   });
 });
