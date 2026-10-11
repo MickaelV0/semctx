@@ -2,7 +2,7 @@
 
 `semctx verify diff` analyses a git diff and exits **non-zero on `BLOCK`** (exit code 3), so it
 drops straight into a pre-commit hook or a CI job. `WARN` and `PASS` exit 0 by default; add
-`--strict` to also fail on `WARN`.
+`--fail-on warn` to also fail on `WARN` (`--strict` is a legacy alias).
 
 ## Local pre-commit hook
 
@@ -31,11 +31,15 @@ exit 0
 
 Notes:
 
-- The hook re-uses the **already-indexed** `.semctx/` graph; it does not re-index. After large
-  refactors run `semctx index` to refresh the graph (or add it to the hook if your repo is
-  small — indexing the demo repo is ~sub-second, a 260-file monorepo ~3–4 s).
-- Use `--strict` in the hook if you want `WARN` (plain exported contract without a direct test)
-  to block as well.
+- The hook re-uses the **already-indexed** `.semctx/` graph and must not re-index. A staged or
+  working-tree check reads the index as a snapshot of the committed `HEAD` and matches the diff's
+  old-side line numbers against it. Indexing the staged or edited tree first stores post-edit
+  ranges, which can stop overlapping those hunks and hide a `WARN` or `BLOCK` finding.
+- Re-index outside the hook, from a clean tree, after each commit, pull or branch switch
+  (`semctx index`; sub-second on the demo repo, about 3–4 s on a 260-file monorepo). Until you do,
+  the next check returns `BLOCK` with `index_binding_stale`.
+- Use `--fail-on warn` in the hook if you want `WARN` (plain exported contract without a direct
+  test) to block as well.
 - `git commit --no-verify` bypasses the hook for the rare intentional exception.
 
 ## Managed hooks (husky / lefthook / pre-commit framework)
@@ -78,7 +82,7 @@ therefore remains a deliberately blocking diagnostic, even when accompanied by `
 | verdict | exit | default rules |
 | --- | --- | --- |
 | `BLOCK` | 3 | invariant touched without test · **critical** contract (tagged `critical`/`security`) without test · security surface without verification |
-| `WARN` | 0 (3 with `--strict`) | plain exported contract without a direct test · touched unresolved contradiction |
+| `WARN` | 0 (3 with `--fail-on warn`) | plain exported contract without a direct test · touched unresolved contradiction |
 | `PASS` | 0 | none of the above |
 
 Rules are configurable in `.semctx/config.json` (`blockingRules`). See
