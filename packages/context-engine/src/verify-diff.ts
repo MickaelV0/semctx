@@ -641,7 +641,7 @@ export function analyzeDiff(args: {
     });
   }
 
-  const unknowns = buildDiffUnknowns(impactedInvariants, invariantConstrainedUntested, changedFiles, index);
+  const unknowns = buildDiffUnknowns(impactedInvariants, invariantConstrainedUntested, changedFiles, parseUnifiedDiffScopePaths(args.diffText), index);
 
   const verdict: VerdictLevel = findings.some((f) => f.severity === "block")
     ? "BLOCK"
@@ -696,10 +696,17 @@ function buildDiffUnknowns(
   impactedInvariants: readonly Claim[],
   untested: readonly RepositoryNode[],
   changedFiles: readonly string[],
+  scopePaths: readonly string[],
   index: GraphIndex,
 ): string[] {
   const unknowns: string[] = [];
-  if (changedFiles.length === 0) unknowns.push("No changes detected in the diff.");
+  if (changedFiles.length === 0) {
+    unknowns.push(
+      scopePaths.length === 0
+        ? "No changes detected in the diff."
+        : `The diff names paths with no content hunks (rename, binary or mode-only change); their contents were not compared: ${scopePaths.join(", ")}.`,
+    );
+  }
   for (const inv of impactedInvariants) {
     if (inv.verificationStatus !== "tested") unknowns.push(`Impacted invariant is not test-backed: ${inv.statement}`);
   }

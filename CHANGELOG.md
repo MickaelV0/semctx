@@ -11,6 +11,8 @@ GitHub Release advance together through the tag-driven lockstep workflow documen
 
 ### Fixed
 
+- A diff made only of renames, binary or mode-only changes no longer reports "No changes detected";
+  it names the paths whose contents were not compared.
 - The `VerifyComputation` characterization test no longer depends on the developer's global Git
   configuration (it failed under `commit.gpgsign=true`).
 
