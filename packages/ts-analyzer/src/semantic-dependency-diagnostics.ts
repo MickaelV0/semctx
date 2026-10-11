@@ -198,6 +198,23 @@ export function inspectSemanticDependencies(source: ts.SourceFile, snapshot?: Co
     return declarations(value).some(declaration => ts.isVariableDeclaration(declaration) && ts.isVariableDeclarationList(declaration.parent)
       && (declaration.parent.flags & ts.NodeFlags.Const) !== 0 && declaration.initializer !== undefined && propertyKey(declaration.initializer, seen));
   };
+  const iteratorKey = (expression: ts.Expression, seen = new Set<ts.Node>()): boolean => {
+    const value = unwrapStaticExpression(expression);
+    if (seen.has(value)) return false;
+    seen.add(value);
+    if ((ts.isPropertyAccessExpression(value) || ts.isElementAccessExpression(value)) && sdkValue(value.expression)?.getName() === "Symbol") {
+      return ["iterator", "asyncIterator"].includes(sdkValue(value)?.getName() ?? "");
+    }
+    return declarations(value).some(origin => {
+      if (ts.isVariableDeclaration(origin) && ts.isVariableDeclarationList(origin.parent)
+        && (origin.parent.flags & ts.NodeFlags.Const) !== 0 && origin.initializer !== undefined) return iteratorKey(origin.initializer, seen);
+      return ts.isBindingElement(origin) && ts.isObjectBindingPattern(origin.parent)
+        && ts.isVariableDeclaration(origin.parent.parent) && origin.parent.parent.initializer !== undefined
+        && ts.isVariableDeclarationList(origin.parent.parent.parent) && (origin.parent.parent.parent.flags & ts.NodeFlags.Const) !== 0
+        && sdkValue(origin.parent.parent.initializer)?.getName() === "Symbol"
+        && ["iterator", "asyncIterator"].includes(sdkValue(value)?.getName() ?? "");
+    });
+  };
   const serviceWorkerLoader = (expression: ts.Expression): boolean => {
     const value = unwrapStaticExpression(expression);
     if ((ts.isPropertyAccessExpression(value) || ts.isElementAccessExpression(value)) && staticMemberName(value) === "register"
@@ -355,6 +372,10 @@ export function inspectSemanticDependencies(source: ts.SourceFile, snapshot?: Co
       || (ts.isComputedPropertyName(node) && !propertyKey(node.expression)))) reasons.add("SOURCE_PROPERTY_KEY_UNSUPPORTED");
     if (ts.isBinaryExpression(node) && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment
       && staticMemberName(unwrapStaticExpression(node.left)) === "then" && !primitiveValue(node.right)) reasons.add("SOURCE_THENABLE_MUTATION_UNSUPPORTED");
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment) {
+      const target = unwrapStaticExpression(node.left);
+      if (ts.isElementAccessExpression(target) && iteratorKey(target.argumentExpression)) reasons.add("SOURCE_ITERATOR_MUTATION_UNSUPPORTED");
+    }
     if ((ts.isBinaryExpression(node) && [ts.SyntaxKind.PlusToken, ts.SyntaxKind.PlusEqualsToken].includes(node.operatorToken.kind)
       && (!primitiveValue(node.left) || !primitiveValue(node.right)))
       || (ts.isTemplateExpression(node) && node.templateSpans.some(span => !primitiveValue(span.expression)))) reasons.add("SOURCE_COERCION_UNSUPPORTED");

@@ -257,6 +257,12 @@ retain their boundary. Explicit nonprimitive `then` writes, including immutable 
 key aliases, are unsupported. A native promise's own `then` override is not invoked by
 direct native await, but it can be invoked by async-return assimilation; the mutation
 refusal conservatively prevents that missing dependency.
+The same object mutability limit applies to iteration: assignments through a proven
+SDK `Symbol.iterator` or `Symbol.asyncIterator` key (including const key aliases)
+are unsupported. This source-level refusal applies before for-of, await-for-of,
+destructuring, delegated yield or spread eligibility; it does not fabricate protocol
+edges. Unmodified intrinsic origins retain their boundary, and string properties
+named `iterator` or own homonyms are distinct from actual SDK protocol symbols.
 
 Computed property access/names require a proven primitive key or actual SDK symbol
 origin, without relying on a Symbol/string annotation. Resource declarations carrying
