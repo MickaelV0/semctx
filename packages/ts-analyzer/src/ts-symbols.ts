@@ -1094,6 +1094,14 @@ function enclosingScopeOf(node: ts.Node, retainInterfaceOwners = false): string[
   return scope;
 }
 
+/** Private proof coordinate: the same declaration domain and scope used by extraction. */
+export function retainedFunctionOwnerCoordinate(declaration: ts.FunctionDeclaration, root: string): { relPath: string; symbolPath: string } | undefined {
+  const name = scopeNameOf(declaration);
+  if (declaration.body === undefined || name === undefined) return undefined;
+  return { relPath: relative(root, declaration.getSourceFile().fileName).replaceAll("\\", "/"),
+    symbolPath: symbolScopePath(enclosingScopeOf(declaration, true), name) };
+}
+
 function resolveCallTarget(
   checker: ts.TypeChecker,
   expr: ts.Expression,
@@ -1128,6 +1136,21 @@ function resolveCallTarget(
     ...(snapshot !== undefined && ts.isObjectLiteralExpression(decl.parent)
       ? { unmodeledReason: "OBJECT_LITERAL_MEMBER" } : {}),
   };
+}
+
+/** Private semantic-policy seam: reuse the extractor's canonical declaration coordinate. */
+export function retainedCallableCoordinate(checker: ts.TypeChecker, expression: ts.Expression, root: string, snapshot: CompilerInputSnapshot): ReturnType<typeof resolveCallTarget> {
+  let receiver = unwrapStaticExpression(expression);
+  while (ts.isPropertyAccessExpression(receiver) || ts.isElementAccessExpression(receiver)) receiver = unwrapStaticExpression(receiver.expression);
+  if (checker.getSymbolAtLocation(receiver)?.getDeclarations()?.some(origin => (ts.isImportSpecifier(origin) && origin.isTypeOnly)
+    || (ts.isImportClause(origin) && origin.isTypeOnly) || (ts.isNamespaceImport(origin) && origin.parent.isTypeOnly))) return undefined;
+  let symbol = checker.getSymbolAtLocation(expression);
+  if (symbol !== undefined && (symbol.flags & ts.SymbolFlags.Alias) !== 0) symbol = checker.getAliasedSymbol(symbol);
+  if (!symbol?.getDeclarations()?.some(declaration => (ts.isFunctionDeclaration(declaration) && declaration.body !== undefined)
+    || ts.isClassDeclaration(declaration) || (ts.isMethodDeclaration(declaration) && ts.isClassLike(declaration.parent))
+    || (ts.isVariableDeclaration(declaration) && ts.isIdentifier(declaration.name) && declaration.initializer !== undefined
+      && (ts.isArrowFunction(declaration.initializer) || ts.isFunctionExpression(declaration.initializer))))) return undefined;
+  return resolveCallTarget(checker, expression, abs => normalizePath(relative(root, abs)), true, snapshot);
 }
 
 function hasObjectLiteralMemberAncestor(node: ts.Node): boolean {

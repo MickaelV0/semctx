@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { Database } from "bun:sqlite";
-import { BRIDGE, CONSUMER_VERSIONS, createConsumer, createEligibleConsumer, createPrimitiveSafeConsumer, ENTRY, LEAF, LEAF_SOURCE, PRIMITIVE_SAFE_LEAF_SOURCE, put } from "./public-static-fixture";
+import { BRIDGE, CONSUMER_VERSIONS, createConsumer, createEligibleConsumer, createPrimitiveSafeConsumer, createDataProvenConsumer, ENTRY, LEAF, LEAF_SOURCE, PRIMITIVE_SAFE_LEAF_SOURCE, put } from "./public-static-fixture";
 import { assertInterruptedAdmission } from "./public-interruption-witness";
 
 type Observation = { command: string[]; code: number; stdout: string; stderr: string };
@@ -24,7 +24,7 @@ const interruptionWitnessOnly = process.argv.includes("--interruption-witness-on
 const loaderWitnessesOnly = process.argv.includes("--loader-witnesses-only");
 assert([auditWitnessesOnly, directoryWitnessesOnly, interruptionWitnessOnly, loaderWitnessesOnly].filter(Boolean).length <= 1, "Choose one focused witness scope");
 const observations: Record<string, unknown> = {};
-type FixtureDomain = "declaration-bearing" | "eligible-esm" | "primitive-safe-esm";
+type FixtureDomain = "declaration-bearing" | "eligible-esm" | "primitive-safe-esm" | "data-proven-esm";
 const fixtureSources = new Map<string, string>();
 function leafSource(root: string): string { return fixtureSources.get(root) ?? LEAF_SOURCE; }
 const failures: string[] = [];
@@ -36,13 +36,14 @@ function run(command: string[], cwd: string, timeout = 60_000): Observation {
 }
 function git(root: string, args: string[]): void { const result = run(["git", ...args], root); assert.equal(result.code, 0, result.stderr); }
 function semctx(root: string, args: string[], bundle = cli): Observation { return run([process.execPath, bundle, ...args, "--root", root], root); }
-function fixture(name: string, qualified = true, bundle = cli, domain: FixtureDomain = qualified ? "primitive-safe-esm" : "declaration-bearing"): string {
+function fixture(name: string, qualified = true, bundle = cli, domain: FixtureDomain = qualified ? "data-proven-esm" : "declaration-bearing"): string {
   const root = join(output, `consumer-${name}`);
   assert(!existsSync(root), `Refusing to overwrite existing consumer ${root}; choose a new --output-dir`);
   mkdirSync(root, { recursive: true });
-  if (domain === "declaration-bearing") createConsumer(root); else if (domain === "eligible-esm") createEligibleConsumer(root); else createPrimitiveSafeConsumer(root);
-  fixtureSources.set(root, domain === "primitive-safe-esm" ? PRIMITIVE_SAFE_LEAF_SOURCE : LEAF_SOURCE);
+  if (domain === "declaration-bearing") createConsumer(root); else if (domain === "eligible-esm") createEligibleConsumer(root); else if (domain === "primitive-safe-esm") createPrimitiveSafeConsumer(root); else createDataProvenConsumer(root);
+  fixtureSources.set(root, (domain === "primitive-safe-esm" || domain === "data-proven-esm") ? PRIMITIVE_SAFE_LEAF_SOURCE : LEAF_SOURCE);
   observations[`${name}:fixture-leaf-sha256`] = createHash("sha256").update(leafSource(root)).digest("hex");
+  observations[`${name}:fixture-helper-sha256`] = Object.fromEntries(["suite/tooling/check/build.mjs", "suite/tooling/check/check.mjs"].map(path => [path, createHash("sha256").update(readFileSync(join(root, path))).digest("hex")]));
   observations[`${name}:fixture-domain`] = domain;
   git(root, ["init", "-q"]); git(root, ["add", "-A"]); git(root, ["commit", "-qm", "public fixture"]);
   const initialized = semctx(root, ["init"], bundle); assert.equal(initialized.code, 0, initialized.stderr);
@@ -53,14 +54,14 @@ function fixture(name: string, qualified = true, bundle = cli, domain: FixtureDo
   git(root, ["add", "-A"]); git(root, ["commit", "-qm", "initialize public analysis policy"]);
   return root;
 }
-function typescriptAuditFixture(name: string, variant: "reexport" | "literal-import" | "inherited-nodenext", bundle: string, domain: FixtureDomain = "primitive-safe-esm"): string {
+function typescriptAuditFixture(name: string, variant: "reexport" | "literal-import" | "inherited-nodenext", bundle: string, domain: FixtureDomain = "data-proven-esm"): string {
   observations[`${name}:fixture-domain`] = domain;
   const root = join(output, `consumer-${name}`);
   assert(!existsSync(root), `Refusing to overwrite existing consumer ${root}`);
   mkdirSync(root, { recursive: true });
   put(root, ".gitignore", ".semctx/\n");
   put(root, "package.json", JSON.stringify({ name: "public-typescript-audit-consumer", private: true, type: "module" }));
-  put(root, "src/main.ts", domain === "primitive-safe-esm" ? "export function main(input: number): number { return 1 + 1; }\n" : "export function main(input: number): number { return input + 1; }\n");
+  put(root, "src/main.ts", (domain === "primitive-safe-esm" || domain === "data-proven-esm") ? "export function main(input: number): number { return 1 + 1; }\n" : "export function main(input: number): number { return input + 1; }\n");
   put(root, "tsconfig.json", JSON.stringify({ extends: "./configs/base.json", include: ["src/**/*.ts", "hidden.ts"] }));
   const module = variant === "inherited-nodenext" ? "NodeNext" : "ESNext";
   const moduleResolution = variant === "inherited-nodenext" ? "NodeNext" : "Bundler";
@@ -76,7 +77,7 @@ function typescriptAuditFixture(name: string, variant: "reexport" | "literal-imp
   git(root, ["add", "-A"]); git(root, ["commit", "-qm", "initialize qualified audit policy"]);
   const initial = semctx(root, ["index", "--json"], bundle); observations[`${name}:initial-index`] = initial;
   assert.equal(initial.code, 0, initial.stderr);
-  put(root, "src/main.ts", domain === "primitive-safe-esm" ? "export function main(input: number): number { return 1 + 2; }\n" : "export function main(input: number): number { return input + 2; }\n");
+  put(root, "src/main.ts", (domain === "primitive-safe-esm" || domain === "data-proven-esm") ? "export function main(input: number): number { return 1 + 2; }\n" : "export function main(input: number): number { return input + 2; }\n");
   const refreshed = semctx(root, ["index", "--json"], bundle); observations[`${name}:refreshed-index`] = refreshed;
   assert.equal(refreshed.code, 0, refreshed.stderr);
   return root;
@@ -88,7 +89,7 @@ type DirectoryAdmission = {
   changeCoverage: { expected: string[]; analyzed: string[]; files: { path: string; status: string; reasons: string[] }[] };
 };
 const directoryPaths = ["tooling/build/hidden.ts", "dist/hidden.mjs"] as const;
-function directoryFixture(name: string, hidden: typeof directoryPaths[number], selected: boolean, bundle: string, domain: FixtureDomain = "primitive-safe-esm"): string {
+function directoryFixture(name: string, hidden: typeof directoryPaths[number], selected: boolean, bundle: string, domain: FixtureDomain = "data-proven-esm"): string {
   observations[`${name}:fixture-domain`] = domain;
   const root = join(output, `consumer-${name}`);
   assert(!existsSync(root), `Refusing to overwrite existing consumer ${root}`);
@@ -96,7 +97,7 @@ function directoryFixture(name: string, hidden: typeof directoryPaths[number], s
   put(root, ".gitignore", ".semctx/\nnode_modules/\n");
   put(root, "package.json", JSON.stringify({ name: "public-directory-witness", private: true, type: "module" }));
   put(root, "tsconfig.json", JSON.stringify({ compilerOptions: { target: "ES2022", module: "ESNext", moduleResolution: "Bundler", allowJs: true, noEmit: true }, include: ["src/**/*.ts", hidden] }));
-  put(root, "src/main.ts", domain === "primitive-safe-esm" ? "export function main(input: number): number { return 1 + 1; }\n" : "export function main(input: number): number { return input + 1; }\n");
+  put(root, "src/main.ts", (domain === "primitive-safe-esm" || domain === "data-proven-esm") ? "export function main(input: number): number { return 1 + 1; }\n" : "export function main(input: number): number { return input + 1; }\n");
   put(root, hidden, hidden.endsWith(".ts") ? 'export { main } from "../../src/main";\n' : 'export { main } from "../src/main.ts";\n');
   git(root, ["init", "-q"]); git(root, ["add", "-A"]); git(root, ["commit", "-qm", "public tracked directory witness"]);
   const initialized = semctx(root, ["init"], bundle); assert.equal(initialized.code, 0, initialized.stderr);
@@ -106,7 +107,7 @@ function directoryFixture(name: string, hidden: typeof directoryPaths[number], s
   writeFileSync(configPath, JSON.stringify(config));
   git(root, ["add", "-A"]); git(root, ["commit", "-qm", "initialize qualified directory policy"]);
   const initial = semctx(root, ["index", "--json"], bundle); observations[`${name}:initial-index`] = initial; assert.equal(initial.code, 0, initial.stderr);
-  put(root, "src/main.ts", domain === "primitive-safe-esm" ? "export function main(input: number): number { return 1 + 2; }\n" : "export function main(input: number): number { return input + 2; }\n");
+  put(root, "src/main.ts", (domain === "primitive-safe-esm" || domain === "data-proven-esm") ? "export function main(input: number): number { return 1 + 2; }\n" : "export function main(input: number): number { return input + 2; }\n");
   const refreshed = semctx(root, ["index", "--json"], bundle); observations[`${name}:refreshed-index`] = refreshed; assert.equal(refreshed.code, 0, refreshed.stderr);
   return root;
 }
@@ -146,14 +147,14 @@ const loaderSources = {
   "node-global-getter-js": { path: "hidden-node-global-getter.mjs", source: 'const native = global.process.getBuiltinModule("module"); const factory = native.createRequire; const load = factory(import.meta.url); export function entry() { return load("./src/main.mjs"); }\n', selected: false, expectedDiagnostic: "NATIVE_MODULE_MEMBER_UNSUPPORTED" },
   barrel: { path: "hidden-barrel.ts", source: 'import { make } from "./barrel.mjs"; const load = make(import.meta.url); export const hidden = load("./src/main.mjs");\n', selected: false },
 } as const;
-function loaderFixture(name: string, variant: keyof typeof loaderSources, bundle: string, domain: FixtureDomain = "primitive-safe-esm"): string {
+function loaderFixture(name: string, variant: keyof typeof loaderSources, bundle: string, domain: FixtureDomain = "data-proven-esm"): string {
   observations[`${name}:fixture-domain`] = domain;
   const root = join(output, `consumer-${name}`); assert(!existsSync(root), `Refusing to overwrite existing consumer ${root}`);
   mkdirSync(root, { recursive: true });
   put(root, ".gitignore", ".semctx/\nnode_modules/\n");
   put(root, "package.json", JSON.stringify({ name: "public-loader-witness", private: true, type: "module" }));
   put(root, "tsconfig.json", JSON.stringify({ compilerOptions: { target: "ES2022", module: "ESNext", moduleResolution: "Bundler", allowJs: true, noEmit: true }, include: ["**/*.ts", "**/*.mjs"] }));
-  put(root, "src/main.mjs", domain === "primitive-safe-esm" ? "export function main(input) { return 1 + 1; }\n" : "export function main(input) { return input + 1; }\n");
+  put(root, "src/main.mjs", (domain === "primitive-safe-esm" || domain === "data-proven-esm") ? "export function main(input) { return 1 + 1; }\n" : "export function main(input) { return input + 1; }\n");
   put(root, "src/bridge.ts", 'import { main } from "./main.mjs";\nexport function bridge(input: number) { return main(input); }\n');
   const loader = loaderSources[variant]; put(root, loader.path, loader.source);
   if (variant === "barrel") put(root, "barrel.mjs", 'export { createRequire as make } from "node:module";\n');
@@ -163,7 +164,7 @@ function loaderFixture(name: string, variant: keyof typeof loaderSources, bundle
   Object.assign(config, { version: 2, selectionMode: "qualified-static-v1", analysisProfile: "public-monorepo-static-v1", languages: { typescript: "on", javascript: "on" }, include: ["src/**/*", ...(loader.selected ? [loader.path] : [])], exclude: ["**/node_modules/**", "**/.git/**", "**/.semctx/**"] });
   writeFileSync(path, JSON.stringify(config)); git(root, ["add", "-A"]); git(root, ["commit", "-qm", "initialize qualified loader policy"]);
   for (const phase of ["initial", "refreshed"] as const) {
-    if (phase === "refreshed") put(root, "src/main.mjs", domain === "primitive-safe-esm" ? "export function main(input) { return 1 + 2; }\n" : "export function main(input) { return input + 2; }\n");
+    if (phase === "refreshed") put(root, "src/main.mjs", (domain === "primitive-safe-esm" || domain === "data-proven-esm") ? "export function main(input) { return 1 + 2; }\n" : "export function main(input) { return input + 2; }\n");
     const indexed = semctx(root, ["index", "--json"], bundle); observations[`${name}:${phase}-index`] = indexed; assert.equal(indexed.code, 0, indexed.stderr);
   }
   return root;
@@ -243,6 +244,16 @@ await scenario("eligible-esm-unknown-coercion-blocks", () => {
   const result = verify(root, "eligible-esm-unknown-coercion-blocks");
   blocked(result);
   assert(JSON.stringify(report(result).analysisAdmission).includes("COERCION_UNSUPPORTED"));
+});
+
+
+await scenario("primitive-safe-esm-opaque-data-blocks", () => {
+  const root = fixture("primitive-safe-esm-opaque-data-blocks", true, cli, "primitive-safe-esm");
+  put(root, LEAF, leafSource(root).replace("+ 1", "+ 7"));
+  observations["primitive-safe-esm-opaque-data-blocks:index"] = semctx(root, ["index", "--json"]);
+  const result = verify(root, "primitive-safe-esm-opaque-data-blocks");
+  blocked(result);
+  assert(JSON.stringify(report(result).analysisAdmission).includes("SOURCE_OPAQUE_CALLBACK_UNSUPPORTED"));
 });
 
 if (legacyCli) await scenario("legacy-incident", () => {

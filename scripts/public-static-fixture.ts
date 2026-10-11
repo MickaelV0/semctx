@@ -23,9 +23,16 @@ export function createConsumer(root: string): void {
 export function createEligibleConsumer(root: string): void {
   writeConsumer(root, "eligible-esm");
 }
-/** Distinct positive domain; the two earlier fixture outputs remain byte-identical. */
+/** Historical primitive-safe domain; unproven opaque Node data is now a BLOCK witness. */
 export function createPrimitiveSafeConsumer(root: string): void {
   writeConsumer(root, "primitive-safe-esm");
+}
+
+/** Separate runtime-data-proven domain; all three historical outputs stay unchanged. */
+export function createDataProvenConsumer(root: string): void {
+  createPrimitiveSafeConsumer(root);
+  put(root, "suite/tooling/check/check.mjs", 'import { basename } from "node:path";\nexport function check(path) { if (typeof path !== "string") throw new TypeError("path must be a string"); return basename(path); }\n');
+  put(root, "suite/tooling/check/build.mjs", 'import { readFileSync, mkdirSync, writeFileSync } from "node:fs";\nconst source = readFileSync("../../domains/sample/core/value.mjs", "utf8");\nif (typeof source !== "string") throw new TypeError("source must be a string");\nif (source.includes("+ 9")) throw new Error("synthetic build failure");\nmkdirSync("out", { recursive: true });\nwriteFileSync("out/result.txt", source);\n');
 }
 
 function writeConsumer(root: string, domain: "declaration-bearing" | "eligible-esm" | "primitive-safe-esm"): void {

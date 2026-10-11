@@ -54,10 +54,15 @@ and Turbo 2.11.7 with nested `apps/*`, `contracts/*`, `design-system/*`, `domain
 to TypeScript 5.9.3. Newer consumer syntax that cannot be parsed remains a failure.
 The original `createConsumer` fixture retains its `.d.mts` companion and `.cts` source
 and is an explicit `original-declaration-bearing-consumer-blocks` witness. Positive
-qualification now uses the separately named `createPrimitiveSafeConsumer` fixture in
-the `primitive-safe-esm` domain: the same tool pins, topology and runtime call chain,
+qualification now uses the separately named `createDataProvenConsumer` fixture in
+the `data-proven-esm` domain: the same tool pins, topology and runtime call chain,
 with no declarations, an explicit ESM `port.ts`, and leaf operands literally `1 + 1`.
 Its test describes the fixed primitive fixture value, not input-increment semantics.
+The historical `createPrimitiveSafeConsumer` / `primitive-safe-esm` bytes remain unchanged
+as `primitive-safe-esm-opaque-data-blocks`: its Node helpers pass unproven data across
+opaque calls. The fourth domain changes only those two helpers, rejecting non-string
+values with actual runtime guards before the native APIs. Native output bytes, valid
+string behavior and the synthetic `+ 9` build failure remain the same.
 The original declaration-free `createEligibleConsumer` / `eligible-esm` output is preserved
 byte-for-byte and is the additional `eligible-esm-unknown-coercion-blocks` witness:
 an unknown `input + 1` can invoke an internal primitive-coercion protocol.
@@ -65,10 +70,18 @@ Runtime companion redirection remains distinct from declaration-change
 qualification; v2 declaration files remain visible as unsupported. Selector globs
 can select `.cts`/declarations, but selection cannot admit their unsupported semantics.
 Qualification observations record each fixture domain. Qualified historical/current
-artifact pairs both use the explicit `primitive-safe-esm` domain; the executable path never
+artifact pairs both use the explicit `data-proven-esm` domain; the executable path never
 selects fixture content. Earlier `eligible-esm` receipts retain their historical source identity.
 The original declaration-bearing negative is selected explicitly, and legacy diagnostics
 retain their separately recorded original domain.
+Observations bind each domain's initial leaf and two Node helper hashes to its Git inputs;
+historical receipts keep their original domain and source identity.
+Opaque callable arguments are unsupported unless existing facts prove ownership of every
+retained callable reference in that exact inline callback. This private proof adds no edges
+and requires the actual graph and raw inputs to match the indexed freshness seal; stale
+graphs, value escapes, unrelated edges and empty or uncertain references do not qualify.
+Primitive data guards must dominate the use in the same execution scope and reference the
+same unchanged binding. An annotation, assertion or guard in another function is not proof.
 Unknown/internal coercion in addition or template interpolation, async thenable return
 assimilation, actual SDK Proxy traps and ServiceWorkerContainer registration are outside
 qualification. A type annotation/assertion cannot prove a primitive/native value origin.

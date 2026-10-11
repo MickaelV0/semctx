@@ -25,7 +25,7 @@ import {
 import { CONTROL_INDEX_SNAPSHOT_META_KEY, fingerprintRepositoryFacts, parseIndexedControlSnapshot } from "./freshness";
 import { CLEAN_CONTROL_WORKING_DIFF_HASH, type ControlFreshnessReason, type ControlFreshnessStatusReport } from "@semantic-context/control-model";
 import { fingerprintVerificationSource, retainedGitBlobObjectIds } from "./verification-state";
-import { isQualified, qualifiedAdmission, QUALIFIED_BUILD_META } from "./qualified-analysis";
+import { isQualified, qualifiedAdmission, QUALIFIED_BUILD_META, bindOpaqueCallbackGraph } from "./qualified-analysis";
 import { canonicalRepositoryRoot, captureQualifiedAnalysisInputs, isQualifiedRepositoryInputPath } from "./freshness";
 
 /**
@@ -691,15 +691,20 @@ export function runVerify(root: string, source: VerifySource): VerifyComputation
       else if (indexed.workingDiffHash !== CLEAN_CONTROL_WORKING_DIFF_HASH) qualifiedPostImageReasons.push("QUALIFIED_POST_IMAGE_DIRTY_INDEX");
       else qualifiedPostImageReasons.push(...qualifiedPostImageInputs(root, inputAfter!, source, resolved.identity));
     }
+    const qualifiedBinding = isQualified(config) ? observeIndexBinding(root, store, resolved.identity, (hash) => analyzedSemanticInputHashes.push(hash)) : undefined;
+    const qualifiedHealth = isQualified(config) ? indexHealth(root) : undefined;
     const analysisAdmission = isQualified(config) ? qualifiedAdmission({
-      config, graph, changedPaths: changedScopePaths, health: indexHealth(root),
+      config, graph, changedPaths: changedScopePaths, health: qualifiedHealth!,
       sourceHash: digestCanonical({ inputs: inputBefore, sourceIdentity: resolved.identity }), diff: resolved.diffText ?? "", indexSnapshot: analyzedIndexSnapshotHash,
-      bindingReasons: [...observeIndexBinding(root, store, resolved.identity, (hash) => analyzedSemanticInputHashes.push(hash)).breaks, ...qualifiedPostImageReasons],
+      bindingReasons: [...qualifiedBinding!.breaks, ...qualifiedPostImageReasons],
       checkChanged: inputBefore !== inputAfter!.digest,
       buildState: store.getMeta(QUALIFIED_BUILD_META),
       sourceCommits: resolved.identity.kind === "absent" ? [] : [...resolved.identity.commits], baseCommit: resolved.git.mergeBase,
       expectedInputHash: inputBefore!,
       consumedInputs: inputAfter!,
+      opaqueGraphBinding: bindOpaqueCallbackGraph({ graph, actualFactsHash: analyzedRepositoryFactsHash, freshness: qualifiedBinding!.freshness,
+        consumedHash: inputAfter!.digest, expectedHash: inputBefore!, bindingValid: qualifiedHealth!.binding.status === "valid",
+        buildComplete: store.getMeta(QUALIFIED_BUILD_META) === "complete", checkChanged: inputBefore !== inputAfter!.digest }),
     }) : undefined;
     const coChanges = resolved.includeCoChanges && resolved.coChangeHead !== null
       ? historicalCoChanges(root, result.changedFiles, resolved.coChangeHead)

@@ -1,6 +1,6 @@
 import type { AnalysisAdmission, RepositoryGraph, SemctxConfig } from "@semantic-context/core";
 import { digestCanonical } from "@semantic-context/plane-a-internal";
-import { discoverRepository, extractTypeScript, inspectSourceParsing, inspectModuleConfiguration, inspectNativeModuleBindings } from "@semantic-context/ts-analyzer";
+import { discoverRepository, extractTypeScript, inspectSourceParsing, inspectModuleConfiguration, inspectNativeModuleBindings, registerOpaqueCallbackOwnership } from "@semantic-context/ts-analyzer";
 import type { IndexHealthReportV1 } from "./index-health";
 import { QUALIFIED_ANALYZER_IDENTITY } from "./analyzer-identity-generated";
 import { isBuiltin } from "node:module";
@@ -8,6 +8,23 @@ import ts from "typescript";
 import { evaluateAnalysisAdmission } from "@semantic-context/context-engine";
 import type { captureQualifiedAnalysisInputs } from "./freshness";
 import { dirname, resolve } from "node:path";
+import type { ControlFreshnessStatusReport } from "@semantic-context/control-model/reconciliation";
+
+interface OpaqueGraphBinding { graphDigest: string; inputHash: string }
+const ownershipBindings = new WeakSet<OpaqueGraphBinding>();
+/** Private identity proof only; it neither authorizes controls nor changes their gates. */
+export function bindOpaqueCallbackGraph(input: {
+  graph: RepositoryGraph; actualFactsHash: string; freshness: ControlFreshnessStatusReport | null;
+  consumedHash: string; expectedHash: string; bindingValid: boolean; buildComplete: boolean; checkChanged: boolean;
+}): OpaqueGraphBinding | undefined {
+  const observed = input.freshness; const seal = observed?.freshnessSeal;
+  if (seal === undefined || seal === null || !input.bindingValid || !input.buildComplete || input.checkChanged
+    || !(observed?.verdict === "FRESH" || (observed?.verdict === "DIRTY_KNOWN" && observed.reasons.every(reason => reason === "WORKING_TREE_DIRTY")))
+    || seal.repositoryGraphHash !== input.actualFactsHash || seal.indexedRepositoryGraphHash !== input.actualFactsHash
+    || seal.analysisInputHash !== input.consumedHash || seal.indexedAnalysisInputHash !== input.consumedHash || input.expectedHash !== input.consumedHash) return undefined;
+  const token = Object.freeze({ graphDigest: digestCanonical(input.graph), inputHash: input.consumedHash });
+  ownershipBindings.add(token); return token;
+}
 
 export const QUALIFIED_BUILD_META = "qualified_analysis_build_v1";
 export function isQualified(config: SemctxConfig): boolean {
@@ -20,6 +37,7 @@ export function qualifiedAdmission(input: {
   sourceCommits: string[]; baseCommit: string | null;
   expectedInputHash: string;
   consumedInputs: ReturnType<typeof captureQualifiedAnalysisInputs>;
+  opaqueGraphBinding?: OpaqueGraphBinding;
 }): AnalysisAdmission {
   const { config, health } = input;
   const evaluationsByCandidate = new Map<string, typeof health.evaluations.decisions>();
@@ -35,6 +53,11 @@ export function qualifiedAdmission(input: {
   const consumed = input.consumedInputs;
   const sourceFiles = consumed.files.filter((file) => /\.[cm]?[jt]sx?$/.test(file.path)).map((file) => ({ relPath: file.path, absPath: resolve(config.repositoryRoot, file.path), content: Buffer.from(file.bytes).toString("utf8") }));
   const compilerInputs = new Map(consumed.files.map((file) => [resolve(config.repositoryRoot, file.path), Buffer.from(file.bytes).toString("utf8")]));
+  const token = input.opaqueGraphBinding;
+  if (token !== undefined && ownershipBindings.has(token) && token.graphDigest === digestCanonical(input.graph)
+    && token.inputHash === consumed.digest && token.inputHash === input.expectedInputHash && !input.checkChanged) {
+    registerOpaqueCallbackOwnership(compilerInputs, input.graph, config.repositoryRoot);
+  }
   const workspaceNames = new Set<string>();
   const externalPackages = new Map<string, Set<string>>();
   const aliases: string[] = [];

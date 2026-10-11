@@ -135,22 +135,35 @@ for (const source of unprovedValueExports) test(`ordinary native bindings do not
   expect(reasons.some(reason => reason.startsWith("JAVASCRIPT_NATIVE_MODULE_MEMBER_UNSUPPORTED"))).toBe(false);
 });
 
+
+for (const source of [
+  "import * as nodeModule from 'node:module'; export function known(name) { return nodeModule.isBuiltin(name); }",
+  "import * as m from 'node:module'; const n = m; export function known(name) { return n.isBuiltin(name); }",
+  "import * as m from 'node:module'; const { isBuiltin } = m; export function known(name) { return isBuiltin(name); }",
+  "import { default as M } from 'node:module'; export function known(name) { return M.isBuiltin(name); }",
+  "import * as m from 'node:module'; const { default: M } = m; export function known(name) { return M.isBuiltin(name); }",
+  "import * as m from 'node:module'; const { 'isBuiltin': known } = m; export function query(name) { return known(name); }"
+]) test(`opaque Node data remains an explicit unsupported control: ${source}`, () => {
+  expect(inspectNativeModuleBindings(ts.createSourceFile("/fixture/main.mjs", source, ts.ScriptTarget.Latest, true))).toEqual({ commonJsUnsupported: false, unmodeledMembers: [] });
+  expect(inspectJavaScriptSource("/fixture/main.mjs", source).reasons).toContain("JAVASCRIPT_OPAQUE_CALLBACK_UNSUPPORTED");
+});
+
 test("ordinary Node APIs and unrelated factories retain modeled function or known-literal boundaries", () => {
   for (const source of [
-    "import * as nodeModule from 'node:module'; export function known(name) { return nodeModule.isBuiltin(name); }",
+    "import * as nodeModule from 'node:module'; export function known(name) { return nodeModule.isBuiltin('node:fs'); }",
     "function createRequire(value) { return value; } export function known() { return createRequire(1); }",
     "const opaque = { createRequire(value) { return value; } }; export function known() { return opaque.createRequire(1); }",
     "import { createRequire } from 'node:module'; export const unusedFactoryImport = 1;",
     "import { createRequire as make } from 'node:module'; export function known(make) { return make(1); }",
     "import { createRequire } from 'node:module'; const opaque = { createRequire(value) { return value; } }; export function known() { return opaque.createRequire(1); }",
     "export { isBuiltin } from 'node:module';",
-    "import * as m from 'node:module'; const n = m; export function known(name) { return n.isBuiltin(name); }",
-    "import * as m from 'node:module'; const { isBuiltin } = m; export function known(name) { return isBuiltin(name); }",
+    "import * as m from 'node:module'; const n = m; export function known(name) { return n.isBuiltin('node:fs'); }",
+    "import * as m from 'node:module'; const { isBuiltin } = m; export function known(name) { return isBuiltin('node:fs'); }",
     "import * as m from 'node:module'; export function known(m) { return m.isBuiltin(1); }",
-    "import { default as M } from 'node:module'; export function known(name) { return M.isBuiltin(name); }",
+    "import { default as M } from 'node:module'; export function known(name) { return M.isBuiltin('node:fs'); }",
     "import { 'default' as M } from 'node:module'; export const unused = 1;",
-    "import * as m from 'node:module'; const { default: M } = m; export function known(name) { return M.isBuiltin(name); }",
-    "import * as m from 'node:module'; const { 'isBuiltin': known } = m; export function query(name) { return known(name); }",
+    "import * as m from 'node:module'; const { default: M } = m; export function known(name) { return M.isBuiltin('node:fs'); }",
+    "import * as m from 'node:module'; const { 'isBuiltin': known } = m; export function query(name) { return known('node:fs'); }",
     "import { default as M } from 'node:module'; export function known(M) { return M.isBuiltin(1); }",
     "import { builtinModules } from 'node:module'; export function known() { return builtinModules; }",
     "import { _resolveFilename } from 'node:module'; export const unused = 1;",

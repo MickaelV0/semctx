@@ -35,6 +35,7 @@ import {
 import packageJson from "../package.json";
 import { QUALIFIED_ANALYZER_IDENTITY } from "./analyzer-identity-generated";
 import { analyzeWorkspaceSync } from "@semantic-context/workspace-analyzer-internal";
+import { readCurrentConfigBytes } from "@semantic-context/repository-store";
 
 export const CONTROL_INDEX_SNAPSHOT_META_KEY = "control_index_snapshot_v1";
 export const PLANE_A_INDEX_SNAPSHOT_META_KEY = "plane_a_index_snapshot_v1";
@@ -203,7 +204,14 @@ export function fingerprintSemanticModel(model: SemanticModel): Sha256Hash {
 /** Retained raw inputs: consumers must analyze these bytes, not re-read a mutable filesystem. */
 export function captureQualifiedAnalysisInputs(config: SemctxConfig): {
   digest: Sha256Hash; files: { path: string; bytes: Uint8Array }[]; workspaceRoots: readonly string[];
+  configurationInput: { state: "present"; bytes: Uint8Array } | { state: "absent" };
 } {
+    let configurationInput: { state: "present"; bytes: Uint8Array } | { state: "absent" };
+    try { configurationInput = { state: "present", bytes: readCurrentConfigBytes(config.repositoryRoot) }; }
+    catch (error) {
+      if (!(error instanceof SemctxError) || error.code !== "CONFIG_NOT_FOUND") throw error;
+      configurationInput = { state: "absent" };
+    }
     const entries: { path: string; contentHash: string }[] = [];
     const files: { path: string; bytes: Uint8Array }[] = [];
     const eligible = createQualifiedPathEligibility(config);
@@ -237,7 +245,8 @@ export function captureQualifiedAnalysisInputs(config: SemctxConfig): {
     const manifestContents = new Map(files.map(file => [resolve(config.repositoryRoot, file.path), Buffer.from(file.bytes).toString("utf8")]));
     const workspaceLayout = analyzeWorkspaceSync({ repositoryRoot: config.repositoryRoot, manifestContents });
     const workspaceRoots = [...new Set([...workspaceLayout.nodes, ...workspaceLayout.candidates].map(entry => entry.root))].sort(compareIds);
-    return { digest: hash("qualified-analysis-input-v1", serializeControlReport({ config, analyzer: QUALIFIED_ANALYZER_IDENTITY, files: entries.sort((a, b) => compareIds(a.path, b.path)), workspaceLayout })), files, workspaceRoots };
+    const rawConfiguration = configurationInput.state === "present" ? { state: "present", contentHash: hash("qualified-input-bytes", configurationInput.bytes) } : configurationInput;
+    return { digest: hash("qualified-analysis-input-v1", serializeControlReport({ config, rawConfiguration, analyzer: QUALIFIED_ANALYZER_IDENTITY, files: entries.sort((a, b) => compareIds(a.path, b.path)), workspaceLayout })), files, workspaceRoots, configurationInput };
 }
 
 /** Repository-owned inputs sealed by the named profile; shared with Git post-image checks. */

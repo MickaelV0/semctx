@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { BRIDGE, CONSUMER_VERSIONS, createConsumer, createEligibleConsumer, createPrimitiveSafeConsumer, ENTRY, LEAF, LEAF_SOURCE, PRIMITIVE_SAFE_LEAF_SOURCE, WORKSPACES } from "./public-static-fixture";
+import { BRIDGE, CONSUMER_VERSIONS, createConsumer, createEligibleConsumer, createPrimitiveSafeConsumer, createDataProvenConsumer, ENTRY, LEAF, LEAF_SOURCE, PRIMITIVE_SAFE_LEAF_SOURCE, WORKSPACES } from "./public-static-fixture";
 import { createGlobSelectionConfig } from "@semantic-context/core";
 import { initWorkspace } from "@semantic-context/repository-store";
 import { indexRepository, runVerify } from "@semantic-context/app-services";
@@ -43,8 +43,18 @@ test("round20 original eligible-esm unknown coercion consumer remains a visible 
   expect(report.analysisAdmission?.reasons.some(reason => reason.includes("COERCION_UNSUPPORTED"))).toBe(true);
   expect(readFileSync(join(root, "suite/domains/sample/core/value.test.ts"), "utf8")).toContain("increments the input");
 }, 60_000);
-test("round20 distinctly named primitive-safe ESM consumer qualifies mixed static impact", () => {
+test("round27 original primitive-safe ESM consumer remains an opaque-data BLOCK witness", () => {
   const root = mkdtempSync(join(tmpdir(), "public-primitive-consumer-")); roots.push(root); createPrimitiveSafeConsumer(root);
+  for (const args of [["init", "-q"], ["add", "."], ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-qm", "fixture"]]) expect(Bun.spawnSync(["git", ...args], { cwd: root, stdout: "pipe", stderr: "pipe" }).exitCode).toBe(0);
+  initWorkspace(root, { ...createGlobSelectionConfig(root), selectionMode: "qualified-static-v1", analysisProfile: "public-monorepo-static-v1", include: ["suite/**/*"], languages: { typescript: "on", javascript: "on" } });
+  writeFileSync(join(root, LEAF), PRIMITIVE_SAFE_LEAF_SOURCE.replace("+ 1", "+ 2"));
+  indexRepository(root, "2026-10-09T10:01:00.000Z");
+  const report = runVerify(root, { kind: "working-tree" }).report;
+  expect(report.analysisAdmission?.status).toBe("rejected");
+  expect(report.analysisAdmission?.reasons.some(reason => reason.includes("SOURCE_OPAQUE_CALLBACK_UNSUPPORTED"))).toBe(true);
+}, 60_000);
+test("fourth data-proven ESM consumer qualifies mixed static impact", () => {
+  const root = mkdtempSync(join(tmpdir(), "public-data-consumer-")); roots.push(root); createDataProvenConsumer(root);
   for (const args of [["init", "-q"], ["add", "."], ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-qm", "fixture"]]) expect(Bun.spawnSync(["git", ...args], { cwd: root, stdout: "pipe", stderr: "pipe" }).exitCode).toBe(0);
   initWorkspace(root, { ...createGlobSelectionConfig(root), selectionMode: "qualified-static-v1", analysisProfile: "public-monorepo-static-v1", include: ["suite/**/*"], languages: { typescript: "on", javascript: "on" } });
   writeFileSync(join(root, LEAF), PRIMITIVE_SAFE_LEAF_SOURCE.replace("+ 1", "+ 2"));
@@ -53,6 +63,15 @@ test("round20 distinctly named primitive-safe ESM consumer qualifies mixed stati
   expect(report.analysisAdmission?.status).toBe("admitted");
   expect(report.analysisAdmission?.changeCoverage.analyzed).toContain(ENTRY);
 }, 60_000);
+test("fourth domain preserves historical primitive fixture bytes except two guarded Node helpers", () => {
+  const oldRoot = mkdtempSync(join(tmpdir(), "public-third-")); const newRoot = mkdtempSync(join(tmpdir(), "public-fourth-")); roots.push(oldRoot, newRoot);
+  createPrimitiveSafeConsumer(oldRoot); createDataProvenConsumer(newRoot);
+  const inventory = (root: string, prefix = ""): string[] => readdirSync(join(root, prefix), { withFileTypes: true }).flatMap(entry => entry.isDirectory() ? inventory(root, join(prefix, entry.name)) : [join(prefix, entry.name)]).sort();
+  const files = inventory(oldRoot); expect(inventory(newRoot)).toEqual(files);
+  expect(files.filter(path => !readFileSync(join(oldRoot, path)).equals(readFileSync(join(newRoot, path))))).toEqual(["suite/tooling/check/build.mjs", "suite/tooling/check/check.mjs"].map(path => path.replaceAll("/", process.platform === "win32" ? "\\" : "/")));
+  expect(readFileSync(join(oldRoot, LEAF), "utf8")).toBe(PRIMITIVE_SAFE_LEAF_SOURCE);
+  expect(readFileSync(join(newRoot, LEAF), "utf8")).toBe(PRIMITIVE_SAFE_LEAF_SOURCE);
+});
 test("new primitive domain preserves both original fixture outputs and changes only leaf semantics and test copy", () => {
   const oldRoot = mkdtempSync(join(tmpdir(), "public-original-esm-")); const newRoot = mkdtempSync(join(tmpdir(), "public-safe-esm-")); roots.push(oldRoot, newRoot);
   createEligibleConsumer(oldRoot); createPrimitiveSafeConsumer(newRoot);

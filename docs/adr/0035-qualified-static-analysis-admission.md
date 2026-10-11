@@ -267,9 +267,10 @@ and ordinary own-name methods retain their supported domains.
 The original declaration-bearing fixture and the historical declaration-free `eligible-esm`
 fixture retain their complete original source bytes. The latter's unknown `input + 1`
 coercion is now the explicit `eligible-esm-unknown-coercion-blocks` witness. Positive
-qualification uses the separately named `primitive-safe-esm` domain with literal `1 + 1`
-operands, the same tool pins/topology/static call chain, and test copy describing its fixed
-primitive value. Historical/current artifact pairs use identical explicit fixture domains;
+qualification uses the separately named `data-proven-esm` domain with literal `1 + 1`
+operands and guarded Node data, the same tool pins/topology/static call chain, and test copy
+describing its fixed primitive value. The historical `primitive-safe-esm` bytes remain a
+distinct opaque-data BLOCK witness. Artifact pairs use identical explicit fixture domains;
 earlier receipts remain bound to their original sources and are never relabeled.
 Array/collection initialization behind a const binding does not prove an immutable
 object or exclude a later `then` override. Those iterable objects are outside safe
@@ -328,6 +329,28 @@ evidence. Workspace projection consumes retained manifest bytes; index reconstru
 still compares its projection against the final current layout to detect drift.
 
 ## Proof boundary
+
+Qualified identity separately binds the exact `.semctx/config.json` bytes, including an
+explicit absent state. Equivalent JSON rewrites invalidate the input seal; malformed
+configuration still refuses normal loading. These control bytes do not become retained
+repository files or Git post-image members, and database/report artifacts stay excluded.
+
+Actual SDK descriptor/mutator routes cannot overwrite `Symbol.iterator`,
+`Symbol.asyncIterator`, `Symbol.hasInstance` or `Symbol.toPrimitive` and then claim an
+intrinsic boundary. Formal primitive property-key slots are not iterable API contracts.
+Every actual SDK `Promise.resolve` route must establish safe assimilation of its value.
+Opaque calls cannot accept unproven callable data. Specific inline obligations may be
+discharged after assembly by existing uniquely owned calls or paired canonical test edges;
+the exact snapshot, callback span, current graph and indexed raw-input seal bind that proof.
+No new invocation edges, framework whitelist or public proof field is introduced.
+Runtime primitive guards are proof only for the same unmodified binding in the same
+executing scope. Type annotations and assertions alone do not establish value provenance.
+
+The three historical public consumer domains remain byte-identical and visible BLOCK
+witnesses. The fourth `data-proven-esm` domain preserves the primitive leaf and changes only
+the two Node helpers to check real string values before native calls. Current/historical
+artifact comparisons use identical explicitly selected domain inputs. Native pipeline
+behavior and source hashes are observed separately; prior receipts are never relabeled.
 
 Every required closure member must also have admitted Plane-A fact-use tuples.
 The JavaScript registration covers the 22 declared ESM fact kinds for v2,

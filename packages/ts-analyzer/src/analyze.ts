@@ -51,6 +51,7 @@ import {
 } from "./ts-symbols";
 import { groupSymbols } from "./symbol-grouping";
 import { inspectJavaScriptSource } from "./javascript-diagnostics";
+import { registerOpaqueCallbackOwnership } from "./semantic-dependency-diagnostics";
 import {
   degradeDivergentMarkerNodes,
   detectMarkerDivergence,
@@ -339,6 +340,7 @@ export function assembleRepository(
   degradeDivergentMarkerNodes(builder.nodes.values(), markerDivergences);
 
   const analysis = builder.build();
+  if (checkLocalCalls && compilerInputs !== undefined) registerOpaqueCallbackOwnership(compilerInputs, analysis.graph, config.repositoryRoot);
   if (checkLocalCalls) qualifiedCallReasons.set(analysis, callReasons);
   return attachPlaneASidecar(
     analysis,
