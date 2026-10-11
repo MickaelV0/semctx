@@ -54,15 +54,26 @@ and Turbo 2.11.7 with nested `apps/*`, `contracts/*`, `design-system/*`, `domain
 to TypeScript 5.9.3. Newer consumer syntax that cannot be parsed remains a failure.
 The original `createConsumer` fixture retains its `.d.mts` companion and `.cts` source
 and is an explicit `original-declaration-bearing-consumer-blocks` witness. Positive
-qualification uses the separately named `createEligibleConsumer` fixture: the same
-tool pins, topology and runtime call chain, with no declarations and an explicit ESM
-`port.ts`. Runtime companion redirection remains distinct from declaration-change
+qualification now uses the separately named `createPrimitiveSafeConsumer` fixture in
+the `primitive-safe-esm` domain: the same tool pins, topology and runtime call chain,
+with no declarations, an explicit ESM `port.ts`, and leaf operands literally `1 + 1`.
+Its test describes the fixed primitive fixture value, not input-increment semantics.
+The original declaration-free `createEligibleConsumer` / `eligible-esm` output is preserved
+byte-for-byte and is the additional `eligible-esm-unknown-coercion-blocks` witness:
+an unknown `input + 1` can invoke an internal primitive-coercion protocol.
+Runtime companion redirection remains distinct from declaration-change
 qualification; v2 declaration files remain visible as unsupported. Selector globs
 can select `.cts`/declarations, but selection cannot admit their unsupported semantics.
 Qualification observations record each fixture domain. Qualified historical/current
-artifact pairs both use `eligible-esm`; the executable path never selects fixture content.
+artifact pairs both use the explicit `primitive-safe-esm` domain; the executable path never
+selects fixture content. Earlier `eligible-esm` receipts retain their historical source identity.
 The original declaration-bearing negative is selected explicitly, and legacy diagnostics
 retain their separately recorded original domain.
+Unknown/internal coercion in addition or template interpolation, async thenable return
+assimilation, actual SDK Proxy traps and ServiceWorkerContainer registration are outside
+qualification. A type annotation/assertion cannot prove a primitive/native value origin.
+These refusals do not add implicit invocation or browser code-loader edges; ordinary/v1
+facts and explicitly proven primitive/native boundaries retain their stated domain.
 The profile's effective module settings are `module: "ESNext"` and
 `moduleResolution: "Bundler"`. Missing settings take those defaults. Explicit incompatible
 settings, including inherited NodeNext/Node16 or CommonJS, remain outside qualification and

@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { Database } from "bun:sqlite";
-import { BRIDGE, CONSUMER_VERSIONS, createConsumer, createEligibleConsumer, ENTRY, LEAF, LEAF_SOURCE, put } from "./public-static-fixture";
+import { BRIDGE, CONSUMER_VERSIONS, createConsumer, createEligibleConsumer, createPrimitiveSafeConsumer, ENTRY, LEAF, LEAF_SOURCE, PRIMITIVE_SAFE_LEAF_SOURCE, put } from "./public-static-fixture";
 import { assertInterruptedAdmission } from "./public-interruption-witness";
 
 type Observation = { command: string[]; code: number; stdout: string; stderr: string };
@@ -24,6 +24,9 @@ const interruptionWitnessOnly = process.argv.includes("--interruption-witness-on
 const loaderWitnessesOnly = process.argv.includes("--loader-witnesses-only");
 assert([auditWitnessesOnly, directoryWitnessesOnly, interruptionWitnessOnly, loaderWitnessesOnly].filter(Boolean).length <= 1, "Choose one focused witness scope");
 const observations: Record<string, unknown> = {};
+type FixtureDomain = "declaration-bearing" | "eligible-esm" | "primitive-safe-esm";
+const fixtureSources = new Map<string, string>();
+function leafSource(root: string): string { return fixtureSources.get(root) ?? LEAF_SOURCE; }
 const failures: string[] = [];
 mkdirSync(output, { recursive: true });
 const gitEnv = { ...process.env, GIT_AUTHOR_NAME: "public-fixture", GIT_AUTHOR_EMAIL: "fixture@example.invalid", GIT_COMMITTER_NAME: "public-fixture", GIT_COMMITTER_EMAIL: "fixture@example.invalid" };
@@ -33,11 +36,13 @@ function run(command: string[], cwd: string, timeout = 60_000): Observation {
 }
 function git(root: string, args: string[]): void { const result = run(["git", ...args], root); assert.equal(result.code, 0, result.stderr); }
 function semctx(root: string, args: string[], bundle = cli): Observation { return run([process.execPath, bundle, ...args, "--root", root], root); }
-function fixture(name: string, qualified = true, bundle = cli, domain: "declaration-bearing" | "eligible-esm" = qualified ? "eligible-esm" : "declaration-bearing"): string {
+function fixture(name: string, qualified = true, bundle = cli, domain: FixtureDomain = qualified ? "primitive-safe-esm" : "declaration-bearing"): string {
   const root = join(output, `consumer-${name}`);
   assert(!existsSync(root), `Refusing to overwrite existing consumer ${root}; choose a new --output-dir`);
   mkdirSync(root, { recursive: true });
-  if (domain === "declaration-bearing") createConsumer(root); else createEligibleConsumer(root);
+  if (domain === "declaration-bearing") createConsumer(root); else if (domain === "eligible-esm") createEligibleConsumer(root); else createPrimitiveSafeConsumer(root);
+  fixtureSources.set(root, domain === "primitive-safe-esm" ? PRIMITIVE_SAFE_LEAF_SOURCE : LEAF_SOURCE);
+  observations[`${name}:fixture-leaf-sha256`] = createHash("sha256").update(leafSource(root)).digest("hex");
   observations[`${name}:fixture-domain`] = domain;
   git(root, ["init", "-q"]); git(root, ["add", "-A"]); git(root, ["commit", "-qm", "public fixture"]);
   const initialized = semctx(root, ["init"], bundle); assert.equal(initialized.code, 0, initialized.stderr);
@@ -48,13 +53,14 @@ function fixture(name: string, qualified = true, bundle = cli, domain: "declarat
   git(root, ["add", "-A"]); git(root, ["commit", "-qm", "initialize public analysis policy"]);
   return root;
 }
-function typescriptAuditFixture(name: string, variant: "reexport" | "literal-import" | "inherited-nodenext", bundle: string): string {
+function typescriptAuditFixture(name: string, variant: "reexport" | "literal-import" | "inherited-nodenext", bundle: string, domain: FixtureDomain = "primitive-safe-esm"): string {
+  observations[`${name}:fixture-domain`] = domain;
   const root = join(output, `consumer-${name}`);
   assert(!existsSync(root), `Refusing to overwrite existing consumer ${root}`);
   mkdirSync(root, { recursive: true });
   put(root, ".gitignore", ".semctx/\n");
   put(root, "package.json", JSON.stringify({ name: "public-typescript-audit-consumer", private: true, type: "module" }));
-  put(root, "src/main.ts", "export function main(input: number): number { return input + 1; }\n");
+  put(root, "src/main.ts", domain === "primitive-safe-esm" ? "export function main(input: number): number { return 1 + 1; }\n" : "export function main(input: number): number { return input + 1; }\n");
   put(root, "tsconfig.json", JSON.stringify({ extends: "./configs/base.json", include: ["src/**/*.ts", "hidden.ts"] }));
   const module = variant === "inherited-nodenext" ? "NodeNext" : "ESNext";
   const moduleResolution = variant === "inherited-nodenext" ? "NodeNext" : "Bundler";
@@ -70,7 +76,7 @@ function typescriptAuditFixture(name: string, variant: "reexport" | "literal-imp
   git(root, ["add", "-A"]); git(root, ["commit", "-qm", "initialize qualified audit policy"]);
   const initial = semctx(root, ["index", "--json"], bundle); observations[`${name}:initial-index`] = initial;
   assert.equal(initial.code, 0, initial.stderr);
-  put(root, "src/main.ts", "export function main(input: number): number { return input + 2; }\n");
+  put(root, "src/main.ts", domain === "primitive-safe-esm" ? "export function main(input: number): number { return 1 + 2; }\n" : "export function main(input: number): number { return input + 2; }\n");
   const refreshed = semctx(root, ["index", "--json"], bundle); observations[`${name}:refreshed-index`] = refreshed;
   assert.equal(refreshed.code, 0, refreshed.stderr);
   return root;
@@ -82,14 +88,15 @@ type DirectoryAdmission = {
   changeCoverage: { expected: string[]; analyzed: string[]; files: { path: string; status: string; reasons: string[] }[] };
 };
 const directoryPaths = ["tooling/build/hidden.ts", "dist/hidden.mjs"] as const;
-function directoryFixture(name: string, hidden: typeof directoryPaths[number], selected: boolean, bundle: string): string {
+function directoryFixture(name: string, hidden: typeof directoryPaths[number], selected: boolean, bundle: string, domain: FixtureDomain = "primitive-safe-esm"): string {
+  observations[`${name}:fixture-domain`] = domain;
   const root = join(output, `consumer-${name}`);
   assert(!existsSync(root), `Refusing to overwrite existing consumer ${root}`);
   mkdirSync(root, { recursive: true });
   put(root, ".gitignore", ".semctx/\nnode_modules/\n");
   put(root, "package.json", JSON.stringify({ name: "public-directory-witness", private: true, type: "module" }));
   put(root, "tsconfig.json", JSON.stringify({ compilerOptions: { target: "ES2022", module: "ESNext", moduleResolution: "Bundler", allowJs: true, noEmit: true }, include: ["src/**/*.ts", hidden] }));
-  put(root, "src/main.ts", "export function main(input: number): number { return input + 1; }\n");
+  put(root, "src/main.ts", domain === "primitive-safe-esm" ? "export function main(input: number): number { return 1 + 1; }\n" : "export function main(input: number): number { return input + 1; }\n");
   put(root, hidden, hidden.endsWith(".ts") ? 'export { main } from "../../src/main";\n' : 'export { main } from "../src/main.ts";\n');
   git(root, ["init", "-q"]); git(root, ["add", "-A"]); git(root, ["commit", "-qm", "public tracked directory witness"]);
   const initialized = semctx(root, ["init"], bundle); assert.equal(initialized.code, 0, initialized.stderr);
@@ -99,7 +106,7 @@ function directoryFixture(name: string, hidden: typeof directoryPaths[number], s
   writeFileSync(configPath, JSON.stringify(config));
   git(root, ["add", "-A"]); git(root, ["commit", "-qm", "initialize qualified directory policy"]);
   const initial = semctx(root, ["index", "--json"], bundle); observations[`${name}:initial-index`] = initial; assert.equal(initial.code, 0, initial.stderr);
-  put(root, "src/main.ts", "export function main(input: number): number { return input + 2; }\n");
+  put(root, "src/main.ts", domain === "primitive-safe-esm" ? "export function main(input: number): number { return 1 + 2; }\n" : "export function main(input: number): number { return input + 2; }\n");
   const refreshed = semctx(root, ["index", "--json"], bundle); observations[`${name}:refreshed-index`] = refreshed; assert.equal(refreshed.code, 0, refreshed.stderr);
   return root;
 }
@@ -139,13 +146,14 @@ const loaderSources = {
   "node-global-getter-js": { path: "hidden-node-global-getter.mjs", source: 'const native = global.process.getBuiltinModule("module"); const factory = native.createRequire; const load = factory(import.meta.url); export function entry() { return load("./src/main.mjs"); }\n', selected: false, expectedDiagnostic: "NATIVE_MODULE_MEMBER_UNSUPPORTED" },
   barrel: { path: "hidden-barrel.ts", source: 'import { make } from "./barrel.mjs"; const load = make(import.meta.url); export const hidden = load("./src/main.mjs");\n', selected: false },
 } as const;
-function loaderFixture(name: string, variant: keyof typeof loaderSources, bundle: string): string {
+function loaderFixture(name: string, variant: keyof typeof loaderSources, bundle: string, domain: FixtureDomain = "primitive-safe-esm"): string {
+  observations[`${name}:fixture-domain`] = domain;
   const root = join(output, `consumer-${name}`); assert(!existsSync(root), `Refusing to overwrite existing consumer ${root}`);
   mkdirSync(root, { recursive: true });
   put(root, ".gitignore", ".semctx/\nnode_modules/\n");
   put(root, "package.json", JSON.stringify({ name: "public-loader-witness", private: true, type: "module" }));
   put(root, "tsconfig.json", JSON.stringify({ compilerOptions: { target: "ES2022", module: "ESNext", moduleResolution: "Bundler", allowJs: true, noEmit: true }, include: ["**/*.ts", "**/*.mjs"] }));
-  put(root, "src/main.mjs", "export function main(input) { return input + 1; }\n");
+  put(root, "src/main.mjs", domain === "primitive-safe-esm" ? "export function main(input) { return 1 + 1; }\n" : "export function main(input) { return input + 1; }\n");
   put(root, "src/bridge.ts", 'import { main } from "./main.mjs";\nexport function bridge(input: number) { return main(input); }\n');
   const loader = loaderSources[variant]; put(root, loader.path, loader.source);
   if (variant === "barrel") put(root, "barrel.mjs", 'export { createRequire as make } from "node:module";\n');
@@ -155,7 +163,7 @@ function loaderFixture(name: string, variant: keyof typeof loaderSources, bundle
   Object.assign(config, { version: 2, selectionMode: "qualified-static-v1", analysisProfile: "public-monorepo-static-v1", languages: { typescript: "on", javascript: "on" }, include: ["src/**/*", ...(loader.selected ? [loader.path] : [])], exclude: ["**/node_modules/**", "**/.git/**", "**/.semctx/**"] });
   writeFileSync(path, JSON.stringify(config)); git(root, ["add", "-A"]); git(root, ["commit", "-qm", "initialize qualified loader policy"]);
   for (const phase of ["initial", "refreshed"] as const) {
-    if (phase === "refreshed") put(root, "src/main.mjs", "export function main(input) { return input + 2; }\n");
+    if (phase === "refreshed") put(root, "src/main.mjs", domain === "primitive-safe-esm" ? "export function main(input) { return 1 + 2; }\n" : "export function main(input) { return input + 2; }\n");
     const indexed = semctx(root, ["index", "--json"], bundle); observations[`${name}:${phase}-index`] = indexed; assert.equal(indexed.code, 0, indexed.stderr);
   }
   return root;
@@ -222,17 +230,25 @@ async function mcpVerify(root: string, label = "mixed"): Promise<Record<string, 
 
 await scenario("original-declaration-bearing-consumer-blocks", () => {
   const root = fixture("original-declaration-bearing", true, cli, "declaration-bearing");
-  put(root, LEAF, LEAF_SOURCE.replace("+ 1", "+ 7"));
+  put(root, LEAF, leafSource(root).replace("+ 1", "+ 7"));
   observations["original-declaration-bearing:index"] = semctx(root, ["index", "--json"]);
   const result = verify(root, "original-declaration-bearing");
   blocked(result);
   assert(JSON.stringify(report(result).analysisAdmission).includes("DEPENDENCY_SCOPE_DECLARATION_UNSUPPORTED:suite/domains/sample/core/value.d.mts"));
 });
+await scenario("eligible-esm-unknown-coercion-blocks", () => {
+  const root = fixture("eligible-esm-unknown-coercion-blocks", true, cli, "eligible-esm");
+  put(root, LEAF, leafSource(root).replace("+ 1", "+ 7"));
+  observations["eligible-esm-unknown-coercion-blocks:index"] = semctx(root, ["index", "--json"]);
+  const result = verify(root, "eligible-esm-unknown-coercion-blocks");
+  blocked(result);
+  assert(JSON.stringify(report(result).analysisAdmission).includes("COERCION_UNSUPPORTED"));
+});
 
 if (legacyCli) await scenario("legacy-incident", () => {
   const root = fixture("legacy", false, legacyCli);
   observations["legacy:index"] = semctx(root, ["index", "--json"], legacyCli);
-  put(root, LEAF, LEAF_SOURCE.replace("+ 1", "+ 7"));
+  put(root, LEAF, leafSource(root).replace("+ 1", "+ 7"));
   const health = semctx(root, ["index-health", "--json"], legacyCli); observations["legacy:health"] = health;
   assert.equal((JSON.parse(health.stdout) as { freshness: { verdict: string } }).freshness.verdict, "STALE");
   const result = verify(root, "legacy", legacyCli);
@@ -241,7 +257,7 @@ if (legacyCli) await scenario("legacy-incident", () => {
 });
 if (legacyCli) await scenario("legacy-refuses-qualified-config", () => {
   const root = fixture("legacy-qualified-policy", true, legacyCli);
-  put(root, LEAF, LEAF_SOURCE.replace("+ 1", "+ 7"));
+  put(root, LEAF, leafSource(root).replace("+ 1", "+ 7"));
   const legacyIndex = semctx(root, ["index", "--json"], legacyCli);
   observations["legacy-qualified-policy:index"] = legacyIndex;
   assert.notEqual(legacyIndex.code, 0, "Legacy indexing must refuse the unsupported qualified selection mode");
@@ -260,7 +276,7 @@ if (legacyCli) await scenario("legacy-before-matrix", () => {
   observations["legacy-before-matrix:observations"] = matrix;
   for (const variant of ["edit", "add", "delete", "rename", "parse", "dynamic", "commonjs", "partial-language", "empty-selection", "wrong-root"] as const) {
     let analyzedRoot = root;
-    if (variant === "edit") put(root, LEAF, LEAF_SOURCE.replace("+ 1", "+ 4"));
+    if (variant === "edit") put(root, LEAF, leafSource(root).replace("+ 1", "+ 4"));
     if (variant === "add") { put(root, added, "export function added() { return 4; }\n"); git(root, ["add", added]); }
     if (variant === "delete") rmSync(join(root, LEAF));
     if (variant === "rename") { renameSync(join(root, LEAF), join(root, renamed)); git(root, ["add", LEAF, renamed]); }
@@ -270,9 +286,9 @@ if (legacyCli) await scenario("legacy-before-matrix", () => {
     if (variant === "partial-language" || variant === "empty-selection") {
       const config = JSON.parse(originalConfig) as Record<string, unknown>;
       Object.assign(config, { version: 2, selectionMode: "globs-v1", languages: { typescript: "on", javascript: "off" }, include: variant === "empty-selection" ? ["absent/**/*.ts"] : ["suite/**/*"] });
-      writeFileSync(configPath, JSON.stringify(config)); put(root, LEAF, LEAF_SOURCE.replace("+ 1", "+ 4"));
+      writeFileSync(configPath, JSON.stringify(config)); put(root, LEAF, leafSource(root).replace("+ 1", "+ 4"));
     }
-    if (variant === "wrong-root") { analyzedRoot = join(root, "suite/apps/web"); put(root, LEAF, LEAF_SOURCE.replace("+ 1", "+ 4")); }
+    if (variant === "wrong-root") { analyzedRoot = join(root, "suite/apps/web"); put(root, LEAF, leafSource(root).replace("+ 1", "+ 4")); }
     // Parsing/unsupported/selection cases also rebuild: distinguish an omitted file
     // from stale state rather than assuming all old failures had the same cause.
     const refreshed = ["parse", "dynamic", "commonjs", "partial-language", "empty-selection"].includes(variant)
@@ -284,7 +300,7 @@ if (legacyCli) await scenario("legacy-before-matrix", () => {
     // result; old refusals are observations, not historical false positives.
     git(root, ["reset", "HEAD", "--", LEAF, added, renamed, "suite/tooling/check/legacy.cjs"]);
     for (const path of [added, renamed, "suite/tooling/check/legacy.cjs"]) rmSync(join(root, path), { force: true });
-    put(root, LEAF, LEAF_SOURCE); writeFileSync(configPath, originalConfig);
+    put(root, LEAF, leafSource(root)); writeFileSync(configPath, originalConfig);
     if (refreshed) {
       const restored = semctx(root, ["index", "--json"], legacyCli);
       matrix[`${variant}:restored-index`] = restored; assert.equal(restored.code, 0, restored.stderr);
@@ -413,15 +429,15 @@ await scenario("mixed-transitive-analysis", async () => {
     const build = run([process.execPath, "x", `pnpm@${CONSUMER_VERSIONS.pnpm}`, "exec", "turbo", "run", "build", "--filter=@public/apps-web", "--output-logs=full"], join(root, "suite"));
     observations[`consumer:turbo-${attempt}`] = build; assert.equal(build.code, 0, build.stderr); assert(build.stdout.includes(`cache ${attempt}`));
   }
-  put(root, LEAF, LEAF_SOURCE.replace("+ 1", "+ 9"));
+  put(root, LEAF, leafSource(root).replace("+ 1", "+ 9"));
   const failedTest = run([process.execPath, "x", `pnpm@${CONSUMER_VERSIONS.pnpm}`, "exec", "vitest", "run"], join(root, "suite"));
   observations["consumer:failed-test"] = failedTest; assert.notEqual(failedTest.code, 0); assert(failedTest.stdout.includes("1 failed"));
   const failedBuild = run([process.execPath, "x", `pnpm@${CONSUMER_VERSIONS.pnpm}`, "exec", "turbo", "run", "build", "--filter=@public/apps-web", "--output-logs=full"], join(root, "suite"));
   observations["consumer:failed-build"] = failedBuild; assert.notEqual(failedBuild.code, 0); assert((failedBuild.stdout + failedBuild.stderr).includes("synthetic build failure"));
-  put(root, LEAF, LEAF_SOURCE);
+  put(root, LEAF, leafSource(root));
   git(root, ["add", "suite/pnpm-lock.yaml"]); git(root, ["commit", "-qm", "lock synthetic consumer dependencies"]);
   assert.equal(index(root, "mixed").code, 0);
-  put(root, LEAF, LEAF_SOURCE.replace("+ 1", "+ 2"));
+  put(root, LEAF, leafSource(root).replace("+ 1", "+ 2"));
   blocked(verify(root, "mixed-before-refresh"));
   blocked(verify(root, "mixed-plugin-before-refresh", pluginCli));
   const rejectedMcp = await mcpVerify(root, "mixed-before-refresh"); observations["mixed-before-refresh:mcp"] = rejectedMcp;
@@ -461,7 +477,7 @@ await scenario("mixed-transitive-analysis", async () => {
 for (const mutation of ["add", "edit", "delete", "rename"] as const) await scenario(`stale-${mutation}`, () => {
   const root = fixture(mutation); assert.equal(index(root, mutation).code, 0);
   if (mutation === "add") { put(root, "suite/tooling/check/added.mjs", "export function added() { return 1; }\n"); git(root, ["add", "suite/tooling/check/added.mjs"]); }
-  if (mutation === "edit") put(root, LEAF, LEAF_SOURCE.replace("+ 1", "+ 3"));
+  if (mutation === "edit") put(root, LEAF, leafSource(root).replace("+ 1", "+ 3"));
   if (mutation === "delete") rmSync(join(root, LEAF));
   if (mutation === "rename") { renameSync(join(root, LEAF), join(root, LEAF.replace("value.mjs", "renamed.mjs"))); git(root, ["add", "-A"]); }
   blocked(verify(root, mutation));
@@ -475,18 +491,18 @@ for (const broken of ["parse", "dynamic", "commonjs", "empty-selection", "partia
     const path = join(root, ".semctx/config.json"); const config = JSON.parse(readFileSync(path, "utf8")) as { include: string[]; languages: Record<string, string> };
     if (broken === "empty-selection") config.include = ["missing/**/*.ts"];
     else config.languages.javascript = "off";
-    writeFileSync(path, JSON.stringify(config)); put(root, LEAF, LEAF_SOURCE.replace("+ 1", "+ 5"));
+    writeFileSync(path, JSON.stringify(config)); put(root, LEAF, leafSource(root).replace("+ 1", "+ 5"));
   }
   index(root, broken); blocked(verify(root, broken));
 });
 await scenario("wrong-root", () => {
-  const root = fixture("wrong-root"); assert.equal(index(root, "wrong-root").code, 0); put(root, LEAF, LEAF_SOURCE.replace("+ 1", "+ 6"));
+  const root = fixture("wrong-root"); assert.equal(index(root, "wrong-root").code, 0); put(root, LEAF, leafSource(root).replace("+ 1", "+ 6"));
   blocked(verify(join(root, "suite/apps/web"), "wrong-root"));
 });
 await scenario("interrupted-index", async () => {
   const root = fixture("interrupted"); assert.equal(index(root, "interrupted-before").code, 0);
-  put(root, LEAF, LEAF_SOURCE.replace("+ 1", "+ 8"));
-  for (let file = 0; file < 128; file++) put(root, `suite/platform/shared/pending-${file}.ts`, Array.from({ length: 32 }, (_, item) => `export function pending${item}(input: number) { return input + ${item}; }`).join("\n"));
+  put(root, LEAF, leafSource(root).replace("+ 1", "+ 8"));
+  for (let file = 0; file < 128; file++) put(root, `suite/platform/shared/pending-${file}.ts`, Array.from({ length: 32 }, (_, item) => `export function pending${item}(input: number) { return 1 + ${item}; }`).join("\n"));
   git(root, ["add", "suite/platform/shared"]);
   const beforeGraph = graph(root);
   const databasePath = join(root, ".semctx/semctx.db");

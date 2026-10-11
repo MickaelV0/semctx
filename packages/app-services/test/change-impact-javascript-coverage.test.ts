@@ -103,7 +103,7 @@ for (const [name, before, after, analyzed] of [
   } finally { rmSync(root, { recursive: true, force: true }); }
 }, 60_000);
 
-for (const changed of ["src/base.ts", "src/bridge.mjs"]) test(`mixed-language impact follows actual call edges from ${changed}`, () => {
+for (const changed of ["src/base.ts", "src/bridge.mjs"]) test(`primitive-safe mixed-language impact follows actual call edges from ${changed}`, () => {
   const root = mkdtempSync(join(tmpdir(), "semctx-mixed-impact-"));
   const git = (...args: string[]): void => {
     const process = Bun.spawnSync(["git", ...args], { cwd: root, stdout: "pipe", stderr: "pipe" });
@@ -113,7 +113,7 @@ for (const changed of ["src/base.ts", "src/bridge.mjs"]) test(`mixed-language im
     mkdirSync(join(root, "src")); writeFileSync(join(root, ".gitignore"), ".semctx/\n");
     const files = {
       "src/base.ts": "export function base() { return 1; }\n",
-      "src/bridge.mjs": "import { base } from './base.ts'; export function bridge() { return base() + 1; }\n",
+      "src/bridge.mjs": "import { base } from './base.ts'; export function bridge() { return base(1); }\n",
       "src/entry.ts": "import { bridge } from './bridge.mjs'; export function entry() { return bridge(); }\n",
     };
     for (const [path, content] of Object.entries(files)) writeFileSync(join(root, path), content);

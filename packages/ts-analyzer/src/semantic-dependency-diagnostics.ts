@@ -15,7 +15,18 @@ export function inspectSemanticDependencies(source: ts.SourceFile, snapshot?: Co
   if (source.referencedFiles.length > 0) reasons.add("SOURCE_REFERENCE_PATH_UNSUPPORTED");
   const sdk = ts as unknown as { isIntrinsicJsxName(name: string): boolean };
   let needsChecker = false;
+  const asyncOwner = (node: ts.Node): boolean => {
+    for (let owner: ts.Node | undefined = node.parent; owner !== undefined; owner = owner.parent) if (ts.isFunctionLike(owner)) {
+      return ts.canHaveModifiers(owner) && ts.getModifiers(owner)?.some(modifier => modifier.kind === ts.SyntaxKind.AsyncKeyword) === true;
+    }
+    return false;
+  };
   const inspectSyntax = (node: ts.Node): void => {
+    if (ts.isTemplateExpression(node) || (ts.isBinaryExpression(node) && [ts.SyntaxKind.PlusToken, ts.SyntaxKind.PlusEqualsToken].includes(node.operatorToken.kind))
+      || (ts.isReturnStatement(node) && asyncOwner(node))
+      || (ts.isArrowFunction(node) && ts.getModifiers(node)?.some(modifier => modifier.kind === ts.SyntaxKind.AsyncKeyword))) needsChecker = true;
+    if ((ts.isIdentifier(node) || ts.isStringLiteral(node)) && node.text === "register") needsChecker = true;
+    if ((ts.isIdentifier(node) || ts.isStringLiteral(node)) && ["Proxy", "revocable"].includes(node.text)) needsChecker = true;
     if (ts.isDecorator(node)) reasons.add("SOURCE_DECORATOR_UNSUPPORTED");
     if (ts.isNewExpression(node)) needsChecker = true;
     if (ts.isForOfStatement(node) || ts.isSpreadElement(node)) needsChecker = true;
@@ -145,6 +156,38 @@ export function inspectSemanticDependencies(source: ts.SourceFile, snapshot?: Co
     && checker.getTypeOfSymbolAtLocation(symbol, symbol.getDeclarations()![0]!).getConstructSignatures().some(signature => {
       const declaration = signature.getDeclaration(); return declaration !== undefined && program.isSourceFileDefaultLibrary(declaration.getSourceFile());
     });
+  const primitiveValue = (expression: ts.Expression, seen = new Set<ts.Node>()): boolean => {
+    const value = unwrapStaticExpression(expression);
+    if (seen.has(value)) return false;
+    seen.add(value);
+    if (ts.isNumericLiteral(value) || ts.isBigIntLiteral(value) || ts.isStringLiteralLike(value) || ts.isVoidExpression(value)
+      || [ts.SyntaxKind.NullKeyword, ts.SyntaxKind.TrueKeyword, ts.SyntaxKind.FalseKeyword].includes(value.kind)) return true;
+    if (ts.isIdentifier(value) && value.text === "undefined" && declarations(value).length === 0
+      && (checker.getTypeAtLocation(value).flags & ts.TypeFlags.Undefined) !== 0) return true;
+    if (ts.isTypeOfExpression(value)) return true;
+    if (ts.isTemplateExpression(value)) return value.templateSpans.every(span => primitiveValue(span.expression, new Set(seen)));
+    if (ts.isBinaryExpression(value) && value.operatorToken.kind === ts.SyntaxKind.PlusToken) return primitiveValue(value.left, new Set(seen)) && primitiveValue(value.right, new Set(seen));
+    if (ts.isPrefixUnaryExpression(value)) return value.operator === ts.SyntaxKind.ExclamationToken || primitiveValue(value.operand, new Set(seen));
+    return declarations(value).some(declaration => ts.isVariableDeclaration(declaration) && ts.isVariableDeclarationList(declaration.parent)
+      && (declaration.parent.flags & ts.NodeFlags.Const) !== 0 && declaration.initializer !== undefined && primitiveValue(declaration.initializer, new Set(seen)));
+  };
+  const staticMemberName = (expression: ts.Expression): string | undefined => ts.isPropertyAccessExpression(expression) ? expression.name.text
+    : ts.isElementAccessExpression(expression) && ts.isStringLiteralLike(expression.argumentExpression) ? expression.argumentExpression.text : undefined;
+  const serviceWorkerLoader = (expression: ts.Expression): boolean => {
+    const value = unwrapStaticExpression(expression);
+    if ((ts.isPropertyAccessExpression(value) || ts.isElementAccessExpression(value)) && staticMemberName(value) === "register"
+      && sdkValue(value.expression)?.getName() === "serviceWorker") return true;
+    const symbol = sdkValue(expression);
+    return symbol?.getName() === "register" && (symbol.getDeclarations() ?? []).some(declaration => program.isSourceFileDefaultLibrary(declaration.getSourceFile())
+      && ts.isInterfaceDeclaration(declaration.parent) && declaration.parent.name.text === "ServiceWorkerContainer");
+  };
+  const proxyFactory = (expression: ts.Expression): boolean => {
+    const value = unwrapStaticExpression(expression);
+    if ((ts.isPropertyAccessExpression(value) || ts.isElementAccessExpression(value)) && staticMemberName(value) === "revocable" && sdkValue(value.expression)?.getName() === "Proxy") return true;
+    const symbol = sdkValue(value);
+    return symbol?.getName() === "revocable" && (symbol.getDeclarations() ?? []).some(declaration => program.isSourceFileDefaultLibrary(declaration.getSourceFile())
+      && ts.isInterfaceDeclaration(declaration.parent) && declaration.parent.name.text === "ProxyConstructor");
+  };
   const reflectedInvocation = (expression: ts.Expression): boolean => {
     const symbol = sdkValue(expression);
     return symbol !== undefined && ["apply", "construct"].includes(symbol.getName())
@@ -198,9 +241,8 @@ export function inspectSemanticDependencies(source: ts.SourceFile, snapshot?: Co
     const value = unwrapStaticExpression(expression);
     if (seen.has(value)) return false;
     seen.add(value);
-    if (ts.isNumericLiteral(value) || ts.isBigIntLiteral(value) || ts.isVoidExpression(value)
-      || [ts.SyntaxKind.NullKeyword, ts.SyntaxKind.TrueKeyword, ts.SyntaxKind.FalseKeyword].includes(value.kind)
-      || intrinsicIterable(value)) return true;
+    if (ts.isAwaitExpression(value)) return safeAwaitValue(value.expression, seen);
+    if (primitiveValue(value) || intrinsicIterable(value)) return true;
     if (ts.isNewExpression(value) && sdkValue(value.expression)?.getName() === "Promise") return true;
     if (ts.isCallExpression(value)) {
       const callee = unwrapStaticExpression(value.expression);
@@ -275,6 +317,14 @@ export function inspectSemanticDependencies(source: ts.SourceFile, snapshot?: Co
   };
   const visit = (node: ts.Node): void => {
     if (ts.isTypeNode(node)) return;
+    if ((ts.isBinaryExpression(node) && [ts.SyntaxKind.PlusToken, ts.SyntaxKind.PlusEqualsToken].includes(node.operatorToken.kind)
+      && (!primitiveValue(node.left) || !primitiveValue(node.right)))
+      || (ts.isTemplateExpression(node) && node.templateSpans.some(span => !primitiveValue(span.expression)))) reasons.add("SOURCE_COERCION_UNSUPPORTED");
+    if ((ts.isReturnStatement(node) && node.expression !== undefined && asyncOwner(node) && !safeAwaitValue(node.expression))
+      || (ts.isArrowFunction(node) && !ts.isBlock(node.body) && ts.getModifiers(node)?.some(modifier => modifier.kind === ts.SyntaxKind.AsyncKeyword)
+        && !safeAwaitValue(node.body))) reasons.add("SOURCE_ASYNC_RETURN_UNSUPPORTED");
+    if ((ts.isIdentifier(node) || ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) && serviceWorkerLoader(node)) reasons.add("SOURCE_SERVICE_WORKER_LOADER_UNSUPPORTED");
+    if ((ts.isIdentifier(node) || ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) && proxyFactory(node)) reasons.add("SOURCE_PROXY_UNSUPPORTED");
     if (ts.isAwaitExpression(node) && !safeAwaitValue(node.expression)) reasons.add("SOURCE_AWAIT_UNSUPPORTED");
     if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.InstanceOfKeyword
       && !sdkConstruction(sdkValue(node.right))) reasons.add("SOURCE_INSTANCEOF_UNSUPPORTED");
@@ -291,6 +341,7 @@ export function inspectSemanticDependencies(source: ts.SourceFile, snapshot?: Co
       const origin = sdkValue(node.expression);
       if (!sdkConstruction(origin)) reasons.add("SOURCE_CONSTRUCTION_UNSUPPORTED");
       else if (["Worker", "SharedWorker"].includes(origin!.getName())) reasons.add("SOURCE_WORKER_LOADER_UNSUPPORTED");
+      else if (origin!.getName() === "Proxy") reasons.add("SOURCE_PROXY_UNSUPPORTED");
     }
     if (ts.isIdentifier(node) || ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) inspectTimerUse(node);
     if (ts.isPropertyAccessExpression(node) && functionHelper(node)) reasons.add("SOURCE_FUNCTION_HELPER_UNSUPPORTED");

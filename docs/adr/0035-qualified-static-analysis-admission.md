@@ -234,6 +234,22 @@ values, actual native promises and genuine async-function results retain their s
 boundary. Type annotations or assertions alone do not prove that boundary. `instanceof`
 requires an actual SDK constructor origin; internal or uncertain `Symbol.hasInstance`
 invocations are unsupported. No protocol invocation edges are added.
+Unknown or internal primitive coercion at addition/concatenation and template interpolation
+is unsupported, including numeric addition over unknown parameters. Primitive annotations
+or assertions do not prove value origin. Async return resolution, including expression-bodied
+async arrows, applies the same thenable-origin boundary as explicit await; nested ordinary
+function returns remain distinct. Actual SDK Proxy construction and ServiceWorkerContainer
+register references are unsupported implicit trap and code-loader routes. No protocol,
+proxy-trap or browser-loader edges are invented; actual primitive/native promise values
+and ordinary own-name methods retain their supported domains.
+
+The original declaration-bearing fixture and the historical declaration-free `eligible-esm`
+fixture retain their complete original source bytes. The latter's unknown `input + 1`
+coercion is now the explicit `eligible-esm-unknown-coercion-blocks` witness. Positive
+qualification uses the separately named `primitive-safe-esm` domain with literal `1 + 1`
+operands, the same tool pins/topology/static call chain, and test copy describing its fixed
+primitive value. Historical/current artifact pairs use identical explicit fixture domains;
+earlier receipts remain bound to their original sources and are never relabeled.
 
 Retained named `tsconfig*.json` files whose options are not actually consumed are
 unsupported. Conventional `tsconfig.json` reads and their SDK-parsed `extends` read set
