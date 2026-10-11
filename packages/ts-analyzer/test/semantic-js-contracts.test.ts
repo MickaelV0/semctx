@@ -51,6 +51,25 @@ test("non-call namespace members retain barrel/default owners and reject shadows
     expect(negative.edges.some(edge => edge.kind === "tested_by" || edge.kind === "covers")).toBe(false);
   }
 });
+for (const extension of ["js", "ts"]) test(`namespace destructured values associate the real canonical owner in ${extension}`, () => {
+  const result = graph({ "lib.mjs": "export function helper() { return 1; } export function unused() { return 2; }", [`lib.test.${extension}`]: "import * as api from './lib.mjs'; const { helper: renamed } = api; expect(renamed).toBeDefined();" });
+  const helper = result.nodes.find(node => node.name === "helper")!;
+  const unused = result.nodes.find(node => node.name === "unused")!;
+  const tester = result.nodes.find(node => node.kind === "test")!;
+  expect(result.edges).toContainEqual(expect.objectContaining({ kind: "tested_by", from: helper.id, to: tester.id }));
+  expect(result.edges).toContainEqual(expect.objectContaining({ kind: "covers", from: tester.id, to: helper.id }));
+  expect(result.edges.some(edge => edge.kind === "tested_by" && edge.from === unused.id)).toBe(false);
+});
+test("namespace destructuring preserves leaf/default owners and rejects a local shadow or unmodeled homonym", () => {
+  const result = graph({ "leaf.mjs": "export default function namedFn() { return 1; }", "barrel.mjs": "export { default as facade } from './leaf.mjs';", "leaf.test.js": "import * as api from './barrel.mjs'; const { facade: renamed } = api; expect(renamed).toBeDefined();" });
+  const helper = result.nodes.find(node => node.name === "namedFn")!; const tester = result.nodes.find(node => node.kind === "test")!;
+  expect(result.edges).toContainEqual(expect.objectContaining({ kind: "tested_by", from: helper.id, to: tester.id }));
+  for (const content of [
+    "import * as api from './lib.mjs'; function ordinary(api) { const { helper } = api; expect(helper).toBeDefined(); }",
+    "import * as api from './lib.mjs'; const { helper } = api.obj; expect(helper).toBeDefined();",
+    "import type * as api from './lib.mjs'; type Fn = typeof api.helper;",
+  ]) expect(graph({ "lib.mjs": "export function helper() { return 1; } export const obj = { helper() { return 2; } };", "lib.test.ts": content }).edges.some(edge => edge.kind === "tested_by" || edge.kind === "covers")).toBe(false);
+});
 test("namespace test coverage follows actual leaf aliases and excludes a shadowed namespace", () => {
   const result = graph({ "leaf.mjs": "export function helper() { return 1; }", "barrel.mjs": "export { helper as facade } from './leaf.mjs';", "leaf.test.js": "import * as lib from './barrel.mjs'; lib.facade();" });
   const helper = result.nodes.find(node => node.name === "helper")!; const tester = result.nodes.find(node => node.kind === "test")!;

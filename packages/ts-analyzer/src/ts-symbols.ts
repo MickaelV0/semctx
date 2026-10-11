@@ -481,9 +481,9 @@ export function extractTypeScript(rootAbsPaths: string[], repoRoot: string, supp
         const namespace = node.importClause?.namedBindings;
         const namespaceSymbol = node.importClause?.isTypeOnly !== true && namespace !== undefined && ts.isNamespaceImport(namespace)
           ? checker.getSymbolAtLocation(namespace.name) : undefined;
-        const references = [...valueImportBindings(node), ...(namespaceSymbol === undefined ? [] : namespaceReferences?.get(namespaceSymbol) ?? [])];
+        const references: { expression: ts.Expression; targetSymbol?: ts.Symbol }[] = [...valueImportBindings(node).map(expression => ({ expression })), ...(namespaceSymbol === undefined ? [] : namespaceReferences?.get(namespaceSymbol) ?? [])];
         const bindingTargets = staticModuleLinksEnabled ? references.flatMap(binding => {
-          const target = resolveCallTarget(checker, binding, relOf, javascriptEnabled, snapshot);
+          const target = resolveCallTarget(checker, binding.expression, relOf, javascriptEnabled, snapshot, binding.targetSymbol);
           return target?.relPath !== undefined && target.symbolPath !== undefined ? [{ relPath: target.relPath, symbolPath: target.symbolPath }] : [];
         }) : undefined;
         imports.push({
@@ -1025,28 +1025,33 @@ function valueImportBindings(node: ts.ImportDeclaration): ts.Identifier[] {
 }
 
 /** Static modeled member references keyed by their actual lexical receiver binding, never its spelling. */
-function namespaceMemberReferences(source: ts.SourceFile, checker: ts.TypeChecker): Map<ts.Symbol, ts.Expression[]> {
-  const references = new Map<ts.Symbol, ts.Expression[]>();
+function namespaceMemberReferences(source: ts.SourceFile, checker: ts.TypeChecker): Map<ts.Symbol, { expression: ts.Expression; targetSymbol?: ts.Symbol }[]> {
+  const references = new Map<ts.Symbol, { expression: ts.Expression; targetSymbol?: ts.Symbol }[]>();
   const unwrap = unwrapStaticExpression;
+  const add = (binding: ts.Symbol | undefined, expression: ts.Expression, target: ts.Symbol | undefined): void => {
+    if (target !== undefined && (target.flags & ts.SymbolFlags.Alias) !== 0) target = checker.getAliasedSymbol(target);
+    const declaration = target?.getDeclarations()?.[0];
+    const modeled = declaration !== undefined && (ts.isFunctionDeclaration(declaration) || ts.isClassDeclaration(declaration)
+      || (ts.isVariableDeclaration(declaration) && declaration.initializer !== undefined && isFunctionLike(declaration.initializer)));
+    if (binding === undefined || !modeled) return;
+    const targets = references.get(binding) ?? [];
+    targets.push({ expression, targetSymbol: target }); references.set(binding, targets);
+  };
   const visit = (node: ts.Node): void => {
     if (ts.isTypeNode(node)) return;
     if (ts.isPropertyAccessExpression(node) || (ts.isElementAccessExpression(node) && ts.isStringLiteralLike(node.argumentExpression))) {
       const member = node;
-        let target = checker.getSymbolAtLocation(member);
-        if (target !== undefined && (target.flags & ts.SymbolFlags.Alias) !== 0) target = checker.getAliasedSymbol(target);
-        const declaration = target?.getDeclarations()?.[0];
-        // Only owners already extracted as callable symbols can supply coverage. Property,
-        // method and callback origins cannot borrow a same-named file-level coordinate.
-        const modeled = declaration !== undefined && (ts.isFunctionDeclaration(declaration) || ts.isClassDeclaration(declaration)
-          || (ts.isVariableDeclaration(declaration) && declaration.initializer !== undefined && isFunctionLike(declaration.initializer)));
-        if (!modeled) { ts.forEachChild(node, visit); return; }
-        let receiver = unwrap(member.expression);
-        while (ts.isPropertyAccessExpression(receiver) || ts.isElementAccessExpression(receiver)) receiver = unwrap(receiver.expression);
-        const binding = checker.getSymbolAtLocation(receiver);
-        if (binding !== undefined) {
-          const targets = references.get(binding) ?? [];
-          targets.push(member); references.set(binding, targets);
-        }
+      let receiver = unwrap(member.expression);
+      while (ts.isPropertyAccessExpression(receiver) || ts.isElementAccessExpression(receiver)) receiver = unwrap(receiver.expression);
+      add(checker.getSymbolAtLocation(receiver), member, checker.getSymbolAtLocation(member));
+    } else if (ts.isBindingElement(node) && node.dotDotDotToken === undefined && ts.isIdentifier(node.name)
+      && ts.isObjectBindingPattern(node.parent) && ts.isVariableDeclaration(node.parent.parent) && node.parent.parent.initializer !== undefined) {
+      const receiver = unwrap(node.parent.parent.initializer);
+      const binding = checker.getSymbolAtLocation(receiver);
+      if (binding?.getDeclarations()?.some(declaration => ts.isNamespaceImport(declaration))) {
+        const property = node.propertyName ?? node.name;
+        if (ts.isIdentifier(property) || ts.isStringLiteralLike(property)) add(binding, node.name, checker.getPropertyOfType(checker.getTypeAtLocation(receiver), property.text));
+      }
     }
     ts.forEachChild(node, visit);
   };
@@ -1094,8 +1099,9 @@ function resolveCallTarget(
   relOf: (abs: string) => string,
   javascriptEnabled = false,
   snapshot?: CompilerInputSnapshot,
+  targetSymbol?: ts.Symbol,
 ): { relPath?: string; symbolPath?: string; unmodeledReason?: string } | undefined {
-  let symbol = checker.getSymbolAtLocation(expr);
+  let symbol = targetSymbol ?? checker.getSymbolAtLocation(expr);
   if (symbol === undefined) return undefined;
   // Follow import aliases to the real declaration (imported functions call across files).
   if ((symbol.flags & ts.SymbolFlags.Alias) !== 0) {

@@ -5,6 +5,11 @@ import { join } from "node:path";
 import { createGlobSelectionConfig } from "@semantic-context/core";
 import { initWorkspace } from "@semantic-context/repository-store";
 import { indexRepository, runChangeImpact } from "../src";
+import { inspectJavaScriptSource } from "@semantic-context/ts-analyzer";
+for (const mode of ["directory", "sibling", "substitution"]) test(`unknown namespace key remains an explicit unsupported source: ${mode}`, () => {
+  const original = `import * as ns from './widget${mode === "substitution" ? ".js" : ""}'; ${mode === "substitution" ? "import './widget.ts';" : ""} export function read(key) { return ns[key]; }\n`;
+  expect(inspectJavaScriptSource("/fixture/consumer.mjs", original).reasons).toContain("JAVASCRIPT_PROPERTY_KEY_UNSUPPORTED");
+});
 for (const mode of ["directory", "sibling", "substitution"]) test(`a namespace consumer observes newly exported values with resolution: ${mode}`, () => {
   const root = mkdtempSync(join(tmpdir(), "semctx-impact-jsx-"));
   const git = (...args: string[]): void => {
@@ -20,7 +25,7 @@ for (const mode of ["directory", "sibling", "substitution"]) test(`a namespace c
       writeFileSync(join(root, "src/widget.js"), "export const existing = 1;\n");
     }
     if (mode === "substitution") writeFileSync(join(root, "src/widget.ts"), "export const existing = 1;\n");
-    writeFileSync(join(root, "src/consumer.mjs"), `import * as ns from './widget${mode === "substitution" ? ".js" : ""}'; ${mode === "substitution" ? "import './widget.ts';" : ""} export function read(key) { return ns[key]; }\n`);
+    writeFileSync(join(root, "src/consumer.mjs"), `import * as ns from './widget${mode === "substitution" ? ".js" : ""}'; ${mode === "substitution" ? "import './widget.ts';" : ""} export function read() { const key = 'added'; return ns[key]; }\n`);
     git("init", "-q"); git("add", "."); git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "fixture");
     initWorkspace(root, { ...createGlobSelectionConfig(root), include: ["src/**/*"], languages: { javascript: "on", typescript: "on" } });
     indexRepository(root, "2026-10-09T10:00:00.000Z");

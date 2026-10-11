@@ -15,6 +15,8 @@ export function inspectSemanticDependencies(source: ts.SourceFile, snapshot?: Co
   if (source.referencedFiles.length > 0) reasons.add("SOURCE_REFERENCE_PATH_UNSUPPORTED");
   const sdk = ts as unknown as { isIntrinsicJsxName(name: string): boolean };
   let needsChecker = false;
+  const assignment = (node: ts.Node): node is ts.BinaryExpression => ts.isBinaryExpression(node)
+    && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment;
   const asyncOwner = (node: ts.Node): boolean => {
     for (let owner: ts.Node | undefined = node.parent; owner !== undefined; owner = owner.parent) if (ts.isFunctionLike(owner)) {
       return ts.canHaveModifiers(owner) && ts.getModifiers(owner)?.some(modifier => modifier.kind === ts.SyntaxKind.AsyncKeyword) === true;
@@ -29,13 +31,14 @@ export function inspectSemanticDependencies(source: ts.SourceFile, snapshot?: Co
       || (ts.isArrowFunction(node) && ts.getModifiers(node)?.some(modifier => modifier.kind === ts.SyntaxKind.AsyncKeyword))) needsChecker = true;
     if ((ts.isIdentifier(node) || ts.isStringLiteral(node)) && node.text === "register") needsChecker = true;
     if ((ts.isIdentifier(node) || ts.isStringLiteral(node)) && node.text === "defineProperty") needsChecker = true;
+    if ((ts.isIdentifier(node) || ts.isStringLiteral(node)) && node.text === "importScripts") needsChecker = true;
     if (ts.isFunctionDeclaration(node) && node.body === undefined) needsChecker = true;
     if ((ts.isIdentifier(node) || ts.isStringLiteral(node)) && ["Proxy", "revocable"].includes(node.text)) needsChecker = true;
     if (ts.isDecorator(node)) reasons.add("SOURCE_DECORATOR_UNSUPPORTED");
     if (ts.isNewExpression(node)) needsChecker = true;
     if (ts.isForOfStatement(node) || ts.isSpreadElement(node)) needsChecker = true;
     if (ts.isAwaitExpression(node) || (ts.isYieldExpression(node) && node.asteriskToken !== undefined)
-      || (ts.isBinaryExpression(node) && [ts.SyntaxKind.InstanceOfKeyword, ts.SyntaxKind.EqualsToken].includes(node.operatorToken.kind))) needsChecker = true;
+      || assignment(node) || (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.InstanceOfKeyword)) needsChecker = true;
     if (ts.isParameter(node) && ts.isArrayBindingPattern(node.name)) needsChecker = true;
     if ((ts.isIdentifier(node) || ts.isStringLiteral(node)) && ["Reflect", "construct"].includes(node.text)) needsChecker = true;
     if ((ts.isIdentifier(node) || ts.isStringLiteral(node)) && ["setTimeout", "setInterval"].includes(node.text)) needsChecker = true;
@@ -219,6 +222,19 @@ export function inspectSemanticDependencies(source: ts.SourceFile, snapshot?: Co
   };
   const propertyName = (name: ts.PropertyName | ts.BindingName): string | undefined => ts.isComputedPropertyName(name) ? constantString(name.expression)
     : ts.isIdentifier(name) || ts.isStringLiteralLike(name) || ts.isNumericLiteral(name) ? name.text : undefined;
+  const sdkCallableMember = (expression: ts.Expression, name: string | undefined): boolean => {
+    if (name === undefined) return false;
+    const receiver = unwrapStaticExpression(expression);
+    const symbol = checker.getPropertyOfType(checker.getTypeAtLocation(receiver), name);
+    const origins = symbol?.getDeclarations() ?? [];
+    if (origins.length === 0 || !origins.every(origin => program.isSourceFileDefaultLibrary(origin.getSourceFile()))) return false;
+    const type = checker.getTypeOfSymbolAtLocation(symbol!, receiver);
+    return type.getCallSignatures().length > 0 || type.getConstructSignatures().length > 0;
+  };
+  const sdkCallableProperty = (expression: ts.Expression): boolean => {
+    const target = unwrapStaticExpression(expression);
+    return (ts.isPropertyAccessExpression(target) || ts.isElementAccessExpression(target)) && sdkCallableMember(target.expression, staticMemberName(target));
+  };
   const descriptorFactory = (expression: ts.Expression, seen = new Set<ts.Node>()): boolean => {
     const value = unwrapStaticExpression(expression);
     if (seen.has(value)) return false;
@@ -253,7 +269,15 @@ export function inspectSemanticDependencies(source: ts.SourceFile, snapshot?: Co
     const container = usage.parent;
     if (ts.isVariableDeclaration(container) && container.initializer === usage && ts.isIdentifier(container.name)
       && ts.isVariableDeclarationList(container.parent) && (container.parent.flags & ts.NodeFlags.Const) !== 0) return;
-    if (ts.isCallExpression(container) && container.expression === usage && container.arguments[2] !== undefined && dataDescriptor(container.arguments[2])) return;
+    if (ts.isCallExpression(container) && container.expression === usage && container.arguments[2] !== undefined && dataDescriptor(container.arguments[2])) {
+      if (container.arguments[1] !== undefined && (iteratorKey(container.arguments[1]) || constantString(container.arguments[1]) === "then")) {
+        reasons.add("SOURCE_PROTOCOL_DESCRIPTOR_UNSUPPORTED"); return;
+      }
+      if (container.arguments[0] !== undefined && container.arguments[1] !== undefined && sdkCallableMember(container.arguments[0], constantString(container.arguments[1]))) {
+        reasons.add("SOURCE_SDK_CALLABLE_MUTATION_UNSUPPORTED"); return;
+      }
+      return;
+    }
     reasons.add("SOURCE_DESCRIPTOR_ACCESSOR_UNSUPPORTED");
   };
   const serviceWorkerLoader = (expression: ts.Expression): boolean => {
@@ -416,11 +440,12 @@ export function inspectSemanticDependencies(source: ts.SourceFile, snapshot?: Co
       && !ts.getModifiers(origin)?.some(modifier => modifier.kind === ts.SyntaxKind.DeclareKeyword)))) reasons.add("SOURCE_AMBIENT_FUNCTION_UNSUPPORTED");
     if (runtimeProperty(node) && ((ts.isElementAccessExpression(node) && !propertyKey(node.argumentExpression))
       || (ts.isComputedPropertyName(node) && !propertyKey(node.expression)))) reasons.add("SOURCE_PROPERTY_KEY_UNSUPPORTED");
-    if (ts.isBinaryExpression(node) && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment
+    if (assignment(node)
       && staticMemberName(unwrapStaticExpression(node.left)) === "then" && !primitiveValue(node.right)) reasons.add("SOURCE_THENABLE_MUTATION_UNSUPPORTED");
-    if (ts.isBinaryExpression(node) && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment) {
+    if (assignment(node)) {
       const target = unwrapStaticExpression(node.left);
       if (ts.isElementAccessExpression(target) && iteratorKey(target.argumentExpression)) reasons.add("SOURCE_ITERATOR_MUTATION_UNSUPPORTED");
+      if (sdkCallableProperty(target) && !primitiveValue(node.right)) reasons.add("SOURCE_SDK_CALLABLE_MUTATION_UNSUPPORTED");
     }
     if ((ts.isBinaryExpression(node) && [ts.SyntaxKind.PlusToken, ts.SyntaxKind.PlusEqualsToken].includes(node.operatorToken.kind)
       && (!primitiveValue(node.left) || !primitiveValue(node.right)))
@@ -429,6 +454,7 @@ export function inspectSemanticDependencies(source: ts.SourceFile, snapshot?: Co
       || (ts.isArrowFunction(node) && !ts.isBlock(node.body) && ts.getModifiers(node)?.some(modifier => modifier.kind === ts.SyntaxKind.AsyncKeyword)
         && !safeAwaitValue(node.body))) reasons.add("SOURCE_ASYNC_RETURN_UNSUPPORTED");
     if ((ts.isIdentifier(node) || ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) && serviceWorkerLoader(node)) reasons.add("SOURCE_SERVICE_WORKER_LOADER_UNSUPPORTED");
+    if ((ts.isIdentifier(node) || ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) && sdkValue(node)?.getName() === "importScripts") reasons.add("SOURCE_WORKER_LOADER_UNSUPPORTED");
     if (ts.isIdentifier(node) || ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) inspectDescriptorUse(node);
     if ((ts.isIdentifier(node) || ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) && proxyFactory(node)) reasons.add("SOURCE_PROXY_UNSUPPORTED");
     if (ts.isAwaitExpression(node) && !safeAwaitValue(node.expression)) reasons.add("SOURCE_AWAIT_UNSUPPORTED");

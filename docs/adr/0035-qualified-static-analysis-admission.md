@@ -115,6 +115,10 @@ Canonical leaf/default coordinates are preserved through barrels. Dynamic whole 
 local shadows and unmodeled object members do not provide `tested_by`/`covers` evidence.
 These associations do not observe test execution. Whole-module impact reads use the
 indexed import target, including TypeScript extension substitution, before fallback probes.
+Object destructuring from the actual namespace binding also supplies canonical member
+associations, including renamed/barrel/default owners. Local binding-element names do
+not become fictional callee coordinates. This is semantic opt-in metadata with the
+existing worker DTO shape, without a new invocation extractor.
 
 TypeScript/TSX files classified as migrations retain legacy structural migration facts,
 but this profile refuses their selected producer scope and broad dependency scope because
@@ -162,6 +166,14 @@ escapes are unsupported. Only a direct data-descriptor literal containing known 
 value/writable/enumerable/configurable fields retains its boundary; get/set, spreads,
 unknown fields and a prototype-setting field do not prove accessor absence. A mutable const descriptor
 alias is not an absence proof. Own homonyms and type-only SDK references stay distinct.
+SDK data descriptors replacing iterator/then protocols or SDK-callable properties are
+also unsupported; a direct descriptor does not restore intrinsic mutability safety.
+Nonprimitive writes to members whose callable/constructible coordinates come from
+the actual loaded SDK revoke that opaque call boundary. Own source declarations are
+distinct; an annotation is not proof of an unmodified native value.
+The current ES2022.full Program loads lib.webworker.importscripts.d.ts: importScripts
+is an actual SDK loader and is unsupported, including transparent value aliases.
+No worker library is added and no SDK origin is fabricated from its spelling.
 Retained bodyless-only function declarations are not evidence of a runtime lexical
 shadow and are unsupported. A binder overload set with a real implementation remains
 distinct; ordinary signature facts and SDK/declaration boundaries are preserved.

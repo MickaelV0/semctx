@@ -72,11 +72,17 @@ for (const control of ["reports", "dependency"] as const) test(`qualified ${cont
   const { parent, root } = fixture(); const outside = join(parent, "outside");
   const linked = join(root, control === "reports" ? ".semctx/reports" : "node_modules");
   try {
+    if (control === "dependency") writeFileSync(join(root, ".gitignore"), ".semctx/\nreport.json\nnode_modules\n");
     mkdirSync(outside); writeFileSync(join(outside, "sentinel.json"), "unchanged");
     symlinkSync(outside, linked, "junction"); indexRepository(root, "2026-10-11T10:00:00.000Z");
     const output = control === "reports" ? join(linked, "sentinel.json") : join(outside, "sentinel.json");
     const result = Bun.spawnSync([process.execPath, cli, "verify", "diff", "--root", root, "--format", "json", "--fail-on", "none", "--output", output], { cwd: root, stdout: "pipe", stderr: "pipe" });
     expect(result.exitCode).not.toBe(0);
+    if (control === "dependency") {
+      const error = new TextDecoder().decode(result.stderr);
+      expect(error).toContain("INVALID_TASK_INPUT");
+      expect(error).toContain("cannot change dependency inputs");
+    }
     expect(readFileSync(join(outside, "sentinel.json"), "utf8")).toBe("unchanged");
   } finally { if (existsSync(linked)) unlinkSync(linked); rmSync(parent, { recursive: true, force: true }); }
 }, 60_000);
