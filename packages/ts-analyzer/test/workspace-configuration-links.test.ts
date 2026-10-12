@@ -134,6 +134,24 @@ test("a workspace declared above the repository boundary receives no link", () =
   expect(resolveTypeScriptModule("#shared", source, undefined, true)).toBeUndefined();
 });
 
+test("a pnpm workspace above the repository boundary does not shadow its package workspaces", () => {
+  const parent = temporaryRoot("semctx-workspace-shadow-");
+  write(parent, {
+    "pnpm-workspace.yaml": "packages:\n  - \"repo/**\"\n",
+    "repo/package.json": JSON.stringify({ name: "fixture-root", private: true, workspaces: ["tooling/*", "domains/*/*"] }),
+    ...Object.fromEntries(Object.entries(CONFIG_MEMBER).map(([path, content]) => [`repo/${path}`, content])),
+    "repo/domains/catalog/api/package.json": JSON.stringify({ name: "@fixture/catalog-api", devDependencies: { "@fixture/config": "workspace:*" } }),
+    "repo/domains/catalog/api/tsconfig.json": JSON.stringify({ extends: "@fixture/config/tsconfig/node.json" }),
+    "repo/domains/catalog/api/src/items.ts": "export const items = 1;\n",
+  });
+  mkdirSync(join(parent, "repo", ".git"));
+  const root = `${parent}/repo`;
+  const source = `${root}/domains/catalog/api/src/items.ts`;
+  expect(configurationFailures(inspectModuleConfiguration(source, root))).toEqual([]);
+  // Without an analyzed root, only the `.git` marker keeps the outer pnpm declaration from governing.
+  expect(resolveTypeScriptModule("#shared", source, undefined, true)).toBe(`${root}/tooling/config/tsconfig/shared.ts`);
+});
+
 function failsToResolve(root: string, source: string, code = "6053"): boolean {
   return configurationFailures(inspectModuleConfiguration(source, root)).some(reason => reason.startsWith(`SOURCE_CONFIGURATION_INVALID:${code}`));
 }
