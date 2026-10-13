@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { processLimits } from "../plugins/shared/hooks/process-budget.mjs";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { resolve, join } from "node:path";
@@ -39,7 +40,7 @@ const failures: string[] = [];
 mkdirSync(output, { recursive: true });
 const gitEnv = { ...process.env, GIT_AUTHOR_NAME: "public-fixture", GIT_AUTHOR_EMAIL: "fixture@example.invalid", GIT_COMMITTER_NAME: "public-fixture", GIT_COMMITTER_EMAIL: "fixture@example.invalid" };
 function run(command: string[], cwd: string, timeout = 60_000): Observation {
-  const result = Bun.spawnSync(command, { cwd, env: gitEnv, stdout: "pipe", stderr: "pipe", timeout });
+  const result = Bun.spawnSync(command, { cwd, env: gitEnv, stdout: "pipe", stderr: "pipe", ...processLimits(timeout) });
   return { command, code: result.exitCode ?? 1, stdout: result.stdout.toString(), stderr: result.stderr.toString() };
 }
 function git(root: string, args: string[]): void { const result = run(["git", ...args], root); assert.equal(result.code, 0, result.stderr); }
@@ -497,7 +498,7 @@ await scenario("interrupted-index", async () => {
   const databasePath = join(root, ".semctx/semctx.db");
   const snapshotPath = join(output, "interrupted-marker-snapshot.db");
   const command = [process.execPath, cli, "index", "--root", root];
-  const child = Bun.spawn(command, { cwd: root, stdout: "pipe", stderr: "pipe" });
+  const child = Bun.spawn(command, { cwd: root, stdout: "pipe", stderr: "pipe", ...processLimits(20_000) });
   const stdout = new Response(child.stdout).text(); const stderr = new Response(child.stderr).text();
   let observedIncomplete = false;
   let snapshotError: string | undefined;

@@ -1,3 +1,4 @@
+import { spawnGitSync } from "../packages/app-services/src/git-process";
 import { appendFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -171,13 +172,12 @@ export function planForPaths(paths: readonly string[], targetExists: (path: stri
 }
 
 export function changedPaths(base: string, cwd = process.cwd()): string[] | null {
-  const child = Bun.spawnSync(["git", "diff", "--name-only", "--no-renames", "-z", `${base}...HEAD`],
-    { cwd, stdout: "pipe", stderr: "pipe" });
-  if (child.exitCode !== 0) return null;
-  const bytes = child.stdout;
-  if (bytes.length === 0) return [];
-  if (bytes[bytes.length - 1] !== 0) return null;
   try {
+    const child = spawnGitSync(["git", "diff", "--name-only", "--no-renames", "-z", `${base}...HEAD`], { cwd });
+    if (child.exitCode !== 0) return null;
+    const bytes = child.stdout;
+    if (bytes.length === 0) return [];
+    if (bytes[bytes.length - 1] !== 0) return null;
     return new TextDecoder("utf-8", { fatal: true }).decode(bytes).slice(0, -1).split("\0");
   } catch {
     return null;

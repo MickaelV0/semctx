@@ -9,6 +9,7 @@ import {
   renderOmpCliShim,
 } from "../../../scripts/build-plugin-runtime.ts";
 import { evaluateGuard } from "../hooks/semctx-guard.mjs";
+import { GUARD_PROCESS_BUDGET_MS } from "../../shared/hooks/process-budget.mjs";
 import semctxGuardExtension, {
   evaluateOmpToolCall,
   explicitGuardOff,
@@ -864,3 +865,46 @@ describe("OMP extension adapter wiring (omp/semctx-guard.ts)", () => {
     }
   });
 });
+
+test.skipIf(process.platform === "win32")("OMP stays advisory when Git exhausts the shared deadline", () => {
+  const root = mkdtempSync(join(tmpdir(), "semctx-omp-advisory-budget-"));
+  try {
+    writeFileSync(join(root, "git"), '#!/bin/sh\nexec /bin/sleep 30\n', { mode: 0o755 });
+    const env: NodeJS.ProcessEnv = { ...process.env, PATH: root };
+    delete env.SEMCTX_GUARD;
+    delete env.SEMCTX_GUARDED;
+    const modulePath = resolve(import.meta.dir, "../omp/semctx-guard.ts");
+    const script = `import { evaluateOmpToolCall } from ${JSON.stringify(modulePath)}; const decision = evaluateOmpToolCall({ type: "tool_call", toolCallId: "fixture", toolName: "bash", input: { command: "git commit -m fixture" } }, { cwd: ${JSON.stringify(root)} }); console.log(JSON.stringify(decision ?? null));`;
+    const result = Bun.spawnSync([process.execPath, "-e", script], { env, stdout: "pipe", stderr: "pipe", timeout: 20000, killSignal: "SIGKILL" });
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(new TextDecoder().decode(result.stdout))).toBeNull();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+}, 25000);
+
+test.skipIf(process.platform === "win32").each([true, false])("OMP unresolved scope shares one cumulative deadline (%s)", (enabled) => {
+  const root = mkdtempSync(join(tmpdir(), "semctx-omp-unresolved-budget-"));
+  try {
+    mkdirSync(join(root, ".semctx"));
+    writeFileSync(join(root, ".semctx", "guard.json"), JSON.stringify({ enabled }));
+    writeFileSync(join(root, "git"), '#!/bin/sh\nexec /bin/sleep 30\n', { mode: 0o755 });
+    const env: NodeJS.ProcessEnv = { ...process.env, PATH: root };
+    delete env.SEMCTX_GUARD;
+    delete env.SEMCTX_GUARDED;
+    const modulePath = resolve(import.meta.dir, "../omp/semctx-guard.ts");
+    const input = enabled
+      ? { command: "git commit -m fixture", cwd: "artifact://fixture" }
+      : { command: "git -C artifact://fixture commit -m fixture" };
+    const script = `import { evaluateOmpToolCall } from ${JSON.stringify(modulePath)}; const started = performance.now(); const decision = evaluateOmpToolCall({ type: "tool_call", toolCallId: "fixture", toolName: "bash", input: ${JSON.stringify(input)} }, { cwd: ${JSON.stringify(root)} }); console.log(JSON.stringify({ decision: decision ?? null, elapsedMs: performance.now() - started }));`;
+    const result = Bun.spawnSync([process.execPath, "-e", script], {
+      env, stdout: "pipe", stderr: "pipe", timeout: GUARD_PROCESS_BUDGET_MS * 2 + 5000, killSignal: "SIGKILL",
+    });
+    expect(result.exitCode).toBe(0);
+    const report = JSON.parse(new TextDecoder().decode(result.stdout));
+    if (enabled) expect(report.decision?.block).toBe(true);
+    else expect(report.decision).toBeNull();
+    expect(report.elapsedMs).toBeGreaterThanOrEqual(GUARD_PROCESS_BUDGET_MS - 500);
+    expect(report.elapsedMs).toBeLessThan(GUARD_PROCESS_BUDGET_MS + 1500);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 40000);

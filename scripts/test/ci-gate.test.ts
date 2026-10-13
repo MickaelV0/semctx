@@ -11,6 +11,21 @@ const lane = (
 ): CiLane => ({ profile, os, targets, smoke, shard });
 
 describe("CI gate runner", () => {
+  test("kills a stalled command within its budget while retaining captured report output", async () => {
+    const root = mkdtempSync(join(tmpdir(), "semctx-ci-budget-"));
+    try {
+      const started = performance.now();
+      const code = await spawnCiCommand([
+        process.execPath, "--eval", 'console.log("partial report"); process.on("SIGTERM", () => {}); await Bun.sleep(1500);',
+      ], root, "report.json", 200);
+      expect(code).toBe(124);
+      expect(performance.now() - started).toBeLessThan(1000);
+      expect(readFileSync(join(root, "report.json"), "utf8")).toBe("partial report\n");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("captures a worker report in a fresh cwd whose nested output directory does not exist", async () => {
     const root = mkdtempSync(join(tmpdir(), "semctx-ci-fresh-report-"));
     const stdoutFile = ".semctx/multicore-index.json";

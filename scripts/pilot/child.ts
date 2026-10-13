@@ -1,3 +1,4 @@
+import { processLimits } from "../../plugins/shared/hooks/process-budget.mjs";
 /** A subprocess result that is always finite and never lies about how it ended (ADR 0019 process-truth invariant). */
 export interface BoundedRunResult {
   argv: readonly string[];
@@ -26,7 +27,7 @@ export function runBounded(argv: readonly string[], options: BoundedRunOptions):
     cwd: options.cwd,
     stdout: "pipe",
     stderr: "pipe",
-    timeout: options.timeoutMs,
+    ...processLimits(options.timeoutMs),
     env: options.env,
   });
   const durationMs = Math.round((performance.now() - started) * 100) / 100;

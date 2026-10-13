@@ -948,3 +948,37 @@ of ownership or liveness.
 
 `task create` and `context prepare` (the `task → ContextPack` retriever) and `bench` remain in the
 CLI but are **experimental** and are not a code-search replacement (ADR 0005).
+
+### Child-process deadlines
+
+Core Git captures use a 5,000 ms deadline, `SIGKILL`, and a 256 MiB per-stream
+output ceiling. Timeout and output exhaustion refuse the capture with `GIT_ERROR`
+and the named reason `PROCESS_TIMEOUT` or `PROCESS_OUTPUT_LIMIT`; partial output
+is never verification evidence. Core Git commands remove inherited `GIT_*` and
+`GCM_*` variables, including `GIT_DIR` and `GIT_WORK_TREE`, before execution.
+Repository configuration files remain effective.
+
+The Claude Code guard runs its complete hook computation in a supervised process
+with a 15,000 ms deadline and a 16 MiB combined output ceiling. Exhaustion blocks
+the operation with verification unknown when guarded mode has been established;
+advisory mode remains non-blocking, and `SEMCTX_GUARD=off` returns immediately. Its synchronous Git and verifier probes
+share the remaining deadline; the existing 1,000 ms recovery-probe cap remains.
+The in-process OMP adapter shares that cumulative child-process budget; filesystem
+work in that adapter cannot be interrupted by an in-process timer.
+
+Detached Codex cleanup keeps its existing twelve-hour retry window. A separate
+supervisor survives the installing CLI and forcibly stops cleanup at that deadline.
+Commands within cleanup retain their readback and mutation deadlines and use
+`SIGKILL`. A timeout leaves cleanup deferred; installation does not certify its
+completion. POSIX supervisors kill the inherited process group; Windows uses
+`taskkill /T /F` with a further five-second termination budget. Synchronous Git
+and host queries kill their direct child; arbitrary independently detached external
+helpers are outside that guarantee after they have reparented. POSIX budget
+supervisors use a bounded `ps` inventory to also kill nested owned process groups;
+an unavailable, malformed, timed-out or oversized inventory reports
+`PROCESS_TERMINATION_FAILED` and fails the operation after stopping its direct group.
+
+Local verification and contributor/CI steps have a sixty-minute deadline each;
+benchmark samples have a ten-minute deadline each. A timed-out verification step
+fails with `PROCESS_TIMEOUT` and exit 124, never a passing check. Captured subprocess
+output is bounded; inherited verification output is streamed without buffering.

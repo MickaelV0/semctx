@@ -917,6 +917,7 @@ async function main(): Promise<void> {
   // Shadow lifecycle hook: one shared body plus one generated contract, byte-identical per host.
   const lifecycleHookFiles: Record<string, string> = {
     [LIFECYCLE_HOOK_SOURCE_NAME]: readLifecycleHookSource(),
+    "process-budget.mjs": readFileSync(resolve(root, "plugins/shared/hooks/process-budget.mjs"), "utf8"),
     [LIFECYCLE_HOOK_CONTRACT_NAME]: renderLifecycleHookContract(),
   };
   for (const directory of Object.values(lifecycleHookDirs)) {

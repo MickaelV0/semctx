@@ -15,7 +15,7 @@ import {
 } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { relative, resolve, sep } from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawnSyncWithinBudget as spawnSync, gitEnvironment } from "../../../plugins/shared/hooks/process-budget.mjs";
 import { SemctxError } from "@semantic-context/core";
 import {
   CanonicalProofAttestationV1Schema,
@@ -166,6 +166,7 @@ function assertProposalContainedInCommit(
   const relativePath = relative(resolve(root), path).replaceAll("\\", "/");
   const result = spawnSync("git", ["--no-optional-locks", "-C", root, "show", `${commit}:${relativePath}`], {
     encoding: null,
+    env: gitEnvironment(),
     windowsHide: true,
     maxBuffer: 16 * 1024 * 1024,
   });

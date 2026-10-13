@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { changedPaths, planForPaths, planFromGit, TEST_SHARDS, type CiLane } from "../ci-plan";
@@ -153,3 +153,25 @@ test("Git diff treats a rename as both deletion and addition and missing base as
     rmSync(cwd, { recursive: true, force: true });
   }
 });
+
+test.skipIf(process.platform === "win32")("a real Git deadline selects the complete CI fallback", () => {
+  const root = mkdtempSync(join(tmpdir(), "semctx-ci-plan-budget-"));
+  try {
+    const gitPath = join(root, "git");
+    writeFileSync(gitPath, `#!/bin/sh\nexec "${process.execPath}" -e 'await Bun.sleep(6500)'\n`);
+    chmodSync(gitPath, 0o755);
+    const entrypoint = join(import.meta.dir, "../ci-plan.ts");
+    const result = Bun.spawnSync([process.execPath, "-e", `import { planFromGit } from ${JSON.stringify(entrypoint)}; console.log(JSON.stringify(planFromGit("main", ${JSON.stringify(root)})));`], {
+      env: { ...process.env, PATH: root }, stdout: "pipe", stderr: "pipe", timeout: 8000, killSignal: "SIGKILL",
+    });
+    expect(result.exitCode).toBe(0);
+    const plan = JSON.parse(new TextDecoder().decode(result.stdout));
+    expect(plan.mode).toBe("fallback");
+    expect(plan.reason).toBe("diff unavailable");
+    expect(new Set(plan.matrix.include.map((lane: CiLane) => lane.os))).toEqual(new Set(["ubuntu-latest", "macos-15", "windows-latest"]));
+    expect(new Set(plan.matrix.include.filter((lane: CiLane) => lane.profile === "full").map((lane: CiLane) => lane.os))).toEqual(new Set(["ubuntu-latest", "macos-15", "windows-latest"]));
+    expect(plan.matrix.include.filter((lane: CiLane) => lane.os !== "ubuntu-latest").every((lane: CiLane) => lane.smoke === "true")).toBe(true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 10000);

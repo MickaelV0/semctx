@@ -1,3 +1,4 @@
+import { processLimits } from "../../../plugins/shared/hooks/process-budget.mjs";
 export const CLI_COMPATIBILITY_PROBE_TIMEOUT_MS = 2_000;
 
 export type CliCompatibilityReason =
@@ -86,12 +87,12 @@ function defaultRunVersionProbe(path: string, timeoutMs: number): CliCompatibili
   const process = Bun.spawnSync([path, "--version"], {
     stdout: "pipe",
     stderr: "pipe",
-    timeout: timeoutMs,
+    ...processLimits(timeoutMs, 64 * 1024),
   });
   return {
     exitCode: process.exitCode,
     stdout: new TextDecoder().decode(process.stdout),
-    timedOut: process.signalCode === "SIGTERM",
+    timedOut: process.exitedDueToTimeout === true,
   };
 }
 

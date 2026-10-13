@@ -1,3 +1,4 @@
+import { spawnGitSync } from "./git-process";
 import { createHash, type Hash } from "node:crypto";
 import { lstatSync, readFileSync, readlinkSync, realpathSync, type Stats } from "node:fs";
 import { resolve } from "node:path";
@@ -54,7 +55,7 @@ interface VerificationGitSnapshot {
 }
 
 function git(root: string, args: string[], stdin?: Uint8Array): Uint8Array {
-  const process = Bun.spawnSync(["git", ...args], {
+  const process = spawnGitSync(["git", ...args], {
     cwd: root,
     stdout: "pipe",
     stderr: "pipe",
@@ -304,7 +305,7 @@ export function retainedWorkingTreeFilterPaths(root: string, paths: readonly str
   for (const name of new Set(filters.values())) {
     let active = false;
     for (const kind of ["clean", "process"]) {
-      const result = Bun.spawnSync(["git", "config", "--null", "--get-all", `filter.${name}.${kind}`], { cwd: root, stdout: "pipe", stderr: "pipe" });
+      const result = spawnGitSync(["git", "config", "--null", "--get-all", `filter.${name}.${kind}`], { cwd: root });
       if (result.exitCode !== 0 && result.exitCode !== 1) throw new SemctxError("GIT_ERROR", "cannot establish working-tree filter configuration");
       if (result.exitCode === 0 && new TextDecoder().decode(result.stdout).split("\0").some(value => value.length > 0)) active = true;
     }
@@ -358,7 +359,7 @@ function initializedGitlinkHead(root: string, path: string): string | undefined 
     throw new SemctxError("GIT_ERROR", "symlinked gitlink verification input is unsupported", { path });
   }
   const gitMarkerPresent = lstatIfPresent(resolve(absolute, ".git")) !== undefined;
-  const topLevel = Bun.spawnSync(["git", "-C", path, "rev-parse", "--show-toplevel"], {
+  const topLevel = spawnGitSync(["git", "-C", path, "rev-parse", "--show-toplevel"], {
     cwd: root,
     stdout: "pipe",
     stderr: "pipe",
@@ -372,7 +373,7 @@ function initializedGitlinkHead(root: string, path: string): string | undefined 
   if (realpathSync.native(new TextDecoder().decode(topLevel.stdout).trim()) !== realpathSync.native(absolute)) {
     return undefined;
   }
-  const process = Bun.spawnSync(["git", "-C", path, "rev-parse", "--verify", "HEAD"], {
+  const process = spawnGitSync(["git", "-C", path, "rev-parse", "--verify", "HEAD"], {
     cwd: root,
     stdout: "pipe",
     stderr: "pipe",

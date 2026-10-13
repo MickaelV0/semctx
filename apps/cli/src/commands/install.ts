@@ -1,3 +1,4 @@
+import { CODEX_CLEANUP_BUDGET_MS, DEFERRED_PROCESS_SUPERVISOR, processLimits } from "../../../../plugins/shared/hooks/process-budget.mjs";
 import packageJson from "../../package.json";
 import {
   codexMarketplaceIdentity,
@@ -258,10 +259,6 @@ interface ClaudePlugin {
   version?: unknown;
 }
 
-function decode(bytes: Uint8Array | undefined): string {
-  return bytes === undefined ? "" : new TextDecoder().decode(bytes);
-}
-
 export function resolveInstallHostCommand(
   command: readonly string[],
   platform: NodeJS.Platform = process.platform,
@@ -321,24 +318,8 @@ function defaultRun(command: readonly string[], cwd: string, budget?: NativeInst
     };
     return { code: result.code, out: result.out, err: result.err };
   }
-  try {
-    const process = Bun.spawnSync([...command], {
-      cwd,
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    return {
-      code: process.exitCode ?? 1,
-      out: decode(process.stdout),
-      err: decode(process.stderr),
-    };
-  } catch (cause) {
-    return {
-      code: 1,
-      out: "",
-      err: cause instanceof Error ? cause.message : String(cause),
-    };
-  }
+  const result = runPluginDeliveryQuery(command, cwd);
+  return { code: result.timedOut || result.truncated ? 1 : result.code, out: result.out, err: result.timedOut ? "PROCESS_TIMEOUT: host query budget exhausted" : result.err };
 }
 
 const DEFERRED_CODEX_CLEANUP_SCRIPT = String.raw`
@@ -383,6 +364,7 @@ const run = (command) => {
     const result = Bun.spawnSync(command, {
       cwd: root, stdin: "ignore", stdout: "pipe", stderr: "pipe",
       timeout: Math.min(remaining, command.includes("list") ? ${PLUGIN_DELIVERY_QUERY_TIMEOUT_MS} : ${NATIVE_MUTATION_TIMEOUT_MS}),
+      killSignal: "SIGKILL",
       maxBuffer: ${PLUGIN_DELIVERY_MAX_HOST_OUTPUT_BYTES / 2},
     });
     if (result.exitedDueToTimeout || result.exitedDueToMaxBuffer
@@ -403,7 +385,7 @@ const parseObject = (result) => {
   }
 };
 
-const deadline = Date.now() + 12 * 60 * 60 * 1000;
+const deadline = Date.now() + ${CODEX_CLEANUP_BUDGET_MS};
 while (Date.now() < deadline) {
   const pluginState = parseObject(run([...codexCommand, "plugin", "list", "--json"]));
   const marketplaceState = parseObject(
@@ -446,7 +428,7 @@ function defaultDeferCodexCleanup(
   try {
     const payload = Buffer.from(JSON.stringify(marketplaceNames), "utf8").toString("base64url");
     const child = Bun.spawn(
-      [process.execPath, "-e", DEFERRED_CODEX_CLEANUP_SCRIPT, cwd, payload],
+      [process.execPath, "-e", DEFERRED_PROCESS_SUPERVISOR, Buffer.from(JSON.stringify([CODEX_CLEANUP_BUDGET_MS, process.execPath, "-e", DEFERRED_CODEX_CLEANUP_SCRIPT, cwd, payload])).toString("base64url")],
       {
         cwd,
         stdin: "ignore",
@@ -454,6 +436,7 @@ function defaultDeferCodexCleanup(
         stderr: "ignore",
         detached: true,
         windowsHide: true,
+        ...processLimits(CODEX_CLEANUP_BUDGET_MS + 5000),
       },
     );
     child.unref();
@@ -541,7 +524,8 @@ const selectedVersion = () => {
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
-    timeout: ${PLUGIN_DELIVERY_QUERY_TIMEOUT_MS},
+    timeout: Math.min(${PLUGIN_DELIVERY_QUERY_TIMEOUT_MS}, Math.max(1, deadline - Date.now())),
+    killSignal: "SIGKILL",
     maxBuffer: ${PLUGIN_DELIVERY_MAX_HOST_OUTPUT_BYTES / 2},
   });
   if (result.exitCode !== 0 || result.exitedDueToTimeout || result.exitedDueToMaxBuffer
@@ -568,7 +552,7 @@ const sweep = () => {
   } catch {}
 };
 
-const deadline = Date.now() + 12 * 60 * 60 * 1000;
+const deadline = Date.now() + ${CODEX_CLEANUP_BUDGET_MS};
 while (Date.now() < deadline) {
   // Never destroy a retired fallback unless its expected replacement still exists.
   if (!existsSync(keepEntry) || selectedVersion() !== keepVersion) process.exit(1);
@@ -601,7 +585,7 @@ function defaultDeferCodexCacheCleanup(
   try {
     const payload = Buffer.from(JSON.stringify(request), "utf8").toString("base64url");
     const child = Bun.spawn(
-      [process.execPath, "-e", DEFERRED_CODEX_CACHE_CLEANUP_SCRIPT, payload],
+      [process.execPath, "-e", DEFERRED_PROCESS_SUPERVISOR, Buffer.from(JSON.stringify([CODEX_CLEANUP_BUDGET_MS, process.execPath, "-e", DEFERRED_CODEX_CACHE_CLEANUP_SCRIPT, payload])).toString("base64url")],
       {
         cwd,
         stdin: "ignore",
@@ -609,6 +593,7 @@ function defaultDeferCodexCacheCleanup(
         stderr: "ignore",
         detached: true,
         windowsHide: true,
+        ...processLimits(CODEX_CLEANUP_BUDGET_MS + 5000),
       },
     );
     child.unref();

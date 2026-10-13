@@ -1,3 +1,5 @@
+import { spawnGitSync } from "../packages/app-services/src/git-process";
+import { runProcessWithinBudget, VERIFICATION_STEP_BUDGET_MS } from "../plugins/shared/hooks/process-budget.mjs";
 export interface VerifyOptions {
   base: string;
   skipDiff: boolean;
@@ -107,25 +109,19 @@ export function verificationSteps(options: VerifyOptions): VerificationStep[] {
   ];
 }
 
-export const spawnCommand: CommandRunner = async (argv, cwd) => {
-  const child = Bun.spawn(argv, {
-    cwd,
-    stdin: "inherit",
-    stdout: "inherit",
-    stderr: "inherit",
-  });
-  return await child.exited;
-};
+export async function spawnCommand(argv: string[], cwd: string, budgetMs = VERIFICATION_STEP_BUDGET_MS): Promise<number> {
+  const outcome = await runProcessWithinBudget(argv, { cwd, budgetMs, stdin: "inherit", inheritOutput: true });
+  if (outcome.kind === "timeout") {
+    console.error("PROCESS_TIMEOUT: verification step budget exhausted");
+    return 124;
+  }
+  return outcome.exitCode;
+}
 
 export const listUntrackedFiles: UntrackedFileLister = async (cwd) => {
-  const child = Bun.spawn(["git", "ls-files", "--others", "--exclude-standard", "-z"], {
-    cwd,
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "inherit",
-  });
-  const output = await new Response(child.stdout).text();
-  const exitCode = await child.exited;
+  const child = spawnGitSync(["git", "ls-files", "--others", "--exclude-standard", "-z"], { cwd });
+  const output = new TextDecoder().decode(child.stdout);
+  const exitCode = child.exitCode;
   return {
     exitCode,
     paths: output.split("\0").filter((path) => path.length > 0),
