@@ -450,7 +450,9 @@ export function runContinuityDemo(options: RunContinuityDemoOptions): Continuity
     commands.push(recordCommand(outDir, "fixture-git-init", gitInit));
     if (gitInit.code !== 0) return block("FIXTURE_GIT_FAILED", `git init failed: ${gitInit.stderr.trim()}`);
 
-    const gitIgnoreConfig = runGit(["config", "--local", "core.excludesFile", process.platform === "win32" ? "NUL" : "/dev/null"], fixtureDir);
+    // Point the user-level exclude file at the repository's own exclude file so a host-level one cannot
+    // leak in. Git for Windows rejects NUL and /dev/null here ("cannot use NUL as an exclude file").
+    const gitIgnoreConfig = runGit(["config", "--local", "core.excludesFile", join(fixtureDir, ".git", "info", "exclude")], fixtureDir);
     commands.push(recordCommand(outDir, "fixture-git-ignore-config", gitIgnoreConfig));
     if (gitIgnoreConfig.code !== 0) return block("FIXTURE_GIT_FAILED", `git ignore configuration failed: ${gitIgnoreConfig.stderr.trim()}`);
 

@@ -103,10 +103,13 @@ describe("runProcessWithinBudget", () => {
   // The win32 branch is driven from POSIX by presenting the process as win32 and putting a scripted
   // `taskkill` first on PATH; the real taskkill is covered by the win32-only test that follows.
   test.skipIf(process.platform === "win32").each([
-    ["a taskkill that finishes late is awaited before the timeout is answered", 'sleep 0.4; kill -9 "$2"; echo stopped > "$MARKER"', "timeout", true],
-    ["a taskkill that reports the process as already gone is a timeout", 'kill -9 "$2"; exit 128', "timeout", false],
-    ["a taskkill that refuses is a named termination failure", "exit 1", "exited", false],
-  ] as const)("%s", async (_name, script, kind, awaited) => {
+    ["a taskkill that finishes late is awaited before the timeout is answered", 'sleep 0.4; kill -9 "$2"; echo stopped > "$MARKER"', "timeout", true, null],
+    ["a taskkill that reports the process as already gone is a timeout", 'kill -9 "$2"; exit 128', "timeout", false, null],
+    ["a taskkill that refuses is a named termination failure", "exit 1", "exited", false, "PROCESS_TERMINATION_FAILED: taskkill exited with status 1"],
+    // 255 is what taskkill reports for a descendant that exited between enumeration and termination.
+    ["a taskkill status 255 with the direct child gone stays a typed timeout with a warning", 'kill -9 "$2"; exit 255', "timeout", false, "taskkill exited with status 255; the direct child is gone"],
+    ["a taskkill status 255 with the direct child alive is a named termination failure", "exit 255", "exited", false, "PROCESS_TERMINATION_FAILED: taskkill exited with status 255"],
+  ] as const)("%s", async (_name, script, kind, awaited, detail) => {
     const directory = mkdtempSync(join(tmpdir(), "semctx-budget-taskkill-"));
     const pidFile = join(directory, "child.pid");
     const marker = join(directory, "stopped.marker");
@@ -131,9 +134,10 @@ describe("runProcessWithinBudget", () => {
       const answer = JSON.parse(child.stdout.toString());
       expect(answer.outcome.kind).toBe(kind);
       expect(answer.stoppedAtAnswer).toBe(awaited);
+      if (kind === "timeout" && detail !== null) expect(answer.outcome.terminationWarning).toContain(detail);
       if (kind === "exited") {
         expect(answer.outcome).toMatchObject({ exitCode: 1, stdout: "" });
-        expect(answer.outcome.stderr).toContain("PROCESS_TERMINATION_FAILED: taskkill exited with status 1");
+        expect(answer.outcome.stderr).toContain(detail);
         // A refused tree kill still stops the direct child.
         const deadline = performance.now() + 1_000;
         while (alive(pid) && performance.now() < deadline) await Bun.sleep(20);

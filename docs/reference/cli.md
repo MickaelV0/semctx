@@ -986,10 +986,13 @@ The inventory is best effort: when it is unavailable, malformed, timed-out or
 oversized the direct group is still stopped and the deadline is still answered as a
 timeout, carrying a `terminationWarning` that nested groups may have survived.
 Windows budget supervisors wait, within the same five-second limit, for
-`taskkill /T /F` to finish before answering; a `taskkill` that fails or does not
-finish reports `PROCESS_TERMINATION_FAILED` and fails the operation after stopping
-the direct child. `PROCESS_TERMINATION_FAILED` is otherwise reserved for a direct
-child that could not be signalled.
+`taskkill /T /F` to finish before answering. A `taskkill` that cannot run, does not
+finish, or reports a failure while the direct child is still alive reports
+`PROCESS_TERMINATION_FAILED` and fails the operation after stopping the direct
+child. A non-zero `taskkill` status (255 for a descendant that exited while the tree
+was being stopped) with the direct child verifiably gone is answered as a timeout
+carrying a `terminationWarning`. `PROCESS_TERMINATION_FAILED` is otherwise reserved
+for a direct child that could not be signalled.
 
 Local verification and contributor/CI steps have a sixty-minute deadline each;
 benchmark samples have a ten-minute deadline each. A timed-out verification step

@@ -85,21 +85,35 @@ child.on("exit", (code) => {
 
 const TREE_TERMINATION_WAIT_MS = 5000;
 
-// Windows stops a tree with one `taskkill`; its exit status is the only evidence that the tree is gone.
+const ROOT_EXIT_POLL_MS = 25;
+const ROOT_EXIT_WAIT_MS = 1000;
+
+function processIsGone(pid) {
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    return error.code === "ESRCH";
+  }
+}
+
+// Windows stops a tree with one `taskkill`. Resolves to {} when the tree is gone, to {warning} when
+// taskkill reported a non-zero status but the direct child is verifiably gone, and to {failure}
+// when the direct child could not be stopped.
 function taskkillTree(pid) {
   return new Promise((resolveKill) => {
     let done = false;
-    const finish = (reason) => {
+    const finish = (reason, warning) => {
       if (done) return;
       done = true;
       clearTimeout(limit);
       if (reason === undefined) {
-        resolveKill(undefined);
+        resolveKill(warning === undefined ? {} : { warning });
         return;
       }
       // taskkill did not establish termination: still stop the direct child.
       try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
-      resolveKill(`PROCESS_TERMINATION_FAILED: ${reason}`);
+      resolveKill({ failure: `PROCESS_TERMINATION_FAILED: ${reason}` });
     };
     const killer = spawnAsync("taskkill", ["/pid", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
     const limit = setTimeout(() => {
@@ -107,8 +121,27 @@ function taskkillTree(pid) {
       finish(`taskkill exceeded its ${TREE_TERMINATION_WAIT_MS} ms termination budget`);
     }, TREE_TERMINATION_WAIT_MS);
     killer.on("error", (error) => finish(`taskkill could not run: ${error.message}`));
-    // 128 is "process not found": the child had already exited, so there is nothing left to stop.
-    killer.on("exit", (code) => finish(code === 0 || code === 128 ? undefined : `taskkill exited with status ${code}`));
+    killer.on("exit", (code) => {
+      // 128 is "process not found": the child had already exited, so there is nothing left to stop.
+      if (code === 0 || code === 128) {
+        finish(undefined);
+        return;
+      }
+      // Any other status (255 for a descendant that exited between enumeration and termination)
+      // is a failure only if the direct child is still alive once taskkill has returned.
+      const deadline = performance.now() + ROOT_EXIT_WAIT_MS;
+      const poll = () => {
+        if (done) return;
+        if (processIsGone(pid)) {
+          finish(undefined, `taskkill exited with status ${code}; the direct child is gone`);
+        } else if (performance.now() >= deadline) {
+          finish(`taskkill exited with status ${code}`);
+        } else {
+          setTimeout(poll, ROOT_EXIT_POLL_MS);
+        }
+      };
+      poll();
+    });
   });
 }
 
@@ -165,7 +198,9 @@ async function killTree(pid) {
   }
   try {
     if (process.platform === "win32") {
-      failure = await taskkillTree(pid);
+      const outcome = await taskkillTree(pid);
+      failure = outcome.failure;
+      if (outcome.warning !== undefined) warning = outcome.warning;
     } else {
       try { process.kill(-pid, "SIGKILL"); } catch {
         process.kill(pid, "SIGKILL");
