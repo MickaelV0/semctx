@@ -65,10 +65,11 @@ const [budget, ...argv] = JSON.parse(Buffer.from(process.argv[1], "base64url").t
 const child = spawn(argv[0], argv.slice(1), { stdio: "ignore", detached: process.platform !== "win32", windowsHide: true });
 const stop = () => {
   if (process.platform === "win32") {
+    const fail = () => { child.kill("SIGKILL"); process.exit(1); };
     const killer = spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
-    const limit = setTimeout(() => { killer.kill("SIGKILL"); process.exit(1); }, 5000);
-    killer.on("error", () => { clearTimeout(limit); child.kill("SIGKILL"); process.exit(1); });
-    killer.on("exit", () => { clearTimeout(limit); process.exit(1); });
+    const limit = setTimeout(() => { killer.kill("SIGKILL"); fail(); }, 5000);
+    killer.on("error", () => { clearTimeout(limit); fail(); });
+    killer.on("exit", (code) => { clearTimeout(limit); if (code !== 0 && code !== 128) fail(); process.exit(1); });
   } else {
     try { process.kill(-child.pid, "SIGKILL"); } catch {}
     process.exit(1);
@@ -276,6 +277,12 @@ export async function runProcessWithinBudget(argv, options) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      // An incomplete tree kill can leave descendants holding captured pipes open. Release our
+      // read ends once the bounded result is final, so a one-shot caller can exit naturally.
+      if (termination !== undefined) {
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+      }
       releaseProcess();
       resolveOutcome(outcome);
     };
@@ -289,7 +296,9 @@ export async function runProcessWithinBudget(argv, options) {
       if (bytes > (options.maxBytes ?? 16 * 1024 * 1024)) {
         if (!overflowed) {
           overflowed = true;
-          void terminate();
+          void terminate().then(({ failure }) => {
+            settle({ kind: "exited", exitCode: 1, stdout: "", stderr: failure ?? "bounded child output exceeded its byte limit", elapsedMs: elapsed() });
+          });
         }
         return;
       }
@@ -298,6 +307,7 @@ export async function runProcessWithinBudget(argv, options) {
     child.stdout?.on("data", collect(stdout));
     child.stderr?.on("data", collect(stderr));
     const timer = setTimeout(async () => {
+      if (overflowed) return;
       expired = true;
       const { failure, warning } = await terminate();
       settle(failure === undefined
@@ -309,12 +319,7 @@ export async function runProcessWithinBudget(argv, options) {
     });
     child.on("close", async (code) => {
       // The child's exit is the consequence of the kill the deadline is still awaiting, not a result.
-      if (expired) return;
-      if (overflowed) {
-        const { failure } = await termination;
-        settle({ kind: "exited", exitCode: code === 0 || code === null ? 1 : code, stdout: "", stderr: failure ?? "bounded child output exceeded its byte limit", elapsedMs: elapsed() });
-        return;
-      }
+      if (expired || overflowed) return;
       settle({
         kind: "exited",
         exitCode: code ?? 1,
