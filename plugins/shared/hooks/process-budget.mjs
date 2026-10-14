@@ -235,8 +235,12 @@ function cancelProcesses(signal) {
 function ownProcess(pid) {
   if (process.platform === "win32" || pid === undefined) return () => {};
   activeProcessIds.add(pid);
-  if (activeProcessIds.size === 1) {
+  // A host signal handler can start a replacement before killed children have been reaped.
+  // Cancellation removed our handlers, even while those old PIDs still occupy the set.
+  if (!process.listeners("SIGINT").includes(onInterrupt)) {
     process.prependListener("SIGINT", onInterrupt);
+  }
+  if (!process.listeners("SIGTERM").includes(onTerminate)) {
     process.prependListener("SIGTERM", onTerminate);
   }
   return () => {

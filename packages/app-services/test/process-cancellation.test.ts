@@ -14,6 +14,63 @@ test("completed concurrent budgets release their signal listeners", async () => 
   expect([process.listenerCount("SIGINT"), process.listenerCount("SIGTERM")]).toEqual(before);
 });
 
+test.skipIf(process.platform === "win32")("a host handler's replacement budget retains cancellation across a second SIGTERM", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "semctx-cancellation-transition-"));
+  const eventsFile = join(directory, "events.jsonl");
+  const names = ["original", "replacement"];
+  const worker = (name: string) => `const {writeFileSync,appendFileSync}=await import('node:fs'); writeFileSync(${JSON.stringify(join(directory, `${name}.pid`))},String(process.pid)); setInterval(()=>appendFileSync(${JSON.stringify(join(directory, `${name}.beat`))},'x'),25);`;
+  const supervisorCode = [
+    `import {runProcessWithinBudget} from ${JSON.stringify(join(import.meta.dir, "../../../plugins/shared/hooks/process-budget.mjs"))};`,
+    "const {appendFileSync}=await import('node:fs');",
+    `const record=(event)=>appendFileSync(${JSON.stringify(eventsFile)},JSON.stringify({event,sigterm:process.listenerCount('SIGTERM'),sigint:process.listenerCount('SIGINT')})+'\\n');`,
+    `const start=(name,code)=>{const result=runProcessWithinBudget([process.execPath,'-e',code],{cwd:${JSON.stringify(directory)},budgetMs:20000}); record(name+'-started'); void result.then(()=>record(name+'-settled'));};`,
+    `let signals=0; process.on('SIGTERM',()=>{signals++; record('signal-'+signals); if(signals===1) start('replacement',${JSON.stringify(worker("replacement"))});});`,
+    `start('original',${JSON.stringify(worker("original"))});`,
+  ].join("\n");
+  const supervisor = spawn(process.execPath, ["-e", supervisorCode], { detached: true, stdio: "ignore" });
+  const exited = new Promise<void>((resolve, reject) => {
+    supervisor.once("error", reject);
+    supervisor.once("exit", () => resolve());
+  });
+  const beats = () => names.map((name) => {
+    const path = join(directory, `${name}.beat`);
+    return existsSync(path) ? readFileSync(path, "utf8").length : 0;
+  });
+  const events = (): { event: string; sigterm: number; sigint: number }[] => existsSync(eventsFile)
+    ? readFileSync(eventsFile, "utf8").trim().split("\n").map((line) => JSON.parse(line)) : [];
+  const waitFor = async (ready: () => boolean) => {
+    const deadline = performance.now() + 5000;
+    while (!ready() && performance.now() < deadline) await Bun.sleep(25);
+    expect(ready()).toBe(true);
+  };
+  try {
+    await waitFor(() => beats()[0]! >= 2);
+    process.kill(supervisor.pid!, "SIGTERM");
+    await waitFor(() => beats()[1]! >= 2 && events().some(({ event }) => event === "original-settled"));
+    process.kill(supervisor.pid!, "SIGTERM");
+    await waitFor(() => events().some(({ event }) => event === "signal-2"));
+    await Bun.sleep(250);
+    const stopped = beats();
+    await Bun.sleep(200);
+    expect(beats()).toEqual(stopped);
+    expect(events().filter(({ event }) => event.startsWith("signal-"))).toHaveLength(2);
+    expect(events().find(({ event }) => event === "replacement-started")).toEqual({ event: "replacement-started", sigterm: 2, sigint: 1 });
+    await waitFor(() => events().some(({ event }) => event === "replacement-settled"));
+    expect(events().find(({ event }) => event === "replacement-settled")).toEqual({ event: "replacement-settled", sigterm: 1, sigint: 0 });
+  } finally {
+    for (const pid of [supervisor.pid, ...names.map((name) => {
+      const path = join(directory, `${name}.pid`);
+      return existsSync(path) ? Number(readFileSync(path, "utf8")) : undefined;
+    })]) {
+      if (pid === undefined) continue;
+      try { process.kill(-pid, "SIGKILL"); } catch { /* group already gone */ }
+      try { process.kill(pid, "SIGKILL"); } catch { /* process already gone */ }
+    }
+    await exited;
+    rmSync(directory, { recursive: true, force: true });
+  }
+}, 15000);
+
 test.skipIf(process.platform === "win32").each([
   ["SIGINT", "default"], ["SIGTERM", "default"],
   ["SIGTERM", "host"], ["SIGTERM", "host-exit"],
