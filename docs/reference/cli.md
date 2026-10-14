@@ -607,7 +607,9 @@ computed in a child process that is stopped at the deadline, and the answer is t
 `freshnessSeal: null`, `budget: { budgetMs, elapsedMs }` — rather than no verdict. A `TIMEOUT`
 observed nothing and authorizes nothing. Allow about 150 ms of process start-up on top of `N` when
 an outer hook enforces its own limit; on Windows the answer also waits for `taskkill` to stop the
-child's process tree, typically a few hundred milliseconds and never more than five seconds.
+child's process tree, typically a few hundred milliseconds and never more than five seconds. A
+child that could not be stopped at all is the only case where the deadline is reported as a
+termination failure instead of `TIMEOUT`.
 Without `--budget-ms` the command never answers `TIMEOUT`.
 The MCP tool `semctx_control_status` always runs with a budget (`budgetMs`, default 15 000 ms) and
 returns the same document.
@@ -961,9 +963,11 @@ CLI but are **experimental** and are not a code-search replacement (ADR 0005).
 Core Git captures use a 5,000 ms deadline, `SIGKILL`, and a 256 MiB per-stream
 output ceiling. Timeout and output exhaustion refuse the capture with `GIT_ERROR`
 and the named reason `PROCESS_TIMEOUT` or `PROCESS_OUTPUT_LIMIT`; partial output
-is never verification evidence. Core Git commands remove inherited `GIT_*` and
-`GCM_*` variables, including `GIT_DIR` and `GIT_WORK_TREE`, before execution.
-Repository configuration files remain effective.
+is never verification evidence. Core Git captures and qualified path discovery
+remove inherited `GIT_*` and `GCM_*` variables, including `GIT_DIR` and
+`GIT_WORK_TREE`, before execution. Other Git probes (the install workspace root
+lookup and the `index` base recommendation) still inherit the caller's
+environment. Repository configuration files remain effective.
 
 The Claude Code guard runs its complete hook computation in a supervised process
 with a 15,000 ms deadline and a 16 MiB combined output ceiling. Exhaustion blocks
