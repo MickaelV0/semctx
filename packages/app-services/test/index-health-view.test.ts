@@ -1,9 +1,11 @@
-import { describe, expect, it } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { describe, expect, it, spyOn } from "bun:test";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { canonicalJson, SemctxError, type SemctxErrorCode } from "@semantic-context/core";
+import { dirname, join } from "node:path";
+import ts from "typescript";
+import { canonicalJson, createGlobSelectionConfig, SemctxError, type SemctxErrorCode } from "@semantic-context/core";
 import { initWorkspace, openStore } from "@semantic-context/repository-store";
+import { indexRepository } from "../src";
 import type { IndexHealthReportV1 } from "../src/index-health";
 import {
   INDEX_HEALTH_SECTIONS, INDEX_HEALTH_VIEW_MAX_BYTES, indexHealthView, projectIndexHealth,
@@ -320,5 +322,75 @@ describe("bounded index health view", () => {
     original.capturedAt = "x".repeat(available);
     expect(Buffer.byteLength(canonicalJson(projectIndexHealth(original)), "utf8")).toBe(INDEX_HEALTH_VIEW_MAX_BYTES);
     expectError(original, { section: "workspace_nodes" }, "INDEX_HEALTH_RESPONSE_TOO_LARGE");
+  });
+});
+
+/**
+ * A pnpm workspace whose package inherits its compiler options from another member through a
+ * `workspace:` link, with `sources` TypeScript files governed by that one configuration.
+ * The root is canonical: the analyzer reads canonical paths (macOS reaches `tmpdir()` through
+ * `/var` -> `/private/var`, Windows runners through an 8.3 name), and `readsDuring` compares them.
+ */
+function governedWorkspace(sources: number): { root: string; configuration: string } {
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "semctx-index-health-pass-")));
+  const files: Record<string, string> = {
+    "package.json": JSON.stringify({ name: "pass-fixture", private: true }),
+    "pnpm-workspace.yaml": 'packages:\n  - "tooling/*"\n  - "domains/*"\n',
+    ".gitignore": ".semctx/\n",
+    "tooling/config/package.json": JSON.stringify({ name: "@fixture/config", version: "1.0.0" }),
+    "tooling/config/base.json": JSON.stringify({ compilerOptions: { strict: true, module: "ESNext", moduleResolution: "Bundler" } }),
+    "domains/api/package.json": JSON.stringify({ name: "@fixture/api", devDependencies: { "@fixture/config": "workspace:*" } }),
+    "domains/api/tsconfig.json": JSON.stringify({ extends: "@fixture/config/base.json" }),
+  };
+  for (let index = 0; index < sources; index += 1) files[`domains/api/src/s${index}.ts`] = `export const s${index} = ${index};\n`;
+  for (const [path, content] of Object.entries(files)) {
+    mkdirSync(dirname(join(root, path)), { recursive: true });
+    writeFileSync(join(root, path), content);
+  }
+  const git = (...args: string[]) => expect(Bun.spawnSync(["git", "-C", root, ...args]).exitCode).toBe(0);
+  git("init", "-q");
+  git("add", ".");
+  git("-c", "user.name=Semctx Test", "-c", "user.email=semctx@example.test", "commit", "-q", "-m", "fixture");
+  initWorkspace(root, {
+    ...createGlobSelectionConfig(root),
+    include: ["domains/**/*.ts"],
+    languages: { typescript: "on", python: "off", markdown: "off", sql: "off" },
+  });
+  indexRepository(root, "2026-10-14T00:00:00.000Z");
+  return { root, configuration: join(root, "domains", "api", "tsconfig.json").replaceAll("\\", "/") };
+}
+
+/** Reads of one file through the compiler system while `run` observes the repository. */
+function readsDuring(path: string, run: () => void): number {
+  const original = ts.sys.readFile.bind(ts.sys);
+  let reads = 0;
+  const probe = spyOn(ts.sys, "readFile").mockImplementation(((target: string, encoding?: string) => {
+    if (target.replaceAll("\\", "/") === path) reads += 1;
+    return original(target, encoding);
+  }) as typeof ts.sys.readFile);
+  try { run(); } finally { probe.mockRestore(); }
+  return reads;
+}
+
+describe("index health live observation cost", () => {
+  it("observes a shared TypeScript configuration a bounded number of times, however many sources it governs", () => {
+    const observed: number[] = [];
+    for (const sources of [2, 9]) {
+      const { root, configuration } = governedWorkspace(sources);
+      try {
+        const page = readsDuring(configuration, () => {
+          expect(indexHealthView(root, { section: "evaluations", limit: 1 }).page?.total).toBeGreaterThanOrEqual(sources);
+        });
+        observed.push(page);
+        // A summary observes the same repository state: its cost cannot depend on the section.
+        expect(readsDuring(configuration, () => indexHealthView(root, {}))).toBe(page);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+    expect(observed[0]).toBeGreaterThan(0);
+    expect(observed[1]).toBe(observed[0]!);
+    // Two passes bracket one capture: freshness is compared before and after the observation.
+    expect(observed[1]).toBeLessThanOrEqual(2);
   });
 });

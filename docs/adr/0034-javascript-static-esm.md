@@ -81,3 +81,68 @@ admission path. This analyzer ADR does not itself declare a consumer ready, an
 installed package, an active session, executed tests or functioning pipeline.
 Static PASS is not runtime or pipeline evidence. Approval gates, brokers and
 shared agent policy are outside this change.
+
+## Amendment — path mapping in TypeScript-only graphs (2026-10-14)
+
+Status: proposed; awaiting maintainer acceptance with the pull request that implements it.
+Issue: #354.
+
+A version 2 repository that imports by tsconfig `paths` alias and selects no JavaScript indexed
+with no `imports` edge, no cross-file `calls` edge and no test link: the TypeScript-only
+extraction resolved every specifier with the analyzer's fixed Bundler options and never read
+the nearest tsconfig, which this ADR applied only to mixed graphs. Impact and verification
+then returned empty sets that read as "no dependents".
+
+- **Rule.** Under configuration v2, with no retained snapshot and no JavaScript root, a
+  non-relative specifier written in a selected file and governed by that file's nearest
+  tsconfig `paths` or `baseUrl` (`extends` included) is resolved with those two fields over the
+  historical Bundler options, by the resolver and by the Program the checker uses. Nothing else of
+  the configuration is applied. The mapping only adds a repository module: a specifier no mapping
+  governs, one the mapping cannot reach, one that resolves to an installed package and one that
+  resolves to nothing under confinement (a `node_modules` hoisted above the analyzed root) keep
+  the historical resolution, with the usage mode the compiler applies to the import form. A
+  configuration whose selected files are governed by neither field leaves the extraction
+  byte-identical.
+- **Selected files.** Only imports written in a selected file are mapped. A file the Program
+  loads through an alias without being selected keeps the historical resolution for its own
+  specifiers: its tsconfig is not an input freshness binds, so the extraction must not depend on
+  it. A re-export through an unselected barrel therefore stays unresolved until the barrel is
+  selected.
+- **Legacy.** Version 1 keeps its resolution. Its analysis input identity deliberately does not
+  inspect live configuration, so reading `paths` there would add an input the freshness seal
+  cannot bind. Mixed JavaScript/TypeScript graphs and qualified snapshots already applied the
+  complete nearest configuration and are unchanged.
+- **Freshness.** Version 2 identity already binds the nearest configuration and its `extends`
+  chain for every selected TypeScript and JavaScript file, including failed link probes, so an
+  edited mapping withdraws the index. The extraction reads the same files through the same
+  confined, workspace-link aware system, and only for selected files.
+- **Confinement.** Resolution reuses the configured resolver's admission: a mapped target outside
+  the analyzed root, or behind a link leaving it, is neither read nor produced. It is refused as
+  an unresolved specifier, not as `IMPORT_OUTSIDE_REPOSITORY`, so that an existing configuration
+  with an out-of-repository alias keeps indexing. A repository file a mapping reaches from a
+  selected file is repository-authored traversal like a relative import: the confinement walk
+  follows it, and a relative import or reference of that file leaving the repository is refused
+  with `IMPORT_OUTSIDE_REPOSITORY` or `REFERENCE_OUTSIDE_REPOSITORY` as the relative spelling of
+  the same chain is. The confinement walk classifies a specifier with the predicate the Program's
+  mapping uses (`ts.isExternalModuleNameRelative`): a name beginning with a dot that TypeScript
+  does not call relative is mapped and followed, and an absolute specifier is traversal like a
+  relative one. Nothing outside the repository is read through an alias.
+- **Determinism and cost.** The governing mapping is derived once per directory and per
+  configuration in one pass, never across passes. Resolutions use the compiler's own cache, which
+  is keyed by importing directory and usage mode, so what depends on the importer (`package.json`
+  `imports`, a self-name reference, a `node_modules` lookup) is never shared across directories.
+  Only the absence of a mapped candidate is shared, because `paths` and `baseUrl` candidates are
+  the same from every directory and the rest is resolved by the historical resolution as well.
+  The result therefore does not depend on the order of the roots, and a catch-all `"*"` mapping
+  does not make every bare import a confined, uncached resolution. Worker partitioning and the
+  preflight Program resolve aliases too, so serial and parallel extraction stay identical, in
+  source order as well.
+- **Not claimed.** A specifier that stays unresolved is still not reported: an alias with no
+  target is silence, not a completeness diagnostic. `package.json` `imports` and `exports`
+  entries targeting build output need `outDir`/`rootDir` and remain unresolved in an unbuilt
+  checkout; entries targeting sources already resolved. `export ... from` and `import()` produce
+  no dependency edge in this graph for relative and aliased specifiers alike. A file loaded
+  through an alias but not selected is read; its content is not part of the analysis input
+  identity, as for a relative import. For the same reason, a file created at a higher-priority
+  target of a `paths` entry that is not selected (a git-ignored `gen/`) changes the resolved edge
+  without making the index stale until it is rebuilt.

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { processLimits } from "../plugins/shared/hooks/process-budget.mjs";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { resolve, join } from "node:path";
@@ -39,7 +40,7 @@ const failures: string[] = [];
 mkdirSync(output, { recursive: true });
 const gitEnv = { ...process.env, GIT_AUTHOR_NAME: "public-fixture", GIT_AUTHOR_EMAIL: "fixture@example.invalid", GIT_COMMITTER_NAME: "public-fixture", GIT_COMMITTER_EMAIL: "fixture@example.invalid" };
 function run(command: string[], cwd: string, timeout = 60_000): Observation {
-  const result = Bun.spawnSync(command, { cwd, env: gitEnv, stdout: "pipe", stderr: "pipe", timeout });
+  const result = Bun.spawnSync(command, { cwd, env: gitEnv, stdout: "pipe", stderr: "pipe", ...processLimits(timeout) });
   return { command, code: result.exitCode ?? 1, stdout: result.stdout.toString(), stderr: result.stderr.toString() };
 }
 function git(root: string, args: string[]): void { const result = run(["git", ...args], root); assert.equal(result.code, 0, result.stderr); }
@@ -497,7 +498,7 @@ await scenario("interrupted-index", async () => {
   const databasePath = join(root, ".semctx/semctx.db");
   const snapshotPath = join(output, "interrupted-marker-snapshot.db");
   const command = [process.execPath, cli, "index", "--root", root];
-  const child = Bun.spawn(command, { cwd: root, stdout: "pipe", stderr: "pipe" });
+  const child = Bun.spawn(command, { cwd: root, stdout: "pipe", stderr: "pipe", ...processLimits(20_000) });
   const stdout = new Response(child.stdout).text(); const stderr = new Response(child.stderr).text();
   let observedIncomplete = false;
   let snapshotError: string | undefined;
@@ -520,7 +521,8 @@ await scenario("interrupted-index", async () => {
       if (observedIncomplete) break;
       await new Promise<void>((done) => setTimeout(done, 10));
     }
-    preKill = { exitCode: child.exitCode, signalCode: child.signalCode, marker: observedIncomplete ? "incomplete" : null };
+    // Bun 1.4.3 reports a signal that has no name as its number; keep the recorded contract a string.
+    preKill = { exitCode: child.exitCode, signalCode: child.signalCode === null ? null : String(child.signalCode), marker: observedIncomplete ? "incomplete" : null };
     assert(observedIncomplete, "Must observe the persisted rebuild marker on a copied database");
     assert.equal(preKill.exitCode, null, "Natural index exit cannot count as forced interruption");
     assert.equal(preKill.signalCode, null, "Process must still be alive before the deliberate kill");
@@ -529,7 +531,7 @@ await scenario("interrupted-index", async () => {
   } finally {
     if (!killRequested) child.kill("SIGKILL");
     exitCode = await child.exited;
-    observations["interrupted:process"] = { command, pid: child.pid, preKill, requestedSignal: "SIGKILL", killRequested, killResult: killResult === undefined ? "returned void" : killResult, code: exitCode, signalCode: child.signalCode, observedIncomplete, snapshotPath, snapshotError, stdout: await stdout, stderr: await stderr };
+    observations["interrupted:process"] = { command, pid: child.pid, preKill, requestedSignal: "SIGKILL", killRequested, killResult: killResult === undefined ? "returned void" : killResult, code: exitCode, signalCode: child.signalCode === null ? null : String(child.signalCode), observedIncomplete, snapshotPath, snapshotError, stdout: await stdout, stderr: await stderr };
   }
   assert.notEqual(exitCode, 0);
   assert.equal(child.signalCode, "SIGKILL", "Must attest the deliberate forced stop");

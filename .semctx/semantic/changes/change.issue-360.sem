@@ -1,0 +1,7 @@
+change change.issue-360
+  statement: Repair index --record stale-receipt recovery: freshly verify the rebuilt index and selected changed sources without consuming the old receipt as current proof; preserve ordinary freshness refusal, advisory negative completeness, and all drift/integrity/lifecycle refusals. Prove with recovery regression and verify:pr.
+  status: active
+  provenance: author
+  serves: goal.semctx.honest-project-evidence
+  preserves: invariant.semctx.plane-separation
+  preserves: invariant.semctx.project-evidence-honesty

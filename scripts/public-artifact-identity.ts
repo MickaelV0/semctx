@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnGitSync } from "../packages/app-services/src/git-process";
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -46,7 +47,7 @@ function assertFiles(actual: { path: string; sha256: string }[], expected: { pat
   assert.deepEqual(actual, [...expected].sort((a, b) => a.path.localeCompare(b.path, "en")), `${label}: complete artifact inventory/bytes differ`);
 }
 function git(root: string, args: string[]): Uint8Array {
-  const result = Bun.spawnSync(["git", ...args], { cwd: root, stdout: "pipe", stderr: "pipe" });
+  const result = spawnGitSync(["git", ...args], { cwd: root });
   assert.equal(result.exitCode, 0, `Source identity unavailable: git ${args.join(" ")}: ${result.stderr.toString()}`);
   return result.stdout;
 }

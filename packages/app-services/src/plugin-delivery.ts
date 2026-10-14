@@ -1,3 +1,4 @@
+import { processLimits } from "../../../plugins/shared/hooks/process-budget.mjs";
 import { createHash } from "node:crypto";
 import {
   closeSync,
@@ -1730,7 +1731,7 @@ export function runPluginDeliveryQuery(
       cwd,
       stdout: "pipe",
       stderr: "pipe",
-      timeout: limits.timeoutMs,
+      ...processLimits(limits.timeoutMs, perStreamCeiling(limits.maxBytes)),
       // Enforced *while* the child runs, so a flood is killed at the ceiling instead of being
       // buffered whole and inspected afterwards. The spawn applies this ceiling to each stream on
       // its own — measured, not assumed: 3 MiB on stdout plus 3 MiB on stderr survives a 4 MiB
@@ -2880,12 +2881,25 @@ function codexGitBoundary(root: string, observations: string[]): string | null {
   for (let depth = 0; depth < 128; depth += 1) {
     try {
       const gitPath = join(current, ".git");
-      const traversal = captureRawTraversal(gitPath, false, "directory");
+      const traversal = captureRawTraversal(gitPath, false);
       if (traversal === null) return null;
       observations.push(JSON.stringify({ gitBoundary: current, traversal }));
       const git = lstatSync(gitPath);
-      if (git.isSymbolicLink() || !git.isDirectory()) return null;
-      const head = readCodexMetadataFile(join(gitPath, "HEAD"), gitPath, observations);
+      if (git.isSymbolicLink()) return null;
+      let gitDirectory = gitPath;
+      if (git.isFile()) {
+        const marker = readCodexMetadataFile(gitPath, current, observations, 64 * 1024);
+        if (marker.status !== "ok") return null;
+        const text = decodeCodexUtf8(marker.bytes);
+        const target = text?.startsWith("gitdir: ") ? text.slice(8).replace(/\r?\n$/, "") : undefined;
+        if (target === undefined || target.length === 0 || !hasLocalRepositoryRootShape(target)) return null;
+        const candidate = isAbsolute(target) ? target : `${current}${sep}${target}`;
+        const targetTraversal = captureRawTraversal(candidate, false, "directory");
+        if (targetTraversal === null || targetTraversal.at(-1)?.exists !== true) return null;
+        observations.push(JSON.stringify({ gitDirectory: candidate, traversal: targetTraversal }));
+        gitDirectory = resolve(candidate);
+      } else if (!git.isDirectory()) return null;
+      const head = readCodexMetadataFile(join(gitDirectory, "HEAD"), gitDirectory, observations);
       if (head.status !== "ok" || !validCodexGitHead(head.bytes)) return null;
       return current;
     } catch (cause) {

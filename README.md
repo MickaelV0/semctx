@@ -17,7 +17,7 @@ exits with code 3, so a Git hook, a CI job or a coding agent can stop the change
 
 Analysis runs on your machine. It reads your files and your local Git history, and calls no LLM and
 no network service. To try it on your own code, start from a clean working tree in a repository
-with at least one commit ([Bun](https://bun.sh) 1.4.0 or newer):
+with at least one commit ([Bun](https://bun.sh) 1.4.3 or newer):
 
 ```sh
 bunx semctx@latest setup          # once: config and local index
@@ -105,7 +105,7 @@ are the defaults (`--fail-on block`).
 
 ## Quick start
 
-You need [Bun](https://bun.sh) 1.4.0 or newer and a Git repository with at least one commit. This
+You need [Bun](https://bun.sh) 1.4.3 or newer and a Git repository with at least one commit. This
 flow checks a committed branch against `main`, which is also what the GitHub Action does.
 
 1. Set up once, from a clean working tree (commit or stash first):
@@ -381,7 +381,7 @@ Plugins update from the `stable` branch, which moves only when a release is publ
 <summary>Tested host versions</summary>
 
 <!-- semctx:compatibility:start -->
-Semctx **0.4.5** requires **Bun >=1.4.0**.
+Semctx **0.4.5** requires **Bun >=1.4.3**.
 The supported, tested host baseline is **Codex 0.147.0** and
 **Claude Code 2.1.229**. Other host versions are **unknown** until tested;
 these pins do not claim the earliest historically compatible versions.

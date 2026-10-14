@@ -132,10 +132,12 @@ interface SemanticProjectionFailure {
 function classifySemanticProjection(
   loaded: ReturnType<typeof loadSemanticModel>,
   lifecycleFindings: readonly SemanticLifecycleFinding[],
+  baselineOperation: "consume" | "replace" = "consume",
 ): SemanticProjectionFailure | null {
   const diagnostics = loaded.diagnostics.filter((diagnostic) => diagnostic.severity === "error");
   const duplicateIds = [...loaded.duplicateIds];
-  const lifecycleErrors = lifecycleFindings.filter((finding) => finding.severity === "error");
+  const lifecycleErrors = lifecycleFindings.filter((finding) => finding.severity === "error"
+    && !(baselineOperation === "replace" && finding.code === "EVIDENCE_BASELINE_STALE"));
   const freshnessReasons: UnsealedInputReason[] = [];
   if (diagnostics.length > 0 || duplicateIds.length > 0) freshnessReasons.push("SEMANTIC_MODEL_INVALID");
   if (lifecycleErrors.length > 0) freshnessReasons.push("SEMANTIC_LIFECYCLE_INVALID");
@@ -159,7 +161,11 @@ export function loadControlState(root: string): CurrentControlState {
   return loadObservedControlState(root);
 }
 
-function loadObservedControlState(root: string, observeSemanticInput?: (hash: string) => void): CurrentControlState {
+function loadObservedControlState(
+  root: string,
+  observeSemanticInput?: (hash: string) => void,
+  baselineOperation: "consume" | "replace" = "consume",
+): CurrentControlState {
   const reader = openReadyRepository(root);
   try {
     const gitBefore = captureGitState(root);
@@ -172,7 +178,7 @@ function loadObservedControlState(root: string, observeSemanticInput?: (hash: st
       semanticModelHash: fingerprintSemanticModel(semanticBefore.model),
       lifecycleInputHash: lifecycleBeforeObservation.inputHash,
     }));
-    const projection = classifySemanticProjection(semanticBefore, lifecycleBefore);
+    const projection = classifySemanticProjection(semanticBefore, lifecycleBefore, baselineOperation);
     if (projection !== null) {
       throw new SemctxError("CONFIG_INVALID", "semantic model cannot be projected into Plane C", {
         diagnostics: projection.diagnostics,
@@ -364,9 +370,23 @@ export function controlStatusWithSemanticInputs(root: string): {
   status: ControlFreshnessStatusReport;
   semanticInputHashes: string[];
 } {
+  return observeVerificationControlStatus(root, "consume");
+}
+
+export function recoveryControlStatusWithSemanticInputs(root: string): {
+  status: ControlFreshnessStatusReport;
+  semanticInputHashes: string[];
+} {
+  return observeVerificationControlStatus(root, "replace");
+}
+
+function observeVerificationControlStatus(root: string, baselineOperation: "consume" | "replace"): {
+  status: ControlFreshnessStatusReport;
+  semanticInputHashes: string[];
+} {
   const semanticInputHashes: string[] = [];
   try {
-    const status = loadObservedControlState(root, (hash) => semanticInputHashes.push(hash)).freshnessStatus;
+    const status = loadObservedControlState(root, (hash) => semanticInputHashes.push(hash), baselineOperation).freshnessStatus;
     return { status, semanticInputHashes };
   } catch (error) {
     const unavailable = unavailableStatus(error);
@@ -450,6 +470,8 @@ export function traceControl(root: string, command: ControlTraceCommand): Traver
   const state = loadControlState(root);
   assertFreshControlInputs(state.freshnessStatus);
   const bounds = {
+    sourceSeal: state.queryFreshnessSeal.sealHash,
+    indexSeal: state.queryFreshnessSeal.sealHash,
     ...(command.maxDepth !== undefined ? { maxDepth: command.maxDepth } : {}),
     ...(command.maxResults !== undefined ? { maxResults: command.maxResults } : {}),
   };

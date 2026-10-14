@@ -1,3 +1,4 @@
+import { processLimits, runProcessWithinBudget, VERIFICATION_STEP_BUDGET_MS } from "../plugins/shared/hooks/process-budget.mjs";
 /**
  * A new contributor's first check (ADR 0022): portable, read-only by default, and never a
  * substitute for `bun run verify:pr`.
@@ -78,13 +79,9 @@ export function parseContributorArgs(args: readonly string[]): ContributorComman
 // --- Real process/filesystem access (the only impure section) --------------------------------
 
 const realCapturingRunner = async (argv: readonly string[], cwd: string): Promise<CapturedCommand> => {
-  const child = Bun.spawn([...argv], { cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
-  const [out, err] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-  ]);
-  const code = await child.exited;
-  return { code, output: `${out}${err}` };
+  const outcome = await runProcessWithinBudget(argv, { cwd, budgetMs: VERIFICATION_STEP_BUDGET_MS });
+  if (outcome.kind === "timeout") return { code: 124, output: "PROCESS_TIMEOUT: contributor check budget exhausted" };
+  return { code: outcome.exitCode, output: `${outcome.stdout}${outcome.stderr}` };
 };
 
 function probePythonTool(id: string, requiredVersion: string): PrerequisiteResult {
@@ -99,7 +96,7 @@ function probePythonTool(id: string, requiredVersion: string): PrerequisiteResul
       rawVersion: null,
     });
   }
-  const result = Bun.spawnSync([which, "--version"], { stdout: "pipe", stderr: "pipe", timeout: 10_000 });
+  const result = Bun.spawnSync([which, "--version"], { stdout: "pipe", stderr: "pipe", ...processLimits(10_000) });
   return evaluatePythonTool({
     id,
     label: `${id} (Python quality tool)`,
@@ -126,7 +123,7 @@ function gatherPrerequisites(): PrerequisiteResult[] {
   const jsDependencies = evaluateJsDependencies({ nodeModulesPresent, checkedPackages, missingPackages, versions });
 
   const pythonPath = Bun.which("python");
-  const pythonProbe = pythonPath === null ? null : Bun.spawnSync([pythonPath, "--version"], { stdout: "pipe", stderr: "pipe", timeout: 10_000 });
+  const pythonProbe = pythonPath === null ? null : Bun.spawnSync([pythonPath, "--version"], { stdout: "pipe", stderr: "pipe", ...processLimits(10_000) });
   const pythonInterpreter = evaluatePythonInterpreter({ which: pythonPath, queryOk: pythonProbe?.exitCode === 0, rawVersion: pythonProbe === null ? null : `${pythonProbe.stdout.toString()}${pythonProbe.stderr.toString()}` });
 
   const pins = parseRequirementsQualityPins(

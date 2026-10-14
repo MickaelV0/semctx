@@ -9,6 +9,47 @@ GitHub Release advance together through the tag-driven lockstep workflow documen
 
 ## [Unreleased]
 
+### Changed
+
+- Bun is pinned to 1.4.3 in every CI workflow (CI, release, Pages, documentation links and
+  stable delivery proof), the GitHub Action, the devcontainer, the plugin artifact generator
+  and `@types/bun`. The CI and release pins equal the supported minimum by contract
+  (`bun run compatibility:check`), so the supported Bun minimum rises from 1.4.0 to 1.4.3.
+  The tracked plugin bundles and the GitHub Action report validator are regenerated with that
+  Bun; the bundler partitions code between `semctx-mcp.js` and `semctx-shared.js` differently.
+- Tooling scripts record a process signal as a string when Bun 1.4.3 reports an unnamed signal
+  by its number; named signals are recorded exactly as before.
+
+### Fixed
+
+- In a version 2 configuration, an import resolved by the `paths` or `baseUrl` of the nearest
+  `tsconfig.json` (`extends` included) now produces its `imports` edge, its cross-file `calls`
+  edges and its test link in a TypeScript-only graph, as the same import written relatively
+  does (#354). Previously a repository importing only by alias indexed with no `imports` edge, so
+  `impact diff` and `verify diff` returned empty sets that read as "no dependents". Only `paths`
+  and `baseUrl` are taken from the configuration, and only for imports written in a selected
+  file. The mapping only adds a repository module: any other specifier, including a package
+  hoisted above the analyzed root and the `require` form of a dual package, resolves as before,
+  and a configuration without either field leaves the extraction byte-identical. A mapped target
+  outside the repository is not read, and a repository file reached through an alias is refused
+  with `IMPORT_OUTSIDE_REPOSITORY` or `REFERENCE_OUTSIDE_REPOSITORY` when it imports or references
+  outside the repository, as the relative spelling of the same chain is. The confinement walk
+  now classifies a specifier as TypeScript does, so an absolute import of a file outside the
+  repository is refused with `IMPORT_OUTSIDE_REPOSITORY` where it was read silently before.
+  Version 1 configurations, JavaScript-enabled graphs and retained compiler snapshots are
+  unchanged for the mapping itself. A
+  specifier that stays unresolved is still not reported as such: an empty result is not evidence
+  of no dependents. `package.json` `imports`/`exports` entries that point to build output stay
+  unresolved in a checkout that is not built.
+- A live freshness observation inspects each governing TypeScript configuration once per pass
+  instead of once per source it governs (#355). On a pnpm workspace whose packages extend a shared
+  member configuration, one `index-health --section` page took about 40 s for 2 300 selected files
+  in a synthetic Windows 11 reproduction and now takes about 8 s; the gain depends on the
+  workspace shape and was not measured on Linux or macOS. Report content and cursors are unchanged
+  for the same inputs. Every page still observes the working tree live, so reading a whole section
+  by cursor costs one observation per page; `semctx index-health --json` returns every detail in
+  one call.
+
 ## [0.4.5] - 2026-10-13
 
 ### Fixed

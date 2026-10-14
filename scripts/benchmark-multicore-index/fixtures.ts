@@ -1,3 +1,4 @@
+import { spawnGitSync } from "../../packages/app-services/src/git-process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { captureGitState, fingerprintAnalysisInputs } from "@semantic-context/app-services";
@@ -118,6 +119,6 @@ export function captureFixtureIdentity(repositoryRoot: string): FixtureIdentity 
 }
 
 function git(cwd: string, ...args: string[]): void {
-  const result = Bun.spawnSync(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
+  const result = spawnGitSync(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
   if (result.exitCode !== 0) throw new Error(new TextDecoder().decode(result.stderr));
 }

@@ -1,3 +1,4 @@
+import { processLimits, BENCHMARK_SAMPLE_BUDGET_MS } from "../plugins/shared/hooks/process-budget.mjs";
 /**
  * ADR 0026 observational baseline harness. Usage: `bun run bench:index-workers [packages] [files]`
  * (both default and bound the "disconnected-modules" corpus; the two hostile fallback corpora use
@@ -164,13 +165,16 @@ function runCorpus(id: CorpusId, dimensions: CorpusDimensions, plan: readonly Sa
 }
 
 function runSample(id: CorpusId, root: string, entry: SamplePlanEntry): CorpusSample {
+  const limits = processLimits(BENCHMARK_SAMPLE_BUDGET_MS);
   const child = Bun.spawnSync([
     process.execPath,
     import.meta.path,
     "--worker-run",
     root,
     String(entry.workers),
-  ], { stdout: "pipe", stderr: "pipe" });
+  ], { stdout: "pipe", stderr: "pipe", ...limits });
+  if (child.exitedDueToTimeout) throw new Error("PROCESS_TIMEOUT: benchmark sample budget exhausted");
+  if (child.exitedDueToMaxBuffer || child.stdout.byteLength >= limits.maxBuffer || child.stderr.byteLength >= limits.maxBuffer) throw new Error("PROCESS_OUTPUT_LIMIT: benchmark sample output refused");
   if (child.exitCode !== 0) {
     throw new Error(
       `corpus ${id} sample ${entry.position} (workers=${entry.workers}) failed: `

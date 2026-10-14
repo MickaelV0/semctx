@@ -436,14 +436,14 @@ test("child and manifest records preserve measured duration and termination sign
   if (child.durationMs < 20 || terminated.durationMs < 10) {
     process.stderr.write("DEMO_PROCESS_DURATION_CAPTURE_MISMATCH\n");
   }
-  if (child.signal !== null || terminated.signal !== "SIGTERM") {
+  if (child.signal !== null || terminated.signal !== "SIGKILL") {
     process.stderr.write("DEMO_PROCESS_SIGNAL_CAPTURE_MISMATCH\n");
   }
   expect(child.code).toBe(0);
   expect(child.signal).toBeNull();
   expect(child.durationMs).toBeGreaterThanOrEqual(20);
   expect(terminated.code).toBeNull();
-  expect(terminated.signal).toBe("SIGTERM");
+  expect(terminated.signal).toBe("SIGKILL");
   expect(terminated.durationMs).toBeGreaterThanOrEqual(10);
 
   const outDir = fresh("process-status");

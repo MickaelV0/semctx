@@ -35,10 +35,16 @@ export interface WorkspaceLinkResolver {
   readonly declarations: Map<string, WorkspaceDeclaration | null>;
   readonly members: Map<string, WorkspaceMembers>;
   readonly links: Map<string, ReadonlyMap<string, string>>;
+  /**
+   * Reasons of a live inspection of one governing configuration, by repository root and
+   * configuration path. That inspection is a function of the configuration chain alone, so the
+   * sources it governs share one answer within the pass.
+   */
+  readonly configurations: Map<string, readonly string[]>;
 }
 
 export function createWorkspaceLinkResolver(): WorkspaceLinkResolver {
-  return { inputs: new Map(), declarations: new Map(), members: new Map(), links: new Map() };
+  return { inputs: new Map(), declarations: new Map(), members: new Map(), links: new Map(), configurations: new Map() };
 }
 
 function slash(path: string): string {

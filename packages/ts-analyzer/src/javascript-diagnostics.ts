@@ -387,6 +387,18 @@ export function inspectModuleConfiguration(
     return relation !== ".." && !relation.startsWith("../") && !isAbsolute(relation);
   };
   if (!contained(configPath)) return ["SOURCE_CONFIGURATION_OUTSIDE_REPOSITORY"];
+  // Live and without a parsed source, the answer is a function of the governing configuration
+  // chain alone: the sources it governs share it within one pass instead of reading and parsing
+  // that chain again for each of them. The pass-scoped resolver owns the answer and its reads
+  // are already recorded in its inputs; a later pass starts from a new resolver.
+  const sharedPass = compilerInputs === undefined && source === undefined ? workspaceLinks : undefined;
+  const passKey = `${repositoryRoot ?? ""}\0${configPath}`;
+  const known = sharedPass?.configurations.get(passKey);
+  if (known !== undefined) return [...known];
+  const remember = (answer: string[]): string[] => {
+    sharedPass?.configurations.set(passKey, answer);
+    return [...answer];
+  };
   // Bind the live initial read as well as inherited reads; snapshots use retained bytes.
   const configurationSystem = compilerInputs === undefined ? workspaceLinkedSystem(system, repositoryRoot, workspaceLinks) : system;
   const config = ts.readConfigFile(configPath, candidate => {
@@ -404,7 +416,7 @@ export function inspectModuleConfiguration(
       return configurationSystem.readFile(candidate);
     },
   }, dirname(configPath));
-  if (escaped) return ["SOURCE_CONFIGURATION_OUTSIDE_REPOSITORY"];
+  if (escaped) return remember(["SOURCE_CONFIGURATION_OUTSIDE_REPOSITORY"]);
   const diagnostics = config.error ? [config.error] : parsed?.errors ?? [];
   const reasons = [...defaultReasons, ...diagnostics.filter(diagnostic => diagnostic.code !== 18003).map(diagnostic =>
     `SOURCE_CONFIGURATION_INVALID:${diagnostic.code}:${ts.flattenDiagnosticMessageText(diagnostic.messageText, " ")}`)];
@@ -423,7 +435,7 @@ export function inspectModuleConfiguration(
   if (source !== undefined && compilerInputs !== undefined) {
     reasons.push(...inspectQualifiedModuleScope(source, path));
   }
-  return reasons;
+  return remember(reasons);
 }
 
 function inspectImportedRuntimeHelpers(source: ts.SourceFile, options: ts.CompilerOptions): string[] {

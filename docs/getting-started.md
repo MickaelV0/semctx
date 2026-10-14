@@ -1,7 +1,7 @@
 # Getting started
 
 <!-- semctx:compatibility:start -->
-Semctx **0.4.5** requires **Bun >=1.4.0**.
+Semctx **0.4.5** requires **Bun >=1.4.3**.
 The supported, tested host baseline is **Codex 0.147.0** and
 **Claude Code 2.1.229**. Other host versions are **unknown** until tested;
 these pins do not claim the earliest historically compatible versions.
@@ -16,7 +16,7 @@ It is local-first, deterministic, and needs no LLM, network, or service.
 
 ## Prerequisites
 
-- [Bun](https://bun.sh) ≥ 1.4.0 (the engine runs under Bun).
+- [Bun](https://bun.sh) ≥ 1.4.3 (the engine runs under Bun).
 - A git repository with TypeScript sources.
 - Optional: Codex and/or Claude Code with plugin support. `semctx install` detects whichever hosts
   are already available; it never installs the host applications themselves.

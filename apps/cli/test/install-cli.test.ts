@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import {
   chmodSync,
   copyFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -13,7 +15,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, join, resolve, sep } from "node:path";
+import { delimiter, dirname, join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "../src/args";
 import packageJson from "../package.json";
@@ -36,6 +38,7 @@ import {
 import {
   pluginDeliveryStatus,
   readClaudePluginMetadataInventory,
+  readCodexPluginMetadataInventory,
   type CodexPluginMetadataInventory,
   type ClaudePluginMetadataInventory,
 } from "@semantic-context/app-services";
@@ -3086,6 +3089,45 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
     expect(report.hosts.claude.error).toContain("not enabled");
   });
 
+  test("Codex dry-run with real linked-worktree metadata plans without writing or starting the host", () => {
+    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "semctx-install-worktree-")));
+    try {
+      const repo = join(root, "repo");
+      const linked = join(root, "linked");
+      const home = join(root, "profile");
+      mkdirSync(repo);
+      mkdirSync(home);
+      execFileSync("git", ["init", "-q", repo]);
+      writeFileSync(join(repo, "source.ts"), "export const value = 1;\n");
+      execFileSync("git", ["-C", repo, "add", "--", "source.ts"]);
+      execFileSync("git", ["-C", repo, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+        "-c", "commit.gpgsign=false", "commit", "-qm", "fixture"]);
+      execFileSync("git", ["-C", repo, "worktree", "add", "-q", "-b", "linked", linked]);
+      const tree = () => readdirSync(root, { recursive: true }).map(String).sort().map((entry) => {
+        const path = join(root, entry);
+        return [entry, lstatSync(path).isFile() ? readFileSync(path).toString("base64") : null];
+      });
+      const before = tree();
+      for (const repositoryRoot of [repo, linked]) {
+        const runtime = fakeRuntime({ codex: true, gitRoot: repositoryRoot, codexHome: home });
+        const report = executeInstall(repositoryRoot,
+          parseArgs(["install", "--dry-run", "--host", "codex", "--skip-setup"]), {
+            ...runtime,
+            readCodexPluginMetadata: (target) => readCodexPluginMetadataInventory(target, home, undefined, home, {
+              systemFiles: [], managedPreferences: () => "absent",
+            }),
+          });
+        expect(report.ok).toBe(true);
+        expect(report.hosts.codex.status).toBe("planned");
+        expect(report.workspace.status).toBe("skipped");
+        expect(runtime.commands.some(([program, command]) => program === "codex" && command === "plugin")).toBe(false);
+        expect(tree()).toEqual(before);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("dry-run probes workspace conflicts but performs no mutation or repository setup", () => {
     const runtime = fakeRuntime({ codex: true, claude: true });
     const report = executeInstall(
@@ -3135,6 +3177,26 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
     expect(report.workspace.report).toEqual(conflictReport);
     expect(runtime.commands).toEqual([["git", "rev-parse", "--show-toplevel"]]);
     expect(runtime.setupRoots).toEqual([]);
+  });
+
+  test.each([
+    ["timeout", { timedOut: true }, "PROCESS_TIMEOUT"],
+    ["output exhaustion", { truncated: true }, "output exceeded"],
+  ] as const)("Git root query %s blocks every host action", (_name, failure, error) => {
+    const runtime = fakeRuntime({
+      codex: true,
+      claude: true,
+      queryOutcomes: { "git rev-parse --show-toplevel": { code: 0, out: "C:\\work\\project\n", ...failure } },
+    });
+    const report = executeInstall("C:\\work\\project", parseArgs(["install", "--host", "all"]), runtime);
+
+    expect(report.ok).toBe(false);
+    expect(report.workspace.status).toBe("failed");
+    expect(report.workspace.error).toContain(error);
+    expect(runtime.commands).toEqual([["git", "rev-parse", "--show-toplevel"]]);
+    expect(runtime.setupRoots).toEqual([]);
+    expect(runtime.deferredCodexCleanups).toEqual([]);
+    expect(runtime.deferredCacheCleanups).toEqual([]);
   });
 
   test("does not write workspace state when invoked outside a Git repository", () => {
@@ -3596,4 +3658,181 @@ describe("Claude inventory JSON boundary", () => {
     expect(report.ok).toBe(false);
     expect(report.hosts.claude.error).toContain("cannot inspect final Claude plugin state");
   });
+});
+
+describe("detached cleanup launch", () => {
+  const installUrl = pathToFileURL(join(import.meta.dir, "../src/commands/install.ts")).href;
+  const budgetUrl = pathToFileURL(join(import.meta.dir, "../../../plugins/shared/hooks/process-budget.mjs")).href;
+
+  // A referenced timer on the spawn keeps the launcher's event loop alive after `unref()` until the
+  // supervised child exits (up to twelve hours). The supervisor already enforces the deadline, so
+  // the launch itself carries no timeout. The production spawn options are replayed unchanged; only
+  // the worker is replaced by a short sleeper so no host CLI is ever started.
+  test.each([
+    ["legacy marketplace janitor", "defaultDeferCodexCleanup", '["personal"]'],
+    ["obsolete cache janitor", "defaultDeferCodexCacheCleanup",
+      JSON.stringify({ cacheRoot: "/cache", path: "/cache/0.1.16", version: "0.1.16", keepVersion: "0.1.17" })],
+  ] as const)("%s launch leaves the launcher free to exit while the supervisor keeps the twelve-hour window", (_name, launcher, argument) => {
+    const program = `
+      import { CODEX_CLEANUP_BUDGET_MS, DEFERRED_PROCESS_SUPERVISOR } from ${JSON.stringify(budgetUrl)};
+      const install = await import(${JSON.stringify(installUrl)});
+      const launch = Bun.spawn;
+      const observed = [];
+      Bun.spawn = (argv, options) => {
+        const [budget] = JSON.parse(Buffer.from(argv[3], "base64url").toString("utf8"));
+        observed.push({ supervised: argv[2] === DEFERRED_PROCESS_SUPERVISOR, budget, options });
+        const worker = Buffer.from(JSON.stringify([budget, process.execPath, "-e", "await Bun.sleep(12000)"])).toString("base64url");
+        return launch([argv[0], argv[1], argv[2], worker], options);
+      };
+      const result = install.${launcher}(${argument}, ${JSON.stringify(tmpdir())});
+      console.log(JSON.stringify({ result, observed, window: CODEX_CLEANUP_BUDGET_MS, lifetime: performance.now() }));
+    `;
+    const started = performance.now();
+    const child = Bun.spawnSync([process.execPath, "-e", program], { stdout: "pipe", stderr: "pipe", timeout: 40_000, killSignal: "SIGKILL" });
+    const elapsed = performance.now() - started;
+    expect(new TextDecoder().decode(child.stderr)).toBe("");
+    const report = JSON.parse(new TextDecoder().decode(child.stdout)) as {
+      result: CommandResult; window: number; lifetime: number;
+      observed: { supervised: boolean; budget: number; options: Record<string, unknown> }[];
+    };
+    try {
+      expect(report.result.code).toBe(0);
+      expect(report.observed).toHaveLength(1);
+      const [launch] = report.observed;
+      expect(launch!.supervised).toBe(true);
+      expect(launch!.budget).toBe(report.window);
+      expect(report.window).toBe(12 * 60 * 60 * 1000);
+      // Time the launcher stayed alive after its program finished, whatever the startup load.
+      expect(elapsed - report.lifetime).toBeLessThan(6_000);
+      expect(launch!.options["detached"]).toBe(true);
+      expect(Object.keys(launch!.options).filter((name) => ["timeout", "killSignal", "maxBuffer"].includes(name))).toEqual([]);
+    } finally {
+      try { process.kill((JSON.parse(report.result.out) as { pid: number }).pid, "SIGKILL"); } catch { /* already gone */ }
+    }
+  }, 60_000);
+});
+
+describe("Git root query budget", () => {
+  test.each([
+    ["timeout", "await Bun.sleep(60000)", "PROCESS_TIMEOUT"],
+    ["output exhaustion", 'process.stdout.write("x".repeat(3 * 1024 * 1024))', "output exceeded"],
+  ] as const)("default runtime refuses Git root query %s", (_name, stub, expectedError) => {
+    const installUrl = pathToFileURL(join(import.meta.dir, "../src/commands/install.ts")).href;
+    const argsUrl = pathToFileURL(join(import.meta.dir, "../src/args.ts")).href;
+    const program = `
+      const { executeInstall } = await import(${JSON.stringify(installUrl)});
+      const { parseArgs } = await import(${JSON.stringify(argsUrl)});
+      const spawn = Bun.spawnSync;
+      const commands = [];
+      Bun.which = () => null;
+      Bun.spawnSync = (argv, options) => {
+        commands.push(argv);
+        if (argv.join(" ") !== "git rev-parse --show-toplevel") throw new Error("unexpected child");
+        return spawn([process.execPath, "-e", ${JSON.stringify(stub)}], options);
+      };
+      const report = executeInstall(${JSON.stringify(tmpdir())}, parseArgs(["install", "--host", "all"]));
+      console.log(JSON.stringify({ report, commands }));
+    `;
+    const child = Bun.spawnSync([process.execPath, "-e", program], {
+      stdout: "pipe", stderr: "pipe", timeout: 15000, killSignal: "SIGKILL",
+    });
+    expect(child.exitCode).toBe(0);
+    expect(new TextDecoder().decode(child.stderr)).toBe("");
+    const result = JSON.parse(new TextDecoder().decode(child.stdout)) as { report: InstallReport; commands: string[][] };
+    expect(result.report.ok).toBe(false);
+    expect(result.report.workspace.status).toBe("failed");
+    expect(result.report.workspace.error).toContain(expectedError);
+    expect(result.commands).toEqual([["git", "rev-parse", "--show-toplevel"]]);
+  }, 20000);
+});
+
+describe("repository setup budget", () => {
+  const installUrl = pathToFileURL(join(import.meta.dir, "../src/commands/install.ts")).href;
+  const argsUrl = pathToFileURL(join(import.meta.dir, "../src/args.ts")).href;
+  const REPORT = { schemaVersion: 1, kind: "setup_plan", verdict: "SETUP_PLANNED", plannedChanges: [] };
+
+  /** A Git repository plus a stand-in for the `semctx` entrypoint that `defaultSetup` spawns. */
+  function setupFixture(stub: string): { root: string; repo: string; entrypoint: string; environment: Record<string, string> } {
+    const root = mkdtempSync(join(tmpdir(), "semctx-setup-budget-"));
+    const repo = join(root, "repo");
+    mkdirSync(repo);
+    const entrypoint = join(root, "semctx-entry.js");
+    writeFileSync(entrypoint, stub);
+    const environment = Object.fromEntries(Object.entries(process.env)
+      .filter((entry): entry is [string, string] => entry[1] !== undefined && !/^GIT_/i.test(entry[0])));
+    const init = Bun.spawnSync(["git", "init", "--quiet", repo], { env: environment, stdout: "pipe", stderr: "pipe" });
+    expect(init.exitCode).toBe(0);
+    return { root, repo, entrypoint, environment };
+  }
+
+  // The default runtime, end to end: `semctx install` plans the repository through `semctx setup`,
+  // whose indexing legitimately outlives the 5 s budget of a host probe (38 s on ~900 files).
+  test("the default runtime lets repository setup outlive the host-query budget", () => {
+    const { root, repo, entrypoint, environment } = setupFixture(`
+      await Bun.sleep(5600);
+      process.stdout.write(${JSON.stringify(JSON.stringify(REPORT))});
+    `);
+    try {
+      const program = `
+        const { executeInstall } = await import(${JSON.stringify(installUrl)});
+        const { parseArgs } = await import(${JSON.stringify(argsUrl)});
+        const report = executeInstall(${JSON.stringify(repo)}, parseArgs(["install", "--host", "claude", "--dry-run"]));
+        console.log(JSON.stringify({ workspace: report.workspace }));
+      `;
+      // Only `git` is reachable, so no host CLI can be found, let alone started.
+      const git = Bun.which("git");
+      expect(git).not.toBeNull();
+      const child = Bun.spawnSync([process.execPath, "-e", program, entrypoint], {
+        env: { ...environment, PATH: dirname(git!) }, stdout: "pipe", stderr: "pipe", timeout: 60_000, killSignal: "SIGKILL",
+      });
+      expect(new TextDecoder().decode(child.stderr)).toBe("");
+      const { workspace } = JSON.parse(new TextDecoder().decode(child.stdout)) as { workspace: { status: string; error?: string; report?: unknown } };
+      expect(workspace.error).toBeUndefined();
+      expect(workspace.status).toBe("planned");
+      expect(workspace.report).toEqual(REPORT);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 90_000);
+
+  // The ceiling itself is injectable so the bound is exercised in milliseconds, not minutes.
+  test.each([
+    ["a setup that never returns is killed at its own named ceiling", `
+      await Bun.write(process.env.SEMCTX_TEST_PID, String(process.pid));
+      await Bun.sleep(60_000);
+    `, "PROCESS_TIMEOUT: repository setup budget exhausted"],
+    // Exactly the per-stream ceiling of the injected 4096-byte budget, then a clean exit: refused
+    // although the child itself reports success.
+    ["a setup reaching its output ceiling is refused", `
+      process.stdout.write("x".repeat(2048));
+    `, "output exceeded the allowed size"],
+  ] as const)("%s", (_name, stub, expectedError) => {
+    const { root, repo, entrypoint, environment } = setupFixture(stub);
+    const pidFile = join(root, "setup.pid");
+    try {
+      const program = `
+        const { defaultSetup } = await import(${JSON.stringify(installUrl)});
+        const started = performance.now();
+        const result = defaultSetup(${JSON.stringify(repo)}, false, { timeoutMs: 1500, maxBytes: 4096 });
+        console.log(JSON.stringify({ result, elapsed: performance.now() - started }));
+      `;
+      const child = Bun.spawnSync([process.execPath, "-e", program, entrypoint], {
+        env: { ...environment, SEMCTX_TEST_PID: pidFile }, stdout: "pipe", stderr: "pipe", timeout: 30_000, killSignal: "SIGKILL",
+      });
+      expect(new TextDecoder().decode(child.stderr)).toBe("");
+      const { result, elapsed } = JSON.parse(new TextDecoder().decode(child.stdout)) as {
+        result: SetupExecution; elapsed: number;
+      };
+      expect(result.code).toBe(1);
+      expect(result.report).toBeNull();
+      expect(result.err).toContain(expectedError);
+      expect(elapsed).toBeLessThan(10_000);
+      if (existsSync(pidFile)) {
+        const pid = Number(readFileSync(pidFile, "utf8"));
+        expect(() => process.kill(pid, 0)).toThrow();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 40_000);
 });

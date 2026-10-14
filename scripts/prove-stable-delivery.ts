@@ -1,3 +1,4 @@
+import { processLimits } from "../plugins/shared/hooks/process-budget.mjs";
 /**
  * Prove that a fresh Codex environment and a fresh Claude environment can install the plugins
  * published by the immutable commit promoted to `stable`.
@@ -2324,7 +2325,7 @@ export function defaultProofRuntime(limits: McpLimits = DEFAULT_MCP_LIMITS): Del
         env: env as Record<string, string>,
         stdout: "pipe",
         stderr: "pipe",
-        timeout: HOST_COMMAND_TIMEOUT_MS,
+        ...processLimits(HOST_COMMAND_TIMEOUT_MS),
       });
       return {
         code: result.exitCode ?? 1,
@@ -2339,7 +2340,7 @@ export function defaultProofRuntime(limits: McpLimits = DEFAULT_MCP_LIMITS): Del
         env: env as Record<string, string>,
         stdout: "pipe",
         stderr: "pipe",
-        timeout: HOST_COMMAND_TIMEOUT_MS,
+        ...processLimits(HOST_COMMAND_TIMEOUT_MS),
       });
       return result.exitCode === 0 ? new Uint8Array(result.stdout) : null;
     },

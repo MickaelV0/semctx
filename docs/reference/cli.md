@@ -55,6 +55,11 @@ therefore blocks the whole install first. It then inventories and plans every re
 applying any host command; one missing, failed or conflicting requested host blocks all host and
 workspace writes. If a host fails to converge during application, repository setup remains skipped.
 `--dry-run` returns that workspace plan alongside the read-only host and Git probes.
+The setup child is the one install step that does real work (configuration, full index,
+scaffold), so it does not share the five-second host-probe budget: it runs under its own
+30-minute ceiling and a 16 MiB combined output cap. Exhaustion kills it and reports the workspace
+`failed` with `PROCESS_TIMEOUT: repository setup budget exhausted`; re-running the idempotent
+`semctx setup` completes whatever the interrupted run left.
 
 The JSON report contains `ok`, CLI `version`, selected mode, per-host steps/status, workspace
 status, and restart/recovery actions. Exit 0 means at least one requested or auto-detected host is
@@ -601,7 +606,11 @@ computed in a child process that is stopped at the deadline, and the answer is t
 `TIMEOUT` — `canRunHighRiskControl: false`, `reasons: ["STATUS_BUDGET_EXCEEDED"]`,
 `freshnessSeal: null`, `budget: { budgetMs, elapsedMs }` — rather than no verdict. A `TIMEOUT`
 observed nothing and authorizes nothing. Allow about 150 ms of process start-up on top of `N` when
-an outer hook enforces its own limit. Without `--budget-ms` the command never answers `TIMEOUT`.
+an outer hook enforces its own limit; on Windows the answer also waits for `taskkill` to stop the
+child's process tree, typically a few hundred milliseconds and never more than five seconds. A
+child that could not be stopped at all is the only case where the deadline is reported as a
+termination failure instead of `TIMEOUT`.
+Without `--budget-ms` the command never answers `TIMEOUT`.
 The MCP tool `semctx_control_status` always runs with a budget (`budgetMs`, default 15 000 ms) and
 returns the same document.
 
@@ -948,3 +957,48 @@ of ownership or liveness.
 
 `task create` and `context prepare` (the `task → ContextPack` retriever) and `bench` remain in the
 CLI but are **experimental** and are not a code-search replacement (ADR 0005).
+
+### Child-process deadlines
+
+Core Git captures use a 5,000 ms deadline, `SIGKILL`, and a 256 MiB per-stream
+output ceiling. Timeout and output exhaustion refuse the capture with `GIT_ERROR`
+and the named reason `PROCESS_TIMEOUT` or `PROCESS_OUTPUT_LIMIT`; partial output
+is never verification evidence. Core Git captures and qualified path discovery
+remove inherited `GIT_*` and `GCM_*` variables, including `GIT_DIR` and
+`GIT_WORK_TREE`, before execution. The `index` base recommendation also removes
+these overrides. The install workspace root lookup still inherits the caller's
+environment. Repository configuration files remain effective.
+
+The Claude Code guard runs its complete hook computation in a supervised process
+with a 15,000 ms deadline and a 16 MiB combined output ceiling. Exhaustion blocks
+the operation with verification unknown when guarded mode has been established;
+advisory mode remains non-blocking, and `SEMCTX_GUARD=off` returns immediately. Its synchronous Git and verifier probes
+share the remaining deadline; the existing 1,000 ms recovery-probe cap remains.
+The in-process OMP adapter shares that cumulative child-process budget; filesystem
+work in that adapter cannot be interrupted by an in-process timer.
+
+Detached Codex cleanup keeps its existing twelve-hour retry window. A separate
+supervisor survives the installing CLI and forcibly stops cleanup at that deadline.
+Commands within cleanup retain their readback and mutation deadlines and use
+`SIGKILL`. A timeout leaves cleanup deferred; installation does not certify its
+completion. POSIX supervisors kill the inherited process group; Windows uses
+`taskkill /T /F` with a further five-second termination budget. Synchronous Git
+and host queries kill their direct child; arbitrary independently detached external
+helpers are outside that guarantee after they have reparented. POSIX budget
+supervisors use a bounded `ps` inventory to also kill nested owned process groups.
+The inventory is best effort: when it is unavailable, malformed, timed-out or
+oversized the direct group is still stopped and the deadline is still answered as a
+timeout, carrying a `terminationWarning` that nested groups may have survived.
+Windows budget supervisors wait, within the same five-second limit, for
+`taskkill /T /F` to finish before answering. A `taskkill` that cannot run, does not
+finish, or reports a failure while the direct child is still alive reports
+`PROCESS_TERMINATION_FAILED` and fails the operation after stopping the direct
+child. A non-zero `taskkill` status (255 for a descendant that exited while the tree
+was being stopped) with the direct child verifiably gone is answered as a timeout
+carrying a `terminationWarning`. `PROCESS_TERMINATION_FAILED` is otherwise reserved
+for a direct child that could not be signalled.
+
+Local verification and contributor/CI steps have a sixty-minute deadline each;
+benchmark samples have a ten-minute deadline each. A timed-out verification step
+fails with `PROCESS_TIMEOUT` and exit 124, never a passing check. Captured subprocess
+output is bounded; inherited verification output is streamed without buffering.

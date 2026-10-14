@@ -1,3 +1,4 @@
+import { spawnGitSync } from "./git-process";
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, readdirSync, readlinkSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
@@ -303,7 +304,7 @@ export function canonicalRepositoryRoot(root: string): string {
 }
 
 function git(root: string, args: string[]): { code: number; stdout: Uint8Array; stderr: string } {
-  const process = Bun.spawnSync(["git", ...args], { cwd: root, stdout: "pipe", stderr: "pipe" });
+  const process = spawnGitSync(["git", ...args], { cwd: root, stdout: "pipe", stderr: "pipe" });
   return {
     code: process.exitCode ?? 1,
     stdout: process.stdout,

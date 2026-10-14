@@ -1,3 +1,4 @@
+import { spawnGitSync } from "./git-process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, posix, relative, resolve } from "node:path";
@@ -104,7 +105,7 @@ const ANALYSIS_LIMITS: ChangeImpactAnalysis["limits"] = [
 const TIER_RANK: Record<ImpactTier, number> = { changed: 0, direct: 1, transitive: 2, possible: 3 };
 
 function git(root: string, args: string[]): { code: number; out: Uint8Array; err: string } {
-  const proc = Bun.spawnSync(["git", ...args], { cwd: root, stdout: "pipe", stderr: "pipe" });
+  const proc = spawnGitSync(["git", ...args], { cwd: root, stdout: "pipe", stderr: "pipe" });
   return { code: proc.exitCode ?? 1, out: proc.stdout, err: new TextDecoder().decode(proc.stderr) };
 }
 
@@ -338,7 +339,7 @@ function readTexts(root: string, revision: string | null, paths: readonly string
   const top = git(root, ["rev-parse", "--show-prefix"]);
   if (top.code !== 0) return undefined;
   const repoPrefix = new TextDecoder().decode(top.out).trim();
-  const proc = Bun.spawnSync(["git", "cat-file", "--batch"], {
+  const proc = spawnGitSync(["git", "cat-file", "--batch"], {
     cwd: root,
     stdin: new TextEncoder().encode(paths.map((path) => `${revision}:${repoPrefix}${path}\n`).join("")),
     stdout: "pipe",

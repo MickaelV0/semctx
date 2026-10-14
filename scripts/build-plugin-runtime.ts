@@ -37,7 +37,7 @@ const portableTypeScriptPrelude =
   'var __dirname=import.meta.dir+"/typescript-lib",__filename=__dirname+"/typescript.js";';
 const escapedRoot = JSON.stringify(root).slice(1, -1);
 
-export const PLUGIN_BUILD_BUN_VERSION = "1.4.0";
+export const PLUGIN_BUILD_BUN_VERSION = "1.4.3";
 /** Bun's `naming.chunk` target — the only artifact allowed to carry the TypeScript path prelude. */
 const pluginRuntimeSharedChunk = "semctx-shared.js";
 const pluginRuntimeCoreArtifactPaths = [
@@ -917,6 +917,7 @@ async function main(): Promise<void> {
   // Shadow lifecycle hook: one shared body plus one generated contract, byte-identical per host.
   const lifecycleHookFiles: Record<string, string> = {
     [LIFECYCLE_HOOK_SOURCE_NAME]: readLifecycleHookSource(),
+    "process-budget.mjs": readFileSync(resolve(root, "plugins/shared/hooks/process-budget.mjs"), "utf8"),
     [LIFECYCLE_HOOK_CONTRACT_NAME]: renderLifecycleHookContract(),
   };
   for (const directory of Object.values(lifecycleHookDirs)) {

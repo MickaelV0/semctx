@@ -1,3 +1,4 @@
+import { processLimits } from "../../plugins/shared/hooks/process-budget.mjs";
 /** Real child-process execution. No mocked runner: every command here actually spawns. */
 
 export interface ChildOutcome {
@@ -37,14 +38,15 @@ export function runChild(
     env: options.env,
     stdout: "pipe",
     stderr: "pipe",
-    timeout: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    ...processLimits(options.timeoutMs ?? DEFAULT_TIMEOUT_MS),
   });
   const durationMs = Math.max(0, performance.now() - startedAt);
   return {
     argv,
     cwd: options.cwd,
     code: proc.exitCode ?? null,
-    signal: proc.signalCode ?? null,
+    // Bun 1.4.3 reports a signal that has no name as its number; keep the recorded contract a string.
+    signal: proc.signalCode === undefined || proc.signalCode === null ? null : String(proc.signalCode),
     durationMs,
     stdout: new TextDecoder().decode(proc.stdout),
     stderr: new TextDecoder().decode(proc.stderr),

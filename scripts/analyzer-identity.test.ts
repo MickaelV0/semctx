@@ -14,7 +14,7 @@ test("analyzer identity covers the independent Git runtime inventory", () => {
   const root = resolve(import.meta.dir, "..");
   const inventory = Bun.spawnSync(["git", "ls-files", "-z"], { cwd: root, stdout: "pipe", stderr: "pipe" });
   expect(inventory.exitCode).toBe(0);
-  const fixed = new Set(["bun.lock", "tsconfig.json", "tsconfig.base.json", "scripts/analyzer-identity.ts", "scripts/build-plugin-runtime.ts", "scripts/build-cli-package.ts"]);
+  const fixed = new Set(["bun.lock", "tsconfig.json", "tsconfig.base.json", "scripts/analyzer-identity.ts", "scripts/build-plugin-runtime.ts", "scripts/build-cli-package.ts", "plugins/shared/hooks/process-budget.mjs"]);
   const expected = new TextDecoder().decode(inventory.stdout).split("\0").filter((path) =>
     fixed.has(path) || (/^(?:packages\/[^/]+|apps\/cli)\/(?:package\.json|src\/.*\.(?:ts|js|mjs))$/.test(path)
       && path !== "packages/app-services/src/analyzer-identity-generated.ts"));
@@ -53,6 +53,7 @@ test("analyzer identity producer binds canonical LF bytes and refuses CRLF witho
     "scripts/build-cli-package.ts": "export {};\n",
     "packages/app-services/package.json": "{}\n",
     "packages/app-services/src/value.ts": source,
+    "plugins/shared/hooks/process-budget.mjs": source,
     "apps/cli/package.json": "{}\n",
   };
   try {
@@ -78,6 +79,10 @@ test("analyzer identity producer binds canonical LF bytes and refuses CRLF witho
     expect(generate.exitCode).toBe(0);
     const output = join(root, "packages/app-services/src/analyzer-identity-generated.ts");
     const before = readFileSync(output);
+    const beforeSharedChange = analyzerIdentity(root).digest;
+    writeFileSync(join(root, "plugins/shared/hooks/process-budget.mjs"), source.replace("= 1", "= 2"));
+    expect(analyzerIdentity(root).digest).not.toBe(beforeSharedChange);
+    writeFileSync(join(root, "plugins/shared/hooks/process-budget.mjs"), source);
     const crlf = source.replaceAll("\n", "\r\n");
     writeFileSync(join(root, input), crlf);
     const refused = Bun.spawnSync([process.execPath, entry], { cwd: root, stdout: "pipe", stderr: "pipe" });

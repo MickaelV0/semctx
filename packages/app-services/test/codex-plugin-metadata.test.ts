@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { randomUUID } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, sep } from "node:path";
+import { join, relative, sep } from "node:path";
 import { readCodexManagedPreferences, readCodexPluginMetadataInventory } from "../src/plugin-delivery";
 
 const roots: string[] = [];
@@ -31,6 +32,20 @@ function fixture(): { root: string; home: string; repo: string } {
   mkdirSync(repo);
   writeGitRoot(repo);
   return { root, home, repo };
+}
+function worktreeFixture(): ReturnType<typeof fixture> & { linked: string; gitDirectory: string } {
+  const current = fixture();
+  const { root, repo } = current;
+  rmSync(join(repo, ".git"), { recursive: true });
+  execFileSync("git", ["init", "-q", repo]);
+  writeFileSync(join(repo, "source.ts"), "export const value = 1;\n");
+  execFileSync("git", ["-C", repo, "add", "--", "source.ts"]);
+  execFileSync("git", ["-C", repo, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+    "-c", "commit.gpgsign=false", "commit", "-qm", "fixture"]);
+  const linked = join(root, "linked worktree");
+  execFileSync("git", ["-C", repo, "worktree", "add", "-q", "-b", "linked", linked]);
+  const gitDirectory = execFileSync("git", ["-C", linked, "rev-parse", "--absolute-git-dir"], { encoding: "utf8" }).trim();
+  return { ...current, linked, gitDirectory };
 }
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -145,6 +160,85 @@ describe("Codex native trusted project merge inventory", () => {
 });
 
 describe("Codex declarative plugin inventory", () => {
+  test("a real linked Git worktree and its checkout have the same available inventory", () => {
+    const { home, repo, linked } = worktreeFixture();
+    expect(fs.lstatSync(join(linked, ".git")).isFile()).toBe(true);
+    expect(readFixtureInventory(repo, home, undefined, home)).toEqual({ marketplaces: [], plugins: [] });
+    expect(readFixtureInventory(linked, home, undefined, home)).toEqual({ marketplaces: [], plugins: [] });
+    const child = join(linked, "child");
+    mkdirSync(child);
+    expect(readFixtureInventory(child, home, undefined, home)).toEqual({ marketplaces: [], plugins: [] });
+  });
+
+  test("relative gitdir paths and detached worktree HEADs remain available", () => {
+    const { home, linked, gitDirectory } = worktreeFixture();
+    writeFileSync(join(linked, ".git"), `gitdir: ${relative(linked, gitDirectory)}\r\n`);
+    expect(readFixtureInventory(linked, home, undefined, home)).toEqual({ marketplaces: [], plugins: [] });
+    execFileSync("git", ["-C", linked, "checkout", "-q", "--detach"]);
+    expect(readFixtureInventory(linked, home, undefined, home)).toEqual({ marketplaces: [], plugins: [] });
+  });
+
+  for (const malformed of ["", "gitdir: \n", "gitdir:no-space\n", "gitdir: missing\n", "gitdir: //host/share\n",
+    "gitdir: \\\\host\\share\n", "gitdir: C:relative\nextra\n", "gitdir: path\0\n", "gitdir: path\nextra\n"]) {
+    test(`invalid gitfile ${JSON.stringify(malformed)} cannot hide a valid ancestor`, () => {
+      const { home, repo } = fixture();
+      const child = join(repo, "child");
+      mkdirSync(child);
+      writeFileSync(join(child, ".git"), malformed);
+      expect(readFixtureInventory(child, home, undefined, home)).toBeNull();
+    });
+  }
+
+  for (const mutation of ["missing HEAD", "malformed HEAD", "invalid UTF-8 HEAD", "linked HEAD", "linked gitfile",
+    "linked directory", "cancelled linked ancestor", "oversized gitfile", "invalid UTF-8 gitfile", "extra line", "file target"] as const) {
+    test(`worktree ${mutation} remains unavailable`, () => {
+      const { root, home, repo, linked, gitDirectory } = worktreeFixture();
+      const marker = join(linked, ".git");
+      const head = join(gitDirectory, "HEAD");
+      if (mutation === "missing HEAD" || mutation === "linked HEAD") rmSync(head);
+      if (mutation === "malformed HEAD") writeFileSync(head, "not a Git head\n");
+      if (mutation === "invalid UTF-8 HEAD") writeFileSync(head, Buffer.from([0xff]));
+      if (mutation === "linked HEAD") symlinkSync(join(repo, ".git", "HEAD"), head, "file");
+      if (mutation === "linked gitfile") {
+        renameSync(marker, join(linked, "marker"));
+        symlinkSync(join(linked, "marker"), marker, "file");
+      }
+      if (mutation === "linked directory" || mutation === "cancelled linked ancestor") {
+        const alias = join(root, "alias");
+        symlinkSync(gitDirectory, alias, process.platform === "win32" ? "junction" : "dir");
+        const target = mutation === "linked directory" ? alias : `${alias}${sep}..${sep}${relative(root, gitDirectory)}`;
+        writeFileSync(marker, `gitdir: ${target}\n`);
+      }
+      if (mutation === "oversized gitfile") writeFileSync(marker, `gitdir: ${"a".repeat(64 * 1024)}\n`);
+      if (mutation === "invalid UTF-8 gitfile") writeFileSync(marker, Buffer.concat([Buffer.from("gitdir: "), Buffer.from([0xff])]));
+      if (mutation === "extra line") writeFileSync(marker, `gitdir: ${gitDirectory}\n\n`);
+      if (mutation === "file target") writeFileSync(marker, `gitdir: ${head}\n`);
+      expect(readFixtureInventory(linked, home, undefined, home)).toBeNull();
+    });
+  }
+
+  for (const mutation of ["gitfile bytes", "gitfile identity", "HEAD bytes", "HEAD identity", "directory identity"] as const) {
+    test(`worktree ${mutation} drift between observations remains unavailable`, () => {
+      const { home, linked, gitDirectory } = worktreeFixture();
+      expect(readFixtureInventory(linked, home, () => {
+        const marker = join(linked, ".git");
+        const head = join(gitDirectory, "HEAD");
+        if (mutation === "gitfile bytes") writeFileSync(marker, `gitdir: ${gitDirectory}${sep}.\n`);
+        if (mutation === "HEAD bytes") writeFileSync(head, "ref: refs/heads/other\n");
+        if (mutation === "gitfile identity" || mutation === "HEAD identity") {
+          const file = mutation === "gitfile identity" ? marker : head;
+          renameSync(file, `${file}.old`);
+          writeFileSync(file, readFileSync(`${file}.old`));
+        }
+        if (mutation === "directory identity") {
+          renameSync(gitDirectory, `${gitDirectory}.old`);
+          mkdirSync(gitDirectory);
+          writeFileSync(head, readFileSync(join(`${gitDirectory}.old`, "HEAD")));
+        }
+      }, home)).toBeNull();
+    });
+  }
+
   test("fixture authority is known absent while explicit unknown and present overrides remain authoritative", () => {
     const { home, repo } = fixture();
     expect(readFixtureInventory(repo, home, undefined, home)).toEqual({ marketplaces: [], plugins: [] });

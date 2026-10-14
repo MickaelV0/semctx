@@ -3,6 +3,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { normalizePath, SemctxError } from "@semantic-context/core";
 import type { SemctxConfig } from "@semantic-context/core";
 import ts from "typescript";
+import { gitEnvironment, processLimits } from "../../../plugins/shared/hooks/process-budget.mjs";
 import { canonicalFilesystemPath as canonicalPath, resolveTypeScriptModule } from "./ts-symbols";
 
 export type FileRole = "source" | "test" | "document" | "migration" | "other";
@@ -194,9 +195,18 @@ export function createDiscoveryPathExclusion(config: SemctxConfig): (inputPath: 
  * Keep the original selector when broadening discovery for inbound dependency closure.
  */
 export function createQualifiedPathEligibility(config: SemctxConfig): (relPath: string) => boolean {
-  const result = Bun.spawnSync(["git", "ls-files", "-z", "--cached", "--others", "--exclude-per-directory=.gitignore"], {
-    cwd: config.repositoryRoot, stdout: "pipe", stderr: "pipe",
+  // Same contract as core Git captures: no inherited GIT_*/GCM_*, a deadline and an output ceiling,
+  // refused as GIT_ERROR. `app-services` owns that helper and depends on this package.
+  const limits = processLimits();
+  const command = ["git", "ls-files", "-z", "--cached", "--others", "--exclude-per-directory=.gitignore"];
+  const result = Bun.spawnSync(command, {
+    cwd: config.repositoryRoot, stdout: "pipe", stderr: "pipe", env: gitEnvironment(), ...limits,
   });
+  if (result.exitedDueToTimeout || result.exitedDueToMaxBuffer
+    || result.stdout.byteLength >= limits.maxBuffer || result.stderr.byteLength >= limits.maxBuffer) {
+    const reason = result.exitedDueToTimeout ? "PROCESS_TIMEOUT" : "PROCESS_OUTPUT_LIMIT";
+    throw new SemctxError("GIT_ERROR", `${reason}: Git capture refused`, { command, reason, timeoutMs: limits.timeout });
+  }
   if (result.exitCode !== 0) {
     throw new SemctxError("IO_ERROR", "qualified discovery could not establish Git source eligibility");
   }
@@ -268,7 +278,7 @@ function escapedDependencyReason(
   const canonicalRoot = canonicalPath(root);
   const preprocessed = ts.preProcessFile(content, true, true);
   for (const imported of preprocessed.importedFiles) {
-    if (!imported.fileName.startsWith(".")) continue;
+    if (!ts.isExternalModuleNameRelative(imported.fileName)) continue;
     const lexical = resolve(dirname(absPath), imported.fileName);
     if (!isContained(canonicalRoot, canonicalPath(lexical))) return "IMPORT_OUTSIDE_REPOSITORY";
     const resolved = resolveTypeScriptModule(imported.fileName, absPath, undefined, undefined, undefined, undefined, root);

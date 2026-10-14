@@ -747,25 +747,30 @@ describe("Codex and Claude Code plugin parity", () => {
   test("both plugin trees ship the same shadow lifecycle hook, and Claude keeps its guard", () => {
     // The hook body and its generated contract are byte-identical across hosts; only the wiring
     // differs. dist/ parity does not cover hooks/, so the comparison is made explicitly here.
-    for (const name of ["semctx-lifecycle.mjs", "semctx-lifecycle-contract.json"]) {
+    for (const name of ["process-budget.mjs", "semctx-lifecycle.mjs", "semctx-lifecycle-contract.json"]) {
       expect(readFileSync(resolve(repoRoot, `plugins/claude-code/hooks/${name}`)))
         .toEqual(readFileSync(resolve(repoRoot, `plugins/semctx-control/hooks/${name}`)));
     }
     // The shared source is the SSOT for the body; the contract is generated and has no shared file.
     expect(read("plugins/shared/hooks/semctx-lifecycle.mjs"))
       .toBe(read("plugins/claude-code/hooks/semctx-lifecycle.mjs"));
+    expect(existsSync(resolve(repoRoot, "plugins/shared/hooks/process-budget.mjs"))).toBe(true);
+    expect(read("plugins/shared/hooks/process-budget.mjs"))
+      .toBe(read("plugins/claude-code/hooks/process-budget.mjs"));
 
     const hookFiles = (plugin: "claude-code" | "semctx-control"): string[] =>
       readdirSync(resolve(repoRoot, `plugins/${plugin}/hooks`)).sort();
     // Claude additionally carries the unrelated commit/push guard (ADR 0007); Codex never has.
     expect(hookFiles("claude-code")).toEqual([
       "hooks.json",
+      "process-budget.mjs",
       "semctx-guard.mjs",
       "semctx-lifecycle-contract.json",
       "semctx-lifecycle.mjs",
     ]);
     expect(hookFiles("semctx-control")).toEqual([
       "hooks.json",
+      "process-budget.mjs",
       "semctx-lifecycle-contract.json",
       "semctx-lifecycle.mjs",
     ]);

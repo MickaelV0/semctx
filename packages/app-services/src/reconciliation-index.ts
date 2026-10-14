@@ -1,3 +1,4 @@
+import { spawnGitSync } from "./git-process";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -2001,7 +2002,7 @@ function fingerprintAnalyzerConfig(
 }
 
 function gitBytes(root: string, args: readonly string[]): Uint8Array {
-  const process = Bun.spawnSync(["git", "--no-optional-locks", ...args], {
+  const process = spawnGitSync(["git", "--no-optional-locks", ...args], {
     cwd: root,
     stdout: "pipe",
     stderr: "pipe",

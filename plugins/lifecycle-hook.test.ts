@@ -143,7 +143,7 @@ describe("shadow lifecycle contract is generated from the canonical contracts", 
   });
 
   test("both trees ship the same hook body and the same contract, byte for byte", () => {
-    for (const name of [LIFECYCLE_HOOK_SOURCE_NAME, LIFECYCLE_HOOK_CONTRACT_NAME]) {
+    for (const name of ["process-budget.mjs", LIFECYCLE_HOOK_SOURCE_NAME, LIFECYCLE_HOOK_CONTRACT_NAME]) {
       expect(readFileSync(join(hostHookDirs["claude-code"], name))).toEqual(
         readFileSync(join(hostHookDirs["semctx-control"], name)),
       );
@@ -153,6 +153,9 @@ describe("shadow lifecycle contract is generated from the canonical contracts", 
       .replaceAll("\r\n", "\n"))
       .toBe(readFileSync(join(hostHookDirs["claude-code"], LIFECYCLE_HOOK_SOURCE_NAME), "utf8")
         .replaceAll("\r\n", "\n"));
+    expect(readdirSync(resolve(repoRoot, "plugins/shared/hooks"))).toContain("process-budget.mjs");
+    expect(readFileSync(resolve(repoRoot, "plugins/shared/hooks/process-budget.mjs")))
+      .toEqual(readFileSync(join(hostHookDirs["claude-code"], "process-budget.mjs")));
   });
 
   test("the tool table is the canonical workflow table, recomputed independently", () => {

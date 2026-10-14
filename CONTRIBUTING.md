@@ -8,7 +8,7 @@ public journey without writing authored declarations or installing a global plug
 Control Handoff v2 capture/explain, staleness detection, and a refused resume, end to end.
 
 <!-- semctx:compatibility:start -->
-Semctx **0.4.5** requires **Bun >=1.4.0**.
+Semctx **0.4.5** requires **Bun >=1.4.3**.
 The supported, tested host baseline is **Codex 0.147.0** and
 **Claude Code 2.1.229**. Other host versions are **unknown** until tested;
 these pins do not claim the earliest historically compatible versions.
@@ -63,7 +63,7 @@ bun run semctx status --json
 bun run semctx index-health --json
 bun run semctx semantic check --json
 bun run semctx verify diff --base upstream/main --format json
-bun run semctx change verify change.semctx.project-evidence-config --base upstream/main --format json
+bun run semctx change verify change.semctx.review-349-followups --base upstream/main --format json
 ```
 
 Fetch `upstream/main` first, or use the actual integration base ref of your checkout. After a
