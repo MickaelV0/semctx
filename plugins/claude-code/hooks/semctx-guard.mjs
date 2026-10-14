@@ -5,7 +5,7 @@
 //
 // It parses the Bash command STRUCTURALLY (segments + tokens, never a shell eval) and never
 // executes PR/agent content. It gates on canonical content fingerprints — no analysis runs here.
-import { existsSync, lstatSync, readFileSync, readlinkSync, realpathSync, readdirSync } from "node:fs";
+import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, realpathSync, readdirSync } from "node:fs";
 import { execFileSyncWithinBudget, spawnSyncWithinBudget, runProcessWithinBudget, GUARD_PROCESS_BUDGET_MS } from "./process-budget.mjs";
 
 let guardDeadline;
@@ -1596,8 +1596,13 @@ function readJson(path) {
 }
 
 function readGuardJson(path) {
+  let descriptor;
   try {
-    const value = JSON.parse(readFileSync(path, "utf8"));
+    descriptor = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
+    // Check the opened object, not a separate path lookup: symlinks to regular declarations work,
+    // while FIFOs/devices cannot stall the enablement walk before its repository root is observed.
+    if (!fstatSync(descriptor).isFile()) return { status: "unknown", value: null };
+    const value = JSON.parse(readFileSync(descriptor, "utf8"));
     if (
       value === null
       || typeof value !== "object"
@@ -1613,6 +1618,8 @@ function readGuardJson(path) {
       return { status: "absent", value: null };
     }
     return { status: "unknown", value: null };
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
   }
 }
 

@@ -2068,22 +2068,17 @@ it.skipIf(process.platform === "win32")("explicit advisory mode does not wait fo
   }
 });
 
-for (const mode of ["blocked", "delayed-probe", "off"] as const) {
+for (const mode of ["fifo", "symlink-fifo", "off"] as const) {
   it.skipIf(process.platform === "win32").concurrent(`the real hook bounds a FIFO guard configuration (${mode})`, async () => {
     const root = mkdtempSync(join(tmpdir(), "semctx-guard-fifo-config-"));
     const config = join(root, ".semctx", "guard.json");
-    let writer: ReturnType<typeof Bun.spawn> | undefined;
     let child: ReturnType<typeof Bun.spawn> | undefined;
     try {
       mkdirSync(join(root, ".semctx"));
-      execFileSync("mkfifo", [config]);
+      const fifo = mode === "symlink-fifo" ? join(root, "guard.fifo") : config;
+      execFileSync("mkfifo", [fifo]);
+      if (mode === "symlink-fifo") symlinkSync(fifo, config);
       const started = performance.now();
-      if (mode === "delayed-probe") {
-        // The probe consumes two seconds before reading the declaration; the real worker then
-        // blocks on the same FIFO. Giving each phase a fresh 15 seconds would take 17 seconds.
-        const release = `await Bun.sleep(2000); require('node:fs').writeFileSync(${JSON.stringify(config)}, '{"enabled":false}');`;
-        writer = Bun.spawn([process.execPath, "-e", release], { stdin: "ignore", stdout: "ignore", stderr: "pipe" });
-      }
       const running = Bun.spawn([process.execPath, GUARD_SCRIPT], {
         cwd: root, env: hookEnvironment(undefined, mode === "off" ? { SEMCTX_GUARD: "off" } : {}),
         stdin: "pipe", stdout: "pipe", stderr: "pipe", timeout: 18_000, killSignal: "SIGKILL",
@@ -2094,18 +2089,50 @@ for (const mode of ["blocked", "delayed-probe", "off"] as const) {
       const status = await running.exited;
       const elapsed = performance.now() - started;
       expect(status).toBe(0);
-      expect(elapsed).toBeLessThan(mode === "off" ? 1000 : GUARD_PROCESS_BUDGET_MS + 1500);
-      expect(await new Response(running.stderr).text()).toBe(mode === "off" ? "" : "PROCESS_TIMEOUT: semctx guard exceeded its 15000 ms budget; verification remains unknown.\n");
-      if (writer !== undefined) expect(await writer.exited).toBe(0);
+      expect(elapsed).toBeLessThan(3000);
+      expect(await new Response(running.stderr).text()).not.toContain("PROCESS_TIMEOUT");
     } finally {
       child?.kill("SIGTERM");
-      writer?.kill("SIGKILL");
       if (child !== undefined) await child.exited;
-      if (writer !== undefined) await writer.exited;
       rmSync(root, { recursive: true, force: true });
     }
   }, 22_000);
 }
+
+it.concurrent("configuration probe and worker share one cumulative hook deadline", async () => {
+  const root = mkdtempSync(join(tmpdir(), "semctx-guard-probe-deadline-"));
+  let child: ReturnType<typeof Bun.spawn> | undefined;
+  try {
+    declareGuard(root, false);
+    const marker = join(root, "probe-delayed");
+    const preload = join(root, "delay-probe.cjs");
+    writeFileSync(preload, [
+      "const fs=require('node:fs'); const read=fs.readFileSync; let delayed=false;",
+      `fs.readFileSync=function(path,...args){if(process.argv.includes('--guard-config-probe') && typeof path==='number' && !delayed){delayed=true; fs.writeFileSync(${JSON.stringify(marker)},'started'); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,2000);} return read.call(this,path,...args);};`,
+      "require('node:module').syncBuiltinESMExports();",
+    ].join("\n"));
+    const node = Bun.which("node");
+    if (node === null) throw new Error("Node is required to exercise the native hook stdin boundary");
+    const started = performance.now();
+    const running = Bun.spawn([node, GUARD_SCRIPT], {
+      cwd: root, env: hookEnvironment(undefined, { NODE_OPTIONS: `--require ${JSON.stringify(preload.replaceAll("\\", "/"))}` }),
+      stdin: "pipe", stdout: "pipe", stderr: "pipe", timeout: 18_000, killSignal: "SIGKILL",
+    });
+    child = running;
+    // Keep stdin open: after the two-second probe, the worker cannot finish reading its payload.
+    await running.stdin.write(JSON.stringify({ tool_name: "Bash", cwd: root, tool_input: { command: "git commit -m fixture" } }));
+    expect(await running.exited).toBe(0);
+    await running.stdin.end();
+    expect(existsSync(marker)).toBe(true);
+    expect(performance.now() - started).toBeGreaterThanOrEqual(GUARD_PROCESS_BUDGET_MS - 500);
+    expect(performance.now() - started).toBeLessThan(GUARD_PROCESS_BUDGET_MS + 1500);
+    expect(await new Response(running.stderr).text()).toContain("PROCESS_TIMEOUT");
+  } finally {
+    child?.kill("SIGTERM");
+    if (child !== undefined) await child.exited;
+    await removeFixture(root);
+  }
+}, 22_000);
 
 it.skipIf(process.platform === "win32").each([true, false])("a timed-out hook preserves repository guard enablement (%s)", (enabled) => {
   const root = mkdtempSync(join(tmpdir(), "semctx-guard-config-budget-"));
@@ -2180,7 +2207,7 @@ function hookEnvironment(path?: string, extra: Record<string, string> = {}): Nod
 }
 
 /** Run the real hook under Node, as Claude Code does, with no activation override in its environment. */
-function runGuardHook(cwd: string, command: string, env: NodeJS.ProcessEnv): Promise<GuardHookRun> {
+function runGuardHook(cwd: string, command: string, env: NodeJS.ProcessEnv, timeoutMs = 30_000): Promise<GuardHookRun> {
   const node = Bun.which("node");
   if (node === null) throw new Error("Node is required to exercise the native hook process boundary");
   return new Promise((settle, fail) => {
@@ -2188,7 +2215,7 @@ function runGuardHook(cwd: string, command: string, env: NodeJS.ProcessEnv): Pro
     let stderr = "";
     child.stderr.on("data", (chunk) => { stderr += chunk; });
     child.stdin.on("error", () => { /* the worker may already be gone */ });
-    const limit = setTimeout(() => child.kill("SIGKILL"), 30_000);
+    const limit = setTimeout(() => child.kill("SIGKILL"), timeoutMs);
     child.on("error", (error) => { clearTimeout(limit); fail(error); });
     child.on("close", (status) => { clearTimeout(limit); settle({ status, stderr }); });
     child.stdin.end(JSON.stringify({ tool_name: "Bash", cwd, tool_input: { command } }));
@@ -2208,6 +2235,41 @@ function declareGuard(directory: string, declaration: boolean | string): void {
     join(directory, ".semctx", "guard.json"),
     typeof declaration === "boolean" ? JSON.stringify({ enabled: declaration }) : declaration,
   );
+}
+
+for (const mode of ["fifo", "symlink-fifo", "symlink-regular", "absent", "disabled", "off", "advisory-fifo"] as const) {
+  it.skipIf(process.platform === "win32").concurrent(`a retargeted nested guard preserves repository activation (${mode})`, async () => {
+    const root = mkdtempSync(join(tmpdir(), "semctx-guard-nested-type-"));
+    try {
+      const session = fixtureRepository(join(root, "session"), false);
+      const target = fixtureRepository(join(root, "target"), mode !== "advisory-fifo");
+      for (const repository of [session, target]) execFileSync("git", ["init", "-q", repository]);
+      const nested = join(target, "pkg");
+      mkdirSync(nested);
+      if (mode === "symlink-regular") {
+        const declaration = join(target, "declaration.json");
+        writeFileSync(declaration, '{"enabled":true}');
+        unlinkSync(join(target, ".semctx", "guard.json"));
+        symlinkSync(declaration, join(target, ".semctx", "guard.json"));
+      } else if (mode === "disabled") {
+        declareGuard(nested, false);
+      } else if (mode !== "absent") {
+        mkdirSync(join(nested, ".semctx"));
+        const config = join(nested, ".semctx", "guard.json");
+        const fifo = mode === "symlink-fifo" ? join(root, "guard.fifo") : config;
+        execFileSync("mkfifo", [fifo]);
+        if (mode === "symlink-fifo") symlinkSync(fifo, config);
+      }
+      const started = performance.now();
+      const run = await runGuardHook(session, `git -C ${shellQuote(nested)} commit -m fixture`,
+        hookEnvironment(undefined, mode === "off" ? { SEMCTX_GUARD: "off" } : {}), 18_000);
+      expect(run.status).toBe(mode === "off" || mode === "advisory-fifo" ? 0 : 2);
+      expect(run.stderr).not.toContain("PROCESS_TIMEOUT");
+      expect(performance.now() - started).toBeLessThan(3000);
+    } finally {
+      await removeFixture(root);
+    }
+  }, 22_000);
 }
 
 describe("a stalled Git probe cannot hide an enabled guard scope (ADR 0007, ADR 0029)", () => {
