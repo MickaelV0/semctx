@@ -1,6 +1,6 @@
 # Run the packaged continuity demo
 
-From this repository, with Bun >=1.4.0 and Git available:
+From this repository, with Bun >=1.4.3 and Git available:
 
 ```sh
 bun install --frozen-lockfile

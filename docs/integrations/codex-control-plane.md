@@ -28,7 +28,7 @@ user request
 
 ## Install or update
 
-Requirements: Codex CLI with plugin support and Bun 1.4 or newer. Node is additionally required
+Requirements: Codex CLI with plugin support and Bun 1.4.3 or newer. Node is additionally required
 on `PATH` for the shadow lifecycle hook, which runs under Node rather than Bun so the observer
 works on a machine that has no Bun — the same reason the Claude commit/push guard does. Without
 Node the hook simply never runs; nothing else is affected. The plugin contains its own MCP

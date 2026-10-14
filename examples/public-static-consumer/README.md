@@ -8,7 +8,7 @@ under a new output directory, so no live pull request or checkout is modified.
 Before running the harness:
 
 1. Freeze a clean candidate and record `git rev-parse HEAD` and
-   `git rev-parse HEAD^{tree}`. Use the repository's pinned Bun 1.4.0.
+   `git rev-parse HEAD^{tree}`. Use the repository's pinned Bun 1.4.3.
 2. From the repository root, build the CLI with `bun scripts/build-cli-package.ts`.
    Run `bun pm pack` from `apps/cli`, then install that tarball in a disposable
    wrapper. Generate the plugins with `bun scripts/build-plugin-runtime.ts` from

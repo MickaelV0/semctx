@@ -44,7 +44,8 @@ export function runChild(
     argv,
     cwd: options.cwd,
     code: proc.exitCode ?? null,
-    signal: proc.signalCode ?? null,
+    // Bun 1.4.3 reports a signal that has no name as its number; keep the recorded contract a string.
+    signal: proc.signalCode === undefined || proc.signalCode === null ? null : String(proc.signalCode),
     durationMs,
     stdout: new TextDecoder().decode(proc.stdout),
     stderr: new TextDecoder().decode(proc.stderr),

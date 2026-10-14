@@ -335,7 +335,7 @@ outside the qualified source inventory. These boundaries do not establish runtim
 ## Reproduction and validation
 
 Build and pack the CLI, install that tarball into a disposable wrapper, generate the plugins
-with the repository's pinned Bun 1.4.0, then run the public harness with explicit artifact paths:
+with the repository's pinned Bun 1.4.3, then run the public harness with explicit artifact paths:
 
 ```sh
 bun scripts/qualify-public-static.ts --source-root <candidate> \

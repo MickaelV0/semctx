@@ -63,7 +63,7 @@ function fixture(): string {
     "site/landing/index.html",
     `<span>${version} ·</span><code>semctx@${version} install</code><code>github-action@v${version}</code>`
       + `<a href="https://github.com/hoklims/semctx/releases/tag/v${version}">release</a>`
-      + `<p>Bun 1.4.0 or newer</p><style>@media (prefers-reduced-motion: reduce) {} @media (max-width: 640px) {}
+      + `<p>Bun 1.4.3 or newer</p><style>@media (prefers-reduced-motion: reduce) {} @media (max-width: 640px) {}
   @supports not (animation-timeline: view()) {
     .scene, .reveal { animation: none !important; opacity: 1 !important; transform: none !important; }
     .graph line, .graph path { stroke-dashoffset: 0 !important; }

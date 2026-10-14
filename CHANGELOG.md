@@ -9,6 +9,17 @@ GitHub Release advance together through the tag-driven lockstep workflow documen
 
 ## [Unreleased]
 
+### Changed
+
+- Bun is pinned to 1.4.3 in every CI workflow (CI, release, Pages, documentation links and
+  stable delivery proof), the GitHub Action, the devcontainer, the plugin artifact generator
+  and `@types/bun`. The CI and release pins equal the supported minimum by contract
+  (`bun run compatibility:check`), so the supported Bun minimum rises from 1.4.0 to 1.4.3.
+  The tracked plugin bundles and the GitHub Action report validator are regenerated with that
+  Bun; the bundler partitions code between `semctx-mcp.js` and `semctx-shared.js` differently.
+- Tooling scripts record a process signal as a string when Bun 1.4.3 reports an unnamed signal
+  by its number; named signals are recorded exactly as before.
+
 ## [0.4.5] - 2026-10-13
 
 ### Fixed

@@ -1,7 +1,7 @@
 # semctx
 
 <!-- semctx:compatibility:start -->
-Semctx **0.4.5** requires **Bun >=1.4.0**.
+Semctx **0.4.5** requires **Bun >=1.4.3**.
 The supported, tested host baseline is **Codex 0.147.0** and
 **Claude Code 2.1.229**. Other host versions are **unknown** until tested;
 these pins do not claim the earliest historically compatible versions.
@@ -20,7 +20,7 @@ task?"* — it answers *"given this change, what did it put at risk, and is it p
 
 ## Install
 
-Requires [Bun](https://bun.sh) ≥ 1.4.0. The CLI ships as a single self-contained bundle that runs on
+Requires [Bun](https://bun.sh) ≥ 1.4.3. The CLI ships as a single self-contained bundle that runs on
 Bun (no `node_modules` to install).
 
 ```bash
