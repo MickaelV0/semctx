@@ -2068,6 +2068,45 @@ it.skipIf(process.platform === "win32")("explicit advisory mode does not wait fo
   }
 });
 
+for (const mode of ["blocked", "delayed-probe", "off"] as const) {
+  it.skipIf(process.platform === "win32").concurrent(`the real hook bounds a FIFO guard configuration (${mode})`, async () => {
+    const root = mkdtempSync(join(tmpdir(), "semctx-guard-fifo-config-"));
+    const config = join(root, ".semctx", "guard.json");
+    let writer: ReturnType<typeof Bun.spawn> | undefined;
+    let child: ReturnType<typeof Bun.spawn> | undefined;
+    try {
+      mkdirSync(join(root, ".semctx"));
+      execFileSync("mkfifo", [config]);
+      const started = performance.now();
+      if (mode === "delayed-probe") {
+        // The probe consumes two seconds before reading the declaration; the real worker then
+        // blocks on the same FIFO. Giving each phase a fresh 15 seconds would take 17 seconds.
+        const release = `await Bun.sleep(2000); require('node:fs').writeFileSync(${JSON.stringify(config)}, '{"enabled":false}');`;
+        writer = Bun.spawn([process.execPath, "-e", release], { stdin: "ignore", stdout: "ignore", stderr: "pipe" });
+      }
+      const running = Bun.spawn([process.execPath, GUARD_SCRIPT], {
+        cwd: root, env: hookEnvironment(undefined, mode === "off" ? { SEMCTX_GUARD: "off" } : {}),
+        stdin: "pipe", stdout: "pipe", stderr: "pipe", timeout: 18_000, killSignal: "SIGKILL",
+      });
+      child = running;
+      await running.stdin.write(JSON.stringify({ tool_name: "Bash", cwd: root, tool_input: { command: "git commit -m fixture" } }));
+      await running.stdin.end();
+      const status = await running.exited;
+      const elapsed = performance.now() - started;
+      expect(status).toBe(0);
+      expect(elapsed).toBeLessThan(mode === "off" ? 1000 : GUARD_PROCESS_BUDGET_MS + 1500);
+      expect(await new Response(running.stderr).text()).toBe(mode === "off" ? "" : "PROCESS_TIMEOUT: semctx guard exceeded its 15000 ms budget; verification remains unknown.\n");
+      if (writer !== undefined) expect(await writer.exited).toBe(0);
+    } finally {
+      child?.kill("SIGTERM");
+      writer?.kill("SIGKILL");
+      if (child !== undefined) await child.exited;
+      if (writer !== undefined) await writer.exited;
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 22_000);
+}
+
 it.skipIf(process.platform === "win32").each([true, false])("a timed-out hook preserves repository guard enablement (%s)", (enabled) => {
   const root = mkdtempSync(join(tmpdir(), "semctx-guard-config-budget-"));
   try {

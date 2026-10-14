@@ -12,7 +12,7 @@ let guardDeadline;
 let guardBlockingEstablished = false;
 function observeGuardEnablement() {
   guardBlockingEstablished = true;
-  if (process.argv[2] === "--bounded-worker") process.send?.({ semctxGuardEnabled: true });
+  if (process.argv[2] === "--bounded-worker" || process.argv[2] === "--guard-config-probe") process.send?.({ semctxGuardEnabled: true });
 }
 function guardProcessOptions(options) {
   const remaining = guardDeadline === undefined ? GUARD_PROCESS_BUDGET_MS : Math.floor(guardDeadline - performance.now());
@@ -2036,16 +2036,30 @@ function mainWithinBudget() {
 }
 
 async function main() {
+  const deadline = performance.now() + GUARD_PROCESS_BUDGET_MS;
   const override = guardEnvironmentOverride(process.env);
   if (override === false) process.exit(0);
+  if (process.argv[2] === "--guard-config-probe") {
+    if (hookWorkingDirectoryGuardEnabled()) observeGuardEnablement();
+    process.exit(0);
+  }
   if (process.argv[2] === "--bounded-worker") return mainWithinBudget();
-  // The exact working-directory declaration is a pure filesystem read, so it still blocks when the
-  // worker is lost before its first message (spawn failure, crash, external kill).
-  let blockingEstablished = override === true || hookWorkingDirectoryGuardEnabled();
-  const outcome = await runProcessWithinBudget([process.execPath, process.argv[1], "--bounded-worker"], {
-    cwd: process.cwd(), budgetMs: GUARD_PROCESS_BUDGET_MS, stdin: "inherit",
-    onMessage: (message) => { if (message?.semctxGuardEnabled === true) blockingEstablished = true; },
-  });
+  // Even opening a local declaration can block (for example a FIFO). Probe it in a child before
+  // the real worker, preserving known enablement if that worker is lost. Both share one deadline.
+  let blockingEstablished = override === true;
+  let outcome = { kind: "timeout" };
+  for (const mode of override === true ? ["--bounded-worker"] : ["--guard-config-probe", "--bounded-worker"]) {
+    const remaining = Math.floor(deadline - performance.now());
+    if (remaining <= 0) {
+      outcome = { kind: "timeout" };
+      break;
+    }
+    outcome = await runProcessWithinBudget([process.execPath, process.argv[1], mode], {
+      cwd: process.cwd(), budgetMs: remaining, stdin: "inherit",
+      onMessage: (message) => { if (message?.semctxGuardEnabled === true) blockingEstablished = true; },
+    });
+    if (outcome.kind === "timeout" || outcome.exitCode !== 0) break;
+  }
   if (outcome.kind === "timeout") {
     process.stderr.write("PROCESS_TIMEOUT: semctx guard exceeded its 15000 ms budget; verification remains unknown.\n");
     process.exit(blockingEstablished ? 2 : 0);
