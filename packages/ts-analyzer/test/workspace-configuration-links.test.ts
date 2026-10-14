@@ -528,7 +528,8 @@ test.skipIf(!canCreateFileSymlink())("an unsafe closest initial config stays inv
   rmSync(join(root, "domains/catalog/api/src/tsconfig.json"));
   symlinkSync(join(root, "domains/catalog/api/tsconfig.json"), join(root, "domains/catalog/api/src/tsconfig.json"), "file");
   expect(resolveTypeScriptModule("#external", source, undefined, true, undefined, resolver, root)).toBe(`${root}/tooling/config/tsconfig/shared.ts`);
-  expect(configurationFailures(inspectModuleConfiguration(source, root, undefined, undefined, resolver))).toEqual([]);
+  // The workspace changed under this configuration path: a pass that observes it starts anew.
+  expect(configurationFailures(inspectModuleConfiguration(source, root, undefined, undefined, createWorkspaceLinkResolver()))).toEqual([]);
 });
 
 test.skipIf(!canCreateFileSymlink())("a canonical in-root initial config alias remains usable", () => {
@@ -753,5 +754,138 @@ for (const directInheritance of [false, true]) test.skipIf(!canCreateFileSymlink
     expect([...resolver.inputs.values()]).not.toContain(payload);
     rmSync(gitMarker, { recursive: marker === "directory" });
     expect(configurationFailures(inspectModuleConfiguration(source, root))).toEqual([]);
+  }
+});
+
+/**
+ * Reads of the named files through the compiler system the live inspection consumes. A pass that
+ * parses a shared configuration again for every source it governs shows here as one read each.
+ */
+function countReads(paths: readonly string[], run: () => void): number[] {
+  const original = ts.sys.readFile.bind(ts.sys);
+  const wanted = paths.map(path => path.replaceAll("\\", "/"));
+  const reads = wanted.map(() => 0);
+  const probe = spyOn(ts.sys, "readFile").mockImplementation(((target: string, encoding?: string) => {
+    const index = wanted.indexOf(target.replaceAll("\\", "/"));
+    if (index >= 0) reads[index]! += 1;
+    return original(target, encoding);
+  }) as typeof ts.sys.readFile);
+  try { run(); } finally { probe.mockRestore(); }
+  return reads;
+}
+
+/** One governed package, one package governed by a broken configuration, one without any. */
+function governedSources(): { root: string; sources: string[]; api: string[] } {
+  const { root, source } = workspace();
+  write(root, {
+    "domains/catalog/api/src/second.ts": "export const second = 2;\n",
+    "domains/catalog/api/src/nested/third.ts": "export const third = 3;\n",
+    "domains/catalog/broken/package.json": JSON.stringify({ name: "@fixture/broken" }),
+    "domains/catalog/broken/tsconfig.json": JSON.stringify({ extends: "@fixture/missing/tsconfig.json" }),
+    "domains/catalog/broken/src/broken.ts": "export const broken = 1;\n",
+    "domains/catalog/broken/src/other.ts": "export const other = 1;\n",
+    "domains/catalog/loose/src/loose.ts": "export const loose = 1;\n",
+  });
+  const api = [source, `${root}/domains/catalog/api/src/second.ts`, `${root}/domains/catalog/api/src/nested/third.ts`];
+  return {
+    root, api,
+    sources: [
+      ...api,
+      `${root}/domains/catalog/broken/src/broken.ts`,
+      `${root}/domains/catalog/broken/src/other.ts`,
+      `${root}/domains/catalog/loose/src/loose.ts`,
+    ],
+  };
+}
+
+test("one pass reads each governing configuration once, however many sources it governs", () => {
+  const { root, api } = governedSources();
+  const resolver = createWorkspaceLinkResolver();
+  const own = `${root}/domains/catalog/api/tsconfig.json`;
+  const inherited = `${root}/tooling/config/tsconfig/node.json`;
+  const reads = countReads([own, inherited], () => {
+    for (const path of api) expect(inspectModuleConfiguration(path, root, undefined, undefined, resolver)).toEqual([]);
+  });
+  expect(reads).toEqual([1, 1]);
+});
+
+test("a shared pass returns every source's reasons and records every input a separate pass would", () => {
+  const { root, sources } = governedSources();
+  const separate = sources.map(path => {
+    const resolver = createWorkspaceLinkResolver();
+    return { reasons: inspectModuleConfiguration(path, root, undefined, undefined, resolver), inputs: resolver.inputs };
+  });
+  // The fixture is not vacuous: governed sources are accepted, broken ones are refused.
+  expect(separate.map(entry => entry.reasons.filter(reason => reason.startsWith("SOURCE_CONFIGURATION_INVALID:6053")).length > 0))
+    .toEqual([false, false, false, true, true, false]);
+  const expectedInputs = [...new Map(separate.flatMap(entry => [...entry.inputs])).entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  for (const order of [sources, [...sources].reverse()]) {
+    const shared = createWorkspaceLinkResolver();
+    const reasons = new Map(order.map(path => [path, inspectModuleConfiguration(path, root, undefined, undefined, shared)]));
+    expect(sources.map(path => reasons.get(path))).toEqual(separate.map(entry => entry.reasons));
+    expect([...shared.inputs].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))).toEqual(expectedInputs);
+  }
+});
+
+test("a configuration changed between passes is observed by the next pass", () => {
+  const { root, api } = governedSources();
+  const first = createWorkspaceLinkResolver();
+  for (const path of api) expect(inspectModuleConfiguration(path, root, undefined, undefined, first)).toEqual([]);
+  write(root, { "domains/catalog/api/tsconfig.json": JSON.stringify({ extends: "@fixture/missing/tsconfig.json" }) });
+  const second = createWorkspaceLinkResolver();
+  for (const path of api) {
+    expect(inspectModuleConfiguration(path, root, undefined, undefined, second)
+      .some(reason => reason.startsWith("SOURCE_CONFIGURATION_INVALID:6053"))).toBe(true);
+  }
+});
+
+/**
+ * Only the live, source-less inspection is a function of the governing configuration alone. A
+ * retained snapshot or a parsed source adds reasons that belong to one source, so a pass that
+ * shared the answer would give the first source's reasons to every other source under the same
+ * configuration, in either order.
+ */
+test("a shared pass never reuses an answer that depends on the inspected source", () => {
+  const configuration = JSON.stringify({ compilerOptions: { module: "ESNext", moduleResolution: "Bundler" } });
+  const sources = { refused: "export default (() => 1) as () => number;\n", accepted: "export const accepted = 1;\n" };
+  const orders = [["refused", "accepted"], ["accepted", "refused"]] as const;
+
+  // Retained snapshot, no parsed source: the reasons come from the retained bytes of each source.
+  const snapshotRoot = "/fixture";
+  const snapshot = new Map<string, string>([
+    [`${snapshotRoot}/tsconfig.json`, configuration],
+    [`${snapshotRoot}/refused.ts`, sources.refused],
+    [`${snapshotRoot}/accepted.ts`, sources.accepted],
+  ]);
+  const separate = { refused: inspectModuleConfiguration(`${snapshotRoot}/refused.ts`, snapshotRoot, snapshot), accepted: inspectModuleConfiguration(`${snapshotRoot}/accepted.ts`, snapshotRoot, snapshot) };
+  // Not vacuous: the two sources under one configuration do not share their reasons.
+  expect(separate.refused).toContain("SOURCE_DEFAULT_EXPRESSION_UNSUPPORTED");
+  expect(separate.accepted).toEqual([]);
+  for (const order of orders) {
+    const shared = createWorkspaceLinkResolver();
+    const reasons = Object.fromEntries(order.map(name =>
+      [name, inspectModuleConfiguration(`${snapshotRoot}/${name}.ts`, snapshotRoot, snapshot, undefined, shared)]));
+    expect(reasons).toEqual(separate);
+  }
+
+  // Live checkout with a parsed source: the reasons come from the parsed source.
+  const root = temporaryRoot("semctx-shared-pass-source-");
+  write(root, {
+    "package.json": JSON.stringify({ name: "fixture-root", private: true }),
+    "tsconfig.json": configuration,
+    "refused.ts": sources.refused,
+    "accepted.ts": sources.accepted,
+  });
+  const parse = (name: keyof typeof sources): ts.SourceFile =>
+    ts.createSourceFile(`${root}/${name}.ts`, sources[name], ts.ScriptTarget.Latest, true);
+  const live = { refused: inspectModuleConfiguration(`${root}/refused.ts`, root, undefined, parse("refused")),
+    accepted: inspectModuleConfiguration(`${root}/accepted.ts`, root, undefined, parse("accepted")) };
+  expect(live.refused).toContain("SOURCE_DEFAULT_EXPRESSION_UNSUPPORTED");
+  expect(live.accepted).toEqual([]);
+  for (const order of orders) {
+    const shared = createWorkspaceLinkResolver();
+    const reasons = Object.fromEntries(order.map(name =>
+      [name, inspectModuleConfiguration(`${root}/${name}.ts`, root, undefined, parse(name), shared)]));
+    expect(reasons).toEqual(live);
   }
 });

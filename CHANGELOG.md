@@ -9,6 +9,17 @@ GitHub Release advance together through the tag-driven lockstep workflow documen
 
 ## [Unreleased]
 
+### Fixed
+
+- A live freshness observation inspects each governing TypeScript configuration once per pass
+  instead of once per source it governs (#355). On a pnpm workspace whose packages extend a shared
+  member configuration, one `index-health --section` page took about 40 s for 2 300 selected files
+  in a synthetic Windows 11 reproduction and now takes about 8 s; the gain depends on the
+  workspace shape and was not measured on Linux or macOS. Report content and cursors are unchanged
+  for the same inputs. Every page still observes the working tree live, so reading a whole section
+  by cursor costs one observation per page; `semctx index-health --json` returns every detail in
+  one call.
+
 ## [0.4.5] - 2026-10-13
 
 ### Fixed
