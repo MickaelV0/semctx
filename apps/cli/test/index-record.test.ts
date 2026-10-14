@@ -242,10 +242,9 @@ describe("semctx index --record (CLI, real git)", () => {
     const root = repository();
     writeFileSync(join(root, "src", "a.ts"), FEATURE);
     expectSemctxOk(root, ["index"]);
+    const result = semctx(root, ["index", "--record", "--json"]);
     const expected = JSON.parse(expectSemctxOk(root, ["verify", "diff", "--format", "json", "--fail-on", "none"]).stdout) as { unknowns: string[] };
     expect(expected.unknowns.length).toBeGreaterThan(0);
-
-    const result = semctx(root, ["index", "--record", "--json"]);
 
     // One JSON document: the whole stdout parses once, carrying both the index fields and the
     // verification outcome, never two concatenated payloads.
@@ -275,10 +274,9 @@ describe("semctx index --record (CLI, real git)", () => {
     const root = repository();
     writeFileSync(join(root, "src", "a.ts"), FEATURE);
     expectSemctxOk(root, ["index"]);
+    const sync = captureStdout(() => runIndex(root, parseArgs(["index", "--record", "--root", root])));
     const expected = JSON.parse(expectSemctxOk(root, ["verify", "diff", "--format", "json", "--fail-on", "none"]).stdout) as { unknowns: string[] };
     expect(expected.unknowns.length).toBeGreaterThan(0);
-
-    const sync = captureStdout(() => runIndex(root, parseArgs(["index", "--record", "--root", root])));
     expect(sync.result).toBe(3);
     expect(sync.out).toContain("Recovery verification");
     expect(sync.out).toContain("recorded verification state ->");

@@ -10,7 +10,7 @@ import { indexRepository, indexRepositoryAsync, type RepositoryIndex } from "./i
 import { openReadyRepository } from "./readiness";
 import { captureRecordableVerificationGitState, type VerificationGitState } from "./verification-state";
 import { recordVerificationState, requireStableVerificationGitState } from "./verification-recording";
-import { runVerify, type VerifyComputation } from "./verify";
+import { runIndexRecoveryVerification, type VerifyComputation } from "./verify";
 
 export interface IndexRecoveryOutcome {
   index: RepositoryIndex;
@@ -107,7 +107,7 @@ function finishIndexRecovery(
 ): IndexRecoveryOutcome {
   try {
     const afterRebuild = captureRecoveryIndex(root, index);
-    const verification = runVerify(root, { kind: "working-tree" });
+    const verification = runIndexRecoveryVerification(root);
     const beforeRecord = captureRecoveryIndex(root, index);
     if (
       beforeRecord.semanticInputHash !== afterRebuild.semanticInputHash

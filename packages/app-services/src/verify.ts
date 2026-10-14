@@ -22,8 +22,8 @@ import {
 } from "@semantic-context/context-engine";
 import { analyzeAndBuildClaims, analyzeRetainedRepository } from "./indexing";
 import { openReadyRepository } from "./readiness";
-import { evaluateCapturedPlaneA, indexHealth, type IndexHealthReportV1 } from "./index-health";
-import { controlStatusWithSemanticInputs } from "./control";
+import { evaluateCapturedPlaneA, indexHealth, recoveryIndexHealth, type IndexHealthReportV1 } from "./index-health";
+import { controlStatusWithSemanticInputs, recoveryControlStatusWithSemanticInputs } from "./control";
 import {
   readUnresolvedReferenceBinding,
   type UnresolvedReferenceBindingReason,
@@ -469,6 +469,7 @@ export function observeIndexBinding(
   store: ReturnType<typeof openReadyRepository>,
   identity: SourceIdentity,
   observeSemanticInput: (hash: string) => void,
+  observeControl: typeof controlStatusWithSemanticInputs = controlStatusWithSemanticInputs,
 ): IndexBindingObservation {
   const breaks: IndexBindingBreak[] = [];
   // A diff nobody attributed to a commit cannot be joined with line ranges frozen at one. This is
@@ -510,7 +511,7 @@ export function observeIndexBinding(
 
   let freshness: ControlFreshnessStatusReport;
   try {
-    const observed = controlStatusWithSemanticInputs(root);
+    const observed = observeControl(root);
     freshness = observed.status;
     observed.semanticInputHashes.forEach(observeSemanticInput);
     const afterControl = verifyControlBarrierForTesting;
@@ -540,8 +541,9 @@ function applyIndexBindingGate(
   result: VerifyResult,
   identity: SourceIdentity,
   observeSemanticInput: (hash: string) => void,
+  observeControl: typeof controlStatusWithSemanticInputs,
 ): VerifyResult {
-  const { breaks, freshness } = observeIndexBinding(root, store, identity, observeSemanticInput);
+  const { breaks, freshness } = observeIndexBinding(root, store, identity, observeSemanticInput, observeControl);
   if (freshness === null || breaks.length > 0) return refuseImpact(result, breaks);
 
   if (!freshness.canRunHighRiskControl) {
@@ -952,6 +954,19 @@ function applyQualifiedWorkingTreeGuards(
 
 /** Shared CLI/MCP verification use case. Always returns the ADR-0008 report. */
 export function runVerify(root: string, source: VerifySource): VerifyComputation {
+  return computeVerification(root, source, controlStatusWithSemanticInputs, indexHealth);
+}
+
+export function runIndexRecoveryVerification(root: string): VerifyComputation {
+  return computeVerification(root, { kind: "working-tree" }, recoveryControlStatusWithSemanticInputs, recoveryIndexHealth);
+}
+
+function computeVerification(
+  root: string,
+  source: VerifySource,
+  observeControl: typeof controlStatusWithSemanticInputs,
+  observeHealth: typeof indexHealth,
+): VerifyComputation {
   const store = openReadyRepository(root);
   try {
     const config = loadConfig(root);
@@ -990,13 +1005,13 @@ export function runVerify(root: string, source: VerifySource): VerifyComputation
     // v1 repository would otherwise carry no index-binding proof at all.
     const gated = discloseUnresolvedReferences(
       store,
-      applyIndexBindingGate(root, store, baseResult, resolved.identity, (hash) => analyzedSemanticInputHashes.push(hash)),
+      applyIndexBindingGate(root, store, baseResult, resolved.identity, (hash) => analyzedSemanticInputHashes.push(hash), observeControl),
     );
     let result = config.version === 2
       ? applyAnalysisHealthPreflight(
           gated,
           changedScopePaths,
-          indexHealth(root),
+          observeHealth(root),
           discoverRepository(config).candidates,
           (path) => isPathSelected(config, path),
         )
@@ -1038,8 +1053,8 @@ export function runVerify(root: string, source: VerifySource): VerifyComputation
         qualifiedPostImageReasons.push(...qualifiedPostImageInputs(root, inputAfter!, source, resolved.identity));
       }
     }
-    const qualifiedBinding = isQualified(config) ? observeIndexBinding(root, store, resolved.identity, (hash) => analyzedSemanticInputHashes.push(hash)) : undefined;
-    const qualifiedHealth = isQualified(config) ? indexHealth(root) : undefined;
+    const qualifiedBinding = isQualified(config) ? observeIndexBinding(root, store, resolved.identity, (hash) => analyzedSemanticInputHashes.push(hash), observeControl) : undefined;
+    const qualifiedHealth = isQualified(config) ? observeHealth(root) : undefined;
     const analysisAdmission = isQualified(config) ? qualifiedAdmission({
       config, graph, changedPaths: changedScopePaths, health: qualifiedHealth!,
       sourceHash: digestCanonical({ inputs: inputBefore, sourceIdentity: resolved.identity }), diff: resolved.diffText ?? "", indexSnapshot: analyzedIndexSnapshotHash,

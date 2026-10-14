@@ -18,7 +18,7 @@ import {
 import { loadConfig } from "@semantic-context/repository-store";
 import { openReadyRepository } from "./readiness";
 import type { WorkspaceProjection } from "@semantic-context/workspace-analyzer-internal";
-import { controlStatus } from "./control";
+import { controlStatus, recoveryControlStatusWithSemanticInputs } from "./control";
 import { resolvePlaneACapabilityRequirement } from "./plane-a-capability-requirements";
 import { isPlaneAOperationAdmitted } from "./plane-a-authority-policy";
 import { readUnresolvedReferenceBinding } from "./unresolved-references";
@@ -873,7 +873,14 @@ export function indexHealthStatus(health: IndexHealthReportV1): IndexHealthStatu
 
 /** Read-only coverage report. Freshness remains a separate, explicitly nested dimension. */
 export function indexHealth(root: string): IndexHealthReportV1 {
-  const freshness = controlStatus(root);
+  return indexHealthWithFreshness(root, controlStatus(root));
+}
+
+export function recoveryIndexHealth(root: string): IndexHealthReportV1 {
+  return indexHealthWithFreshness(root, recoveryControlStatusWithSemanticInputs(root).status);
+}
+
+function indexHealthWithFreshness(root: string, freshness: ControlFreshnessStatusReport): IndexHealthReportV1 {
   let reader;
   try {
     reader = openReadyRepository(root);
