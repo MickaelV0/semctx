@@ -10,6 +10,7 @@ import {
 import type { RepositoryNode, Claim } from "@semantic-context/core";
 import type { ParsedArgs } from "../args";
 import { flagBool } from "../args";
+import { gitEnvironment } from "../../../../plugins/shared/hooks/process-budget.mjs";
 import { info, success, warn, fail, heading, json, c, nowIso } from "../output";
 
 function countBy<T>(items: T[], key: (item: T) => string): Record<string, number> {
@@ -78,9 +79,7 @@ function printIndexSummary({ analysis, claims, freshnessSeal, parallelism }: Rep
 }
 
 export function localDefaultBranchBase(root: string): string {
-  const env = { ...process.env };
-  delete env.GIT_DIR;
-  delete env.GIT_WORK_TREE;
+  const env = gitEnvironment();
   const options = { cwd: root, env, stdout: "pipe", stderr: "pipe", timeout: 1000 } as const;
   try {
     const result = Bun.spawnSync(["git", "for-each-ref", "--format=%(symref)", "refs/remotes/**/HEAD"], options);

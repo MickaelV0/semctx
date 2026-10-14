@@ -212,6 +212,38 @@ async function killTree(pid) {
   return { failure, warning };
 }
 
+// Detached workers do not receive the supervisor's foreground signals. Stop every owned tree
+// before restoring the original signal's default behavior, including concurrent budgeted calls.
+const activeProcessIds = new Set();
+let cancelling = false;
+const onInterrupt = () => cancelProcesses("SIGINT");
+const onTerminate = () => cancelProcesses("SIGTERM");
+function removeSignalHandlers() {
+  process.removeListener("SIGINT", onInterrupt);
+  process.removeListener("SIGTERM", onTerminate);
+}
+function cancelProcesses(signal) {
+  if (cancelling) return;
+  cancelling = true;
+  void Promise.all([...activeProcessIds].map(killTree)).finally(() => {
+    removeSignalHandlers();
+    cancelling = false;
+    process.kill(process.pid, signal);
+  });
+}
+function ownProcess(pid) {
+  if (process.platform === "win32" || pid === undefined) return () => {};
+  activeProcessIds.add(pid);
+  if (activeProcessIds.size === 1) {
+    process.on("SIGINT", onInterrupt);
+    process.on("SIGTERM", onTerminate);
+  }
+  return () => {
+    activeProcessIds.delete(pid);
+    if (activeProcessIds.size === 0 && !cancelling) removeSignalHandlers();
+  };
+}
+
 /**
  * @param {readonly string[]} argv
  * @param {{cwd: string, budgetMs: number, env?: NodeJS.ProcessEnv, stdin?: "inherit" | "ignore", stdout?: number, maxBytes?: number, inheritOutput?: boolean, onMessage?: (message: unknown) => void}} options
@@ -229,6 +261,7 @@ export async function runProcessWithinBudget(argv, options) {
     windowsHide: true,
   });
   if (options.onMessage) child.on("message", options.onMessage);
+  const releaseProcess = ownProcess(child.pid);
   const elapsed = () => Math.round(performance.now() - started);
 
   return await new Promise((resolveOutcome) => {
@@ -243,6 +276,7 @@ export async function runProcessWithinBudget(argv, options) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      releaseProcess();
       resolveOutcome(outcome);
     };
     // Output overflow and the deadline both stop the tree; whichever comes first does it once.

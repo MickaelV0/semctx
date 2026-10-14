@@ -123,7 +123,7 @@ describe("shipped discovery catalogue (CLI, real git)", () => {
     const probe = () => Bun.spawnSync([process.execPath, "-e",
       `import { localDefaultBranchBase } from ${JSON.stringify(resolve(import.meta.dir, "../src/commands/index-cmd.ts"))}; process.stdout.write(localDefaultBranchBase(${JSON.stringify(root)}));`,
     ], {
-      env: { ...process.env, GIT_DIR: join(hostile, ".git"), GIT_WORK_TREE: hostile },
+      env: { ...process.env, GIT_DIR: join(hostile, ".git"), GIT_WORK_TREE: hostile, GIT_COMMON_DIR: join(hostile, ".git") },
       stdout: "pipe", stderr: "pipe",
     });
     const result = probe();
