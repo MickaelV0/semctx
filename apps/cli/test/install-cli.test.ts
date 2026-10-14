@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import {
   chmodSync,
   copyFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -36,6 +38,7 @@ import {
 import {
   pluginDeliveryStatus,
   readClaudePluginMetadataInventory,
+  readCodexPluginMetadataInventory,
   type CodexPluginMetadataInventory,
   type ClaudePluginMetadataInventory,
 } from "@semantic-context/app-services";
@@ -3084,6 +3087,45 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
     expect(report.ok).toBe(false);
     expect(report.hosts.claude.status).toBe("failed");
     expect(report.hosts.claude.error).toContain("not enabled");
+  });
+
+  test("Codex dry-run with real linked-worktree metadata plans without writing or starting the host", () => {
+    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "semctx-install-worktree-")));
+    try {
+      const repo = join(root, "repo");
+      const linked = join(root, "linked");
+      const home = join(root, "profile");
+      mkdirSync(repo);
+      mkdirSync(home);
+      execFileSync("git", ["init", "-q", repo]);
+      writeFileSync(join(repo, "source.ts"), "export const value = 1;\n");
+      execFileSync("git", ["-C", repo, "add", "--", "source.ts"]);
+      execFileSync("git", ["-C", repo, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+        "-c", "commit.gpgsign=false", "commit", "-qm", "fixture"]);
+      execFileSync("git", ["-C", repo, "worktree", "add", "-q", "-b", "linked", linked]);
+      const tree = () => readdirSync(root, { recursive: true }).map(String).sort().map((entry) => {
+        const path = join(root, entry);
+        return [entry, lstatSync(path).isFile() ? readFileSync(path).toString("base64") : null];
+      });
+      const before = tree();
+      for (const repositoryRoot of [repo, linked]) {
+        const runtime = fakeRuntime({ codex: true, gitRoot: repositoryRoot, codexHome: home });
+        const report = executeInstall(repositoryRoot,
+          parseArgs(["install", "--dry-run", "--host", "codex", "--skip-setup"]), {
+            ...runtime,
+            readCodexPluginMetadata: (target) => readCodexPluginMetadataInventory(target, home, undefined, home, {
+              systemFiles: [], managedPreferences: () => "absent",
+            }),
+          });
+        expect(report.ok).toBe(true);
+        expect(report.hosts.codex.status).toBe("planned");
+        expect(report.workspace.status).toBe("skipped");
+        expect(runtime.commands.some(([program, command]) => program === "codex" && command === "plugin")).toBe(false);
+        expect(tree()).toEqual(before);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("dry-run probes workspace conflicts but performs no mutation or repository setup", () => {
