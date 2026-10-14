@@ -1,3 +1,4 @@
+import { spawnGitSync } from "./git-process";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -128,7 +129,7 @@ function crossVerifyCaptureBarrier(): void {
 }
 
 function git(root: string, args: string[]): { code: number; out: string; err: string } {
-  const proc = Bun.spawnSync(["git", ...args], { cwd: root, stdout: "pipe", stderr: "pipe" });
+  const proc = spawnGitSync(["git", ...args], { cwd: root, stdout: "pipe", stderr: "pipe" });
   return {
     code: proc.exitCode ?? 1,
     out: new TextDecoder().decode(proc.stdout),
@@ -661,7 +662,7 @@ function analyzeCommitTree(root: string, commit: string, config: SemctxConfig,
 ): CommitTreeAnalysis {
   const scratch = canonicalRepositoryRoot(mkdtempSync(join(tmpdir(), "semctx-base-")));
   try {
-    const listed = Bun.spawnSync(["git", "ls-tree", "-r", "-z", commit], {
+    const listed = spawnGitSync(["git", "ls-tree", "-r", "-z", commit], {
       cwd: root, stdout: "pipe", stderr: "pipe",
     });
     if (listed.exitCode !== 0) {
@@ -696,7 +697,7 @@ function analyzeCommitTree(root: string, commit: string, config: SemctxConfig,
       destinations.add(destinationKey);
       entries.push({ path, oid: oid!, mode: mode! });
     }
-    const blobs = Bun.spawnSync(["git", "cat-file", "--batch"], {
+    const blobs = spawnGitSync(["git", "cat-file", "--batch"], {
       cwd: root,
       stdin: new TextEncoder().encode(entries.map((entry) => `${entry.oid}\n`).join("")),
       stdout: "pipe", stderr: "pipe",
@@ -734,9 +735,9 @@ function analyzeCommitTree(root: string, commit: string, config: SemctxConfig,
       throw new SemctxError("GIT_ERROR", "qualified base capture has overriding Git environment");
     }
     const scratchGit = (args: string[], stdin?: Uint8Array): void => {
-      const result = Bun.spawnSync(["git", "-c", "core.autocrlf=false", "-c", "core.fsmonitor=false", ...args], {
+      const result = spawnGitSync(["git", "-c", "core.autocrlf=false", "-c", "core.fsmonitor=false", ...args], {
         cwd: scratch, stdin, stdout: "pipe", stderr: "pipe",
-        env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null" },
+        env: { GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null" },
       });
       if (result.exitCode !== 0) throw new SemctxError("GIT_ERROR", "qualified base private index failed");
     };

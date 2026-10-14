@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { spawnGitSync } from "../../../../packages/app-services/src/git-process";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 import { SemctxError } from "@semantic-context/core";
 import { replaceLocalReportFile } from "../report-output";
@@ -187,7 +188,7 @@ export function assertQualifiedReportOutput(root: string, path: string): boolean
       throw new SemctxError("INVALID_TASK_INPUT", "qualified report output cannot change dependency inputs", { path });
     }
     for (const args of [["rev-parse", "--absolute-git-dir"], ["rev-parse", "--path-format=absolute", "--git-common-dir"]]) {
-      const result = Bun.spawnSync(["git", "-C", canonicalRoot, ...args], { stdout: "pipe", stderr: "pipe" });
+      const result = spawnGitSync(["git", ...args], { cwd: canonicalRoot });
       if (result.exitCode !== 0) throw new SemctxError("INVALID_TASK_INPUT", "cannot establish qualified output Git control boundary", { path });
       if (under(canonicalRepositoryRoot(new TextDecoder().decode(result.stdout).trim()))) {
         throw new SemctxError("INVALID_TASK_INPUT", "qualified report output cannot change Git control inputs", { path });

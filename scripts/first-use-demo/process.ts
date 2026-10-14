@@ -1,3 +1,4 @@
+import { processLimits } from "../../plugins/shared/hooks/process-budget.mjs";
 /** Real child-process execution. No mocked runner: every command here actually spawns. */
 
 export interface ChildOutcome {
@@ -37,7 +38,7 @@ export function runChild(
     env: options.env,
     stdout: "pipe",
     stderr: "pipe",
-    timeout: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    ...processLimits(options.timeoutMs ?? DEFAULT_TIMEOUT_MS),
   });
   const durationMs = Math.max(0, performance.now() - startedAt);
   return {

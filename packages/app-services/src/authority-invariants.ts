@@ -1,3 +1,4 @@
+import { spawnGitSync } from "./git-process";
 /**
  * Single-authority invariants: an authored invariant may declare that a literal value (a trust
  * digest, a pinned version, a key id) has exactly one source file. Copies of that value elsewhere,
@@ -37,7 +38,7 @@ interface Occurrence {
 }
 
 function git(root: string, args: string[]): { code: number; out: string } {
-  const proc = Bun.spawnSync(["git", ...args], { cwd: root, stdout: "pipe", stderr: "pipe" });
+  const proc = spawnGitSync(["git", ...args], { cwd: root, stdout: "pipe", stderr: "pipe" });
   return { code: proc.exitCode ?? 1, out: new TextDecoder().decode(proc.stdout) };
 }
 

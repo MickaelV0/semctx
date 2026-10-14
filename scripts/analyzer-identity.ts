@@ -17,7 +17,7 @@ function sources(root: string, directory: string): string[] {
 
 /** Exact implementation bytes, pinned dependencies and compiler, independent of checkout path. */
 export function analyzerIdentity(root: string): { schemaVersion: 1; digest: string; files: { path: string; digest: string }[]; compiler: { version: string; digest: string } } {
-  const paths = ["bun.lock", "tsconfig.json", "tsconfig.base.json", "scripts/analyzer-identity.ts", "scripts/build-plugin-runtime.ts", "scripts/build-cli-package.ts"];
+  const paths = ["bun.lock", "tsconfig.json", "tsconfig.base.json", "scripts/analyzer-identity.ts", "scripts/build-plugin-runtime.ts", "scripts/build-cli-package.ts", "plugins/shared/hooks/process-budget.mjs"];
   for (const entry of readdirSync(join(root, "packages"), { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     paths.push(`packages/${entry.name}/package.json`, ...sources(root, `packages/${entry.name}/src`));

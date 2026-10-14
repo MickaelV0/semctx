@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSyncWithinBudget as execFileSync } from "../plugins/shared/hooks/process-budget.mjs";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, extname, relative, resolve, sep } from "node:path";
 import cliPackage from "../apps/cli/package.json";

@@ -1,5 +1,6 @@
 import { closeSync, existsSync, mkdirSync, openSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { runProcessWithinBudget, VERIFICATION_STEP_BUDGET_MS } from "../plugins/shared/hooks/process-budget.mjs";
 import { FOCUSED_TEST_TARGETS, ROUTING_TESTS, TEST_SHARDS, type CiLane } from "./ci-plan";
 import { isTestShard, TEST_TIMINGS } from "./verify-pr";
 
@@ -9,14 +10,22 @@ export interface CiCommand {
   stdoutFile?: string;
 }
 
-export async function spawnCiCommand(argv: string[], cwd: string, stdoutFile?: string): Promise<number> {
+export async function spawnCiCommand(argv: string[], cwd: string, stdoutFile?: string, budgetMs = VERIFICATION_STEP_BUDGET_MS): Promise<number> {
   const outputPath = stdoutFile === undefined ? undefined : resolve(cwd, stdoutFile);
   if (outputPath !== undefined) mkdirSync(dirname(outputPath), { recursive: true });
   const descriptor = outputPath === undefined ? undefined : openSync(outputPath, "w");
   let exitCode: number;
   try {
-    const child = Bun.spawn(argv, { cwd, stdin: "inherit", stdout: descriptor ?? "inherit", stderr: "inherit" });
-    exitCode = await child.exited;
+    const outcome = await runProcessWithinBudget(argv, {
+      cwd, budgetMs, stdin: "inherit", inheritOutput: true, stdout: descriptor,
+    });
+    if (outcome.kind === "timeout") {
+      console.error("PROCESS_TIMEOUT: CI step budget exhausted");
+      exitCode = 124;
+    } else {
+      if (outcome.stderr !== "") throw new Error(outcome.stderr);
+      exitCode = outcome.exitCode;
+    }
   } finally {
     if (descriptor !== undefined) closeSync(descriptor);
   }

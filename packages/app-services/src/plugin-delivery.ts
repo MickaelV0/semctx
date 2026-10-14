@@ -1,3 +1,4 @@
+import { processLimits } from "../../../plugins/shared/hooks/process-budget.mjs";
 import { createHash } from "node:crypto";
 import {
   closeSync,
@@ -1730,7 +1731,7 @@ export function runPluginDeliveryQuery(
       cwd,
       stdout: "pipe",
       stderr: "pipe",
-      timeout: limits.timeoutMs,
+      ...processLimits(limits.timeoutMs, perStreamCeiling(limits.maxBytes)),
       // Enforced *while* the child runs, so a flood is killed at the ceiling instead of being
       // buffered whole and inspected afterwards. The spawn applies this ceiling to each stream on
       // its own — measured, not assumed: 3 MiB on stdout plus 3 MiB on stderr survives a 4 MiB

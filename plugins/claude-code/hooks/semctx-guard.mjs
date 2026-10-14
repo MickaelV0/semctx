@@ -6,7 +6,25 @@
 // It parses the Bash command STRUCTURALLY (segments + tokens, never a shell eval) and never
 // executes PR/agent content. It gates on canonical content fingerprints — no analysis runs here.
 import { existsSync, lstatSync, readFileSync, readlinkSync, realpathSync, readdirSync } from "node:fs";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSyncWithinBudget, spawnSyncWithinBudget, runProcessWithinBudget, GUARD_PROCESS_BUDGET_MS } from "./process-budget.mjs";
+
+let guardDeadline;
+let guardBlockingEstablished = false;
+function observeGuardEnablement() {
+  guardBlockingEstablished = true;
+  if (process.argv[2] === "--bounded-worker") process.send?.({ semctxGuardEnabled: true });
+}
+function guardProcessOptions(options) {
+  const remaining = guardDeadline === undefined ? GUARD_PROCESS_BUDGET_MS : Math.floor(guardDeadline - performance.now());
+  if (remaining <= 0) throw new Error("PROCESS_TIMEOUT: guard process budget exhausted");
+  return { ...options, timeout: Math.min(options.timeout ?? remaining, remaining) };
+}
+function spawnSync(command, args, options) {
+  return spawnSyncWithinBudget(command, args, guardProcessOptions(options));
+}
+function execFileSync(command, args, options) {
+  return execFileSyncWithinBudget(command, args, guardProcessOptions(options));
+}
 import { createHash } from "node:crypto";
 import { dirname, join, resolve, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1242,6 +1260,24 @@ export function resolveGitCwd(command, inputCwd) {
   return cwd;
 }
 
+/**
+ * Filesystem-only enablement scan: no process is spawned. A stalled Git probe can consume the whole
+ * shared budget, and the supervising parent decides exit 0 vs 2 from what the worker reported before
+ * that moment, so every scope must be observed here before the first probe. The walk ends at the
+ * repository boundary without stopping at a nested guard.json of any value: Git's toplevel, whose
+ * declaration is authoritative, can sit above a nested one that disables the guard.
+ */
+function observeFilesystemGuardEnablement(cwd) {
+  if (guardDeadline === undefined) return;
+  let current = resolve(cwd);
+  while (true) {
+    const config = readGuardJson(join(current, ".semctx", "guard.json"));
+    if (config.status === "read" && guardEnabled(process.env, config.value)) observeGuardEnablement();
+    if (existsSync(join(current, ".git")) || dirname(current) === current) break;
+    current = dirname(current);
+  }
+}
+
 /** Resolve a command directory to the repository root Git itself will discover from there. */
 function resolveGitRoot(cwd) {
   try {
@@ -1273,8 +1309,12 @@ function sameGitRoot(left, right) {
 /** @param {{command?: unknown, cwd?: string, sessionCwd?: string}} input */
 function guardInvocationContext({ command, cwd, sessionCwd }) {
   const inputCwd = cwd ?? sessionCwd ?? process.cwd();
-  const sessionRoot = resolveGitRoot(sessionCwd ?? inputCwd);
-  const targetRoot = resolveGitRoot(resolveGitCwd(command, inputCwd));
+  const sessionStart = sessionCwd ?? inputCwd;
+  observeFilesystemGuardEnablement(sessionStart);
+  const targetStart = resolveGitCwd(command, inputCwd);
+  observeFilesystemGuardEnablement(targetStart);
+  const sessionRoot = resolveGitRoot(sessionStart);
+  const targetRoot = resolveGitRoot(targetStart);
   return {
     sessionRoot,
     targetRoot,
@@ -1299,8 +1339,20 @@ export function guardEnabled(env, guardJson) {
 export function guardEnabledForInvocation({ command, cwd, sessionCwd, env }) {
   const override = guardEnvironmentOverride(env);
   if (override !== undefined) return override;
-  const context = guardInvocationContext({ command, cwd, sessionCwd });
-  return guardEnablementForContext(context, env);
+  const previousDeadline = guardDeadline;
+  const previousEnablement = guardBlockingEstablished;
+  guardDeadline = previousDeadline ?? performance.now() + GUARD_PROCESS_BUDGET_MS;
+  guardBlockingEstablished = false;
+  try {
+    const context = guardInvocationContext({ command, cwd, sessionCwd });
+    const enabled = guardEnablementForContext(context, env);
+    // As in evaluateGuard: once the shared budget is exhausted the roots above came from the literal
+    // fallback walk, so an enabled declaration observed on the way keeps the answer closed.
+    return enabled !== true && guardBlockingEstablished && performance.now() >= guardDeadline ? true : enabled;
+  } finally {
+    guardDeadline = previousDeadline;
+    guardBlockingEstablished = previousEnablement;
+  }
 }
 
 /**
@@ -1858,18 +1910,37 @@ function verifierEnvironment(env, overriddenEnvKeys) {
  * `{ block: true, reason }`; never throws, never touches stdin/stdout/exit.
  */
 /** @param {{command?: unknown, cwd?: string, sessionCwd?: string, env?: Record<string, string | undefined>, overriddenEnvKeys?: string[]}} input */
-export function evaluateGuard({ command, cwd, sessionCwd, env, overriddenEnvKeys = [] }) {
+export function evaluateGuard(input) {
+  const previousDeadline = guardDeadline;
+  const previousEnablement = guardBlockingEstablished;
+  guardBlockingEstablished = guardEnvironmentOverride(input.env ?? process.env) === true;
+  guardDeadline = performance.now() + GUARD_PROCESS_BUDGET_MS;
+  try {
+    const decision = evaluateGuardWithinBudget(input);
+    if (guardBlockingEstablished && performance.now() >= guardDeadline) return { block: true, reason: "PROCESS_TIMEOUT: guard process budget exhausted; verification remains unknown." };
+    return decision;
+  } catch (error) {
+    return guardBlockingEstablished ? { block: true, reason: `Guard computation failed: ${error.message}` } : { block: false };
+  } finally {
+    guardDeadline = previousDeadline;
+    guardBlockingEstablished = previousEnablement;
+  }
+}
+
+function evaluateGuardWithinBudget({ command, cwd, sessionCwd, env, overriddenEnvKeys = [] }) {
   const terminalVerb = isTerminalGitCommand(command);
   if (!terminalVerb) return { block: false };
 
   const effectiveEnv = env ?? process.env;
   const commandIsolated = isIsolatedTerminalGitCommand(command)
     && !overriddenEnvKeys.some((name) => isRetargetingEnvironmentName(name));
+  const override = guardEnvironmentOverride(effectiveEnv);
+  if (override === false) return { block: false };
   const context = guardInvocationContext({ command, cwd, sessionCwd });
   const { targetRoot: targetCwd } = context;
-  const override = guardEnvironmentOverride(effectiveEnv);
   const enabled = override ?? guardEnablementForContext(context, effectiveEnv);
   if (!enabled) return { block: false }; // advisory (default)
+  observeGuardEnablement();
 
   const state = commandIsolated
     ? readJson(join(targetCwd, ".semctx", "verification-state.json"))
@@ -1920,13 +1991,16 @@ export function evaluateGuard({ command, cwd, sessionCwd, env, overriddenEnvKeys
   return { ...decision, reason };
 }
 
-function exitForInvalidHookInput() {
+function hookWorkingDirectoryGuardEnabled() {
   const override = guardEnvironmentOverride(process.env);
   const localGuard = readGuardJson(join(process.cwd(), ".semctx", "guard.json"));
-  const blockingEstablished = override ?? (
+  return override ?? (
     localGuard.status === "read" && guardEnabled(process.env, localGuard.value)
   );
-  if (blockingEstablished) {
+}
+
+function exitForInvalidHookInput() {
+  if (hookWorkingDirectoryGuardEnabled()) {
     process.stderr.write(
       "semctx guarded mode: invalid hook input; refusing because blocking is enabled for the exact hook working directory.\n",
       () => process.exit(2),
@@ -1936,7 +2010,8 @@ function exitForInvalidHookInput() {
   process.exit(0);
 }
 
-function main() {
+function mainWithinBudget() {
+  if (hookWorkingDirectoryGuardEnabled()) observeGuardEnablement();
   let input;
   try {
     input = JSON.parse(readFileSync(0, "utf8"));
@@ -1960,4 +2035,25 @@ function main() {
   process.exit(0);
 }
 
-if (process.argv[1]?.endsWith("semctx-guard.mjs")) main();
+async function main() {
+  const override = guardEnvironmentOverride(process.env);
+  if (override === false) process.exit(0);
+  if (process.argv[2] === "--bounded-worker") return mainWithinBudget();
+  // The exact working-directory declaration is a pure filesystem read, so it still blocks when the
+  // worker is lost before its first message (spawn failure, crash, external kill).
+  let blockingEstablished = override === true || hookWorkingDirectoryGuardEnabled();
+  const outcome = await runProcessWithinBudget([process.execPath, process.argv[1], "--bounded-worker"], {
+    cwd: process.cwd(), budgetMs: GUARD_PROCESS_BUDGET_MS, stdin: "inherit",
+    onMessage: (message) => { if (message?.semctxGuardEnabled === true) blockingEstablished = true; },
+  });
+  if (outcome.kind === "timeout") {
+    process.stderr.write("PROCESS_TIMEOUT: semctx guard exceeded its 15000 ms budget; verification remains unknown.\n");
+    process.exit(blockingEstablished ? 2 : 0);
+  }
+  process.stdout.write(outcome.stdout);
+  process.stderr.write(outcome.stderr);
+  if (outcome.exitCode !== 0 && outcome.exitCode !== 2) process.stderr.write("Guard computation failed; verification remains unknown.\n");
+  process.exit(outcome.exitCode === 2 || (outcome.exitCode !== 0 && blockingEstablished) ? 2 : 0);
+}
+
+if (process.argv[1]?.endsWith("semctx-guard.mjs")) await main();

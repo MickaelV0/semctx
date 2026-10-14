@@ -1,3 +1,4 @@
+import { gitEnvironment, processLimits, runProcessWithinBudget, VERIFICATION_STEP_BUDGET_MS } from "../plugins/shared/hooks/process-budget.mjs";
 export interface VerifyOptions {
   base: string;
   skipDiff: boolean;
@@ -107,25 +108,28 @@ export function verificationSteps(options: VerifyOptions): VerificationStep[] {
   ];
 }
 
-export const spawnCommand: CommandRunner = async (argv, cwd) => {
-  const child = Bun.spawn(argv, {
-    cwd,
-    stdin: "inherit",
-    stdout: "inherit",
-    stderr: "inherit",
-  });
-  return await child.exited;
-};
+export async function spawnCommand(argv: string[], cwd: string, budgetMs = VERIFICATION_STEP_BUDGET_MS): Promise<number> {
+  const outcome = await runProcessWithinBudget(argv, { cwd, budgetMs, stdin: "inherit", inheritOutput: true });
+  if (outcome.kind === "timeout") {
+    console.error("PROCESS_TIMEOUT: verification step budget exhausted");
+    return 124;
+  }
+  return outcome.exitCode;
+}
 
 export const listUntrackedFiles: UntrackedFileLister = async (cwd) => {
-  const child = Bun.spawn(["git", "ls-files", "--others", "--exclude-standard", "-z"], {
-    cwd,
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "inherit",
+  // Imported by the contributor bootstrap helper: built-ins and the budget helper only, so this
+  // works before `bun install`.
+  const limits = processLimits();
+  const child = Bun.spawnSync(["git", "ls-files", "--others", "--exclude-standard", "-z"], {
+    cwd, stdout: "pipe", stderr: "pipe", env: gitEnvironment(), ...limits,
   });
-  const output = await new Response(child.stdout).text();
-  const exitCode = await child.exited;
+  if (child.exitedDueToTimeout || child.exitedDueToMaxBuffer
+    || child.stdout.byteLength >= limits.maxBuffer || child.stderr.byteLength >= limits.maxBuffer) {
+    throw new Error(`${child.exitedDueToTimeout ? "PROCESS_TIMEOUT" : "PROCESS_OUTPUT_LIMIT"}: Git capture refused`);
+  }
+  const output = new TextDecoder().decode(child.stdout);
+  const exitCode = child.exitCode;
   return {
     exitCode,
     paths: output.split("\0").filter((path) => path.length > 0),

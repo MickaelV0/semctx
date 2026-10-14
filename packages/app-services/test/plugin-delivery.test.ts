@@ -1,3 +1,4 @@
+import { runPluginDeliveryQuery } from "../src/plugin-delivery";
 import { describe, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import {
@@ -3654,3 +3655,12 @@ describe("plugin delivery — the three delivery states over real artifacts", ()
     });
   });
 });
+
+test("the production host-query deadline terminates a real unresponsive host", () => {
+  const started = performance.now();
+  const result = runPluginDeliveryQuery([process.execPath, "-e", 'process.on("SIGTERM", () => {}); await Bun.sleep(6500); console.log("late")'], tmpdir());
+  expect(result.timedOut).toBe(true);
+  expect(result.code).not.toBe(0);
+  expect(result.out).toBe("");
+  expect(performance.now() - started).toBeLessThan(6000);
+}, 10000);

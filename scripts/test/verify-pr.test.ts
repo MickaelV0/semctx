@@ -234,3 +234,11 @@ describe("execution", () => {
     expect(commands).toHaveLength(expectedCalls);
   });
 });
+
+test("the real verification runner refuses and kills a step that ignores SIGTERM", async () => {
+  const { spawnCommand } = await import("../verify-pr");
+  const started = performance.now();
+  const code = await spawnCommand([process.execPath, "-e", 'process.on("SIGTERM", () => {}); await Bun.sleep(30000)'], tmpdir(), 300);
+  expect(code).toBe(124);
+  expect(performance.now() - started).toBeLessThan(2000);
+});

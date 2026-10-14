@@ -323,6 +323,7 @@ describe("continuity demo runner (real packaged CLI child processes)", () => {
       const commandLabels = outcome.commands.map((c) => c.label);
       expect(commandLabels).toEqual([
         "fixture-git-init",
+        "fixture-git-ignore-config",
         "init",
         "semantic-init",
         "change-open",
