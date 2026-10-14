@@ -965,8 +965,8 @@ output ceiling. Timeout and output exhaustion refuse the capture with `GIT_ERROR
 and the named reason `PROCESS_TIMEOUT` or `PROCESS_OUTPUT_LIMIT`; partial output
 is never verification evidence. Core Git captures and qualified path discovery
 remove inherited `GIT_*` and `GCM_*` variables, including `GIT_DIR` and
-`GIT_WORK_TREE`, before execution. Other Git probes (the install workspace root
-lookup and the `index` base recommendation) still inherit the caller's
+`GIT_WORK_TREE`, before execution. The `index` base recommendation also removes
+these overrides. The install workspace root lookup still inherits the caller's
 environment. Repository configuration files remain effective.
 
 The Claude Code guard runs its complete hook computation in a supervised process
