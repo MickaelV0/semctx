@@ -2,15 +2,15 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createDefaultConfig, SemctxError } from "@semantic-context/core";
+import { createDefaultConfig, createGlobSelectionConfig, SemctxError } from "@semantic-context/core";
 import { initWorkspace, openStore, verificationStatePath } from "@semantic-context/repository-store";
-import { ensureSemanticGitignore } from "@semantic-context/semantic-engine";
-import { captureRecordableVerificationGitState, checkSemanticState, controlStatusExplained, indexRepository } from "../src";
+import { activeChangePath, ensureSemanticGitignore } from "@semantic-context/semantic-engine";
+import { captureRecordableVerificationGitState, checkSemanticState, controlStatusExplained, indexHealth, indexRepository } from "../src";
 import { CONTROL_INDEX_SNAPSHOT_META_KEY } from "../src/freshness";
 import { __setIndexRepositoryCaptureBarrierForTesting } from "../src/indexing";
 import { recoverIndexEvidence, recoverIndexEvidenceAsync } from "../src/index-recovery";
 import { recordVerificationState, __setVerificationTemporaryNameForTesting } from "../src/verification-recording";
-import { __setVerifyCaptureBarrierForTesting, __setVerifyAnalysisBarrierForTesting, __setVerifyControlBarrierForTesting } from "../src/verify";
+import { runVerify, __setVerifyCaptureBarrierForTesting, __setVerifyAnalysisBarrierForTesting, __setVerifyControlBarrierForTesting } from "../src/verify";
 
 const roots: string[] = [];
 
@@ -23,7 +23,7 @@ function git(root: string, ...args: string[]): string {
   return new TextDecoder().decode(result.stdout).trim();
 }
 
-function repository(): string {
+function repository(version: 1 | 2 = 1): string {
   const root = mkdtempSync(join(tmpdir(), "semctx-index-recovery-"));
   roots.push(root);
   mkdirSync(join(root, "src"), { recursive: true });
@@ -32,7 +32,7 @@ function repository(): string {
   git(root, "init", "-q");
   git(root, "add", ".");
   git(root, "commit", "-q", "-m", "fixture");
-  initWorkspace(root, createDefaultConfig(root));
+  initWorkspace(root, version === 2 ? createGlobSelectionConfig(root) : createDefaultConfig(root));
   indexRepository(root, "2026-09-13T00:00:00.000Z");
   return root;
 }
@@ -69,8 +69,8 @@ describe("EVIDENCE_BASELINE_STALE is repairable by ordinary indexing", () => {
     expect(checkSemanticState(root).reasonCodes).toEqual(["EVIDENCE_BASELINE_STALE"]);
   });
 
-  it("still refuses to index while a non-staleness lifecycle error is present", () => {
-    const root = repository();
+  it.each([1, 2] as const)("v%s still refuses recovery while a non-staleness lifecycle error is present", (version) => {
+    const root = repository(version);
     recordCurrentBaseline(root, "2026-09-13T00:01:00.000Z");
     writeFileSync(verificationStatePath(root), "{broken");
     expect(checkSemanticState(root).reasonCodes).toEqual(["EVIDENCE_BASELINE_INVALID"]);
@@ -78,6 +78,10 @@ describe("EVIDENCE_BASELINE_STALE is repairable by ordinary indexing", () => {
     expect(() => indexRepository(root, "2026-09-13T00:02:00.000Z")).toThrow(
       "semantic model cannot be sealed during indexing",
     );
+    expect(() => recoverIndexEvidence(root, "2026-09-13T00:02:00.000Z")).toThrow(
+      "semantic model cannot be sealed during indexing",
+    );
+    expect(readFileSync(verificationStatePath(root), "utf8")).toBe("{broken");
     // `status` must not prescribe the sealing command that has just refused to run.
     const explanation = controlStatusExplained(root).explanation.find((entry) => entry.code === "EVIDENCE_BASELINE_INVALID");
     expect(explanation).toMatchObject({ reason: "SEMANTIC_LIFECYCLE_INVALID", remedy: null });
@@ -85,6 +89,44 @@ describe("EVIDENCE_BASELINE_STALE is repairable by ordinary indexing", () => {
 });
 
 describe("recoverIndexEvidence / recoverIndexEvidenceAsync", () => {
+  it.each(["sync", "async"] as const)("%s recovery records the following WARN for a selected changed file with a stale receipt", async (entryPoint) => {
+    const root = repository(2);
+    const initial = recoverIndexEvidence(root, "2026-09-13T00:01:00.000Z");
+    expect(initial.verification.report.verdict).toBe("PASS");
+    expect(checkSemanticState(root).reasonCodes).toEqual([]);
+    const baselinePath = verificationStatePath(root);
+    const previous = readFileSync(baselinePath);
+    writeFileSync(join(root, "src", "service.ts"), "export function service(): number {\n  return 2;\n}\n");
+    git(root, "add", "src/service.ts");
+    expect(checkSemanticState(root).reasonCodes).toEqual(["EVIDENCE_BASELINE_STALE"]);
+    expect(controlStatusExplained(root).canRunHighRiskControl).toBe(false);
+    const stateBefore = captureRecordableVerificationGitState(root);
+    indexRepository(root, "2026-09-13T00:01:30.000Z");
+    expect(indexHealth(root).freshness.canRunHighRiskControl).toBe(false);
+    const ordinary = runVerify(root, { kind: "working-tree" });
+    expect(ordinary.report.verdict).toBe("BLOCK");
+    expect(readFileSync(baselinePath)).toEqual(previous);
+
+    const outcome = entryPoint === "sync"
+      ? recoverIndexEvidence(root, "2026-09-13T00:02:00.000Z")
+      : await recoverIndexEvidenceAsync(root, "2026-09-13T00:02:00.000Z", 1);
+    const following = runVerify(root, { kind: "working-tree" });
+    const persisted = JSON.parse(readFileSync(baselinePath, "utf8")) as Record<string, unknown>;
+
+    expect(following.report.verdict).toBe("WARN");
+    expect(outcome.verification.report.verdict).toBe(following.report.verdict);
+    expect(persisted["verdict"]).toBe("WARN");
+    expect(outcome.verification.report.changedFiles).toEqual(["src/service.ts"]);
+    expect(outcome.verification.report.findings).toEqual(following.report.findings);
+    expect(outcome.verification.report.findings).toContainEqual(expect.objectContaining({
+      rule: "analysis_scope_incomplete", severity: "warn",
+      message: expect.stringContaining("partial for negative impact/test conclusions: src/service.ts"),
+    }));
+    expect(outcome.verification.report.unknowns).toEqual(following.report.unknowns);
+    expect(captureRecordableVerificationGitState(root)).toEqual(stateBefore);
+    expect(checkSemanticState(root).reasonCodes).toEqual([]);
+  }, 30_000);
+
   it("recovers a dirty (uncommitted) stale baseline in one command and records the actual verdict", () => {
     const root = repository();
     recordCurrentBaseline(root, "2026-09-13T00:01:00.000Z");
@@ -117,8 +159,8 @@ describe("recoverIndexEvidence / recoverIndexEvidenceAsync", () => {
     expect(checkSemanticState(root).reasonCodes).toEqual([]);
   }, 30_000);
 
-  it("refuses to record and preserves old evidence when the working tree drifts mid-recovery", () => {
-    const root = repository();
+  it.each([1, 2] as const)("v%s refuses to record and preserves old evidence when the working tree drifts mid-recovery", (version) => {
+    const root = repository(version);
     recordCurrentBaseline(root, "2026-09-13T00:01:00.000Z");
     writeFileSync(join(root, "src", "service.ts"), "export function service(): number {\n  return 2;\n}\n");
     git(root, "add", ".");
@@ -170,8 +212,8 @@ describe("recoverIndexEvidence / recoverIndexEvidenceAsync", () => {
     expect(readFileSync(verificationStatePath(root))).toEqual(priorEvidence);
   });
 
-  it("refuses to record when a second writer replaces the persisted index mid-recovery", () => {
-    const root = repository();
+  it.each([1, 2] as const)("v%s refuses to record when a second writer replaces the persisted index mid-recovery", (version) => {
+    const root = repository(version);
     recordCurrentBaseline(root, "2026-09-13T00:01:00.000Z");
     writeFileSync(join(root, "src", "service.ts"), "export function service(): number {\n  return 2;\n}\n");
     const priorEvidence = readFileSync(verificationStatePath(root));
@@ -202,8 +244,8 @@ describe("recoverIndexEvidence / recoverIndexEvidenceAsync", () => {
     expect(readFileSync(verificationStatePath(root))).toEqual(priorEvidence);
   });
 
-  it("refuses to record when the tracked .semctx/config.json drifts mid-recovery", () => {
-    const root = repository();
+  it.each([1, 2] as const)("v%s refuses to record when the tracked .semctx/config.json drifts mid-recovery", (version) => {
+    const root = repository(version);
     recordCurrentBaseline(root, "2026-09-13T00:01:00.000Z");
     // Track .semctx/config.json (#82) so a config edit is part of the analyzed content state,
     // proving the drift check is not source-file-specific.
@@ -231,8 +273,8 @@ describe("recoverIndexEvidence / recoverIndexEvidenceAsync", () => {
     expect(readFileSync(verificationStatePath(root))).toEqual(priorEvidence);
   });
 
-  it("refuses analyzed index content drift even when snapshot metadata is unchanged", () => {
-    const root = repository();
+  it.each([1, 2] as const)("v%s refuses analyzed index content drift even when snapshot metadata is unchanged", (version) => {
+    const root = repository(version);
     recordCurrentBaseline(root, "2026-09-13T00:01:00.000Z");
     writeFileSync(join(root, "src", "service.ts"), "export function service(): number {\n  return 2;\n}\n");
     const previous = readFileSync(verificationStatePath(root));
@@ -296,8 +338,8 @@ describe("recoverIndexEvidence / recoverIndexEvidenceAsync", () => {
     expect(readFileSync(verificationStatePath(root))).toEqual(previous);
   });
 
-  it("refuses a baseline A-B-A race after the lifecycle probe consumes different evidence", () => {
-    const root = repository();
+  it.each([1, 2] as const)("v%s refuses a baseline A-B-A race after the lifecycle probe consumes different evidence", (version) => {
+    const root = repository(version);
     recordCurrentBaseline(root, "2026-09-13T00:01:00.000Z");
     writeFileSync(join(root, "src", "service.ts"), "export function service(): number {\n  return 2;\n}\n");
     const baselinePath = verificationStatePath(root);
@@ -311,6 +353,20 @@ describe("recoverIndexEvidence / recoverIndexEvidenceAsync", () => {
     expect(failure).toBeInstanceOf(SemctxError);
     expect((failure as SemctxError).details.reason).toBe("RECOVERY_ANALYZED_SEMANTIC_INPUT_MISMATCH");
     expect(readFileSync(baselinePath)).toEqual(previous);
+  });
+
+  it("refuses another lifecycle error arising during verification without replacing stale evidence", () => {
+    const root = repository(2);
+    recordCurrentBaseline(root, "2026-09-13T00:01:00.000Z");
+    writeFileSync(join(root, "src", "service.ts"), "export function service(): number {\n  return 2;\n}\n");
+    const previous = readFileSync(verificationStatePath(root));
+    __setVerifyCaptureBarrierForTesting(() => {
+      writeFileSync(activeChangePath(root), "{broken");
+    });
+
+    expect(() => recoverIndexEvidence(root, "2026-09-13T00:02:00.000Z"))
+      .toThrow("index rebuilt but evidence was not recorded");
+    expect(readFileSync(verificationStatePath(root))).toEqual(previous);
   });
 
   it("leaves no evidence and no partial-rebuild marker when the pre-rebuild snapshot itself refuses (untracked file)", () => {

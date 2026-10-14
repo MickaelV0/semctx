@@ -43,8 +43,8 @@ test("qualified verification keeps three fresh boundaries and only its useful se
       const frames = new Error().stack?.split("\n") ?? [];
       const discoverFrame = frames.findIndex(frame => frame.includes("at discoverRepository "));
       const captureFrame = frames.findIndex(frame => frame.includes("at captureQualifiedAnalysisInputs "));
-      if (discoverFrame >= 0 && frames[discoverFrame + 1]?.includes("at runVerify ")) directDiscoveries++;
-      if (captureFrame >= 0 && frames[captureFrame + 1]?.includes("at runVerify ")) directCaptures++;
+      if (discoverFrame >= 0 && frames[discoverFrame + 1]?.includes("at computeVerification ")) directDiscoveries++;
+      if (captureFrame >= 0 && frames[captureFrame + 1]?.includes("at computeVerification ")) directCaptures++;
     }
     return spawn(...args);
   }) as typeof spawn);
@@ -76,7 +76,7 @@ test("final qualified capture detects drift after admission instead of reusing a
     if (Array.isArray(args[0]) && args[0].includes("--exclude-per-directory=.gitignore")) {
       const frames = new Error().stack?.split("\n") ?? [];
       const captureFrame = frames.findIndex(frame => frame.includes("at captureQualifiedAnalysisInputs "));
-      if (captureFrame >= 0 && frames[captureFrame + 1]?.includes("at runVerify ") && ++directCaptures === 3) {
+      if (captureFrame >= 0 && frames[captureFrame + 1]?.includes("at computeVerification ") && ++directCaptures === 3) {
         writeFileSync(join(root, "src/main.ts"), "export function main() { return 3; }\n"); mutated = true;
       }
     }
