@@ -1,6 +1,6 @@
 import ts from "typescript";
-import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { dirname, isAbsolute, posix, relative, resolve } from "node:path";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { dirname, extname, isAbsolute, posix, relative, resolve } from "node:path";
 import { compareIds, normalizePath, symbolScopePath } from "@semantic-context/core";
 import type { NodeKind } from "@semantic-context/core";
 import { parseMarkers, type ParsedMarker } from "./markers";
@@ -120,6 +120,7 @@ interface ExtractionWorkerRequest {
   repoRoot: string;
   rootAbsPaths: string[];
   emitAbsPaths: string[];
+  tsconfigPathMapping?: boolean;
 }
 
 interface ExtractionWorkerSuccess {
@@ -162,9 +163,31 @@ const COMPILER_OPTIONS: ts.CompilerOptions = {
   strict: false,
 };
 
+/**
+ * Opt-in behavior of one extraction pass. The default is the historical extraction, which callers
+ * that cannot bind live configuration into their freshness identity must keep.
+ */
+export interface TypeScriptExtractionOptions {
+  /**
+   * Resolve the non-relative specifiers of a TypeScript-only, snapshot-free graph through the
+   * `paths` and `baseUrl` of the nearest tsconfig, `extends` included, over the historical Bundler
+   * resolution. Nothing else of that configuration is applied, and a specifier that no mapping
+   * covers takes the historical resolution unchanged. Only configuration v2 sets this: its analysis
+   * input identity already binds the configuration files read here, which v1's does not.
+   */
+  tsconfigPathMapping?: boolean;
+}
+
 /** Internal semantic context; intentionally not exported from the package root. */
 export const extractionContext = {
-  createProgram(this: void, rootAbsPaths: string[], snapshot?: CompilerInputSnapshot, repoRoot?: string): ts.Program {
+  createProgram(
+    this: void,
+    rootAbsPaths: string[],
+    snapshot?: CompilerInputSnapshot,
+    repoRoot?: string,
+    options: TypeScriptExtractionOptions = {},
+    mapping: PathMappingPass | undefined = createPathMappingPassFor(rootAbsPaths, repoRoot, snapshot, options),
+  ): ts.Program {
     const host = ts.createCompilerHost(COMPILER_OPTIONS);
     const system = snapshot === undefined ? ts.sys : snapshotSystem(snapshot);
     if (snapshot !== undefined) {
@@ -179,10 +202,29 @@ export const extractionContext = {
       const workspaceLinks = createWorkspaceLinkResolver();
       host.resolveModuleNames = (names, containingFile) => names.map(name =>
         resolveConfiguredModule(name, containingFile, undefined, system, workspaceLinks, repoRoot)?.resolvedModule);
+    } else if (mapping !== undefined) {
+      installPathMappedResolution(host, mapping, COMPILER_OPTIONS);
     }
     return ts.createProgram(rootAbsPaths, COMPILER_OPTIONS, host);
   },
 };
+
+/**
+ * The Program must see what the extractor sees, or an aliased callee has no declaration to resolve
+ * to. It is only replaced when a mapping governs some root: otherwise the Program is the
+ * historical one by construction. Every specifier the mapping does not add a repository module for
+ * is resolved as the compiler's default does, usage mode and cache included.
+ */
+function installPathMappedResolution(host: ts.CompilerHost, mapping: PathMappingPass, programOptions: ts.CompilerOptions): void {
+  if (!mapping.governsAnyRoot()) return;
+  const cache = ts.createModuleResolutionCache(host.getCurrentDirectory(), fileName => host.getCanonicalFileName(fileName), programOptions);
+  host.resolveModuleNameLiterals = (literals, containingFile, redirectedReference, options, containingSourceFile) =>
+    literals.map(literal => {
+      const mode = ts.getModeForUsageLocation(containingSourceFile, literal, options);
+      return resolvePathMappedModule(mapping, literal.text, containingFile, mode)
+        ?? ts.resolveModuleName(literal.text, containingFile, options, host, cache, redirectedReference, mode);
+    });
+}
 
 function isExported(node: ts.Node): boolean {
   return (ts.getCombinedModifierFlags(node as ts.Declaration) & ts.ModifierFlags.Export) !== 0;
@@ -232,11 +274,15 @@ export function resolveTypeScriptModule(
   snapshot?: CompilerInputSnapshot,
   workspaceLinks?: WorkspaceLinkResolver,
   repositoryRoot?: string,
+  pathMapping?: PathMappingPass,
 ): string | undefined {
   const system = snapshot === undefined ? ts.sys : snapshotSystem(snapshot);
   const resolved = configured
     ? resolveConfiguredModule(specifier, containingFile, resolutionMode, system, workspaceLinks, repositoryRoot)
-    : ts.resolveModuleName(specifier, containingFile, COMPILER_OPTIONS, system, undefined, undefined, resolutionMode);
+    : (pathMapping !== undefined && snapshot === undefined
+      ? resolvePathMappedModule(pathMapping, specifier, containingFile, resolutionMode)
+      : undefined)
+      ?? ts.resolveModuleName(specifier, containingFile, COMPILER_OPTIONS, system, undefined, undefined, resolutionMode);
   // A declaration companion describes the runtime module; dependency edges target the actual
   // source when it exists, rather than silently ending at the skipped .d.mts/.d.cts artifact.
   const declarationPath = resolved.resolvedModule?.resolvedFileName;
@@ -272,17 +318,44 @@ function resolveConfiguredModule(
   // Bind the analyzed root before the first live configuration lookup, not after
   // workspace metadata has already selected an enclosing declaration.
   const configurationSystem = system === ts.sys ? workspaceLinkedSystem(system, repositoryRoot, workspaceLinks) : system;
-  const configPath = ts.findConfigFile(dirname(containingFile), path => configurationSystem.fileExists(path));
-  let options = COMPILER_OPTIONS;
-  if (configPath !== undefined) {
-    const config = ts.readConfigFile(configPath, path => configurationSystem.readFile(path));
-    if (config.error === undefined) {
-      // Module resolution needs inherited options, not a redundant scan of every tsconfig input.
-      // A live checkout may lack the installed link to a workspace member's shared configuration.
-      const parsed = ts.parseJsonConfigFileContent(config.config, { ...configurationSystem, readDirectory: () => [] }, dirname(configPath));
-      options = { ...COMPILER_OPTIONS, ...parsed.options };
-    }
-  }
+  const configured = nearestConfigurationOptions(dirname(containingFile), configurationSystem);
+  return resolveWithOptions(
+    specifier,
+    containingFile,
+    resolutionMode,
+    configured === undefined ? COMPILER_OPTIONS : { ...COMPILER_OPTIONS, ...configured },
+    system,
+    configurationSystem,
+    workspaceLinks,
+    repositoryRoot,
+  );
+}
+
+/** Options of the nearest readable tsconfig, `extends` included; `undefined` when none governs. */
+function nearestConfigurationOptions(directory: string, configurationSystem: ts.System): ts.CompilerOptions | undefined {
+  const configPath = ts.findConfigFile(directory, path => configurationSystem.fileExists(path));
+  return configPath === undefined ? undefined : configurationOptions(configPath, configurationSystem);
+}
+
+function configurationOptions(configPath: string, configurationSystem: ts.System): ts.CompilerOptions | undefined {
+  const config = ts.readConfigFile(configPath, path => configurationSystem.readFile(path));
+  if (config.error !== undefined) return undefined;
+  // Module resolution needs inherited options, not a redundant scan of every tsconfig input.
+  // A live checkout may lack the installed link to a workspace member's shared configuration.
+  return ts.parseJsonConfigFileContent(config.config, { ...configurationSystem, readDirectory: () => [] }, dirname(configPath)).options;
+}
+
+function resolveWithOptions(
+  specifier: string,
+  containingFile: string,
+  resolutionMode: ts.ResolutionMode | undefined,
+  options: ts.CompilerOptions,
+  system: ts.System,
+  configurationSystem: ts.System,
+  workspaceLinks: WorkspaceLinkResolver,
+  repositoryRoot: string | undefined,
+  cache?: ts.ModuleResolutionCache,
+): ts.ResolvedModuleWithFailedLookupLocations {
   // Final source resolution must obey the same root without admitting new synthetic
   // source-package links: only configuration inheritance uses those virtual paths.
   const liveRoot = system === ts.sys && repositoryRoot !== undefined
@@ -309,10 +382,203 @@ function resolveConfiguredModule(
     containingFile,
     options,
     resolutionSystem,
-    undefined,
+    cache,
     undefined,
     resolutionMode ?? ts.getImpliedNodeFormatForFile(containingFile, undefined, resolutionSystem, options),
   );
+}
+
+/** The `paths`/`baseUrl` a tsconfig governs a directory with; nothing else of it is applied. */
+interface PathMapping {
+  readonly options: ts.CompilerOptions;
+  /** `paths` keys TypeScript can match: at most one `*`, as it ignores any other. */
+  readonly patterns: readonly string[];
+  /**
+   * Case-folded names directly below `baseUrl`, listed at most once per pass; `null` when they
+   * cannot be listed under confinement, which keeps every specifier a candidate.
+   */
+  baseUrlEntries?: readonly string[] | null;
+  /**
+   * The compiler's own resolution cache for this mapping's options. It is keyed by importing
+   * directory and usage mode, so a `package.json` `imports` entry, a self-name reference or a
+   * `node_modules` lookup that depends on where the importer sits is never shared across directories.
+   */
+  readonly cache: ts.ModuleResolutionCache;
+  /**
+   * Specifiers (with usage mode and importer extension) this mapping has been seen to add no
+   * repository module for. What a mapping adds comes from its `paths` and `baseUrl` candidates,
+   * which are the same from every directory; what depends on the importing directory (a
+   * `package.json` `imports` entry, a self-name reference, a `node_modules` lookup) is resolved by
+   * the historical resolution as well, so skipping the attempt loses none of it. Only this absence
+   * is shared across directories, never a resolution.
+   */
+  readonly addsNothing: Set<string>;
+}
+
+/**
+ * The tsconfig `paths`/`baseUrl` resolution of one analysis pass. It is created per pass and holds
+ * every derived mapping and cache, so no state outlives the pass that read the configuration: a
+ * later pass observes a changed tsconfig.
+ */
+interface PathMappingPass {
+  readonly repositoryRoot: string;
+  /**
+   * Canonical keys of the selected roots. Only their nearest configuration is bound into the
+   * analysis input identity, so only imports written in a root are mapped: a file the Program loads
+   * through an alias keeps the historical resolution for its own specifiers.
+   */
+  readonly roots: ReadonlySet<string>;
+  readonly workspaceLinks: WorkspaceLinkResolver;
+  readonly configurationSystem: ts.System;
+  readonly byDirectory: Map<string, PathMapping | null>;
+  readonly byConfiguration: Map<string, PathMapping | null>;
+  readonly selected: Map<string, boolean>;
+  /** Whether some root's nearest configuration declares `paths` or `baseUrl`. */
+  governsAnyRoot(): boolean;
+}
+
+/**
+ * The pass of a TypeScript-only, snapshot-free extraction that opted in. A retained snapshot and a
+ * JavaScript-enabled graph already apply the complete nearest configuration, and without the
+ * analyzed root nothing can be confined, so nothing is mapped.
+ */
+function createPathMappingPassFor(
+  rootAbsPaths: readonly string[],
+  repositoryRoot: string | undefined,
+  snapshot: CompilerInputSnapshot | undefined,
+  options: TypeScriptExtractionOptions,
+): PathMappingPass | undefined {
+  if (options.tsconfigPathMapping !== true || snapshot !== undefined || repositoryRoot === undefined
+    || rootAbsPaths.some(path => /\.(mjs|cjs|js|jsx)$/.test(path))) return undefined;
+  const workspaceLinks = createWorkspaceLinkResolver();
+  const pass: PathMappingPass = {
+    repositoryRoot,
+    roots: new Set(rootAbsPaths.map(canonicalTypeScriptFileKey)),
+    workspaceLinks,
+    // The same confined, link-aware reads the configured resolution uses, so a tsconfig outside
+    // the analyzed root or behind an escaping link is never consumed.
+    configurationSystem: workspaceLinkedSystem(ts.sys, repositoryRoot, workspaceLinks),
+    byDirectory: new Map(),
+    byConfiguration: new Map(),
+    selected: new Map(),
+    governsAnyRoot: () => rootAbsPaths.some(path => governingPathMapping(pass, dirname(path)) !== null),
+  };
+  return pass;
+}
+
+function governingPathMapping(pass: PathMappingPass, directory: string): PathMapping | null {
+  const known = pass.byDirectory.get(directory);
+  if (known !== undefined) return known;
+  const configPath = ts.findConfigFile(directory, path => pass.configurationSystem.fileExists(path));
+  let mapping: PathMapping | null = null;
+  if (configPath !== undefined) {
+    const cached = pass.byConfiguration.get(configPath);
+    if (cached !== undefined) mapping = cached;
+    else {
+      const options = configurationOptions(configPath, pass.configurationSystem);
+      mapping = options === undefined ? null : pathMappingOf(options, pass.repositoryRoot);
+      pass.byConfiguration.set(configPath, mapping);
+    }
+  }
+  pass.byDirectory.set(directory, mapping);
+  return mapping;
+}
+
+function pathMappingOf(options: ts.CompilerOptions, repositoryRoot: string): PathMapping | null {
+  const { paths, baseUrl } = options;
+  if (paths === undefined && baseUrl === undefined) return null;
+  const pathsBasePath = (options as { pathsBasePath?: string }).pathsBasePath;
+  const mapped = {
+    ...(paths === undefined ? {} : { paths }),
+    ...(baseUrl === undefined ? {} : { baseUrl }),
+    // Internal to TypeScript: the directory `paths` entries are relative to when no baseUrl is set,
+    // which an inherited mapping keeps as the directory of the configuration that declared it.
+    ...(pathsBasePath === undefined ? {} : { pathsBasePath }),
+  } as ts.CompilerOptions;
+  return {
+    options: mapped,
+    patterns: Object.keys(paths ?? {}).filter(pattern => pattern.split("*").length <= 2),
+    cache: ts.createModuleResolutionCache(repositoryRoot, foldFileName, { ...COMPILER_OPTIONS, ...mapped }),
+    addsNothing: new Set(),
+  };
+}
+
+const foldFileName = (name: string): string => ts.sys.useCaseSensitiveFileNames ? name : name.toLowerCase();
+
+/**
+ * Whether `baseUrl` can contribute a candidate for a specifier no `paths` key matches. Every
+ * candidate TypeScript tries lies below the entry named by the specifier's first segment, with or
+ * without a source extension, so a first segment that no entry starts with cannot resolve there
+ * and the historical resolution, with its caches, applies unchanged.
+ */
+function baseUrlMayResolve(mapping: PathMapping, specifier: string, repositoryRoot: string): boolean {
+  const baseUrl = mapping.options.baseUrl;
+  if (baseUrl === undefined) return false;
+  if (mapping.baseUrlEntries === undefined) {
+    try {
+      // A directory outside the root is never listed: resolution through it is refused and recorded.
+      mapping.baseUrlEntries = isContainedTypeScriptPath(resolve(repositoryRoot), resolve(baseUrl))
+        && isContainedTypeScriptPath(canonicalFilesystemPath(repositoryRoot), canonicalFilesystemPath(baseUrl))
+        ? readdirSync(baseUrl).map(foldFileName) : null;
+    } catch {
+      mapping.baseUrlEntries = null;
+    }
+  }
+  if (mapping.baseUrlEntries === null) return true;
+  const first = foldFileName(specifier.split(/[\\/]/, 1)[0]!.replace(/\.(?:[cm]?[jt]sx?|json)$/i, ""));
+  return mapping.baseUrlEntries.some(entry => entry.startsWith(first));
+}
+
+function matchesPathPattern(pattern: string, specifier: string): boolean {
+  const star = pattern.indexOf("*");
+  if (star < 0) return pattern === specifier;
+  const prefix = pattern.slice(0, star);
+  const suffix = pattern.slice(star + 1);
+  return specifier.length >= prefix.length + suffix.length && specifier.startsWith(prefix) && specifier.endsWith(suffix);
+}
+
+/**
+ * Resolve a non-relative specifier written in a selected root through the nearest tsconfig's
+ * `paths` or `baseUrl`, over the historical Bundler options, with the confinement of configured
+ * resolution. The mapping only ever adds a repository module: `undefined` means it does not, and the
+ * historical resolution applies unchanged with its own caches. That covers a specifier no mapping
+ * governs, one the mapping cannot reach, and one that resolves to an installed package or, under
+ * confinement, to nothing: a `node_modules` hoisted above the root stays the compiler's to resolve.
+ */
+function resolvePathMappedModule(
+  pass: PathMappingPass,
+  specifier: string,
+  containingFile: string,
+  resolutionMode: ts.ResolutionMode | undefined,
+): ts.ResolvedModuleWithFailedLookupLocations | undefined {
+  if (ts.isExternalModuleNameRelative(specifier)) return undefined;
+  let selected = pass.selected.get(containingFile);
+  if (selected === undefined) {
+    selected = pass.roots.has(canonicalTypeScriptFileKey(containingFile));
+    pass.selected.set(containingFile, selected);
+  }
+  if (!selected) return undefined;
+  const mapping = governingPathMapping(pass, dirname(containingFile));
+  if (mapping === null) return undefined;
+  if (!mapping.patterns.some(pattern => matchesPathPattern(pattern, specifier))
+    && !baseUrlMayResolve(mapping, specifier, pass.repositoryRoot)) return undefined;
+  const key = `${resolutionMode ?? ""}\0${extname(containingFile).toLowerCase()}\0${specifier}`;
+  if (mapping.addsNothing.has(key)) return undefined;
+  const result = resolveWithOptions(
+    specifier,
+    containingFile,
+    resolutionMode,
+    { ...COMPILER_OPTIONS, ...mapping.options },
+    ts.sys,
+    pass.configurationSystem,
+    pass.workspaceLinks,
+    pass.repositoryRoot,
+    mapping.cache,
+  );
+  const resolved = result.resolvedModule;
+  if (resolved !== undefined && resolved.isExternalLibraryImport !== true) return result;
+  mapping.addsNothing.add(key);
+  return undefined;
 }
 
 function canonicalTypeScriptFileKey(filePath: string): string {
@@ -356,8 +622,16 @@ export function canonicalFilesystemPath(filePath: string): string {
  * Refuse repository-authored relative dependency traversal before TypeScript can read the target.
  * Bare package imports, configured type packages and the standard library remain delegated to the
  * normal compiler host so the analyzer keeps the same TypeChecker environment for admitted input.
+ * A repository file a tsconfig mapping reaches from a root is repository-authored traversal as well:
+ * its own relative imports and references are held to the same confinement as the relative import
+ * that would reach it, so an alias never lets the Program read what a relative path may not.
  */
-function assertConfinedTypeScriptSources(rootAbsPaths: readonly string[], repoRoot: string, snapshot?: CompilerInputSnapshot): void {
+function assertConfinedTypeScriptSources(
+  rootAbsPaths: readonly string[],
+  repoRoot: string,
+  snapshot?: CompilerInputSnapshot,
+  mapping?: PathMappingPass,
+): void {
   const canonicalRoot = canonicalFilesystemPath(repoRoot);
   const pending = [...rootAbsPaths];
   const visited = new Set<string>();
@@ -374,7 +648,16 @@ function assertConfinedTypeScriptSources(rootAbsPaths: readonly string[], repoRo
     if (source === undefined) throw new Error(`SOURCE_SNAPSHOT_MISSING: ${normalizePath(relative(repoRoot, path))}`);
     const preprocessed = ts.preProcessFile(source, true, true);
     for (const imported of preprocessed.importedFiles) {
-      if (!imported.fileName.startsWith(".")) continue;
+      // The Program applies `paths`/`baseUrl` to exactly the names TypeScript does not call relative;
+      // this walk must classify with the same predicate, or a dot-named alias escapes the confinement.
+      if (!ts.isExternalModuleNameRelative(imported.fileName)) {
+        // The usage mode decides conditional `imports`, so both modes the Program may use are followed.
+        if (mapping !== undefined) for (const mode of [undefined, ts.ModuleKind.CommonJS] as const) {
+          const target = resolvePathMappedModule(mapping, imported.fileName, path, mode)?.resolvedModule?.resolvedFileName;
+          if (target !== undefined) pending.push(target);
+        }
+        continue;
+      }
       const lexical = resolve(dirname(path), imported.fileName);
       if (!isContainedTypeScriptPath(canonicalRoot, canonicalFilesystemPath(lexical))) {
         throw new Error(`IMPORT_OUTSIDE_REPOSITORY: ${imported.fileName}`);
@@ -404,10 +687,17 @@ function assertConfinedTypeScriptSources(rootAbsPaths: readonly string[], repoRo
 }
 
 /** Extract modules, symbols, imports and best-effort resolved calls from source/test files. */
-export function extractTypeScript(rootAbsPaths: string[], repoRoot: string, suppliedSnapshot?: CompilerInputSnapshot): TsExtraction {
+export function extractTypeScript(
+  rootAbsPaths: string[],
+  repoRoot: string,
+  suppliedSnapshot?: CompilerInputSnapshot,
+  options: TypeScriptExtractionOptions = {},
+): TsExtraction {
   const snapshot = suppliedSnapshot === undefined ? undefined : new Map(suppliedSnapshot);
-  assertConfinedTypeScriptSources(rootAbsPaths, repoRoot, snapshot);
-  const program = extractionContext.createProgram(rootAbsPaths, snapshot, repoRoot);
+  const pathMapping = createPathMappingPassFor(rootAbsPaths, repoRoot, snapshot, options);
+  assertConfinedTypeScriptSources(rootAbsPaths, repoRoot, snapshot, pathMapping);
+  // The confinement walk, the Program and the extractor share one mapping pass, and so its caches.
+  const program = extractionContext.createProgram(rootAbsPaths, snapshot, repoRoot, options, pathMapping);
   // One analysis pass shares the derived workspace links of its configured resolutions.
   const workspaceLinks = createWorkspaceLinkResolver();
   const checker = program.getTypeChecker();
@@ -529,7 +819,7 @@ export function extractTypeScript(rootAbsPaths: string[], repoRoot: string, supp
         return;
       } else if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
         const specifier = node.moduleSpecifier.text;
-        const resolvedAbs = resolveTypeScriptModule(specifier, sf.fileName, undefined, javascriptEnabled || snapshot !== undefined, snapshot, workspaceLinks, repoRoot);
+        const resolvedAbs = resolveTypeScriptModule(specifier, sf.fileName, undefined, javascriptEnabled || snapshot !== undefined, snapshot, workspaceLinks, repoRoot, pathMapping);
         const names = importedNames(node, staticModuleLinksEnabled);
         const namespace = node.importClause?.namedBindings;
         const namespaceSymbol = node.importClause?.isTypeOnly !== true && namespace !== undefined && ts.isNamespaceImport(namespace)
@@ -553,7 +843,7 @@ export function extractTypeScript(rootAbsPaths: string[], repoRoot: string, supp
         });
       } else if (staticModuleLinksEnabled && ts.isExportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
         const specifier = node.moduleSpecifier.text;
-        const resolvedAbs = resolveTypeScriptModule(specifier, sf.fileName, undefined, javascriptEnabled || snapshot !== undefined, snapshot, workspaceLinks, repoRoot);
+        const resolvedAbs = resolveTypeScriptModule(specifier, sf.fileName, undefined, javascriptEnabled || snapshot !== undefined, snapshot, workspaceLinks, repoRoot, pathMapping);
         imports.push({
           fromRelPath: relPath,
           moduleSpecifier: specifier,
@@ -565,7 +855,7 @@ export function extractTypeScript(rootAbsPaths: string[], repoRoot: string, supp
         if (staticModuleLinksEnabled && node.expression.kind === ts.SyntaxKind.ImportKeyword &&
           node.arguments.length === 1 && ts.isStringLiteral(node.arguments[0]!)) {
           const specifier = (node.arguments[0] as ts.StringLiteral).text;
-          const resolvedAbs = resolveTypeScriptModule(specifier, sf.fileName, ts.ModuleKind.ESNext, javascriptEnabled || snapshot !== undefined, snapshot, workspaceLinks, repoRoot);
+          const resolvedAbs = resolveTypeScriptModule(specifier, sf.fileName, ts.ModuleKind.ESNext, javascriptEnabled || snapshot !== undefined, snapshot, workspaceLinks, repoRoot, pathMapping);
           imports.push({ fromRelPath: relPath, moduleSpecifier: specifier,
             ...(resolvedAbs !== undefined ? { resolvedRelPath: relOf(resolvedAbs) } : {}),
             names: [], line: lineOf(sf, node.getStart()) });
@@ -612,29 +902,33 @@ export async function extractTypeScriptParallel(
   repoRoot: string,
   requested: IndexWorkerSelection = "auto",
   snapshot?: CompilerInputSnapshot,
+  options: TypeScriptExtractionOptions = {},
 ): Promise<ParallelTsExtraction> {
   if (snapshot !== undefined) {
     return { extraction: extractTypeScript(rootAbsPaths, repoRoot, snapshot), parallelism: { requested, used: 1, mode: "preflight-fallback", reason: "retained compiler input snapshot requires one semantic Program" } };
   }
-  assertConfinedTypeScriptSources(rootAbsPaths, repoRoot);
+  const pathMapping = createPathMappingPassFor(rootAbsPaths, repoRoot, undefined, options);
+  assertConfinedTypeScriptSources(rootAbsPaths, repoRoot, undefined, pathMapping);
+  // Every fallback is the same single Program, so it carries the same extraction options.
+  const serial = (): TsExtraction => extractTypeScript(rootAbsPaths, repoRoot, undefined, options);
   const workerLimit = resolveWorkerCount(requested, rootAbsPaths.length);
   if (workerLimit > 1 && rootAbsPaths.some(path => /\.(mjs|cjs|js|jsx)$/.test(path))) {
     return {
-      extraction: extractTypeScript(rootAbsPaths, repoRoot),
+      extraction: serial(),
       parallelism: { requested, used: 1, mode: "preflight-fallback", reason: "mixed JavaScript/TypeScript extraction requires one semantic Program" },
     };
   }
   if (workerLimit <= 1 || rootAbsPaths.length <= 1) {
     return {
-      extraction: extractTypeScript(rootAbsPaths, repoRoot),
+      extraction: serial(),
       parallelism: { requested, used: 1, mode: "single" },
     };
   }
 
-  const preflight = preflightParallelSafety(rootAbsPaths, repoRoot);
+  const preflight = preflightParallelSafety(rootAbsPaths, repoRoot, pathMapping);
   if (!preflight.safe) {
     return {
-      extraction: extractTypeScript(rootAbsPaths, repoRoot),
+      extraction: serial(),
       parallelism: {
         requested,
         used: 1,
@@ -648,7 +942,7 @@ export async function extractTypeScriptParallel(
   const chunks = weightedComponentChunks(preflight.components, workerLimit);
   if (chunks.length <= 1) {
     return {
-      extraction: extractTypeScript(rootAbsPaths, repoRoot),
+      extraction: serial(),
       parallelism: {
         requested,
         used: 1,
@@ -673,6 +967,7 @@ export async function extractTypeScriptParallel(
         repoRoot,
         rootAbsPaths: [...chunk, ...declarationPaths],
         emitAbsPaths: chunk,
+        ...(options.tsconfigPathMapping === true ? { tsconfigPathMapping: true } : {}),
       }));
     }
     const responses = await Promise.all(jobs.map((job) => job.promise));
@@ -686,7 +981,7 @@ export async function extractTypeScriptParallel(
     await Promise.allSettled(jobs.map((job) => job.promise));
     if (!launched) {
       return {
-        extraction: extractTypeScript(rootAbsPaths, repoRoot),
+        extraction: serial(),
         parallelism: {
           requested,
           used: 1,
@@ -718,16 +1013,16 @@ export function resolveWorkerCount(requested: IndexWorkerSelection, fileCount: n
   return Math.min(2, Math.max(1, available - 1), Math.max(1, fileCount));
 }
 
-function preflightParallelSafety(rootAbsPaths: readonly string[], repoRoot: string):
+function preflightParallelSafety(rootAbsPaths: readonly string[], repoRoot: string, pathMapping?: PathMappingPass):
   | { safe: true; emitAbsOrder: string[]; components: string[][] }
   | { safe: false; reason: string } {
   // Safety inspection needs source ordering and syntax only. Avoid loading the standard library
   // and type packages here: each Worker builds the real semantic Program for its own chunk.
-  const program = ts.createProgram([...rootAbsPaths], {
-    ...COMPILER_OPTIONS,
-    noLib: true,
-    types: [],
-  });
+  const preflightOptions: ts.CompilerOptions = { ...COMPILER_OPTIONS, noLib: true, types: [] };
+  // Source order is part of the extraction's identity: resolve aliases here as the extraction will.
+  const preflightHost = pathMapping === undefined ? undefined : ts.createCompilerHost(preflightOptions);
+  if (preflightHost !== undefined && pathMapping !== undefined) installPathMappedResolution(preflightHost, pathMapping, preflightOptions);
+  const program = ts.createProgram([...rootAbsPaths], preflightOptions, preflightHost);
   const rootSet = new Set(rootAbsPaths.map(canonicalTypeScriptFileKey));
   const roots = program.getSourceFiles().filter((source) => rootSet.has(canonicalTypeScriptFileKey(source.fileName)));
   if (roots.length !== rootSet.size) return { safe: false, reason: "program omitted an extraction root" };
@@ -760,7 +1055,7 @@ function preflightParallelSafety(rootAbsPaths: readonly string[], repoRoot: stri
   return {
     safe: true,
     emitAbsOrder: roots.filter((source) => !source.isDeclarationFile).map((source) => source.fileName),
-    components: rootModuleComponents(program, roots, repositoryKey),
+    components: rootModuleComponents(program, roots, repositoryKey, pathMapping),
   };
 }
 
@@ -774,6 +1069,7 @@ function rootModuleComponents(
   program: ts.Program,
   roots: readonly ts.SourceFile[],
   repositoryKey: string,
+  pathMapping?: PathMappingPass,
 ): string[][] {
   const selectedRoots = new Map(
     roots.filter((source) => !source.isDeclarationFile)
@@ -804,12 +1100,14 @@ function rootModuleComponents(
     else parent.set(leftRoot, rightRoot);
   };
 
+  // Files joined only by a path alias belong to one component, as the extraction will see them.
   for (const source of loadedSources.values()) {
     const from = canonicalTypeScriptFileKey(source.fileName);
     for (const usage of literalModuleSpecifiers(source)) {
       const resolutionMode = usage.resolutionMode
         ?? program.getModeForUsageLocation(source, usage.literal);
-      const resolved = resolveTypeScriptModule(usage.literal.text, source.fileName, resolutionMode, undefined, undefined, undefined, repositoryKey);
+      const resolved = resolveTypeScriptModule(
+        usage.literal.text, source.fileName, resolutionMode, undefined, undefined, undefined, repositoryKey, pathMapping);
       if (resolved === undefined) continue;
       const target = canonicalTypeScriptFileKey(resolved);
       if (loadedSources.has(target)) union(from, target);
@@ -889,8 +1187,10 @@ export function __partitionTypeScriptRootsForTesting(
   rootAbsPaths: readonly string[],
   repoRoot: string,
   count: number,
+  options: TypeScriptExtractionOptions = {},
 ): string[][] {
-  const preflight = preflightParallelSafety(rootAbsPaths, repoRoot);
+  const preflight = preflightParallelSafety(rootAbsPaths, repoRoot,
+    createPathMappingPassFor(rootAbsPaths, repoRoot, undefined, options));
   if (!preflight.safe) throw new Error(preflight.reason);
   return weightedComponentChunks(preflight.components, count);
 }

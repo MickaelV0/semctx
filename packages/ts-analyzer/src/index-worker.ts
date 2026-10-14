@@ -7,6 +7,7 @@ interface ExtractionWorkerRequest {
   repoRoot: string;
   rootAbsPaths: string[];
   emitAbsPaths: string[];
+  tsconfigPathMapping?: boolean;
 }
 
 declare const self: Worker;
@@ -23,7 +24,8 @@ self.onmessage = (event: MessageEvent<unknown>): void => {
       jobId: request.jobId,
       ok: true,
       extraction: restrictToEmitRoots(
-        extractTypeScript(request.rootAbsPaths, request.repoRoot),
+        extractTypeScript(request.rootAbsPaths, request.repoRoot, undefined,
+          request.tsconfigPathMapping === true ? { tsconfigPathMapping: true } : {}),
         request.emitAbsPaths,
         request.repoRoot,
       ),
@@ -47,7 +49,8 @@ function isRequest(value: unknown): value is ExtractionWorkerRequest {
     && Array.isArray(record["rootAbsPaths"])
     && record["rootAbsPaths"].every((path) => typeof path === "string")
     && Array.isArray(record["emitAbsPaths"])
-    && record["emitAbsPaths"].every((path) => typeof path === "string");
+    && record["emitAbsPaths"].every((path) => typeof path === "string")
+    && (record["tsconfigPathMapping"] === undefined || typeof record["tsconfigPathMapping"] === "boolean");
 }
 
 function restrictToEmitRoots(

@@ -278,7 +278,7 @@ function escapedDependencyReason(
   const canonicalRoot = canonicalPath(root);
   const preprocessed = ts.preProcessFile(content, true, true);
   for (const imported of preprocessed.importedFiles) {
-    if (!imported.fileName.startsWith(".")) continue;
+    if (!ts.isExternalModuleNameRelative(imported.fileName)) continue;
     const lexical = resolve(dirname(absPath), imported.fileName);
     if (!isContained(canonicalRoot, canonicalPath(lexical))) return "IMPORT_OUTSIDE_REPOSITORY";
     const resolved = resolveTypeScriptModule(imported.fileName, absPath, undefined, undefined, undefined, undefined, root);

@@ -19,6 +19,27 @@ GitHub Release advance together through the tag-driven lockstep workflow documen
   Bun; the bundler partitions code between `semctx-mcp.js` and `semctx-shared.js` differently.
 - Tooling scripts record a process signal as a string when Bun 1.4.3 reports an unnamed signal
   by its number; named signals are recorded exactly as before.
+### Fixed
+
+- In a version 2 configuration, an import resolved by the `paths` or `baseUrl` of the nearest
+  `tsconfig.json` (`extends` included) now produces its `imports` edge, its cross-file `calls`
+  edges and its test link in a TypeScript-only graph, as the same import written relatively
+  does (#354). Previously a repository importing only by alias indexed with no `imports` edge, so
+  `impact diff` and `verify diff` returned empty sets that read as "no dependents". Only `paths`
+  and `baseUrl` are taken from the configuration, and only for imports written in a selected
+  file. The mapping only adds a repository module: any other specifier, including a package
+  hoisted above the analyzed root and the `require` form of a dual package, resolves as before,
+  and a configuration without either field leaves the extraction byte-identical. A mapped target
+  outside the repository is not read, and a repository file reached through an alias is refused
+  with `IMPORT_OUTSIDE_REPOSITORY` or `REFERENCE_OUTSIDE_REPOSITORY` when it imports or references
+  outside the repository, as the relative spelling of the same chain is. The confinement walk
+  now classifies a specifier as TypeScript does, so an absolute import of a file outside the
+  repository is refused with `IMPORT_OUTSIDE_REPOSITORY` where it was read silently before.
+  Version 1 configurations, JavaScript-enabled graphs and retained compiler snapshots are
+  unchanged for the mapping itself. A
+  specifier that stays unresolved is still not reported as such: an empty result is not evidence
+  of no dependents. `package.json` `imports`/`exports` entries that point to build output stay
+  unresolved in a checkout that is not built.
 
 ## [0.4.5] - 2026-10-13
 

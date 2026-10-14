@@ -40,6 +40,7 @@ export type {
   ExtractedCall,
   IndexWorkerSelection,
   ParallelTsExtraction,
+  TypeScriptExtractionOptions,
   TypeScriptParallelism,
   CompilerInputSnapshot,
 } from "./ts-symbols";

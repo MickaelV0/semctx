@@ -170,6 +170,51 @@ added, removed or renamed members. Otherwise the configuration error is still re
 example `SOURCE_CONFIGURATION_INVALID:6053`. Analysis of retained compiler snapshots
 (`public-monorepo-static-v1`) is unchanged and still reads only the inputs it captured.
 
+### Path aliases in TypeScript
+
+In a version 2 configuration, a non-relative import written in a selected file of a
+TypeScript-only graph is resolved through the `paths` and `baseUrl` of the nearest
+`tsconfig.json` of that file, including what it `extends`. An import such as
+`"@scope/pkg/feat/handler.js"` mapped by `"@scope/pkg/*": ["./src/*"]` then produces the same
+dependency, call and test-link edges as the relative import of that file. A `.js` specifier
+reaches its `.ts` source and several `paths` targets are tried in order, as in `tsc`. Only
+`paths` and `baseUrl` are taken from the configuration. `module`, `moduleResolution` and every
+other option stay at the analyzer's Bundler defaults.
+
+The mapping only adds a repository module. A specifier it does not add one for keeps the
+resolution it had before, with the usage mode (`import`, `require`, `.cts`) the compiler applies
+to it: one no mapping governs, one that resolves to an installed package, and one that resolves to
+nothing the mapping can reach, such as a package hoisted into a `node_modules` above the analyzed
+root. A configuration whose selected files are governed by neither `paths` nor `baseUrl` leaves
+the extraction byte-identical.
+
+- Only imports written in a selected file are mapped. A file the compiler loads through an alias
+  without it being selected keeps the historical resolution for its own specifiers, and its
+  configuration is not an input of the analysis. Select it to have its imports mapped.
+- A mapped target outside the analyzed repository, or behind a link that leaves it, is not read
+  and produces no edge. A repository file reached through an alias is held to the confinement of
+  the relative import that would reach it: a relative import or `/// <reference>` of that file
+  that leaves the repository is refused with `IMPORT_OUTSIDE_REPOSITORY` or
+  `REFERENCE_OUTSIDE_REPOSITORY`, and nothing outside the repository is read. A specifier is
+  classified as TypeScript classifies it: a name that begins with a dot but is not `./` or `../`
+  is bare and mapped, and an absolute path outside the repository is refused like a relative one.
+- A file created at a higher-priority target of a `paths` entry that is not selected, for example
+  a git-ignored `gen/` directory, is not part of the analysis input identity. It changes the edge
+  but does not make the index stale: rebuild after generating it.
+- A specifier that does not resolve produces no edge and is not reported as unresolved. The
+  absence of an edge is not evidence that no dependency exists. `export ... from` and `import()`
+  produce no dependency edge in this graph, aliased or relative.
+- The configuration files read are those of the selected files and are part of the analysis input
+  identity, so editing `paths`, `baseUrl` or an inherited configuration makes the index stale
+  until it is rebuilt.
+- Version 1 configurations keep their historical resolution, which does not read
+  `tsconfig.json` and does not bind it into freshness. JavaScript-enabled graphs already apply the
+  complete nearest configuration.
+- `package.json` `imports` that target source files resolve as before. Entries of `imports` or
+  `exports` that target build output (`./dist/...`) stay unresolved in a checkout that is not
+  built: reaching their sources needs `outDir` and `rootDir`, which this resolution does not
+  take from the configuration.
+
 Setup's optional `scope.proposedIncludes` contains at most 20 exact observed TypeScript/Python
 paths missed by v2 includes while their language is enabled. Add only the desired entries to
 `include` explicitly, then rerun setup. Existing configuration, including empty or restricted
