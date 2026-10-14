@@ -346,6 +346,45 @@ describe("tsconfig path mapping in a TypeScript-only graph (issue #354)", () => 
     }
   });
 
+  for (const [name, file, source, used] of [
+    ["package ESM import", "use.ts", 'import { value } from "#dual"; export const result = value;', "esm"],
+    ["ESM import", "use.mts", 'import { value } from "#dual"; export const result = value;', "esm"],
+    ["CommonJS import equals", "use.cts", 'import dual = require("#dual"); export const result = dual.value;', "cjs"],
+    ["import equals in ESM", "use.mts", 'import dual = require("#dual"); export const result = dual.value;', "cjs"],
+    ["require call", "use.ts", 'const dual = require("#dual"); export const result = dual.value;', "cjs"],
+    ["ESM dynamic import", "use.mts", 'export const result = import("#dual");', "esm"],
+    ["CommonJS dynamic import", "use.cts", 'export const result = import("#dual");', "cjs"],
+    ["type import attribute", "use.mts", 'import type { Value } from "#dual" with { "resolution-mode": "require" }; export type Result = Value;', "cjs"],
+  ] as const) test(`confinement follows only the used conditional branch for ${name}`, async () => {
+    const parent = temporaryRoot("semctx-paths-used-mode-");
+    const root = `${parent}/repo`;
+    const unused = used === "esm" ? "cjs" : "esm";
+    write(parent, { "outside.ts": "export const secret = 42;\n" });
+    write(root, {
+      "package.json": JSON.stringify({ type: "module", imports: { "#dual": { import: "./esm.ts", require: "./cjs.ts" } } }),
+      "tsconfig.json": JSON.stringify({ compilerOptions: { paths: { "*": ["./missing/*"] } } }),
+      [file]: source,
+      "leaf.ts": "export const leaf = 1;\n",
+      [`${used}.ts`]: "export const value = 1; export type Value = number;\n",
+      [`${unused}.ts`]: 'export { secret } from "../outside";\n',
+    });
+    const paths = [join(root, file), join(root, "leaf.ts")];
+    const options = { tsconfigPathMapping: true };
+    const single = extractTypeScript(paths, root, undefined, options);
+    const parallel = await extractTypeScriptParallel(paths, root, 2, undefined, options);
+    expect(parallel.parallelism).toMatchObject({ mode: "parallel", used: 2 });
+    expect(parallel.extraction).toEqual(single);
+    // Moving the escape into the used branch must still refuse the actual dependency.
+    write(root, {
+      [`${unused}.ts`]: "export const value = 1; export type Value = number;\n",
+      [`${used}.ts`]: 'export { secret } from "../outside";\n',
+    });
+    expect(() => extractTypeScript(paths, root, undefined, options)).toThrow(/IMPORT_OUTSIDE_REPOSITORY/);
+    const refusal = await extractTypeScriptParallel(paths, root, 2, undefined, options)
+      .then(() => "extracted", (error: Error) => error.message);
+    expect(refusal).toMatch(/IMPORT_OUTSIDE_REPOSITORY/);
+  });
+
   test("an alias to a repository file does not let the Program read what the relative import may not", () => {
     const parent = temporaryRoot("semctx-paths-bridge-");
     const root = `${parent}/repo`;

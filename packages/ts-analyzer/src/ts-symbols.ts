@@ -647,15 +647,23 @@ function assertConfinedTypeScriptSources(
     const source = snapshot === undefined ? readFileSync(path, "utf8") : snapshotSystem(snapshot).readFile(path);
     if (source === undefined) throw new Error(`SOURCE_SNAPSHOT_MISSING: ${normalizePath(relative(repoRoot, path))}`);
     const preprocessed = ts.preProcessFile(source, true, true);
+    if (mapping !== undefined && mapping.roots.has(key)) {
+      // Match the Program's usage mode without loading dependencies before confinement succeeds.
+      // Following both conditional branches can reject an escaping import the Program never uses.
+      const parsed = ts.createSourceFile(path, source, {
+        languageVersion: COMPILER_OPTIONS.target!,
+        impliedNodeFormat: ts.getImpliedNodeFormatForFile(path, undefined, ts.sys, COMPILER_OPTIONS),
+      }, true);
+      for (const usage of literalModuleSpecifiers(parsed)) {
+        const mode = usage.resolutionMode ?? ts.getModeForUsageLocation(parsed, usage.literal, COMPILER_OPTIONS);
+        const target = resolvePathMappedModule(mapping, usage.literal.text, path, mode)?.resolvedModule?.resolvedFileName;
+        if (target !== undefined) pending.push(target);
+      }
+    }
     for (const imported of preprocessed.importedFiles) {
       // The Program applies `paths`/`baseUrl` to exactly the names TypeScript does not call relative;
       // this walk must classify with the same predicate, or a dot-named alias escapes the confinement.
       if (!ts.isExternalModuleNameRelative(imported.fileName)) {
-        // The usage mode decides conditional `imports`, so both modes the Program may use are followed.
-        if (mapping !== undefined) for (const mode of [undefined, ts.ModuleKind.CommonJS] as const) {
-          const target = resolvePathMappedModule(mapping, imported.fileName, path, mode)?.resolvedModule?.resolvedFileName;
-          if (target !== undefined) pending.push(target);
-        }
         continue;
       }
       const lexical = resolve(dirname(path), imported.fileName);
