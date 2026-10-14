@@ -37,7 +37,7 @@ const portableTypeScriptPrelude =
   'var __dirname=import.meta.dir+"/typescript-lib",__filename=__dirname+"/typescript.js";';
 const escapedRoot = JSON.stringify(root).slice(1, -1);
 
-export const PLUGIN_BUILD_BUN_VERSION = "1.4.0";
+export const PLUGIN_BUILD_BUN_VERSION = "1.4.3";
 /** Bun's `naming.chunk` target — the only artifact allowed to carry the TypeScript path prelude. */
 const pluginRuntimeSharedChunk = "semctx-shared.js";
 const pluginRuntimeCoreArtifactPaths = [

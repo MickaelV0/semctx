@@ -52,12 +52,12 @@ describe("compatibility declaration gate", () => {
   });
   test("rejects the historical Bun 1.3 typo outside the generated section", () => {
     const root = fixture();
-    replace(root, "apps/cli/README.md", "≥ 1.4.0", "≥ 1.3");
+    replace(root, "apps/cli/README.md", "≥ 1.4.3", "≥ 1.3");
     expect(checkCompatibility(root)).toContain("apps/cli/README.md: contradictory Bun requirement 1.3");
   });
   test("changing the package minimum without its consumers fails", () => {
     const root = fixture();
-    replace(root, "apps/cli/package.json", '">=1.4.0"', '">=1.5.0"');
+    replace(root, "apps/cli/package.json", '">=1.4.3"', '">=1.5.0"');
     expect(checkCompatibility(root)).toContain(".github/workflows/ci.yml: Bun pin differs from package minimum");
   });
   test("rejects an untested host substituted in actual provisioning", () => {

@@ -66,7 +66,7 @@ non-zero with a usage message. `ccc` (the embeddings baseline) is skipped gracef
 
 ## Reproducing (with a corpus you own)
 
-Prerequisites: Bun ≥ 1.3, Python ≥ 3.10, and a git repository to evaluate. Then:
+Prerequisites: Bun ≥ 1.4.3, Python ≥ 3.10, and a git repository to evaluate. Then:
 
 ```bash
 # 1. one-time: an indexed COPY of the corpus (never index a repo you edit)

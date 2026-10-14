@@ -343,7 +343,7 @@ function checkCurrentReleaseTruth(root: string, options: DocumentationCheckOptio
     `semctx@${version} install`,
     `github-action@v${version}`,
     `releases/tag/v${version}`,
-    "Bun 1.4.0 or newer",
+    "Bun 1.4.3 or newer",
     "prefers-reduced-motion: reduce",
     "@media (max-width: 640px)",
     "blob/main/docs/README.md",

@@ -520,7 +520,8 @@ await scenario("interrupted-index", async () => {
       if (observedIncomplete) break;
       await new Promise<void>((done) => setTimeout(done, 10));
     }
-    preKill = { exitCode: child.exitCode, signalCode: child.signalCode, marker: observedIncomplete ? "incomplete" : null };
+    // Bun 1.4.3 reports a signal that has no name as its number; keep the recorded contract a string.
+    preKill = { exitCode: child.exitCode, signalCode: child.signalCode === null ? null : String(child.signalCode), marker: observedIncomplete ? "incomplete" : null };
     assert(observedIncomplete, "Must observe the persisted rebuild marker on a copied database");
     assert.equal(preKill.exitCode, null, "Natural index exit cannot count as forced interruption");
     assert.equal(preKill.signalCode, null, "Process must still be alive before the deliberate kill");
@@ -529,7 +530,7 @@ await scenario("interrupted-index", async () => {
   } finally {
     if (!killRequested) child.kill("SIGKILL");
     exitCode = await child.exited;
-    observations["interrupted:process"] = { command, pid: child.pid, preKill, requestedSignal: "SIGKILL", killRequested, killResult: killResult === undefined ? "returned void" : killResult, code: exitCode, signalCode: child.signalCode, observedIncomplete, snapshotPath, snapshotError, stdout: await stdout, stderr: await stderr };
+    observations["interrupted:process"] = { command, pid: child.pid, preKill, requestedSignal: "SIGKILL", killRequested, killResult: killResult === undefined ? "returned void" : killResult, code: exitCode, signalCode: child.signalCode === null ? null : String(child.signalCode), observedIncomplete, snapshotPath, snapshotError, stdout: await stdout, stderr: await stderr };
   }
   assert.notEqual(exitCode, 0);
   assert.equal(child.signalCode, "SIGKILL", "Must attest the deliberate forced stop");

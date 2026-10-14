@@ -13,7 +13,7 @@ without a `cwd` field or `SEMCTX_ROOT`; the first absolute `repositoryRoot` requ
 server as on Codex. Bun's `--cwd` keeps the project's `bunfig.toml` and `.env` out of the server
 process.
 
-Requirements: Oh My Pi `18.1.11` (the currently observed Agent-Plugins baseline) and Bun `>=1.4.0`
+Requirements: Oh My Pi `18.1.11` (the currently observed Agent-Plugins baseline) and Bun `>=1.4.3`
 on PATH. Other OMP versions remain unverified.
 
 Run these commands from the intended project directory. Create its `.omp` directory first:

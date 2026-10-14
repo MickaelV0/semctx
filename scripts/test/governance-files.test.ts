@@ -154,7 +154,7 @@ describe("CI governance", () => {
       "persist-credentials": false,
     });
     expect(python?.with?.["python-version"]).toBe("3.10");
-    expect(bun?.with?.["bun-version"]).toBe("1.4.0");
+    expect(bun?.with?.["bun-version"]).toBe("1.4.3");
     expect(ci).toContain("bun install --frozen-lockfile");
     expect(gates.steps.find((step) => step.name === "Run selected verification lane")?.run)
       .toBe("bun scripts/ci-gate.ts");
@@ -415,8 +415,8 @@ describe("release governance", () => {
     expect(unpinnedActions(releaseWorkflow)).toEqual([]);
     expect(bunSteps).toHaveLength(2);
     expect(bunSteps.map((step) => step.with?.["bun-version"])).toEqual([
-      "1.4.0",
-      "1.4.0",
+      "1.4.3",
+      "1.4.3",
     ]);
 
     const deliver = job(releaseWorkflow, "deliver");
@@ -432,8 +432,8 @@ describe("release governance", () => {
       (step) => step.name === "Prove both hosts can install the immutable release candidate",
     );
     expect(executableShell(prove?.run ?? "")).toContain('test "$verifier_sha" = "$GITHUB_SHA"');
-    expect(publishing).toContain("repository-pinned Bun `1.4.0`");
-    expect(devcontainer).toContain('bash -s "bun-v1.4.0"');
+    expect(publishing).toContain("repository-pinned Bun `1.4.3`");
+    expect(devcontainer).toContain('bash -s "bun-v1.4.3"');
     expect(release).toContain("bun run verify:pr -- --skip-diff");
     expect(release).not.toContain("bun run quality");
     expect(release).not.toContain("bun run plugin:check");

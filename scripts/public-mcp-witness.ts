@@ -114,7 +114,8 @@ export async function verifyMcpWitness(input: { bundle: string; cwd: string; rep
     if (!outcome.teardown.stdoutClosed) outcome.teardown.stdoutCancelled = await within(stdoutReader.cancel().then(() => true, () => false), limits.teardownMs) === true;
     await within(stderrDrain, limits.teardownMs);
     if (!outcome.teardown.stderrClosed) outcome.teardown.stderrCancelled = await within(stderrReader.cancel().then(() => true, () => false), limits.teardownMs) === true;
-    outcome.exitCode = child.exitCode; outcome.signalCode = child.signalCode;
+    // Bun 1.4.3 reports a signal that has no name as its number; keep the recorded contract a string.
+    outcome.exitCode = child.exitCode; outcome.signalCode = child.signalCode === null ? null : String(child.signalCode);
     if (!outcome.teardown.childExited
       || (!outcome.teardown.stdoutClosed && !outcome.teardown.stdoutCancelled)
       || (!outcome.teardown.stderrClosed && !outcome.teardown.stderrCancelled)) {
