@@ -3179,6 +3179,26 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
     expect(runtime.setupRoots).toEqual([]);
   });
 
+  test.each([
+    ["timeout", { timedOut: true }, "PROCESS_TIMEOUT"],
+    ["output exhaustion", { truncated: true }, "output exceeded"],
+  ] as const)("Git root query %s blocks every host action", (_name, failure, error) => {
+    const runtime = fakeRuntime({
+      codex: true,
+      claude: true,
+      queryOutcomes: { "git rev-parse --show-toplevel": { code: 0, out: "C:\\work\\project\n", ...failure } },
+    });
+    const report = executeInstall("C:\\work\\project", parseArgs(["install", "--host", "all"]), runtime);
+
+    expect(report.ok).toBe(false);
+    expect(report.workspace.status).toBe("failed");
+    expect(report.workspace.error).toContain(error);
+    expect(runtime.commands).toEqual([["git", "rev-parse", "--show-toplevel"]]);
+    expect(runtime.setupRoots).toEqual([]);
+    expect(runtime.deferredCodexCleanups).toEqual([]);
+    expect(runtime.deferredCacheCleanups).toEqual([]);
+  });
+
   test("does not write workspace state when invoked outside a Git repository", () => {
     const runtime = fakeRuntime({ codex: true, git: false });
     const report = executeInstall("C:\\Users\\Ada", parseArgs(["install"]), runtime);
@@ -3690,6 +3710,40 @@ describe("detached cleanup launch", () => {
       try { process.kill((JSON.parse(report.result.out) as { pid: number }).pid, "SIGKILL"); } catch { /* already gone */ }
     }
   }, 60_000);
+});
+
+describe("Git root query budget", () => {
+  test.each([
+    ["timeout", "await Bun.sleep(60000)", "PROCESS_TIMEOUT"],
+    ["output exhaustion", 'process.stdout.write("x".repeat(3 * 1024 * 1024))', "output exceeded"],
+  ] as const)("default runtime refuses Git root query %s", (_name, stub, expectedError) => {
+    const installUrl = pathToFileURL(join(import.meta.dir, "../src/commands/install.ts")).href;
+    const argsUrl = pathToFileURL(join(import.meta.dir, "../src/args.ts")).href;
+    const program = `
+      const { executeInstall } = await import(${JSON.stringify(installUrl)});
+      const { parseArgs } = await import(${JSON.stringify(argsUrl)});
+      const spawn = Bun.spawnSync;
+      const commands = [];
+      Bun.which = () => null;
+      Bun.spawnSync = (argv, options) => {
+        commands.push(argv);
+        if (argv.join(" ") !== "git rev-parse --show-toplevel") throw new Error("unexpected child");
+        return spawn([process.execPath, "-e", ${JSON.stringify(stub)}], options);
+      };
+      const report = executeInstall(${JSON.stringify(tmpdir())}, parseArgs(["install", "--host", "all"]));
+      console.log(JSON.stringify({ report, commands }));
+    `;
+    const child = Bun.spawnSync([process.execPath, "-e", program], {
+      stdout: "pipe", stderr: "pipe", timeout: 15000, killSignal: "SIGKILL",
+    });
+    expect(child.exitCode).toBe(0);
+    expect(new TextDecoder().decode(child.stderr)).toBe("");
+    const result = JSON.parse(new TextDecoder().decode(child.stdout)) as { report: InstallReport; commands: string[][] };
+    expect(result.report.ok).toBe(false);
+    expect(result.report.workspace.status).toBe("failed");
+    expect(result.report.workspace.error).toContain(expectedError);
+    expect(result.commands).toEqual([["git", "rev-parse", "--show-toplevel"]]);
+  }, 20000);
 });
 
 describe("repository setup budget", () => {

@@ -329,7 +329,13 @@ function defaultRun(command: readonly string[], cwd: string, budget?: NativeInst
     return { code: result.code, out: result.out, err: result.err };
   }
   const result = runPluginDeliveryQuery(command, cwd);
-  return { code: result.timedOut || result.truncated ? 1 : result.code, out: result.out, err: result.timedOut ? "PROCESS_TIMEOUT: host query budget exhausted" : result.err };
+  return {
+    code: result.timedOut || result.truncated ? 1 : result.code,
+    out: result.out,
+    err: result.timedOut ? "PROCESS_TIMEOUT: host query budget exhausted" : result.err,
+    ...(result.timedOut === true ? { timedOut: true } : {}),
+    ...(result.truncated === true ? { truncated: true } : {}),
+  };
 }
 
 export const DEFERRED_CODEX_CLEANUP_SCRIPT = String.raw`
@@ -1692,13 +1698,15 @@ function detectHost(
   return false;
 }
 
-function resolveGitRoot(root: string, runtime: InstallRuntime): string | undefined {
+function resolveGitRoot(root: string, runtime: InstallRuntime): { root?: string; error?: string } {
   const result = runtime.run(
     ["git", "rev-parse", "--show-toplevel"],
     root,
   );
+  if (result.timedOut === true) return { error: "PROCESS_TIMEOUT: Git repository root query budget exhausted" };
+  if (result.truncated === true) return { error: "Git repository root query output exceeded the allowed size" };
   const resolved = result.out.trim();
-  return result.code === 0 && resolved.length > 0 ? resolved : undefined;
+  return result.code === 0 && resolved.length > 0 ? { root: resolved } : {};
 }
 
 function workspaceReport(
@@ -1713,7 +1721,16 @@ function workspaceReport(
       next: `run MCP semctx_setup (confirm:true) or 'semctx setup --root "${root}"' when you want to prepare the repository`,
     };
   }
-  const repositoryRoot = resolveGitRoot(root, runtime);
+  const resolution = resolveGitRoot(root, runtime);
+  if (resolution.error !== undefined) {
+    return {
+      status: "failed",
+      root,
+      error: resolution.error,
+      next: "resolve the Git repository root query failure, then re-run 'semctx install'",
+    };
+  }
+  const repositoryRoot = resolution.root;
   if (repositoryRoot === undefined) {
     return {
       status: "not-a-repository",
