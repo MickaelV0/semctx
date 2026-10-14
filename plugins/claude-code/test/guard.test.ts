@@ -21,12 +21,13 @@ import {
   shellQuote,
   GLOBAL_VERIFY_COMMAND,
 } from "../hooks/semctx-guard.mjs";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, lstatSync, readFileSync, realpathSync, chmodSync, mkdirSync, mkdtempSync, renameSync, rmdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { GUARD_PROCESS_BUDGET_MS } from "../../shared/hooks/process-budget.mjs";
+import { removeFixture, removeStallingGit, stallingGitPath } from "./stalling-git.ts";
 import {
   captureRecordableVerificationGitState,
   captureVerificationGitState as captureApplicationVerificationGitState,
@@ -2085,6 +2086,127 @@ it.each([true, false])("unfinished stdin preserves exact working-directory guard
     expect(await new Response(child.stderr).text()).toContain("PROCESS_TIMEOUT");
     expect(performance.now() - started).toBeLessThan(GUARD_PROCESS_BUDGET_MS + 1_500);
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    await removeFixture(root);
   }
 }, 25_000);
+
+interface GuardHookRun { status: number | null; stderr: string }
+
+function hookEnvironment(path?: string, extra: Record<string, string> = {}): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [name, value] of Object.entries(process.env)) {
+    if (!/^(?:semctx_guard|semctx_guarded|node_options)$/i.test(name) && !(path !== undefined && /^path$/i.test(name))) env[name] = value;
+  }
+  return { ...env, ...(path === undefined ? {} : { PATH: path }), ...extra };
+}
+
+/** Run the real hook under Node, as Claude Code does, with no activation override in its environment. */
+function runGuardHook(cwd: string, command: string, env: NodeJS.ProcessEnv): Promise<GuardHookRun> {
+  const node = Bun.which("node");
+  if (node === null) throw new Error("Node is required to exercise the native hook process boundary");
+  return new Promise((settle, fail) => {
+    const child = spawn(node, [GUARD_SCRIPT], { cwd, env, stdio: ["pipe", "ignore", "pipe"], windowsHide: true });
+    let stderr = "";
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.stdin.on("error", () => { /* the worker may already be gone */ });
+    const limit = setTimeout(() => child.kill("SIGKILL"), 30_000);
+    child.on("error", (error) => { clearTimeout(limit); fail(error); });
+    child.on("close", (status) => { clearTimeout(limit); settle({ status, stderr }); });
+    child.stdin.end(JSON.stringify({ tool_name: "Bash", cwd, tool_input: { command } }));
+  });
+}
+
+/** A directory Git's own walk-up would stop at; the stalled Git never inspects it. */
+function fixtureRepository(directory: string, guardEnabled?: boolean): string {
+  mkdirSync(join(directory, ".git"), { recursive: true });
+  if (guardEnabled !== undefined) declareGuard(directory, guardEnabled);
+  return directory;
+}
+
+function declareGuard(directory: string, declaration: boolean | string): void {
+  mkdirSync(join(directory, ".semctx"), { recursive: true });
+  writeFileSync(
+    join(directory, ".semctx", "guard.json"),
+    typeof declaration === "boolean" ? JSON.stringify({ enabled: declaration }) : declaration,
+  );
+}
+
+describe("a stalled Git probe cannot hide an enabled guard scope (ADR 0007, ADR 0029)", () => {
+  afterAll(removeStallingGit);
+
+  // The session repository is advisory and Git answers nothing. Enablement of the guarded target must
+  // come from the filesystem before the first (session) probe consumes the shared budget.
+  const retargeted = [
+    ["git -C <guarded target>", (target: string) => `git -C ${shellQuote(target)} commit -m fixture`],
+    ["cd <guarded target> && git", (target: string) => `cd ${shellQuote(target)} && git commit -m fixture`],
+  ] as const;
+  for (const [label, buildCommand] of retargeted) {
+    it.concurrent(`blocks an advisory session retargeted to a guarded repository by ${label}`, async () => {
+      const root = mkdtempSync(join(tmpdir(), "semctx-guard-stalled-target-"));
+      try {
+        const session = fixtureRepository(join(root, "session"));
+        const target = fixtureRepository(join(root, "target"), true).replaceAll("\\", "/");
+        const run = await runGuardHook(session, buildCommand(target), hookEnvironment(stallingGitPath()));
+        expect(run.stderr).toContain("PROCESS_TIMEOUT");
+        expect(run.status).toBe(2);
+      } finally {
+        await removeFixture(root);
+      }
+    }, 40_000);
+  }
+
+  it.concurrent("stays advisory for an advisory target retargeted from an advisory session", async () => {
+    const root = mkdtempSync(join(tmpdir(), "semctx-guard-stalled-advisory-"));
+    try {
+      const session = fixtureRepository(join(root, "session"));
+      const target = fixtureRepository(join(root, "target"), false).replaceAll("\\", "/");
+      const run = await runGuardHook(session, `git -C ${shellQuote(target)} commit -m fixture`, hookEnvironment(stallingGitPath()));
+      expect(run.stderr).toContain("PROCESS_TIMEOUT");
+      expect(run.status).toBe(0);
+    } finally {
+      await removeFixture(root);
+    }
+  }, 40_000);
+
+  // The authoritative declaration is the repository root's. A nested declaration of any value is only
+  // the fallback root when Git cannot answer, so it must not end the search for an enabled one.
+  const nestedDeclarations = [
+    ["disabled", false, true],
+    ["disabled", false, false],
+    ["malformed", '{"enabled":', true],
+  ] as const;
+  for (const [kind, declaration, rootEnabled] of nestedDeclarations) {
+    it.concurrent(`resolves a nested ${kind} declaration against the repository guard (root enabled: ${rootEnabled})`, async () => {
+      const root = mkdtempSync(join(tmpdir(), "semctx-guard-stalled-nested-"));
+      try {
+        fixtureRepository(join(root, "repo"), rootEnabled);
+        const nested = join(root, "repo", "pkg");
+        declareGuard(nested, declaration);
+        const run = await runGuardHook(nested, "git commit -m fixture", hookEnvironment(stallingGitPath()));
+        expect(run.stderr).toContain("PROCESS_TIMEOUT");
+        expect(run.status).toBe(rootEnabled ? 2 : 0);
+      } finally {
+        await removeFixture(root);
+      }
+    }, 40_000);
+  }
+
+  // The worker is lost before its first IPC message, so only what the supervising process read from the
+  // hook working directory itself can keep an enabled declaration blocking. No SEMCTX_GUARD override.
+  for (const enabled of [true, false]) {
+    it.concurrent(`keeps the working-directory declaration when the worker is lost at startup (enabled: ${enabled})`, async () => {
+      const root = mkdtempSync(join(tmpdir(), "semctx-guard-lost-worker-"));
+      try {
+        declareGuard(root, enabled);
+        const preload = join(root, "lose-worker.cjs");
+        writeFileSync(preload, 'if (process.argv.includes("--bounded-worker")) process.exit(1);\n');
+        const env = hookEnvironment(undefined, { NODE_OPTIONS: `--require ${JSON.stringify(preload.replaceAll("\\", "/"))}` });
+        const run = await runGuardHook(root, "git commit -m fixture", env);
+        expect(run.stderr).toContain("Guard computation failed");
+        expect(run.status).toBe(enabled ? 2 : 0);
+      } finally {
+        await removeFixture(root);
+      }
+    }, 40_000);
+  }
+});

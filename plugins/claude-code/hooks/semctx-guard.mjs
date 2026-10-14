@@ -1260,17 +1260,26 @@ export function resolveGitCwd(command, inputCwd) {
   return cwd;
 }
 
+/**
+ * Filesystem-only enablement scan: no process is spawned. A stalled Git probe can consume the whole
+ * shared budget, and the supervising parent decides exit 0 vs 2 from what the worker reported before
+ * that moment, so every scope must be observed here before the first probe. The walk ends at the
+ * repository boundary without stopping at a nested guard.json of any value: Git's toplevel, whose
+ * declaration is authoritative, can sit above a nested one that disables the guard.
+ */
+function observeFilesystemGuardEnablement(cwd) {
+  if (guardDeadline === undefined) return;
+  let current = resolve(cwd);
+  while (true) {
+    const config = readGuardJson(join(current, ".semctx", "guard.json"));
+    if (config.status === "read" && guardEnabled(process.env, config.value)) observeGuardEnablement();
+    if (existsSync(join(current, ".git")) || dirname(current) === current) break;
+    current = dirname(current);
+  }
+}
+
 /** Resolve a command directory to the repository root Git itself will discover from there. */
 function resolveGitRoot(cwd) {
-  if (guardDeadline !== undefined) {
-    let current = resolve(cwd);
-    while (true) {
-      const config = readGuardJson(join(current, ".semctx", "guard.json"));
-      if (config.status === "read" && guardEnabled(process.env, config.value)) observeGuardEnablement();
-      if (existsSync(join(current, ".git")) || config.status !== "absent" || dirname(current) === current) break;
-      current = dirname(current);
-    }
-  }
   try {
     const root = execFileSync("git", ["-C", cwd, "rev-parse", "--show-toplevel"], {
       encoding: "utf8",
@@ -1300,8 +1309,12 @@ function sameGitRoot(left, right) {
 /** @param {{command?: unknown, cwd?: string, sessionCwd?: string}} input */
 function guardInvocationContext({ command, cwd, sessionCwd }) {
   const inputCwd = cwd ?? sessionCwd ?? process.cwd();
-  const sessionRoot = resolveGitRoot(sessionCwd ?? inputCwd);
-  const targetRoot = resolveGitRoot(resolveGitCwd(command, inputCwd));
+  const sessionStart = sessionCwd ?? inputCwd;
+  observeFilesystemGuardEnablement(sessionStart);
+  const targetStart = resolveGitCwd(command, inputCwd);
+  observeFilesystemGuardEnablement(targetStart);
+  const sessionRoot = resolveGitRoot(sessionStart);
+  const targetRoot = resolveGitRoot(targetStart);
   return {
     sessionRoot,
     targetRoot,
@@ -1329,9 +1342,13 @@ export function guardEnabledForInvocation({ command, cwd, sessionCwd, env }) {
   const previousDeadline = guardDeadline;
   const previousEnablement = guardBlockingEstablished;
   guardDeadline = previousDeadline ?? performance.now() + GUARD_PROCESS_BUDGET_MS;
+  guardBlockingEstablished = false;
   try {
     const context = guardInvocationContext({ command, cwd, sessionCwd });
-    return guardEnablementForContext(context, env);
+    const enabled = guardEnablementForContext(context, env);
+    // As in evaluateGuard: once the shared budget is exhausted the roots above came from the literal
+    // fallback walk, so an enabled declaration observed on the way keeps the answer closed.
+    return enabled !== true && guardBlockingEstablished && performance.now() >= guardDeadline ? true : enabled;
   } finally {
     guardDeadline = previousDeadline;
     guardBlockingEstablished = previousEnablement;
@@ -2022,7 +2039,9 @@ async function main() {
   const override = guardEnvironmentOverride(process.env);
   if (override === false) process.exit(0);
   if (process.argv[2] === "--bounded-worker") return mainWithinBudget();
-  let blockingEstablished = override === true;
+  // The exact working-directory declaration is a pure filesystem read, so it still blocks when the
+  // worker is lost before its first message (spawn failure, crash, external kill).
+  let blockingEstablished = override === true || hookWorkingDirectoryGuardEnabled();
   const outcome = await runProcessWithinBudget([process.execPath, process.argv[1], "--bounded-worker"], {
     cwd: process.cwd(), budgetMs: GUARD_PROCESS_BUDGET_MS, stdin: "inherit",
     onMessage: (message) => { if (message?.semctxGuardEnabled === true) blockingEstablished = true; },

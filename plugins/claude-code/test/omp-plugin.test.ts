@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,8 +8,9 @@ import {
   ompStandardContractErrors,
   renderOmpCliShim,
 } from "../../../scripts/build-plugin-runtime.ts";
-import { evaluateGuard } from "../hooks/semctx-guard.mjs";
+import { evaluateGuard, shellQuote } from "../hooks/semctx-guard.mjs";
 import { GUARD_PROCESS_BUDGET_MS } from "../../shared/hooks/process-budget.mjs";
+import { removeFixture, removeStallingGit, stallingGitPath } from "./stalling-git.ts";
 import semctxGuardExtension, {
   evaluateOmpToolCall,
   explicitGuardOff,
@@ -908,3 +909,92 @@ test.skipIf(process.platform === "win32").each([true, false])("OMP unresolved sc
     rmSync(root, { recursive: true, force: true });
   }
 }, 40000);
+
+describe("OMP in-process guard under a stalled Git probe (ADR 0007)", () => {
+  afterAll(removeStallingGit);
+
+  async function evaluateWithStalledGit(cwd: string, command: string, toolCwd?: string): Promise<{ block?: boolean; reason?: string } | null> {
+    const env: NodeJS.ProcessEnv = {};
+    for (const [name, value] of Object.entries(process.env)) {
+      if (!/^(?:path|semctx_guard|semctx_guarded)$/i.test(name)) env[name] = value;
+    }
+    env.PATH = stallingGitPath();
+    const modulePath = resolve(import.meta.dir, "../omp/semctx-guard.ts");
+    const script = `import { evaluateOmpToolCall } from ${JSON.stringify(modulePath)}; const decision = evaluateOmpToolCall({ type: "tool_call", toolCallId: "fixture", toolName: "bash", input: ${JSON.stringify({ command, ...(toolCwd === undefined ? {} : { cwd: toolCwd }) })} }, { cwd: ${JSON.stringify(cwd)} }); console.log(JSON.stringify(decision ?? null));`;
+    const child = Bun.spawn([process.execPath, "-e", script], {
+      env, stdout: "pipe", stderr: "pipe", timeout: GUARD_PROCESS_BUDGET_MS * 2, killSignal: "SIGKILL",
+    });
+    const [stdout, exitCode] = await Promise.all([new Response(child.stdout).text(), child.exited]);
+    expect(exitCode).toBe(0);
+    return JSON.parse(stdout);
+  }
+
+  function nestedFixture(root: string, rootEnabled: boolean, nestedDeclaration: string): string {
+    const repo = join(root, "repo");
+    const nested = join(repo, "pkg");
+    for (const [directory, declaration] of [[repo, JSON.stringify({ enabled: rootEnabled })], [nested, nestedDeclaration]] as const) {
+      mkdirSync(join(directory, ".semctx"), { recursive: true });
+      writeFileSync(join(directory, ".semctx", "guard.json"), declaration);
+    }
+    mkdirSync(join(repo, ".git"));
+    return nested;
+  }
+
+  // A nested declaration of any value is only the fallback root once Git cannot answer; it must not
+  // end the search for the enabled repository declaration (same semantics as the Claude Code hook).
+  const nestedDeclarations = [
+    ["disabled", JSON.stringify({ enabled: false }), true],
+    ["disabled", JSON.stringify({ enabled: false }), false],
+    ["malformed", '{"enabled":', true],
+  ] as const;
+  for (const [kind, declaration, rootEnabled] of nestedDeclarations) {
+    test.concurrent(`resolves a nested ${kind} declaration against the repository guard (root enabled: ${rootEnabled})`, async () => {
+      const root = mkdtempSync(join(tmpdir(), "semctx-omp-stalled-nested-"));
+      try {
+        const decision = await evaluateWithStalledGit(nestedFixture(root, rootEnabled, declaration), "git commit -m fixture");
+        if (rootEnabled) {
+          expect(decision?.block).toBe(true);
+          expect(decision?.reason).toContain("PROCESS_TIMEOUT");
+        } else {
+          expect(decision).toBeNull();
+        }
+      } finally {
+        await removeFixture(root);
+      }
+    }, 40_000);
+
+    // A malformed declaration already refuses an unresolved scope as "unknown", so only a disabled one hides it.
+    if (kind === "disabled") test.concurrent(`keeps an unresolved Git scope on the repository guard under a nested disabled declaration (root enabled: ${rootEnabled})`, async () => {
+      const root = mkdtempSync(join(tmpdir(), "semctx-omp-stalled-unresolved-"));
+      try {
+        const decision = await evaluateWithStalledGit(nestedFixture(root, rootEnabled, declaration), "git commit -m fixture", "artifact://fixture");
+        if (rootEnabled) {
+          expect(decision?.block).toBe(true);
+          expect(decision?.reason).toContain("internal URL");
+        } else {
+          expect(decision).toBeNull();
+        }
+      } finally {
+        await removeFixture(root);
+      }
+    }, 40_000);
+  }
+
+  // Parity with the Claude Code hook: an advisory session retargeted to a guarded repository by `git -C`.
+  test.concurrent("blocks an advisory session retargeted to a guarded repository", async () => {
+    const root = mkdtempSync(join(tmpdir(), "semctx-omp-stalled-target-"));
+    try {
+      const session = join(root, "session");
+      const target = join(root, "target");
+      mkdirSync(join(session, ".git"), { recursive: true });
+      mkdirSync(join(target, ".git"), { recursive: true });
+      mkdirSync(join(target, ".semctx"));
+      writeFileSync(join(target, ".semctx", "guard.json"), JSON.stringify({ enabled: true }));
+      const decision = await evaluateWithStalledGit(session, `git -C ${shellQuote(target.replaceAll("\\", "/"))} commit -m fixture`);
+      expect(decision?.block).toBe(true);
+      expect(decision?.reason).toContain("PROCESS_TIMEOUT");
+    } finally {
+      await removeFixture(root);
+    }
+  }, 40_000);
+});
