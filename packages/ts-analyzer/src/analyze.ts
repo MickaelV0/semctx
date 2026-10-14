@@ -46,6 +46,7 @@ import {
   TYPESCRIPT_DIALECT_VERSION,
   type IndexWorkerSelection,
   type TsExtraction,
+  type TypeScriptExtractionOptions,
   type TypeScriptParallelism,
   type CompilerInputSnapshot,
   retainedCompilerSystem,
@@ -109,6 +110,7 @@ export function analyzeRepository(config: SemctxConfig, discoveredFiles?: readon
     tsFiles.map((file) => file.absPath),
     config.repositoryRoot,
     compilerInputs,
+    typeScriptExtractionOptions(config),
   );
   return assembleRepository(config, files, extraction, compilerInputs);
 }
@@ -127,6 +129,7 @@ export async function analyzeRepositoryAsync(
     config.repositoryRoot,
     workers,
     compilerInputs,
+    typeScriptExtractionOptions(config),
   );
   return {
     analysis: assembleRepository(config, files, result.extraction, compilerInputs),
@@ -406,6 +409,15 @@ function unique(nodes: readonly RepositoryNode[] | undefined): RepositoryNode | 
 function isTypeScriptSource(file: DiscoveredFile): boolean {
   return (file.role === "source" || file.role === "test")
     && (file.language === undefined || file.language === "typescript" || file.language === "javascript");
+}
+
+/**
+ * Configuration v2 binds the tsconfig files that module resolution reads into its analysis input
+ * identity (`fingerprintAnalysisInputs`), so a changed `paths` or `baseUrl` withdraws the index.
+ * Version 1 does not, and keeps the historical resolution rather than gain an unbound input.
+ */
+function typeScriptExtractionOptions(config: SemctxConfig): TypeScriptExtractionOptions {
+  return { tsconfigPathMapping: config.version === 2 };
 }
 
 function assertSnapshotInputs(files: readonly DiscoveredFile[], compilerInputs: CompilerInputSnapshot | undefined, config: SemctxConfig): void {
