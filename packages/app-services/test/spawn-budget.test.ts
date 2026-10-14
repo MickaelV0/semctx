@@ -58,22 +58,24 @@ test.skipIf(process.platform === "win32").each(["qualified-output", "filter-conf
 
 test("core Git reads the requested repository despite ambient Git steering variables", () => {
   const directory = mkdtempSync(join(tmpdir(), "semctx-git-environment-"));
-  const saved = { GIT_DIR: process.env.GIT_DIR, GIT_WORK_TREE: process.env.GIT_WORK_TREE, GIT_CONFIG_COUNT: process.env.GIT_CONFIG_COUNT };
   try {
     const initialized = Bun.spawnSync(["git", "init", "-q", directory]);
     expect(initialized.exitCode).toBe(0);
     const committed = Bun.spawnSync(["git", "-C", directory, "-c", "user.name=Semctx Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-qm", "fixture"]);
     expect(committed.exitCode).toBe(0);
     const expected = resolveRevisionObjectId(directory, "HEAD");
-    process.env.GIT_DIR = join(directory, "missing.git");
-    process.env.GIT_WORK_TREE = tmpdir();
-    process.env.GIT_CONFIG_COUNT = "invalid";
-    expect(resolveRevisionObjectId(directory, "HEAD")).toBe(expected);
+    // The variables must be in the child's real startup environment: Bun does not hand later
+    // process.env mutations to the processes it spawns, so mutating them in-process proves nothing.
+    const steering = { GIT_DIR: join(directory, "missing.git"), GIT_WORK_TREE: tmpdir(), GIT_CONFIG_COUNT: "invalid" };
+    const steered = Bun.spawnSync(["git", "-C", directory, "rev-parse", "HEAD"], { env: { ...process.env, ...steering } });
+    expect(steered.exitCode).not.toBe(0);
+    const modulePath = join(import.meta.dir, "../src/verification-state.ts");
+    const entry = `import { resolveRevisionObjectId } from ${JSON.stringify(modulePath)}; try { console.log(JSON.stringify({ head: resolveRevisionObjectId(${JSON.stringify(directory)}, "HEAD") })); } catch (error) { console.log(JSON.stringify({ error: error.message, details: error.details })); }`;
+    const result = Bun.spawnSync([process.execPath, "-e", entry], {
+      env: { ...process.env, ...steering }, stdout: "pipe", stderr: "pipe", timeout: 9_000, killSignal: "SIGKILL",
+    });
+    expect(JSON.parse(result.stdout.toString())).toEqual({ head: expected });
   } finally {
-    for (const [name, value] of Object.entries(saved)) {
-      if (value === undefined) delete process.env[name];
-      else process.env[name] = value;
-    }
     rmSync(directory, { recursive: true, force: true });
   }
 });
@@ -82,10 +84,10 @@ test("detached cleanup supervision survives its launcher and kills a blocked pro
   const directory = mkdtempSync(join(tmpdir(), "semctx-cleanup-budget-"));
   const pidFile = join(directory, "pids");
   try {
-    const worker = `const grandchild = Bun.spawn([process.execPath, "-e", 'process.on("SIGTERM", () => {}); await Bun.sleep(30000)'], { stdout: "inherit", stderr: "inherit" }); await Bun.write(${JSON.stringify(pidFile)}, JSON.stringify([process.pid, grandchild.pid])); process.on("SIGTERM", () => {}); await Bun.sleep(30000);`;
+    const worker = `const grandchild = Bun.spawn([process.execPath, "-e", 'process.on("SIGTERM", () => {}); await Bun.sleep(30000)'], { stdout: "inherit", stderr: "inherit" }); await Bun.write(process.env.SEMCTX_TEST_PID_FILE, JSON.stringify([process.pid, grandchild.pid])); process.on("SIGTERM", () => {}); await Bun.sleep(30000);`;
     const payload = Buffer.from(JSON.stringify([1000, process.execPath, "-e", worker])).toString("base64url");
     const launcher = `const child = Bun.spawn([process.execPath, "-e", ${JSON.stringify(DEFERRED_PROCESS_SUPERVISOR)}, ${JSON.stringify(payload)}], { detached: true, stdin: "ignore", stdout: "ignore", stderr: "ignore" }); child.unref();`;
-    const launched = Bun.spawnSync([process.execPath, "-e", launcher], { timeout: 2000, killSignal: "SIGKILL" });
+    const launched = Bun.spawnSync([process.execPath, "-e", launcher], { env: { ...process.env, SEMCTX_TEST_PID_FILE: pidFile }, timeout: 2000, killSignal: "SIGKILL" });
     expect(launched.exitCode).toBe(0);
     const deadline = performance.now() + 4000;
     let pids: number[] = [];

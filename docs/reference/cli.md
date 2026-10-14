@@ -601,7 +601,9 @@ computed in a child process that is stopped at the deadline, and the answer is t
 `TIMEOUT` — `canRunHighRiskControl: false`, `reasons: ["STATUS_BUDGET_EXCEEDED"]`,
 `freshnessSeal: null`, `budget: { budgetMs, elapsedMs }` — rather than no verdict. A `TIMEOUT`
 observed nothing and authorizes nothing. Allow about 150 ms of process start-up on top of `N` when
-an outer hook enforces its own limit. Without `--budget-ms` the command never answers `TIMEOUT`.
+an outer hook enforces its own limit; on Windows the answer also waits for `taskkill` to stop the
+child's process tree, typically a few hundred milliseconds and never more than five seconds.
+Without `--budget-ms` the command never answers `TIMEOUT`.
 The MCP tool `semctx_control_status` always runs with a budget (`budgetMs`, default 15 000 ms) and
 returns the same document.
 
@@ -974,9 +976,15 @@ completion. POSIX supervisors kill the inherited process group; Windows uses
 `taskkill /T /F` with a further five-second termination budget. Synchronous Git
 and host queries kill their direct child; arbitrary independently detached external
 helpers are outside that guarantee after they have reparented. POSIX budget
-supervisors use a bounded `ps` inventory to also kill nested owned process groups;
-an unavailable, malformed, timed-out or oversized inventory reports
-`PROCESS_TERMINATION_FAILED` and fails the operation after stopping its direct group.
+supervisors use a bounded `ps` inventory to also kill nested owned process groups.
+The inventory is best effort: when it is unavailable, malformed, timed-out or
+oversized the direct group is still stopped and the deadline is still answered as a
+timeout, carrying a `terminationWarning` that nested groups may have survived.
+Windows budget supervisors wait, within the same five-second limit, for
+`taskkill /T /F` to finish before answering; a `taskkill` that fails or does not
+finish reports `PROCESS_TERMINATION_FAILED` and fails the operation after stopping
+the direct child. `PROCESS_TERMINATION_FAILED` is otherwise reserved for a direct
+child that could not be signalled.
 
 Local verification and contributor/CI steps have a sixty-minute deadline each;
 benchmark samples have a ten-minute deadline each. A timed-out verification step

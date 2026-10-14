@@ -10,6 +10,21 @@ const lane = (
   profile: CiLane["profile"], os: CiLane["os"], targets = "", smoke: CiLane["smoke"] = "false", shard = "",
 ): CiLane => ({ profile, os, targets, smoke, shard });
 
+/**
+ * The killed child's working directory can stay locked for a moment on Windows. Cleanup retries and
+ * never throws, so it can neither fail its test nor replace the assertion that did.
+ */
+async function removeDirectory(path: string): Promise<void> {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    try {
+      rmSync(path, { recursive: true, force: true });
+      return;
+    } catch {
+      await Bun.sleep(50);
+    }
+  }
+}
+
 describe("CI gate runner", () => {
   test("kills a stalled command within its budget while retaining captured report output", async () => {
     const root = mkdtempSync(join(tmpdir(), "semctx-ci-budget-"));
@@ -22,7 +37,7 @@ describe("CI gate runner", () => {
       expect(performance.now() - started).toBeLessThan(1000);
       expect(readFileSync(join(root, "report.json"), "utf8")).toBe("partial report\n");
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      await removeDirectory(root);
     }
   });
 
