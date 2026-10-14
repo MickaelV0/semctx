@@ -83,10 +83,44 @@ child.on("exit", (code) => {
 });
 `;
 
-function killTree(pid) {
-  if (pid === undefined) return;
+const TREE_TERMINATION_WAIT_MS = 5000;
+
+// Windows stops a tree with one `taskkill`; its exit status is the only evidence that the tree is gone.
+function taskkillTree(pid) {
+  return new Promise((resolveKill) => {
+    let done = false;
+    const finish = (reason) => {
+      if (done) return;
+      done = true;
+      clearTimeout(limit);
+      if (reason === undefined) {
+        resolveKill(undefined);
+        return;
+      }
+      // taskkill did not establish termination: still stop the direct child.
+      try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
+      resolveKill(`PROCESS_TERMINATION_FAILED: ${reason}`);
+    };
+    const killer = spawnAsync("taskkill", ["/pid", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+    const limit = setTimeout(() => {
+      killer.kill("SIGKILL");
+      finish(`taskkill exceeded its ${TREE_TERMINATION_WAIT_MS} ms termination budget`);
+    }, TREE_TERMINATION_WAIT_MS);
+    killer.on("error", (error) => finish(`taskkill could not run: ${error.message}`));
+    // 128 is "process not found": the child had already exited, so there is nothing left to stop.
+    killer.on("exit", (code) => finish(code === 0 || code === 128 ? undefined : `taskkill exited with status ${code}`));
+  });
+}
+
+// Resolves to {failure} when the direct child could not be stopped and to {warning} when only
+// descendants outside its process group may have survived: the deadline outcome stays typed.
+async function killTree(pid) {
+  if (pid === undefined) return {};
   let failure;
+  let warning;
   if (process.platform !== "win32") {
+    // Nested owned process groups are found through a `ps` inventory taken before the direct group
+    // is stopped. It is best effort: whatever goes wrong with it, the direct group is still stopped.
     try {
       const options = {
         encoding: "utf8", timeout: 500, maxBuffer: 4 * 1024 * 1024,
@@ -126,16 +160,12 @@ function killTree(pid) {
         }
       }
     } catch (error) {
-      failure = `PROCESS_TERMINATION_FAILED: ${error.message}`;
+      warning = `nested process groups may have survived: ${error.message}`;
     }
   }
   try {
     if (process.platform === "win32") {
-      const killer = spawnAsync("taskkill", ["/pid", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true, ...processLimits() });
-      killer.on("error", () => {
-        try { process.kill(pid, "SIGKILL"); } catch { return; }
-      });
-      killer.unref();
+      failure = await taskkillTree(pid);
     } else {
       try { process.kill(-pid, "SIGKILL"); } catch {
         process.kill(pid, "SIGKILL");
@@ -144,13 +174,13 @@ function killTree(pid) {
   } catch (error) {
     if (error.code !== "ESRCH") failure = `PROCESS_TERMINATION_FAILED: ${error.message}`;
   }
-  return failure;
+  return { failure, warning };
 }
 
 /**
  * @param {readonly string[]} argv
  * @param {{cwd: string, budgetMs: number, env?: NodeJS.ProcessEnv, stdin?: "inherit" | "ignore", stdout?: number, maxBytes?: number, inheritOutput?: boolean, onMessage?: (message: unknown) => void}} options
- * @returns {Promise<{kind: "exited", exitCode: number, stdout: string, stderr: string, elapsedMs: number} | {kind: "timeout", elapsedMs: number}>}
+ * @returns {Promise<{kind: "exited", exitCode: number, stdout: string, stderr: string, elapsedMs: number} | {kind: "timeout", elapsedMs: number, terminationWarning?: string}>}
  */
 export async function runProcessWithinBudget(argv, options) {
   const started = performance.now();
@@ -169,7 +199,8 @@ export async function runProcessWithinBudget(argv, options) {
   return await new Promise((resolveOutcome) => {
     let settled = false;
     let overflowed = false;
-    let terminationFailure;
+    let expired = false;
+    let termination;
     let bytes = 0;
     const stdout = [];
     const stderr = [];
@@ -179,12 +210,17 @@ export async function runProcessWithinBudget(argv, options) {
       clearTimeout(timer);
       resolveOutcome(outcome);
     };
+    // Output overflow and the deadline both stop the tree; whichever comes first does it once.
+    const terminate = () => {
+      if (termination === undefined) termination = killTree(child.pid);
+      return termination;
+    };
     const collect = (sink) => (chunk) => {
       bytes += chunk.byteLength;
       if (bytes > (options.maxBytes ?? 16 * 1024 * 1024)) {
         if (!overflowed) {
           overflowed = true;
-          terminationFailure = killTree(child.pid);
+          void terminate();
         }
         return;
       }
@@ -192,18 +228,22 @@ export async function runProcessWithinBudget(argv, options) {
     };
     child.stdout?.on("data", collect(stdout));
     child.stderr?.on("data", collect(stderr));
-    const timer = setTimeout(() => {
-      const failure = terminationFailure ?? killTree(child.pid);
+    const timer = setTimeout(async () => {
+      expired = true;
+      const { failure, warning } = await terminate();
       settle(failure === undefined
-        ? { kind: "timeout", elapsedMs: elapsed() }
+        ? { kind: "timeout", elapsedMs: elapsed(), ...(warning === undefined ? {} : { terminationWarning: warning }) }
         : { kind: "exited", exitCode: 1, stdout: "", stderr: failure, elapsedMs: elapsed() });
     }, options.budgetMs);
     child.on("error", (error) => {
       settle({ kind: "exited", exitCode: 1, stdout: "", stderr: String(error), elapsedMs: elapsed() });
     });
-    child.on("close", (code) => {
+    child.on("close", async (code) => {
+      // The child's exit is the consequence of the kill the deadline is still awaiting, not a result.
+      if (expired) return;
       if (overflowed) {
-        settle({ kind: "exited", exitCode: code === 0 || code === null ? 1 : code, stdout: "", stderr: terminationFailure ?? "bounded child output exceeded its byte limit", elapsedMs: elapsed() });
+        const { failure } = await termination;
+        settle({ kind: "exited", exitCode: code === 0 || code === null ? 1 : code, stdout: "", stderr: failure ?? "bounded child output exceeded its byte limit", elapsedMs: elapsed() });
         return;
       }
       settle({
