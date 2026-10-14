@@ -92,6 +92,90 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
+describe("shipped discovery catalogue (CLI, real git)", () => {
+  test("index recommendation stays generic without a remote", () => {
+    const root = repository();
+    const remotes = Bun.spawnSync(["git", "remote"], { cwd: root, stdout: "pipe", stderr: "pipe" });
+    expect(remotes.exitCode).toBe(0);
+    expect(new TextDecoder().decode(remotes.stdout)).toBe("");
+    const result = expectSemctxOk(root, ["index"]);
+    expect(result.stdout).toContain("Next: semctx verify diff --base <ref>");
+    expect(result.stdout).not.toContain("origin/main");
+    expect(result.stdout).not.toContain("Next: semctx task");
+    expect(result.stdout).not.toContain("context prepare");
+  });
+
+  test("index recommendation uses an available alternate remote default branch", () => {
+    const root = repository();
+    git(root, "remote", "add", "upstream", "https://example.invalid/repository");
+    git(root, "update-ref", "refs/remotes/upstream/trunk", "HEAD");
+    git(root, "symbolic-ref", "refs/remotes/upstream/HEAD", "refs/remotes/upstream/trunk");
+    const result = expectSemctxOk(root, ["index"]);
+    expect(result.stdout).toContain("Next: semctx verify diff --base refs/remotes/upstream/trunk");
+    expectSemctxOk(root, ["verify", "diff", "--base", "refs/remotes/upstream/trunk"]);
+  });
+
+  test("index recommendation stays generic when the default branch was not fetched", () => {
+    const root = repository();
+    git(root, "remote", "add", "upstream", "https://example.invalid/repository");
+    git(root, "symbolic-ref", "refs/remotes/upstream/HEAD", "refs/remotes/upstream/trunk");
+    const result = expectSemctxOk(root, ["index"]);
+    expect(result.stdout).toContain("Next: semctx verify diff --base <ref>");
+    expect(result.stdout).not.toContain("--base refs/remotes/upstream/trunk");
+  });
+
+  test("index recommendation keeps shell-sensitive default branch names out of the command", () => {
+    const root = repository();
+    git(root, "update-ref", "refs/remotes/upstream/trunk$sideEffect", "HEAD");
+    git(root, "symbolic-ref", "refs/remotes/upstream/HEAD", "refs/remotes/upstream/trunk$sideEffect");
+    const result = expectSemctxOk(root, ["index"]);
+    expect(result.stdout).toContain("Next: semctx verify diff --base <ref>");
+    expect(result.stdout).not.toContain("trunk$sideEffect");
+  });
+
+  test("index recommendation stays generic when the default ref points to a blob", () => {
+    const root = repository();
+    const blob = Bun.spawnSync(["git", "rev-parse", "HEAD:src/a.ts"], { cwd: root, stdout: "pipe", stderr: "pipe" });
+    expect(blob.exitCode).toBe(0);
+    git(root, "update-ref", "refs/remotes/upstream/trunk", new TextDecoder().decode(blob.stdout).trim());
+    git(root, "symbolic-ref", "refs/remotes/upstream/HEAD", "refs/remotes/upstream/trunk");
+    const result = expectSemctxOk(root, ["index"]);
+    expect(result.stdout).toContain("Next: semctx verify diff --base <ref>");
+  });
+
+  test("index recommendation stays generic with ambiguous remote default branches", () => {
+    const root = repository();
+    git(root, "update-ref", "refs/remotes/upstream/trunk", "HEAD");
+    git(root, "symbolic-ref", "refs/remotes/upstream/HEAD", "refs/remotes/upstream/trunk");
+    git(root, "update-ref", "refs/remotes/mirror/production", "HEAD");
+    git(root, "symbolic-ref", "refs/remotes/mirror/HEAD", "refs/remotes/mirror/production");
+    const result = expectSemctxOk(root, ["index"]);
+    expect(result.stdout).toContain("Next: semctx verify diff --base <ref>");
+  });
+
+  test("bench names its experimental ContextPack scope and preserves JSON and failure exits", () => {
+    const root = repository();
+    const suitePath = join(root, "semctx-bench.json");
+    writeFileSync(suitePath, JSON.stringify([{ id: "baseline", task: "Change compute", expect: {} }]));
+    const text = expectSemctxOk(root, ["bench"]);
+    expect(text.stdout).toContain("Experimental ContextPack benchmark (ADR 0005)");
+    const passed = expectSemctxOk(root, ["bench", "--json"]);
+    expect(JSON.parse(passed.stdout)).toMatchObject({ threshold: 1, score: 1, passed: true });
+    expect(Object.keys(JSON.parse(passed.stdout)).sort()).toEqual(["cases", "passed", "score", "threshold"]);
+
+    writeFileSync(suitePath, JSON.stringify([{
+      id: "missing-read", task: "Change compute", expect: { requiredReads: ["src/absent.ts"] },
+    }]));
+    const failed = semctx(root, ["bench", "--json"]);
+    expect(failed.code).toBe(1);
+    expect(JSON.parse(failed.stdout).passed).toBe(false);
+    const failedText = semctx(root, ["bench"]);
+    expect(failedText.code).toBe(1);
+    expect(failedText.stdout).toContain("Experimental ContextPack benchmark (ADR 0005)");
+    expect(failedText.stdout).toContain("FAIL");
+  });
+});
+
 describe("semctx index --record (CLI, real git)", () => {
   test("stale-baseline diagnostics share the explicit recovery remedy", () => {
     const root = repository();
