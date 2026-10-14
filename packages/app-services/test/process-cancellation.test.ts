@@ -14,14 +14,19 @@ test("completed concurrent budgets release their signal listeners", async () => 
   expect([process.listenerCount("SIGINT"), process.listenerCount("SIGTERM")]).toEqual(before);
 });
 
-test.skipIf(process.platform === "win32").each(["SIGINT", "SIGTERM"] as const)(
-  "%s cancellation stops detached verification descendants before exiting", async (signal) => {
+test.skipIf(process.platform === "win32").each([
+  ["SIGINT", "default"], ["SIGTERM", "default"],
+  ["SIGTERM", "host"], ["SIGTERM", "host-exit"],
+] as const)(
+  "%s cancellation with %s handling stops detached descendants", async (signal, handling) => {
     const directory = mkdtempSync(join(tmpdir(), "semctx-cancellation-"));
     const pidsFile = join(directory, "pids.json");
     const beats = [join(directory, "leaf.beat"), join(directory, "grandchild.beat")];
+    const handledFile = join(directory, "handled");
     const heartbeat = (path: string) => `const {appendFileSync}=await import('node:fs'); setInterval(()=>appendFileSync(${JSON.stringify(path)}, 'x'),25);`;
     const leaf = `const {spawn}=await import('node:child_process'); const {writeFileSync}=await import('node:fs'); const child=spawn(process.execPath,['-e',${JSON.stringify(heartbeat(beats[1]!))}],{stdio:'ignore'}); writeFileSync(${JSON.stringify(pidsFile)},JSON.stringify([process.pid,child.pid])); ${heartbeat(beats[0]!)}`;
-    const supervisorCode = `import {runProcessWithinBudget} from ${JSON.stringify(join(import.meta.dir, "../../../plugins/shared/hooks/process-budget.mjs"))}; await runProcessWithinBudget([process.execPath,'-e',${JSON.stringify(leaf)}],{cwd:${JSON.stringify(directory)},budgetMs:20000});`;
+    const hostHandler = handling === "default" ? "" : `process.on(${JSON.stringify(signal)},()=>{require('node:fs').appendFileSync(${JSON.stringify(handledFile)},'x'); ${handling === "host-exit" ? "process.exit(0);" : ""}});`;
+    const supervisorCode = `import {runProcessWithinBudget} from ${JSON.stringify(join(import.meta.dir, "../../../plugins/shared/hooks/process-budget.mjs"))}; ${hostHandler} await runProcessWithinBudget([process.execPath,'-e',${JSON.stringify(leaf)}],{cwd:${JSON.stringify(directory)},budgetMs:20000});`;
     const supervisor = spawn(process.execPath, ["-e", supervisorCode], { detached: true, stdio: "ignore" });
     const exited = new Promise<{code: number | null; signal: NodeJS.Signals | null}>((resolve, reject) => {
       supervisor.once("error", reject);
@@ -40,7 +45,11 @@ test.skipIf(process.platform === "win32").each(["SIGINT", "SIGTERM"] as const)(
         exited,
         new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("supervisor did not stop")), 5000); }),
       ]).finally(() => clearTimeout(timer));
-      expect(outcome.signal).toBe(signal);
+      if (handling === "default") expect(outcome.signal).toBe(signal);
+      else {
+        expect(outcome).toEqual({ code: 0, signal: null });
+        expect(readFileSync(handledFile, "utf8")).toBe("x");
+      }
       await Bun.sleep(250);
       const stopped = beats.map((path) => readFileSync(path, "utf8"));
       await Bun.sleep(200);

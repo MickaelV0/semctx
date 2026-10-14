@@ -147,11 +147,11 @@ function taskkillTree(pid) {
 
 // Resolves to {failure} when the direct child could not be stopped and to {warning} when only
 // descendants outside its process group may have survived: the deadline outcome stays typed.
-async function killTree(pid) {
+function killPosixTree(pid) {
   if (pid === undefined) return {};
   let failure;
   let warning;
-  if (process.platform !== "win32") {
+  {
     // Nested owned process groups are found through a `ps` inventory taken before the direct group
     // is stopped. It is best effort: whatever goes wrong with it, the direct group is still stopped.
     try {
@@ -197,19 +197,18 @@ async function killTree(pid) {
     }
   }
   try {
-    if (process.platform === "win32") {
-      const outcome = await taskkillTree(pid);
-      failure = outcome.failure;
-      if (outcome.warning !== undefined) warning = outcome.warning;
-    } else {
-      try { process.kill(-pid, "SIGKILL"); } catch {
-        process.kill(pid, "SIGKILL");
-      }
+    try { process.kill(-pid, "SIGKILL"); } catch {
+      process.kill(pid, "SIGKILL");
     }
   } catch (error) {
     if (error.code !== "ESRCH") failure = `PROCESS_TERMINATION_FAILED: ${error.message}`;
   }
   return { failure, warning };
+}
+
+async function killTree(pid) {
+  if (pid === undefined) return {};
+  return process.platform === "win32" ? await taskkillTree(pid) : killPosixTree(pid);
 }
 
 // Detached workers do not receive the supervisor's foreground signals. Stop every owned tree
@@ -225,18 +224,19 @@ function removeSignalHandlers() {
 function cancelProcesses(signal) {
   if (cancelling) return;
   cancelling = true;
-  void Promise.all([...activeProcessIds].map(killTree)).finally(() => {
-    removeSignalHandlers();
-    cancelling = false;
-    process.kill(process.pid, signal);
-  });
+  const hasHostHandler = process.listeners(signal).some((listener) => listener !== onInterrupt && listener !== onTerminate);
+  // This must stay synchronous: a host listener may call process.exit during the same event.
+  for (const pid of activeProcessIds) killPosixTree(pid);
+  removeSignalHandlers();
+  cancelling = false;
+  if (!hasHostHandler) process.kill(process.pid, signal);
 }
 function ownProcess(pid) {
   if (process.platform === "win32" || pid === undefined) return () => {};
   activeProcessIds.add(pid);
   if (activeProcessIds.size === 1) {
-    process.on("SIGINT", onInterrupt);
-    process.on("SIGTERM", onTerminate);
+    process.prependListener("SIGINT", onInterrupt);
+    process.prependListener("SIGTERM", onTerminate);
   }
   return () => {
     activeProcessIds.delete(pid);
