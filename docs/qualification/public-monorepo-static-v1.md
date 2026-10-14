@@ -5,6 +5,14 @@ version 2 with `selectionMode: "qualified-static-v1"`. It covers the analyzed ES
 change and its static dependency closure. It does not qualify the entire consumer repository
 or its production pipeline. Public fixtures use generated anonymous sources.
 
+The public identifier is `public-monorepo-static-v1`. Update existing configuration and
+automation to this identifier and the `public-*` qualification script filenames, then
+rebuild the index. Previous consumer-specific identifiers are no longer accepted and
+have no compatibility alias. This confidentiality correction changes the identifier,
+not the supported static-analysis domain or its admission and refusal rules. Historical
+qualification receipts do not establish qualification of the renamed candidate;
+record fresh evidence for the exact configuration and artifacts used.
+
 ## Use and admission
 
 ```json

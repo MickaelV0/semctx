@@ -454,9 +454,9 @@ test.skipIf(!canCreateFileSymlink())("a dangling Git marker excludes a nested wo
 test("JavaScript configuration resolution binds the selected repository before inherited reads", () => {
   const { root } = workspace();
   const selectedRoot = `${root}/domains/catalog/api`;
-  const source = `${selectedRoot}/src/items.js`;
+  const source = `${selectedRoot}/src/registry.js`;
   const content = 'import { shared } from "#shared"; export const items = shared;\n';
-  write(root, { "domains/catalog/api/src/items.js": content });
+  write(root, { "domains/catalog/api/src/registry.js": content });
   const resolver = createWorkspaceLinkResolver();
   const result = inspectJavaScriptSource(source, content, selectedRoot, undefined, resolver);
   expect(result.staticModuleLinks.find(link => link.specifier === "#shared")?.resolution).toBe("unresolved");
