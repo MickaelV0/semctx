@@ -1,4 +1,4 @@
-import { CODEX_CLEANUP_BUDGET_MS, DEFERRED_PROCESS_SUPERVISOR, processLimits } from "../../../../plugins/shared/hooks/process-budget.mjs";
+import { CODEX_CLEANUP_BUDGET_MS, DEFERRED_PROCESS_SUPERVISOR } from "../../../../plugins/shared/hooks/process-budget.mjs";
 import packageJson from "../../package.json";
 import {
   codexMarketplaceIdentity,
@@ -21,6 +21,7 @@ import {
   type CodexPluginManifestIdentity,
   type CodexPluginMetadataInventory,
   type CodexWindowsQueryFailureReason,
+  type PluginDeliveryQueryLimits,
 } from "@semantic-context/app-services";
 import { isSemctxError, SemctxError } from "@semantic-context/core";
 import { Buffer } from "node:buffer";
@@ -45,6 +46,15 @@ const CLAUDE_PLUGIN = "semctx";
 const NATIVE_MUTATION_TIMEOUT_MS = 120_000;
 /** Shared across all hosts and phases of one installation, including preflight elapsed time. */
 const NATIVE_OPERATION_TIMEOUT_MS = 240_000;
+/**
+ * `semctx setup` is the one install child that does real work — config, the full graph index and
+ * the semantic scaffold — so it cannot share the 5 s host-probe budget: indexing took 38-42 s on
+ * about 900 source files. A ceiling for a wedged child, not an expected duration; expiry kills
+ * the child and reports the workspace as failed.
+ */
+const SETUP_TIMEOUT_MS = 30 * 60 * 1000;
+/** Combined stdout and stderr cap. A `--json` setup report is tens of KiB. */
+const SETUP_MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 interface NativeInstallBudget { deadline: number }
 /** Runtime shipped by the plugin; all four artifacts must be present for a payload to count as whole. */
 const CODEX_PLUGIN_RUNTIME_BUNDLES = [
@@ -421,7 +431,7 @@ while (Date.now() < deadline) {
 process.exit(1);
 `;
 
-function defaultDeferCodexCleanup(
+export function defaultDeferCodexCleanup(
   marketplaceNames: readonly string[],
   cwd: string,
 ): CommandResult {
@@ -436,7 +446,6 @@ function defaultDeferCodexCleanup(
         stderr: "ignore",
         detached: true,
         windowsHide: true,
-        ...processLimits(CODEX_CLEANUP_BUDGET_MS + 5000),
       },
     );
     child.unref();
@@ -579,7 +588,7 @@ while (Date.now() < deadline) {
 process.exit(1);
 `;
 
-function defaultDeferCodexCacheCleanup(
+export function defaultDeferCodexCacheCleanup(
   request: CodexCacheCleanupRequest,
   cwd: string,
 ): CommandResult {
@@ -594,7 +603,6 @@ function defaultDeferCodexCacheCleanup(
         stderr: "ignore",
         detached: true,
         windowsHide: true,
-        ...processLimits(CODEX_CLEANUP_BUDGET_MS + 5000),
       },
     );
     child.unref();
@@ -744,16 +752,26 @@ function defaultReadCodexPluginPayload(path: string): CodexPayloadProbe | null {
   };
 }
 
-function defaultSetup(root: string, dryRun: boolean): SetupExecution {
+/** `limits` is injectable so the ceiling itself can be exercised in milliseconds. */
+export function defaultSetup(
+  root: string,
+  dryRun: boolean,
+  limits: PluginDeliveryQueryLimits = { timeoutMs: SETUP_TIMEOUT_MS, maxBytes: SETUP_MAX_OUTPUT_BYTES },
+): SetupExecution {
   const entrypoint = process.argv[1];
   if (entrypoint === undefined) {
     return { code: 1, report: null, err: "cannot resolve the running semctx entrypoint" };
   }
-  const result = defaultRun(
+  const result = runPluginDeliveryQuery(
     [process.execPath, entrypoint, "setup", "--root", root, "--json", ...(dryRun ? ["--dry-run"] : [])],
     root,
+    limits,
   );
-  return setupExecutionFromCommandResult(result);
+  return setupExecutionFromCommandResult({
+    code: result.timedOut || result.truncated ? 1 : result.code,
+    out: result.out,
+    err: result.timedOut ? "PROCESS_TIMEOUT: repository setup budget exhausted" : result.err,
+  });
 }
 
 const DEFAULT_RUNTIME: InstallRuntime = {

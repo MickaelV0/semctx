@@ -1,4 +1,4 @@
-import { spawnGitSync } from "../packages/app-services/src/git-process";
+import { gitEnvironment, processLimits } from "../plugins/shared/hooks/process-budget.mjs";
 import { appendFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -172,8 +172,15 @@ export function planForPaths(paths: readonly string[], targetExists: (path: stri
 }
 
 export function changedPaths(base: string, cwd = process.cwd()): string[] | null {
+  // The CI `plan` job runs before `bun install`: import only built-ins and the dependency-free
+  // budget helper, never a workspace package.
   try {
-    const child = spawnGitSync(["git", "diff", "--name-only", "--no-renames", "-z", `${base}...HEAD`], { cwd });
+    const limits = processLimits();
+    const child = Bun.spawnSync(["git", "diff", "--name-only", "--no-renames", "-z", `${base}...HEAD`], {
+      cwd, stdout: "pipe", stderr: "pipe", env: gitEnvironment(), ...limits,
+    });
+    if (child.exitedDueToTimeout || child.exitedDueToMaxBuffer
+      || child.stdout.byteLength >= limits.maxBuffer || child.stderr.byteLength >= limits.maxBuffer) return null;
     if (child.exitCode !== 0) return null;
     const bytes = child.stdout;
     if (bytes.length === 0) return [];

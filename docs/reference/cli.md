@@ -55,6 +55,11 @@ therefore blocks the whole install first. It then inventories and plans every re
 applying any host command; one missing, failed or conflicting requested host blocks all host and
 workspace writes. If a host fails to converge during application, repository setup remains skipped.
 `--dry-run` returns that workspace plan alongside the read-only host and Git probes.
+The setup child is the one install step that does real work (configuration, full index,
+scaffold), so it does not share the five-second host-probe budget: it runs under its own
+30-minute ceiling and a 16 MiB combined output cap. Exhaustion kills it and reports the workspace
+`failed` with `PROCESS_TIMEOUT: repository setup budget exhausted`; re-running the idempotent
+`semctx setup` completes whatever the interrupted run left.
 
 The JSON report contains `ok`, CLI `version`, selected mode, per-host steps/status, workspace
 status, and restart/recovery actions. Exit 0 means at least one requested or auto-detected host is
