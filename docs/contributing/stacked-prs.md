@@ -30,6 +30,10 @@ described in the [submission guide](https://abhinav.github.io/git-spice/guide/cr
 
 Apply these defaults to this clone. `--local` settings and git-spice metadata are shared by
 its linked worktrees; other repositories are unaffected. A fresh clone needs its own setup.
+Run git-spice from the worktree directory, including in automation. In 0.32.0, configuration
+is [loaded before the `-C` directory flag is applied](https://github.com/abhinav/git-spice/blob/v0.32.0/main.go#L147),
+so using `-C` from outside the repository can miss these defaults. After publishing, confirm
+the draft state and base with `gh pr view PR_NUMBER --json isDraft,baseRefName,headRefOid`.
 
 ```sh
 git config --local spice.submit.draft true
