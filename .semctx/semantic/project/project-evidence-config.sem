@@ -59,7 +59,7 @@ change change.semctx.project-evidence-config
 
 change change.semctx.review-349-followups
   statement: Resolve issue #359 follow-ups to review #349: share safe local Git base recommendations, preserve experimental ContextPack framing under accepted ADR 0005, record historical contract succession, and strengthen the affected regression tests; the package-identity analysis exception was explicitly authorized by Sebastien.
-  status: active
+  status: superseded
   provenance: author
   serves: goal.semctx.honest-project-evidence
   preserves: invariant.semctx.project-evidence-honesty
