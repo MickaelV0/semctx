@@ -1,0 +1,23 @@
+[package]
+name = "semctx-qualification"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+publish = false
+default-run = "semctx-qualification"
+
+[[bin]]
+name = "qualification-mcp-fixture"
+path = "tests/fixtures/mcp.rs"
+
+[dependencies]
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
+sha2 = "=0.10.9"
+tempfile = "=3.27.0"
+semctx-gates = { path = "../gates" }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = ["Win32_System_Threading"] }
+
+[workspace]

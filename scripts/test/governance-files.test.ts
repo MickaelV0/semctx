@@ -139,9 +139,9 @@ describe("CI governance", () => {
     );
 
     expect(plan["runs-on"]).toBe("ubuntu-latest");
-    expect(plan["timeout-minutes"]).toBe(5);
-    expect(plan.steps.find((step) => step.run === "bun scripts/ci-plan.ts")?.name)
-      .toBe("Select required verification lanes");
+    expect(plan["timeout-minutes"]).toBe(10);
+    expect(plan.steps.find((step) => step.name === "Select required verification lanes")?.run)
+      .toContain("semctx-gates ci-plan --root");
     expect(gates.needs).toBe("plan");
     expect(gates.strategy).toEqual({
       "fail-fast": false,
@@ -157,7 +157,7 @@ describe("CI governance", () => {
     expect(bun?.with?.["bun-version"]).toBe("1.4.3");
     expect(ci).toContain("bun install --frozen-lockfile");
     expect(gates.steps.find((step) => step.name === "Run selected verification lane")?.run)
-      .toBe("bun scripts/ci-gate.ts");
+      .toContain("ci-run --root");
     expect(ci).not.toContain("bench:index-workers 24 100");
     expect(gates["timeout-minutes"]).toBe(60);
     expect(plan.env?.SEMCTX_VERIFY_BASE).toBe(
@@ -176,16 +176,17 @@ describe("CI governance", () => {
     expect(ciWorkflow.jobs["semctx-required"]).toMatchObject({
       name: "semctx-required",
       if: "always()",
-      needs: ["plan", "gates"],
+      needs: ["plan", "gates", "rust-gates"],
       "runs-on": "ubuntu-latest",
-      "timeout-minutes": 5,
+      "timeout-minutes": 10,
     });
     const required = job(ciWorkflow, "semctx-required").steps[0];
     expect(required?.env).toEqual({
       PLAN_RESULT: "${{ needs.plan.result }}",
       GATES_RESULT: "${{ needs.gates.result }}",
+      RUST_RESULT: "${{ needs.rust-gates.result }}",
     });
-    expect(required?.run).toBe('test "$PLAN_RESULT" = "success"\ntest "$GATES_RESULT" = "success"\n');
+    expect(required?.run).toBe('test "$PLAN_RESULT" = "success"\ntest "$GATES_RESULT" = "success"\ntest "$RUST_RESULT" = "success"\n');
     expect(ci).not.toMatch(/uses:\s+\S+@v\d/);
   });
 
@@ -194,14 +195,14 @@ describe("CI governance", () => {
       const workflow = Bun.YAML.parse(source) as Workflow;
       const required = job(workflow, "semctx-required");
       expect(required.if).toBe("always()");
-      expect(required.needs).toEqual(["plan", "gates"]);
-      expect(required.steps[0]?.run).toBe('test "$PLAN_RESULT" = "success"\ntest "$GATES_RESULT" = "success"\n');
+      expect(required.needs).toEqual(["plan", "gates", "rust-gates"]);
+      expect(required.steps[0]?.run).toBe('test "$PLAN_RESULT" = "success"\ntest "$GATES_RESULT" = "success"\ntest "$RUST_RESULT" = "success"\n');
     };
     assertRequired(ci);
     for (const mutant of [
-      ci.replace("needs: [plan, gates]", "needs: [gates]"),
+      ci.replace("needs: [plan, gates, rust-gates]", "needs: [gates, rust-gates]"),
       ci.replace('test "$GATES_RESULT" = "success"', "true"),
-      ci.replace("if: always()", "if: success()"),
+      ci.replace("name: semctx-required\n    if: always()", "name: semctx-required\n    if: success()"),
     ]) {
       expect(() => assertRequired(mutant)).toThrow();
     }
@@ -209,19 +210,23 @@ describe("CI governance", () => {
 
   test("archives each selected smoke report with a unique valid artifact name", () => {
     const gates = job(ciWorkflow, "gates");
-    const upload = gates.steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
-    expect(upload?.if).toBe("matrix.smoke == 'true'");
-    expect(upload?.with?.path).toBe(".semctx/multicore-index.json");
-    expect(upload?.with?.["include-hidden-files"]).toBe(true);
+    const upload = gates.steps.find((step) => step.name === "Archive complete worker benchmark report");
+    expect(upload?.if).toBe("matrix.smoke == 'true' && (matrix.shard == '' || startsWith(matrix.shard, '1/'))");
+    expect(upload?.with?.path).toBe("${{ runner.temp }}/worker-report.json");
+    const materialize = gates.steps.find((step) => step.name === "Materialize the observed worker report");
+    expect(materialize?.if).toBe(upload?.if);
+    expect(materialize?.run).toContain('s.action.label === "worker equivalence smoke"');
+    expect(materialize?.run).toContain("JSON.parse(s.outcome.stdout)");
+    expect(gates.steps.indexOf(materialize!)).toBeLessThan(gates.steps.indexOf(upload!));
     expect(upload?.with?.["if-no-files-found"]).toBe("error");
     expect(gates.steps.indexOf(upload!)).toBeGreaterThan(
-      gates.steps.findIndex((step) => step.run === "bun scripts/ci-gate.ts"),
+      gates.steps.findIndex((step) => step.name === "Run selected verification lane"),
     );
     for (const paths of [["scripts/test/benchmark-multicore-index.test.ts"], ["package.json"]]) {
       const plan = planForPaths(paths, () => true);
       for (const attempt of [1, 2]) {
         const names = plan.matrix.include.flatMap((lane, index) => {
-          if (lane.smoke !== "true") return [];
+          if (lane.smoke !== "true" || (lane.shard !== "" && !lane.shard.startsWith("1/"))) return [];
           const values: Record<string, string> = {
             "matrix.os": lane.os, "matrix.shard": lane.shard,
             "github.run_attempt": String(attempt), "strategy.job-index": String(index),
@@ -232,7 +237,7 @@ describe("CI governance", () => {
             return value;
           })];
         });
-        expect(names.length).toBeGreaterThan(3);
+        expect(names.length).toBe(3);
         expect(new Set(names).size).toBe(names.length);
         expect(names.every((name) => /^[\w.-]+$/.test(name))).toBe(true);
       }

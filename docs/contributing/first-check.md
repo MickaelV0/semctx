@@ -6,6 +6,9 @@ use the repository's documented contributor tool versions in `CONTRIBUTING.md` f
 Then run `bun install --frozen-lockfile`. Python and `requirements-quality.txt` are contributor
 quality prerequisites, not requirements to use the packaged Semctx CLI. Install them in a local
 virtual environment and put that environment's executables on your process PATH.
+The native verification tooling also requires the Rust toolchain pinned in `rust-toolchain.toml`.
+Install rustup and that toolchain before `full`; existing dev containers may need this additional
+setup. This does not add Rust as a prerequisite for using the published Semctx package.
 
 ```sh
 bun scripts/contributor.ts inspect
@@ -15,7 +18,7 @@ bun scripts/contributor.ts full
 ```
 
 `inspect` is the default and only reads local prerequisites. It reports the running Bun version,
-installed root development package manifests, Python's actual version response and the exact Ruff
+installed root development package manifests, Rust/Cargo, Python's actual version response and the exact Ruff
 and zizmor pins. Presence of selected packages is not proof that every installed byte matches the lockfile.
 Missing, incompatible and failed probes stay visible. The helper never installs tools, calls a hosted
 service, changes configuration, or requires a global plugin or Docker.
