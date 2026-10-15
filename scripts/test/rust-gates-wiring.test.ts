@@ -42,8 +42,8 @@ function wiringProblems(text: string): string[] {
   enforceStep(native, "Qualify the actual CLI and MCP artifacts", ['"$QUALIFICATION_BIN" --cli "$GITHUB_WORKSPACE/apps/cli/dist/index.js" --mcp "$GITHUB_WORKSPACE/plugins/semctx-control/dist/semctx-mcp.js" --runtime "$(command -v bun)" --out "$RUNNER_TEMP/qualification" --plan "$RUNNER_TEMP/plan/gate-plan.json" --os "$SEMCTX_QUALIFICATION_OS"']);
   enforceStep(required, "Verify all planned lane receipts", ['tools/gates/target/release/semctx-gates aggregate --root "$GITHUB_WORKSPACE" --plan "$RUNNER_TEMP/plan/gate-plan.json" --receipts "$RUNNER_TEMP/receipts"']);
   enforceStep(required, "Verify all native qualification reports", ['tools/qualification/target/release/semctx-qualification verify --reports "$RUNNER_TEMP/qualifications" --plan "$RUNNER_TEMP/plan/gate-plan.json" --cli "$GITHUB_WORKSPACE/apps/cli/dist/index.js" --mcp "$GITHUB_WORKSPACE/plugins/semctx-control/dist/semctx-mcp.js"']);
-  if (gates.env?.GATE_BIN !== "tools/gates/target/release/semctx-gates${{ runner.os == 'Windows' && '.exe' || '' }}") problems.push("gate executable identity changed");
-  if (native.env?.QUALIFICATION_BIN !== "tools/qualification/target/release/semctx-qualification${{ runner.os == 'Windows' && '.exe' || '' }}") problems.push("qualification executable identity changed");
+  if (gates.env?.GATE_BIN !== "tools/gates/target/release/semctx-gates${{ matrix.os == 'windows-latest' && '.exe' || '' }}") problems.push("gate executable identity changed or unsupported job env context");
+  if (native.env?.QUALIFICATION_BIN !== "tools/qualification/target/release/semctx-qualification${{ matrix.os == 'windows-latest' && '.exe' || '' }}") problems.push("qualification executable identity changed or unsupported job env context");
   if (!commands(plan).includes("ci-plan --root")) problems.push("Rust planner is missing");
   if (!commands(gates).includes("ci-run --root")) problems.push("Rust executor is missing");
   if (gates.needs !== "plan" || native.needs !== "plan") problems.push("producers must consume the plan");

@@ -65,7 +65,7 @@ jobs:
       SEMCTX_CI_TARGETS: ${{ matrix.targets }}
       SEMCTX_CI_SMOKE: ${{ matrix.smoke }}
       SEMCTX_CI_SHARD: ${{ matrix.shard }}
-      GATE_BIN: tools/gates/target/release/semctx-gates${{ runner.os == 'Windows' && '.exe' || '' }}
+      GATE_BIN: tools/gates/target/release/semctx-gates${{ matrix.os == 'windows-latest' && '.exe' || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -127,7 +127,7 @@ jobs:
       run:
         shell: bash
     env:
-      QUALIFICATION_BIN: tools/qualification/target/release/semctx-qualification${{ runner.os == 'Windows' && '.exe' || '' }}
+      QUALIFICATION_BIN: tools/qualification/target/release/semctx-qualification${{ matrix.os == 'windows-latest' && '.exe' || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
