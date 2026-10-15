@@ -103,6 +103,9 @@ authority, design, compatibility, test, and generated-artifact requirements.
 ## Commit and PR conventions
 
 - Work on a branch and keep commits cohesive.
+- For dependent changes, use the [stacked PR workflow](docs/contributing/stacked-prs.md):
+  one worktree per stack, each PR based on its immediate parent, and merges into `main`
+  from the bottom of the stack after fresh checks.
 - Update affected documentation and generated artifacts in the same PR.
 - Record each applicable public-contract requirement in the PR evidence. Mark a requirement
   `N/A` only with a reason.
