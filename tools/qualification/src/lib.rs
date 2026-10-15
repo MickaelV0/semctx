@@ -163,6 +163,7 @@ pub struct Report {
     pub host_arch: String,
     pub adapter: String,
     pub runtime: Runtime,
+    /// Positions 0 and 1 are the CLI and MCP entrypoints. Remaining artifacts bind dependencies.
     pub artifacts: Vec<Artifact>,
     pub cases: Vec<Case>,
     pub host_activation: String,

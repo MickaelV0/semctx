@@ -224,7 +224,21 @@ fn verify_reports(options: &BTreeMap<String, PathBuf>) -> Result<Value, String> 
             )
         };
         // Candidate checkout is the authority for shipped bundle bytes, not hashes asserted by reports.
-        for selected in [expected_entries.0, expected_entries.1] {
+        for (role, selected) in [expected_entries.0, expected_entries.1]
+            .into_iter()
+            .enumerate()
+        {
+            let expected_entry = artifact(&selected)?;
+            let reported_entry = &report.artifacts[role];
+            let reported_path = reported_entry.path.to_string_lossy().replace('\\', "/");
+            let (reported_parent, reported_name) = reported_path
+                .rsplit_once('/')
+                .ok_or("artifact entrypoint has no parent")?;
+            if reported_entry.sha256 != expected_entry.sha256
+                || Some(reported_name) != expected_entry.path.file_name().and_then(|p| p.to_str())
+            {
+                return Err("candidate entrypoint identity mismatch".into());
+            }
             let base = selected.parent().ok_or("artifact missing parent")?;
             let mut pending = vec![base.to_path_buf()];
             while let Some(dir) = pending.pop() {
@@ -252,19 +266,19 @@ fn verify_reports(options: &BTreeMap<String, PathBuf>) -> Result<Value, String> 
                         .map_err(|e| e.to_string())?
                         .to_string_lossy()
                         .replace('\\', "/");
-                    let suffix = format!("/{relative}");
+                    let reported_dependency = format!("{reported_parent}/{relative}");
                     let found: Vec<_> = report
                         .artifacts
                         .iter()
                         .filter(|a| {
-                            a.path
-                                .to_string_lossy()
-                                .replace('\\', "/")
-                                .ends_with(&suffix)
+                            a.path.to_string_lossy().replace('\\', "/") == reported_dependency
                         })
                         .collect();
                     if found.len() != 1 || found[0].sha256 != expected_artifact.sha256 {
-                        return Err(format!("candidate bundle mismatch {relative}"));
+                        return Err(format!(
+                            "candidate bundle mismatch {relative} (role {role}, observed matches {})",
+                            found.len()
+                        ));
                     }
                 }
             }
@@ -618,6 +632,46 @@ mod tests {
             ("--cli".into(), dist.join("semctx.js")),
             ("--mcp".into(), dist.join("semctx-mcp.js")),
         ])
+    }
+    #[test]
+    fn separate_cli_and_mcp_distributions_disambiguate_shared_dependency_names() {
+        let root = tempfile::tempdir().unwrap();
+        let mut options = sample(root.path());
+        let old_cli = options["--cli"].clone();
+        let mcp_dir = options["--mcp"].parent().unwrap().to_path_buf();
+        let cli_dir = root.path().join("cli-distribution");
+        fs::create_dir(&cli_dir).unwrap();
+        let cli = cli_dir.join("index.js");
+        fs::copy(&old_cli, &cli).unwrap();
+        fs::write(cli_dir.join("shared.js"), "CLI dependency").unwrap();
+        fs::write(mcp_dir.join("shared.js"), "MCP dependency").unwrap();
+        for entry in fs::read_dir(&options["--reports"]).unwrap() {
+            let path = entry.unwrap().path().join("report.json");
+            let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            let artifacts = value["artifacts"].as_array_mut().unwrap();
+            artifacts.push(artifacts[0].clone());
+            artifacts[0] = serde_json::to_value(artifact(&cli).unwrap()).unwrap();
+            for dependency in [cli_dir.join("shared.js"), mcp_dir.join("shared.js")] {
+                let identified = serde_json::to_value(artifact(&dependency).unwrap()).unwrap();
+                if let Some(existing) = artifacts
+                    .iter_mut()
+                    .find(|entry| entry["path"] == identified["path"])
+                {
+                    *existing = identified;
+                } else {
+                    artifacts.push(identified);
+                }
+            }
+            fs::write(path, value.to_string()).unwrap();
+        }
+        options.insert("--cli".into(), cli);
+        let admitted = verify_reports(&options);
+        assert!(
+            admitted.is_ok(),
+            "same-name dependencies have distinct distribution identities: {admitted:?}"
+        );
+        fs::write(cli_dir.join("shared.js"), "substituted CLI dependency").unwrap();
+        assert!(verify_reports(&options).is_err());
     }
     #[test]
     fn aggregate_accepts_complete_obligations() {
