@@ -157,7 +157,15 @@ fn verify_pr(args: &[String]) -> Result<u8> {
     {
         return Err("untracked source files must be staged".into());
     }
-    for action in receipt::verification(&base, skip, &shard) {
+    let executable = std::env::current_exe().map_err(|e| e.to_string())?;
+    let actions = receipt::local_verification(
+        &base,
+        skip,
+        &shard,
+        executable.to_str().ok_or("non-UTF8 gate executable path")?,
+        root.to_str().ok_or("non-UTF8 source root")?,
+    );
+    for action in actions {
         eprintln!("[verify:pr] START {}", action.label);
         let outcome = process::run(&action.argv, &root, action.timeout_ms, action.output_cap)?;
         eprint!("{}{}", outcome.stdout, outcome.stderr);
@@ -169,7 +177,7 @@ fn verify_pr(args: &[String]) -> Result<u8> {
                 .unwrap_or(1) as u8);
         }
     }
-    println!("[verify:pr] PASS all checks");
+    println!("[verify:pr] PASS  all checks");
     Ok(0)
 }
 fn main() -> ExitCode {

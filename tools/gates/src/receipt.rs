@@ -52,6 +52,47 @@ fn action(label: &str, args: &[&str]) -> Action {
         output_cap: OUTPUT_CAP,
     }
 }
+/// Local full verification also owns the native checks that CI runs in its native OS jobs.
+pub fn local_verification(
+    base: &str,
+    skip_diff: bool,
+    shard: &str,
+    gate: &str,
+    root: &str,
+) -> Vec<Action> {
+    let mut actions = verification(base, skip_diff, shard);
+    for manifest in ["tools/gates/Cargo.toml", "tools/qualification/Cargo.toml"] {
+        actions.extend([
+            action(
+                "Rust formatting",
+                &["cargo", "fmt", "--manifest-path", manifest, "--check"],
+            ),
+            action(
+                "Rust lints",
+                &[
+                    "cargo",
+                    "clippy",
+                    "--manifest-path",
+                    manifest,
+                    "--locked",
+                    "--all-targets",
+                    "--",
+                    "-D",
+                    "warnings",
+                ],
+            ),
+            action(
+                "Rust tests",
+                &["cargo", "test", "--manifest-path", manifest, "--locked"],
+            ),
+        ]);
+    }
+    actions.push(action(
+        "native product tests",
+        &[gate, "rust-test", "--root", root],
+    ));
+    actions
+}
 pub fn verification(base: &str, skip_diff: bool, shard: &str) -> Vec<Action> {
     let mut actions = vec![];
     if !skip_diff {
@@ -468,6 +509,28 @@ mod tests {
         r[0].steps[0].outcome.kind = "timeout".into();
         seal(&mut r[0]);
         assert!(admit(&p, &r).is_err());
+    }
+    #[test]
+    fn local_full_verification_executes_native_tooling_and_product_discovery() {
+        let actions = local_verification("base", false, "", "gate-binary", "source-root");
+        for operation in ["fmt", "clippy", "test"] {
+            for manifest in ["tools/gates/Cargo.toml", "tools/qualification/Cargo.toml"] {
+                assert_eq!(
+                    actions
+                        .iter()
+                        .filter(|a| a.argv.first().is_some_and(|v| v == "cargo")
+                            && a.argv.get(1).is_some_and(|v| v == operation)
+                            && a.argv.iter().any(|v| v == manifest))
+                        .count(),
+                    1,
+                    "{operation} {manifest}"
+                );
+            }
+        }
+        assert_eq!(
+            actions.last().unwrap().argv,
+            ["gate-binary", "rust-test", "--root", "source-root"]
+        );
     }
     #[test]
     fn contract_lane_invokes_each_required_routing_oracle() {

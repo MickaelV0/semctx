@@ -2,7 +2,7 @@
 
 The internal gates are Rust tools; the published Semctx product and its CLI/MCP contracts are
 unchanged. Rust 1.95.0, Cargo, Bun 1.4.3, Python and the pinned quality tools are development
-prerequisites. The toolchain file pins Rust. Install JavaScript dependencies with
+prerequisites. Ripgrep is required by the portable source-fallback scenarios. The toolchain file pins Rust. Install JavaScript dependencies with
 `bun install --frozen-lockfile` and quality tools from `requirements-quality.txt`.
 
 ## Local verification
@@ -17,7 +17,8 @@ cargo clippy --manifest-path tools/qualification/Cargo.toml --locked --all-targe
 bun run verify:pr
 ```
 
-The canonical command executes Rust. The old `scripts/verify-pr.ts` path forwards to it for
+The canonical command executes Rust, checks both native tools and discovers product test crates.
+The old `scripts/verify-pr.ts` path forwards to it for
 existing contributor integrations; its exported legacy functions remain differential fixtures.
 Stage intended new files before verification. `--skip-diff` is for the existing release-source
 verification contract and omits only diff hygiene. It does not remove quality or test checks.
