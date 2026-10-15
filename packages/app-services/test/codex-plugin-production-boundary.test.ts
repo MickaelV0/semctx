@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, parse, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -1152,12 +1152,14 @@ describe("default installer preserves the admitted marketplace tuple after apply
 
 describe("default installer bounds actual native host executables", () => {
   let directory: string, executable: string;
+  let invocation = 0;
   beforeAll(() => {
     directory = mkdtempSync(join(tmpdir(), "semctx-install-native-budget-"));
     const script = join(directory, "host.js");
     writeFileSync(script, `
       const fs = require("node:fs"), argv = process.argv.slice(2);
       const mode = process.env.SEMCTX_NATIVE_MODE;
+      fs.appendFileSync(process.env.SEMCTX_NATIVE_SENTINEL + ".pids", process.pid + "\\n");
       const mutation = argv[1] === "marketplace", readback = argv[1] === "list";
       const finish = () => {
         if (readback) process.stdout.write(JSON.stringify({ installed: [{
@@ -1188,14 +1190,38 @@ describe("default installer bounds actual native host executables", () => {
       chmodSync(executable, 0o755);
     }
   });
-  afterAll(() => { if (directory !== undefined) rmSync(directory, { recursive: true, force: true }); });
+  afterAll(async () => {
+    if (directory === undefined) return;
+    // Bun 1.4.3 ignores rmSync maxRetries on Windows. A dead executable can still
+    // hold its cwd briefly; a persistent lock remains an error after this bound.
+    for (let attempt = 0; attempt < 20; attempt++) {
+      try { rmSync(directory, { recursive: true, force: true }); return; }
+      catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (process.platform !== "win32" || !["EBUSY", "EPERM", "ENOTEMPTY"].includes(code ?? "") || attempt === 19) throw error;
+        await Bun.sleep(100);
+      }
+    }
+  });
   const run = (mode: string, extra: Partial<NonNullable<ProductionJsonFixture["transport"]>> = {}) => {
-    const sentinel = join(directory, `survived-${mode}`);
+    const sentinel = join(directory, `survived-${mode}-${invocation++}`);
     const observed = productionFixture("CODEX_HOME", false, false, "absent", "install", "safe", {
       marketplace: '{"name":"semctx-stable","plugins":[{"name":"semctx-control",'
         + '"source":{"source":"local","path":"./plugins/semctx-control"}}]}',
       dryRun: false, recovery: { success: true }, transport: { executable, mode, sentinel, ...extra },
     }) as InstallObservation;
+    // Cleanup retries must not conceal a host left alive by timeout/output handling.
+    const pids = existsSync(`${sentinel}.pids`) ? readFileSync(`${sentinel}.pids`, "utf8").trim().split("\n").map(Number) : [];
+    // This one case injects transport metadata without starting a host executable.
+    if (extra.timedOutMutation) expect(pids).toEqual([]);
+    else expect(pids.length).toBeGreaterThan(0);
+    for (const pid of pids) {
+      expect(Number.isSafeInteger(pid) && pid > 0).toBe(true);
+      let alive = false;
+      try { process.kill(pid, 0); alive = true; }
+      catch (error) { expect((error as NodeJS.ErrnoException).code).toBe("ESRCH"); }
+      expect(alive, `native host ${pid} must exit before the installer returns`).toBe(false);
+    }
     return { ...observed, sentinel };
   };
   for (const mode of ["flood-stdout", "flood-stderr", "flood-both"] as const) {
