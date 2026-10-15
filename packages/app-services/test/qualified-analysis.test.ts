@@ -297,7 +297,7 @@ test("qualified profile refuses an excluded changed mjs even with an otherwise h
   ]));
 });
 
-function selectedRepository(): string {
+function selectedRepository(options: { index?: boolean } = {}): string {
   const root = mkdtempSync(join(tmpdir(), "semctx-qualified-selected-")); roots.push(root);
   mkdirSync(join(root, "src"));
   writeFileSync(join(root, ".gitignore"), ".semctx/\n");
@@ -306,7 +306,7 @@ function selectedRepository(): string {
   git(root, "init", "-q"); git(root, "add", ".");
   git(root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-qm", "fixture");
   initWorkspace(root, { ...createGlobSelectionConfig(root), selectionMode: "qualified-static-v1", include: ["src/**/*.ts"], analysisProfile: "public-monorepo-static-v1" });
-  indexRepository(root, "2026-10-09T10:00:00.000Z");
+  if (options.index !== false) indexRepository(root, "2026-10-09T10:00:00.000Z");
   return root;
 }
 test("stale inputs reject then actual rebuild admits current sources with dependent closure", () => {
@@ -342,22 +342,27 @@ test("an interrupted rebuild rejects the preserved old index even when inputs ma
   expect(runVerify(root, { kind: "working-tree" }).report.analysisAdmission?.reasons).toContain("INDEX_BUILD_INCOMPLETE");
 });
 test("a configured nested root cannot hide worktree obligations via git --relative", () => {
-  const root = selectedRepository(); const nested = join(root, "src");
+  const root = selectedRepository({ index: false }); const nested = join(root, "src");
   initWorkspace(nested, { ...createGlobSelectionConfig(nested), selectionMode: "qualified-static-v1", analysisProfile: "public-monorepo-static-v1" });
   indexRepository(nested, "2026-10-09T10:00:00.000Z");
   expect(() => runVerify(nested, { kind: "working-tree" })).toThrow("exact Git worktree root");
 });
-test("excluded parse-failed or computed importers cannot silently disappear from dependency scope", () => {
-  for (const content of ["import { main } from './src/main'; export function broken( {", "const path = './src/main'; import(path);", "import { main } from '@hidden/inbound'; export const value = main();"]) {
-    const root = selectedRepository();
+for (const [kind, content, reasonPrefix] of [
+  ["parse-failed", "import { main } from './src/main'; export function broken( {", "DEPENDENCY_SCOPE_PARSE_FAILED:hidden.ts:"],
+  ["computed", "const path = './src/main'; import(path);", "DEPENDENCY_SCOPE_COMPUTED_IMPORT:hidden.ts"],
+  ["unresolved alias", "import { main } from '@hidden/inbound'; export const value = main();", "DEPENDENCY_SCOPE_UNRESOLVED_IMPORT:hidden.ts:@hidden/inbound"],
+] as const) {
+  test(`an excluded ${kind} importer cannot silently disappear from dependency scope`, () => {
+    // Only the final source image is relevant here; stale-index behavior has its own tests above.
+    const root = selectedRepository({ index: false });
     writeFileSync(join(root, "hidden.ts"), content);
     writeFileSync(join(root, "src/main.ts"), "export function main() { return 2; }\n");
     indexRepository(root, "2026-10-09T10:01:00.000Z");
     const report = runVerify(root, { kind: "working-tree" }).report;
     expect(report.analysisAdmission?.status).toBe("rejected");
-    expect(report.analysisAdmission?.reasons.some((reason) => reason.startsWith("DEPENDENCY_SCOPE_"))).toBe(true);
-  }
-});
+    expect(report.analysisAdmission?.reasons.some((reason) => reason.startsWith(reasonPrefix))).toBe(true);
+  });
+}
 test("post-capture mutation is refused rather than describing the new bytes as analyzed", () => {
   const root = selectedRepository();
   writeFileSync(join(root, "src/main.ts"), "export function main() { return 2; }\n");

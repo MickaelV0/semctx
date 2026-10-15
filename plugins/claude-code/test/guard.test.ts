@@ -2069,7 +2069,8 @@ it.skipIf(process.platform === "win32")("explicit advisory mode does not wait fo
 });
 
 for (const mode of ["fifo", "symlink-fifo", "off"] as const) {
-  it.skipIf(process.platform === "win32").concurrent(`the real hook bounds a FIFO guard configuration (${mode})`, async () => {
+  // Keep the short latency assertion independent of other real hook processes and fixture setup.
+  it.skipIf(process.platform === "win32")(`the real hook bounds a FIFO guard configuration (${mode})`, async () => {
     const root = mkdtempSync(join(tmpdir(), "semctx-guard-fifo-config-"));
     const config = join(root, ".semctx", "guard.json");
     let child: ReturnType<typeof Bun.spawn> | undefined;
@@ -2238,7 +2239,8 @@ function declareGuard(directory: string, declaration: boolean | string): void {
 }
 
 for (const mode of ["fifo", "symlink-fifo", "symlink-regular", "absent", "disabled", "off", "advisory-fifo"] as const) {
-  it.skipIf(process.platform === "win32").concurrent(`a retargeted nested guard preserves repository activation (${mode})`, async () => {
+  // Each real hook has its own deadline; concurrent supervisors compete for that same margin on CI.
+  it.skipIf(process.platform === "win32")(`a retargeted nested guard preserves repository activation (${mode})`, async () => {
     const root = mkdtempSync(join(tmpdir(), "semctx-guard-nested-type-"));
     try {
       const session = fixtureRepository(join(root, "session"), false);
