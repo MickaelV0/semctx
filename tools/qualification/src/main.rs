@@ -524,7 +524,7 @@ mod tests {
             "mcp.tools" => return json!({"tools":[{"name":"semctx_inspect"},{"name":"semctx_control_status"},{"name":"semctx_index_health"}]}),
             "mcp.control-status" => return json!({"verdict":"FRESH","canRunHighRiskControl":true}),
             "mcp.inspect" => return json!({"inspect":{"matchedNodes":[{"name":"oldSymbol"}]},"health":{"binding":{"status":"valid"}}}),
-            "mcp.refresh" => return json!({"pid":42,"old":{"matchedNodes":[]},"new":{"matchedNodes":[{"name":"newSymbol"}]},"health":{"binding":{"status":"valid"}}}),
+            "mcp.refresh" => return json!({"pid":42,"old":{"kind":"symbol","query":"oldSymbol","matchedNodes":[]},"new":{"matchedNodes":[{"name":"newSymbol"}]},"health":{"binding":{"status":"valid"}}}),
             _=>panic!("unknown case")
         };
         json!({"observation":{"code":code,"stdout":stdout,"stderr":stderr,"duration_ms":1,"timed_out":false,"output_exceeded":false}})

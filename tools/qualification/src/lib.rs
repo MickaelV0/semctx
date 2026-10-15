@@ -314,6 +314,13 @@ pub fn validate_report(report: &Report) -> Result<(), String> {
     Ok(())
 }
 
+/// Absence needs a well-formed empty response to the exact symbol query.
+pub fn symbol_absent(value: &Value, name: &str) -> bool {
+    value["kind"] == "symbol"
+        && value["query"] == name
+        && value["matchedNodes"].as_array().is_some_and(Vec::is_empty)
+}
+
 /// Re-evaluate observations during aggregate admission: a producer's green label is insufficient.
 pub fn validate_raw_case(id: &str, raw: &Value) -> Result<(), String> {
     fn eq(value: &Value, path: &str, expected: Value) -> Result<(), String> {
@@ -419,7 +426,7 @@ pub fn validate_raw_case(id: &str, raw: &Value) -> Result<(), String> {
                 }
             }
             "mcp.refresh" => {
-                if !symbol(&raw["old"], "oldSymbol")
+                if symbol_absent(&raw["old"], "oldSymbol")
                     && symbol(&raw["new"], "newSymbol")
                     && raw["pid"].as_u64().is_some()
                 {
@@ -444,6 +451,21 @@ mod tests {
             duration_ms: 1,
             stdout: stdout.into(),
             stderr: stderr.into(),
+        }
+    }
+    #[test]
+    fn refresh_refuses_missing_or_malformed_old_symbol_evidence() {
+        for old in [
+            serde_json::Value::Null,
+            serde_json::json!({}),
+            serde_json::json!({"kind":"symbol","query":"oldSymbol","matchedNodes":null}),
+            serde_json::json!({"kind":"symbol","query":"differentQuery","matchedNodes":[]}),
+        ] {
+            let raw = serde_json::json!({"old":old,"new":{"matchedNodes":[{"name":"newSymbol"}]},"pid":1,"health":{"binding":{"status":"valid"}}});
+            assert!(
+                validate_raw_case("mcp.refresh", &raw).is_err(),
+                "malformed old-symbol observation admitted: {raw}"
+            );
         }
     }
     #[test]

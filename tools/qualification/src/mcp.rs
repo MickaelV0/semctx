@@ -262,7 +262,7 @@ pub fn run(runner: &mut Runner, root: &Path) -> Result<(), String> {
         "mcp.refresh",
         "supported",
         raw,
-        if !symbol(&new_old, "oldSymbol")
+        if crate::symbol_absent(&new_old, "oldSymbol")
             && symbol(&new, "newSymbol")
             && new_health["binding"]["status"] == "valid"
         {
