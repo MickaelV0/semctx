@@ -117,6 +117,9 @@ fn native_expected(
     if !root.is_absolute() {
         return Err("--native-artifacts must be absolute".into());
     }
+    // The caller chooses the trusted distribution root. Resolve aliases above it
+    // (for example macOS /var -> /private/var), then refuse links inside each OS cell.
+    let root = root.canonicalize().map_err(|e| e.to_string())?;
     let base = root.join(os);
     unlinked(&base)?;
     let manifest_path = base.join("artifact-manifest.json");
@@ -835,6 +838,17 @@ mod tests {
                 .unwrap_err()
                 .contains("--native-artifacts")
         );
+    }
+    #[test]
+    #[cfg(unix)]
+    fn native_admission_accepts_an_alias_above_the_trusted_distribution_root() {
+        let root = tempfile::tempdir().unwrap();
+        let mut options = native_sample(root.path());
+        let outer = tempfile::tempdir().unwrap();
+        let alias = outer.path().join("root-alias");
+        std::os::unix::fs::symlink(root.path(), &alias).unwrap();
+        options.insert("--native-artifacts".into(), alias.join("expected-native"));
+        assert!(verify_reports(&options).is_ok());
     }
     #[test]
     fn native_admission_rejects_missing_or_wrong_plan_manifest() {

@@ -88,6 +88,21 @@ jobs:
           path: ${{ runner.temp }}/plan
       - run: python -m pip install --disable-pip-version-check --requirement requirements-quality.txt
       - run: bun install --frozen-lockfile
+      - name: Provision the source fallback dependency
+        if: matrix.smoke == 'true' && (matrix.shard == '' || startsWith(matrix.shard, '1/'))
+        run: |
+          if ! command -v rg >/dev/null 2>&1; then
+            case "$RUNNER_OS" in
+              Linux)
+                sudo apt-get update
+                sudo apt-get install --no-install-recommends -y ripgrep
+                ;;
+              macOS) brew install ripgrep ;;
+              Windows) choco install ripgrep -y --no-progress ;;
+              *) exit 1 ;;
+            esac
+          fi
+          rg --version
       - name: Run selected verification lane
         env:
           SEMCTX_LANE_INDEX: ${{ matrix.index }}
@@ -172,7 +187,7 @@ jobs:
       - name: Qualify the actual CLI and MCP artifacts
         env:
           SEMCTX_QUALIFICATION_OS: ${{ matrix.os }}
-        run: '"$QUALIFICATION_BIN" --cli "$GITHUB_WORKSPACE/apps/cli/dist/index.js" --mcp "$GITHUB_WORKSPACE/plugins/semctx-control/dist/semctx-mcp.js" --runtime "$(command -v bun)" --out "$RUNNER_TEMP/qualification" --plan "$RUNNER_TEMP/plan/gate-plan.json" --os "$SEMCTX_QUALIFICATION_OS"'
+        run: '"$QUALIFICATION_BIN" --cli "$GITHUB_WORKSPACE/apps/cli/dist/index.js" --mcp "$GITHUB_WORKSPACE/plugins/semctx-control/dist/semctx-mcp.js" --runtime "$(bun -p process.execPath)" --out "$RUNNER_TEMP/qualification" --plan "$RUNNER_TEMP/plan/gate-plan.json" --os "$SEMCTX_QUALIFICATION_OS"'
       - name: Retain the qualification evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
