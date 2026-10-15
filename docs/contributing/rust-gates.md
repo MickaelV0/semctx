@@ -42,7 +42,7 @@ the receipt directory must contain exactly the planned JSON receipts, with no fo
 Aggregation rechecks source cleanliness, identities, action inventories, outputs and digests.
 
 `rust-test` discovers tracked Cargo manifests for the native product, resolves their workspace
-owners with Cargo, and executes each workspace once with its tracked lock. The two tools above
+owners with Cargo, and executes each product member once with its workspace's tracked lock. The two tools above
 are tested separately. New product crates cannot disappear behind a fixed allowlist; an absent
 port is reported as `no_product`, and a crate compiled without tests remains unqualified.
 

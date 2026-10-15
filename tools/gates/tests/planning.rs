@@ -142,6 +142,28 @@ fn source_change_selects_transitive_consumers_on_every_os() {
     }
 }
 #[test]
+fn shared_plugin_runtime_keeps_full_consumer_coverage_on_every_os() {
+    let r = Repo::new();
+    r.write(
+        "plugins/shared/hooks/process-budget.mjs",
+        "export const budget = 1;\n",
+    );
+    r.commit();
+    let p = r.plan();
+    assert_eq!(
+        p.mode, "fallback",
+        "shared plugin code has consumers outside package manifests"
+    );
+    for os in ["ubuntu-latest", "windows-latest", "macos-15"] {
+        assert!(
+            p.matrix
+                .include
+                .iter()
+                .any(|lane| lane.os == os && lane.profile == "full")
+        );
+    }
+}
+#[test]
 fn unknown_path_and_empty_diff_keep_full_cross_platform_coverage() {
     let r = Repo::new();
     assert_eq!(r.plan().mode, "fallback");

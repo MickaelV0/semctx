@@ -136,7 +136,7 @@ fn missing_lock_is_an_explicit_refusal() {
     assert!(String::from_utf8_lossy(&result.stderr).contains("Cargo.lock"));
 }
 #[test]
-fn workspace_members_are_tested_once_with_the_root_owner() {
+fn workspace_members_are_tested_once_each_with_the_root_owner() {
     let r = Repo::new();
     r.crate_at("native/a", "fixture_workspace_a", true, false);
     r.crate_at("native/b", "fixture_workspace_b", true, false);
@@ -153,13 +153,40 @@ fn workspace_members_are_tested_once_with_the_root_owner() {
         String::from_utf8_lossy(&output.stderr)
     );
     let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(value["runs"].as_array().unwrap().len(), 1);
+    assert_eq!(value["runs"].as_array().unwrap().len(), 2);
     assert!(
         value["runs"][0]["action"]["argv"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|v| v == "--workspace")
+            .any(|v| v == "--package")
+    );
+}
+#[test]
+fn a_tested_workspace_member_cannot_mask_an_untested_member() {
+    let r = Repo::new();
+    r.crate_at("native/a", "fixture_workspace_a", true, false);
+    r.crate_at("native/b", "fixture_workspace_b", true, false);
+    r.write("native/b/src/lib.rs", "pub fn compiled_only() {}\n");
+    r.write(
+        "Cargo.toml",
+        "[workspace]\nmembers = [\"native/a\", \"native/b\"]\nresolver = \"3\"\n",
+    );
+    r.write("Cargo.lock", "version = 4\n\n[[package]]\nname = \"fixture_workspace_a\"\nversion = \"0.1.0\"\n\n[[package]]\nname = \"fixture_workspace_b\"\nversion = \"0.1.0\"\n");
+    r.track();
+    let output = r.run();
+    assert!(
+        !output.status.success(),
+        "a different member's tests cannot qualify an empty crate"
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["status"], "failed");
+    assert!(
+        value["message"]
+            .as_str()
+            .unwrap()
+            .contains("fixture_workspace_b"),
+        "{value:#}"
     );
 }
 #[test]

@@ -470,6 +470,29 @@ mod tests {
         assert!(admit(&p, &r).is_err());
     }
     #[test]
+    fn contract_lane_invokes_each_required_routing_oracle() {
+        let lane = fixture().0.matrix.include[0].clone();
+        let actions = commands(&lane, "base").unwrap();
+        let routing = actions
+            .iter()
+            .find(|a| a.label == "routing regressions")
+            .unwrap();
+        assert_eq!(&routing.argv[..4], ["bun", "test", "--timeout", "60000"]);
+        for path in [
+            "scripts/test/ci-plan.test.ts",
+            "scripts/test/ci-gate.test.ts",
+            "scripts/test/governance-files.test.ts",
+            "scripts/test/rust-gates-wiring.test.ts",
+            "scripts/test/index-routing-inventory.test.ts",
+            "scripts/test/rust-prerequisites.test.ts",
+        ] {
+            assert!(
+                routing.argv.iter().any(|arg| arg == path),
+                "required routing oracle not invoked: {path}"
+            );
+        }
+    }
+    #[test]
     fn factoring_preserves_runtime_checks_once_per_os_and_tests_every_shard() {
         for (os, count) in [("ubuntu-latest", 2), ("windows-latest", 4), ("macos-15", 2)] {
             let mut all = vec![];

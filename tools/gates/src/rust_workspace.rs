@@ -134,7 +134,7 @@ pub fn test(root: &Path) -> Result<Report> {
                 "--format-version".into(),
                 "1".into(),
                 "--manifest-path".into(),
-                manifest_path.to_string_lossy().into_owned(),
+                manifest.clone(),
             ],
             60_000,
         );
@@ -166,8 +166,7 @@ pub fn test(root: &Path) -> Result<Report> {
         let packages = metadata["packages"]
             .as_array()
             .ok_or("cargo metadata missing packages")?;
-        let mut exclusions = vec![];
-        let mut product_members = 0;
+        let mut product_members = vec![];
         for member in members {
             let package = packages
                 .iter()
@@ -178,15 +177,13 @@ pub fn test(root: &Path) -> Result<Report> {
                 .ok_or("Cargo member missing manifest")?;
             let path = require_tracked(&root, Path::new(package_manifest), &tracked)?;
             let relative_path = relative(&root, &path)?;
-            if TOOL_MANIFESTS.contains(&relative_path.as_str()) {
-                exclusions.push(
+            if !TOOL_MANIFESTS.contains(&relative_path.as_str()) {
+                product_members.push(
                     package["name"]
                         .as_str()
-                        .ok_or("Cargo tool member missing name")?
+                        .ok_or("Cargo product member missing name")?
                         .to_owned(),
                 );
-            } else {
-                product_members += 1;
             }
             covered.insert(path);
         }
@@ -194,9 +191,10 @@ pub fn test(root: &Path) -> Result<Report> {
         if !covered.contains(&manifest_path) {
             return Err(format!("Cargo workspace does not account for {manifest}"));
         }
-        if product_members > 0
-            && let Some(previous) = workspaces.insert(owner, exclusions.clone())
-            && previous != exclusions
+        product_members.sort();
+        if !product_members.is_empty()
+            && let Some(previous) = workspaces.insert(owner, product_members.clone())
+            && previous != product_members
         {
             return Err("ambiguous Cargo workspace membership".into());
         }
@@ -206,45 +204,48 @@ pub fn test(root: &Path) -> Result<Report> {
     }
     report.status = "passed".into();
     report.message = "native product test suites executed; tooling suites are separate".into();
-    for (manifest, exclusions) in workspaces {
+    'workspaces: for (manifest, members) in workspaces {
         let relative = relative(&root, &manifest)?;
-        let mut argv = vec![
-            "cargo".into(),
-            "test".into(),
-            "--workspace".into(),
-            "--locked".into(),
-            "--manifest-path".into(),
-            manifest.to_string_lossy().into_owned(),
-        ];
-        for exclusion in exclusions {
-            argv.extend(["--exclude".into(), exclusion]);
-        }
-        let action = command(
-            format!("native product tests: {relative}"),
-            argv,
-            STEP_BUDGET_MS,
-        );
-        eprintln!("[semctx-gates] START {}", action.label);
-        let outcome = process::run(&action.argv, &root, action.timeout_ms, action.output_cap)?;
-        eprint!("{}{}", outcome.stdout, outcome.stderr);
-        let executed_tests = outcome.stdout.lines().any(|line| {
-            line.strip_prefix("test result: ok. ")
-                .and_then(|summary| summary.split_once(" passed;"))
-                .and_then(|(count, _)| count.parse::<u64>().ok())
-                .is_some_and(|count| count > 0)
-        });
-        let passed = outcome.kind == "success" && outcome.exit_code == Some(0) && executed_tests;
-        report.runs.push(Step { action, outcome });
-        if !passed {
-            report.status = "failed".into();
-            report.message = if executed_tests {
-                format!("native product tests failed: {relative}")
-            } else {
-                format!(
-                    "native product test execution unproven (no passing libtest cases): {relative}"
-                )
-            };
-            break;
+        for member in members {
+            // Execute each product member exactly once. A workspace-wide positive summary
+            // cannot establish that every member actually ran tests.
+            let argv = vec![
+                "cargo".into(),
+                "test".into(),
+                "--package".into(),
+                member.clone(),
+                "--locked".into(),
+                "--manifest-path".into(),
+                relative.clone(),
+            ];
+            let action = command(
+                format!("native product tests: {relative} ({member})"),
+                argv,
+                STEP_BUDGET_MS,
+            );
+            eprintln!("[semctx-gates] START {}", action.label);
+            let outcome = process::run(&action.argv, &root, action.timeout_ms, action.output_cap)?;
+            eprint!("{}{}", outcome.stdout, outcome.stderr);
+            let executed_tests = outcome.stdout.lines().any(|line| {
+                line.strip_prefix("test result: ok. ")
+                    .and_then(|summary| summary.split_once(" passed;"))
+                    .and_then(|(count, _)| count.parse::<u64>().ok())
+                    .is_some_and(|count| count > 0)
+            });
+            let passed =
+                outcome.kind == "success" && outcome.exit_code == Some(0) && executed_tests;
+            report.runs.push(Step { action, outcome });
+            if !passed {
+                report.status = "failed".into();
+                report.message = if executed_tests {
+                    format!("native product tests failed: {relative} ({member})")
+                } else {
+                    format!(
+                        "native product test execution unproven (no passing libtest cases): {relative} ({member})"
+                    )
+                };
+                break 'workspaces;
+            }
         }
     }
     Ok(report)

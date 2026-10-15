@@ -23,7 +23,9 @@ No gate requires a Semctx index to bootstrap itself.
 
 The native lane also discovers tracked product Cargo manifests rather than maintaining a list
 of product crates. Cargo supplies actual workspace ownership; each workspace and tracked lock
-must remain inside the repository and executes once with `cargo test --workspace --locked`.
+must remain inside the repository. Each product member executes once with
+`cargo test --package MEMBER --locked` using that workspace owner, so another member's
+tests cannot qualify an untested crate.
 Adding a crate therefore adds an obligation automatically. A missing lock, failed test, or
 compilation without a positive test summary refuses qualification. No native product yet is
 reported explicitly, not as proof that the future Rust product works.

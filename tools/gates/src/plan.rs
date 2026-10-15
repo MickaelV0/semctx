@@ -55,8 +55,9 @@ pub fn affected(
             continue;
         }
         if path.starts_with("plugins/") {
-            selected.insert("plugins".to_owned());
-            continue;
+            // Plugin helpers are also imported directly by CLI/services outside workspace
+            // manifests. Until that graph is complete, retain all consumers on every OS.
+            return None;
         }
         if path.starts_with("site/")
             || path.starts_with("examples/")
