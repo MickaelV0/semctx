@@ -14,6 +14,32 @@ The setup below was exercised with git-spice **0.32.0** on Windows. It needs no 
 GitHub App or hosted stacking service. This is optional contributor tooling, not a product
 dependency.
 
+This workflow requires write access to the upstream repository so child PRs can target
+parent branches there. With a fork and no upstream write access, submit the trunk-based PR
+first, wait for it to merge, then rebase and submit the next change. git-spice's
+[fork workflow](https://abhinav.github.io/git-spice/guide/cr/#fork-workflows) pushes dependent
+branches but creates PRs only for branches based directly on trunk.
+
+## Working with agents
+
+[AGENTS.md](../../AGENTS.md) gives Codex the repository workflow at task startup;
+[CLAUDE.md](../../CLAUDE.md) imports the same instructions for Claude Code. Start a fresh
+session on a checkout containing these files so its instruction loader can discover them.
+An existing session or worktree on an older commit does not acquire the new guidance merely
+because a PR was merged elsewhere.
+
+During an active task, the agent chooses useful dependent slices, creates and updates their
+PRs, runs checks, and invokes restacking when needed. It reports the linked PRs and blockers.
+If the user's request includes merging, it continues through the stack in order after each
+required check; otherwise it leaves the requested reviewable result. Existing authorization
+persists without another routine confirmation.
+
+GitHub runs CI after publication. git-spice manages relationships and navigation when the
+agent invokes it; installing it does not start a background worker. An idle or closed agent
+session does not keep restacking or merging. The human sees smaller linked diffs, draft
+children waiting for their parents, and check results for each PR. Conflicts or missing
+decisions that the agent cannot resolve remain visible blockers.
+
 ## Set up a clone
 
 Install Git, `gh`, and git-spice from its [official installation instructions](https://abhinav.github.io/git-spice/start/install/).
@@ -66,11 +92,14 @@ stack concurrently. A reviewer can inspect a frozen commit in a detached worktre
 From an existing clone, create a worktree for the first branch:
 
 ```sh
-git fetch origin main
+git-spice repo sync --restack=none
 git worktree add --no-track -b feat/parser ../semctx-parser origin/main
 cd ../semctx-parser
 git-spice branch track --base main
 ```
+
+Sync refreshes the local trunk before the new branch is tracked against it. Fetching alone
+refreshes `origin/main` but can leave the local `main` branch behind.
 
 `--no-track` prevents the new branch from inheriting `origin/main` as its push upstream.
 If an existing topic branch already tracks `origin/main`, run `git branch --unset-upstream`
@@ -132,8 +161,14 @@ the stack's worktree. Resolve conflicts explicitly; `git-spice rebase continue` 
 
 Only merge a PR whose current base is `main`. Keep dependent PRs in draft until their parent
 has merged and they have been restacked. To make just the bottom PR ready, switch to it and
-run `git-spice branch submit --no-draft`. Confirm its base and SHA with `gh pr view`, wait for
-the selected `semctx-required` check on that SHA, and resolve review conversations.
+run `git-spice branch submit --no-draft`. Read the current remote base and head explicitly:
+
+```sh
+gh pr view PR_NUMBER --json baseRefName,headRefOid,isDraft
+```
+
+Require `baseRefName` to be `main`, wait for the selected `semctx-required` check on that
+`headRefOid`, and resolve review conversations.
 
 Use the repository's chosen merge method and bind the operation to the inspected head, for
 example `gh pr merge PR_NUMBER --merge --match-head-commit HEAD_SHA`. Never bypass branch
