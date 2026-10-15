@@ -55,18 +55,21 @@ fn plan_id(path: &Path) -> Result<String, String> {
     }
     Ok(id.into())
 }
-fn reserve(path: &Path) -> Result<(), String> {
+fn reserve(path: &Path) -> Result<PathBuf, String> {
     if !path.is_absolute() {
         return Err("--out must be absolute".into());
     }
-    for ancestor in path.ancestors() {
-        if fs::symlink_metadata(ancestor).is_ok_and(|m| m.file_type().is_symlink()) {
-            return Err("symlink output ancestor refused".into());
-        }
-    }
-    fs::create_dir_all(path.parent().ok_or("missing output parent")?).map_err(|e| e.to_string())?;
-    fs::create_dir(path).map_err(|e| format!("output must be NEW: {e}"))?;
-    fs::create_dir(path.join("raw")).map_err(|e| e.to_string())
+    let parent = path.parent().ok_or("missing output parent")?;
+    fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    // Resolve the caller's parent, including system aliases such as macOS /var.
+    // Atomic create_dir still refuses any existing destination, including a symlink.
+    let output = parent
+        .canonicalize()
+        .map_err(|e| e.to_string())?
+        .join(path.file_name().ok_or("missing output directory name")?);
+    fs::create_dir(&output).map_err(|e| format!("output must be NEW: {e}"))?;
+    fs::create_dir(output.join("raw")).map_err(|e| e.to_string())?;
+    Ok(output)
 }
 
 #[derive(serde::Deserialize)]
@@ -382,8 +385,7 @@ fn main_run() -> Result<Value, String> {
             }
         }
     }
-    let out = required(&options, "--out")?;
-    reserve(&out)?;
+    let out = reserve(&required(&options, "--out")?)?;
     let root = tempfile::Builder::new()
         .prefix("semctx-rust-qualification-")
         .tempdir()
@@ -826,6 +828,36 @@ mod tests {
         options.insert("--runtime".into(), PathBuf::from("native"));
         options.insert("--native-artifacts".into(), expected_root);
         options
+    }
+    #[test]
+    fn output_reservation_never_reuses_an_existing_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let output = reserve(&root.path().join("observations")).unwrap();
+        fs::write(output.join("existing.txt"), "preserve this evidence").unwrap();
+        assert!(reserve(&output).unwrap_err().contains("NEW"));
+        assert_eq!(
+            fs::read_to_string(output.join("existing.txt")).unwrap(),
+            "preserve this evidence"
+        );
+    }
+    #[test]
+    #[cfg(unix)]
+    fn output_reservation_resolves_a_system_parent_alias_but_refuses_an_existing_link() {
+        let root = tempfile::tempdir().unwrap();
+        let outer = tempfile::tempdir().unwrap();
+        let alias = outer.path().join("parent-alias");
+        std::os::unix::fs::symlink(root.path(), &alias).unwrap();
+        let output = reserve(&alias.join("observations")).unwrap();
+        assert_eq!(
+            output,
+            root.path().canonicalize().unwrap().join("observations")
+        );
+        std::os::unix::fs::symlink(&output, alias.join("existing-link")).unwrap();
+        assert!(
+            reserve(&alias.join("existing-link"))
+                .unwrap_err()
+                .contains("NEW")
+        );
     }
     #[test]
     fn synthetic_three_os_native_records_require_independent_target_artifacts() {
