@@ -173,9 +173,15 @@ fn verify_pr(args: &[String]) -> Result<u8> {
         let outcome =
             process::run_logged(&action.argv, &root, action.timeout_ms, action.output_cap)?;
         if outcome.kind != "success" {
-            if process::interactive_progress() {
-                eprintln!("[verify:pr] FAIL {} ({})", action.label, outcome.kind);
-            }
+            let _ = writeln!(
+                std::io::stderr(),
+                "[verify:pr] FAIL {} ({}, exit={})",
+                action.label,
+                outcome.kind,
+                outcome
+                    .exit_code
+                    .map_or_else(|| "none".into(), |code| code.to_string())
+            );
             return Ok(outcome
                 .exit_code
                 .filter(|c| *c > 0 && *c < 256)

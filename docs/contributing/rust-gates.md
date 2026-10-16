@@ -51,11 +51,14 @@ evidence when it cannot complete. Receipts contain their bounded stdout/stderr t
 the receipt directory must contain exactly the planned JSON receipts, with no foreign files.
 Aggregation rechecks source cleanliness, identities, action inventories, outputs and digests.
 
-Live child progress and START/FAIL messages are emitted only when stderr is a terminal.
+Live child progress and START messages are emitted only when stderr is a terminal.
 With redirected stderr (including CI pipes), the supervisor captures child output exclusively;
 lane receipts retain the bounded bytes, counts and hashes. An unread logging pipe therefore
-cannot prevent the process deadline from being enforced. Interactive terminal writes and a
-consumer which stops reading the final stdout document are outside this guarantee.
+cannot prevent the process deadline from being enforced. After supervision, `verify-pr`
+always emits one bounded FAIL summary with the action label, outcome kind and exit code,
+including when stderr is redirected; child output stays captured and the original failure
+status is preserved. Interactive terminal writes and consumers which stop reading the final
+stdout document or final stderr summary are outside the capture deadline guarantee.
 
 After process-tree termination, pipe readers have a 500 ms EOF grace. POSIX read ends are
 nonblocking, so a descendant which calls `setsid()` or changes process group cannot hold a

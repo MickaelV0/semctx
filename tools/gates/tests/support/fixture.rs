@@ -221,5 +221,11 @@ fn verification_tool_stub() -> bool {
         .open(std::env::var_os("SEMCTX_TEST_TOOL_LOG").unwrap())
         .unwrap();
     writeln!(log, "{name}").unwrap();
+    let marker = std::path::PathBuf::from(std::env::var_os("SEMCTX_TEST_TOOL_LOG").unwrap())
+        .with_extension("fail-tool7");
+    if marker.exists() {
+        eprintln!("fixture tool failure");
+        std::process::exit(7);
+    }
     true
 }

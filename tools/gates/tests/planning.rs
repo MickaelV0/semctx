@@ -323,3 +323,33 @@ fn verify_pr_refuses_missing_root_before_launching_tools() {
     assert_eq!(error["status"], "refused");
     assert!(!repository.outer.join("tools.log").exists());
 }
+
+#[test]
+fn verify_pr_piped_failure_preserves_the_action_diagnostic_and_exit_status() {
+    let repository = Repo::new();
+    fs::write(repository.outer.join("tools.fail-tool7"), "fail").unwrap();
+    let output = repository.verify_pr(&repository.root);
+    assert_eq!(
+        output.status.code(),
+        Some(7),
+        "original tool status must survive"
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "failed verification cannot print PASS"
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("[verify:pr] FAIL compatibility (nonzero, exit=7)"),
+        "PIPED_VERIFY_FAILURE_DIAGNOSTIC_MISSING: {stderr:?}"
+    );
+    assert_eq!(
+        stderr.lines().count(),
+        1,
+        "only a bounded failure summary is emitted"
+    );
+    assert!(
+        !stderr.contains("fixture tool failure"),
+        "bulk child output stays captured"
+    );
+}
