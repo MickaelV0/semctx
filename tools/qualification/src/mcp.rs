@@ -10,7 +10,7 @@ use std::{
     path::Path,
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Receiver},
     },
     thread,
@@ -45,6 +45,8 @@ struct Session {
     output: Receiver<Result<Value, String>>,
     wire_reader: Option<thread::JoinHandle<Result<(), String>>>,
     stop_delivery: Arc<AtomicBool>,
+    pending_response: Arc<AtomicU64>,
+    stop_readers: Arc<AtomicBool>,
     stderr: Option<process::Capture>,
     id: u64,
     finished: bool,
@@ -65,8 +67,17 @@ impl Session {
     fn start_command(command: &mut std::process::Command, root: &Path) -> Result<Self, String> {
         let mut child = process::spawn(command, root).map_err(|error| error.to_string())?;
         let mut input = child.take_stdin().ok_or("missing MCP stdin")?;
-        let stdout = child.take_stdout().ok_or("missing MCP stdout")?;
-        let stderr = child.take_stderr().ok_or("missing MCP stderr")?;
+        let stop_readers = Arc::new(AtomicBool::new(false));
+        let stdout = semctx_gates::process::pipe_reader(
+            child.take_stdout().ok_or("missing MCP stdout")?,
+            &stop_readers,
+        )
+        .map_err(|error| error.to_string())?;
+        let stderr = semctx_gates::process::pipe_reader(
+            child.take_stderr().ok_or("missing MCP stderr")?,
+            &stop_readers,
+        )
+        .map_err(|error| error.to_string())?;
         let (input_sender, input_receiver) = mpsc::channel();
         let (written, write_result) = mpsc::channel();
         let input_writer = thread::spawn(move || {
@@ -81,6 +92,8 @@ impl Session {
         let (tx, output) = mpsc::sync_channel(32);
         let stop_delivery = Arc::new(AtomicBool::new(false));
         let delivery_stopped = stop_delivery.clone();
+        let pending_response = Arc::new(AtomicU64::new(0));
+        let wire_pending = pending_response.clone();
         let wire_reader = thread::spawn(move || {
             let mut reader = BufReader::new(stdout);
             let mut total = 0u64;
@@ -95,7 +108,8 @@ impl Session {
                     Ok(0) => return Ok(()),
                     Ok(_) if total > process::LIMIT => Err("MCP wire output exceeded".into()),
                     Ok(_) => serde_json::from_slice(&bytes)
-                        .map_err(|error| format!("MCP invalid JSON: {error}")),
+                        .map_err(|error| format!("MCP invalid JSON: {error}"))
+                        .and_then(|value| validate_envelope(value, &wire_pending)),
                     Err(error) => Err(format!("MCP stdout read: {error}")),
                 };
                 let failure = message.as_ref().err().cloned();
@@ -115,7 +129,9 @@ impl Session {
             output,
             wire_reader: Some(wire_reader),
             stop_delivery,
-            stderr: Some(process::drain(stderr, "MCP stderr")),
+            pending_response,
+            stop_readers: stop_readers.clone(),
+            stderr: Some(process::drain(stderr, "MCP stderr", &stop_readers)),
             id: 0,
             finished: false,
         })
@@ -136,18 +152,16 @@ impl Session {
             .input_writer
             .take()
             .map(|writer| {
-                writer
-                    .join()
-                    .map_err(|_| "MCP stdin writer panicked".to_owned())
+                semctx_gates::process::finish_reader(writer, &self.stop_readers)
+                    .map_err(|error| error.to_string())
             })
             .unwrap_or(Ok(()));
         let wire = self
             .wire_reader
             .take()
             .map(|reader| {
-                reader
-                    .join()
-                    .map_err(|_| "MCP stdout reader panicked".to_owned())?
+                semctx_gates::process::finish_reader(reader, &self.stop_readers)
+                    .map_err(|error| error.to_string())?
             })
             .unwrap_or(Ok(()));
         let stderr = self
@@ -230,6 +244,7 @@ impl Session {
         self.check_capture()?;
         self.id += 1;
         let id = self.id;
+        self.pending_response.store(id, Ordering::SeqCst);
         self.write(
             &j!({"jsonrpc":"2.0","id":id,"method":method,"params":params}),
             budget
@@ -285,6 +300,42 @@ impl Session {
             .ok_or("MCP missing JSON text")?;
         serde_json::from_str(text).map_err(|e| e.to_string())
     }
+}
+
+// Validate every message in wire order, including messages drained after the last useful reply.
+// The transport has one outstanding request; server requests are not negotiated by this client.
+fn validate_envelope(value: Value, pending: &AtomicU64) -> Result<Value, String> {
+    if !value.is_object() || value["jsonrpc"] != "2.0" {
+        return Err("MCP protocol envelope requires JSON-RPC 2.0".into());
+    }
+    if value.get("id").is_none() {
+        if !value["method"].is_string()
+            || value.get("result").is_some()
+            || value.get("error").is_some()
+            || value
+                .get("params")
+                .is_some_and(|params| !params.is_object() && !params.is_array())
+        {
+            return Err("MCP protocol envelope is not a notification".into());
+        }
+    } else {
+        let id = value["id"]
+            .as_u64()
+            .filter(|id| *id != 0)
+            .ok_or("unexpected MCP response identity")?;
+        if value.get("method").is_some()
+            || value.get("result").is_some() == value.get("error").is_some()
+            || value
+                .get("error")
+                .is_some_and(|error| !error["code"].is_i64() || !error["message"].is_string())
+        {
+            return Err("MCP protocol envelope is not a response".into());
+        }
+        pending
+            .compare_exchange(id, 0, Ordering::SeqCst, Ordering::SeqCst)
+            .map_err(|_| "unexpected MCP response identity")?;
+    }
+    Ok(value)
 }
 
 /// Probe the same supervised stdio initialization path used by product qualification.

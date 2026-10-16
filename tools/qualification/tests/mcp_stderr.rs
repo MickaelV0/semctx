@@ -77,3 +77,34 @@ fn a_full_notification_channel_cannot_hide_trailing_wire_overflow() {
     assert!(error.contains("MCP wire output exceeded"), "{error}");
     assert!(started.elapsed() < std::time::Duration::from_secs(5));
 }
+
+#[test]
+fn trailing_unsolicited_responses_are_refused_even_after_a_valid_reply() {
+    for mode in ["--trailing-wrong-id", "--trailing-wrong-id-backlog"] {
+        let root = tempfile::tempdir().unwrap();
+        let mut command = Command::new(env!("CARGO_BIN_EXE_qualification-mcp-fixture"));
+        command.arg(mode);
+        let result = semctx_qualification::mcp::probe_initialize(&mut command, root.path());
+        assert!(
+            result
+                .as_ref()
+                .is_err_and(|error| error.contains("unexpected MCP response identity")),
+            "TRAILING_RESPONSE_ACCEPTED {mode}: {result:?}"
+        );
+    }
+}
+#[test]
+fn trailing_invalid_envelopes_are_refused_even_behind_notifications() {
+    for mode in ["--trailing-invalid", "--trailing-invalid-backlog"] {
+        let root = tempfile::tempdir().unwrap();
+        let mut command = Command::new(env!("CARGO_BIN_EXE_qualification-mcp-fixture"));
+        command.arg(mode);
+        let result = semctx_qualification::mcp::probe_initialize(&mut command, root.path());
+        assert!(
+            result
+                .as_ref()
+                .is_err_and(|error| error.contains("MCP protocol envelope")),
+            "TRAILING_ENVELOPE_ACCEPTED {mode}: {result:?}"
+        );
+    }
+}

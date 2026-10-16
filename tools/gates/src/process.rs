@@ -2,7 +2,7 @@
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
-    io::{Read, Write},
+    io::{IsTerminal, Read, Write},
     path::Path,
     process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio},
     sync::{
@@ -65,6 +65,81 @@ pub fn request_cancellation() {
 }
 pub fn cancellation_requested() -> bool {
     CANCELLED.load(Ordering::SeqCst)
+}
+
+/// Live progress is interactive only. A caller-owned pipe may never be drained.
+pub fn interactive_progress() -> bool {
+    std::io::stderr().is_terminal()
+}
+
+/// Interruptible reads allow finalization to close pipes retained by a POSIX descendant
+/// which escaped the owned process group. This does not terminate that descendant.
+pub struct PipeReader<R> {
+    inner: R,
+    stop: Arc<AtomicBool>,
+}
+impl<R: Read> Read for PipeReader<R> {
+    fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+        loop {
+            if self.stop.load(Ordering::SeqCst) {
+                return Err(std::io::Error::other(
+                    "pipe capture finalization deadline exceeded",
+                ));
+            }
+            match self.inner.read(bytes) {
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(5));
+                }
+                result => return result,
+            }
+        }
+    }
+}
+#[cfg(unix)]
+pub fn pipe_reader<R: Read + std::os::fd::AsRawFd>(
+    inner: R,
+    stop: &Arc<AtomicBool>,
+) -> Result<PipeReader<R>> {
+    let fd = inner.as_raw_fd();
+    // SAFETY: fd is the live, uniquely owned read end of a child pipe; flags preserve existing bits.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    // SAFETY: F_SETFL changes only the nonblocking status of that live pipe read end.
+    if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        return Err(ProcessError::io(
+            "nonblocking child pipe",
+            std::io::Error::last_os_error(),
+        ));
+    }
+    Ok(PipeReader {
+        inner,
+        stop: stop.clone(),
+    })
+}
+#[cfg(windows)]
+pub fn pipe_reader<R: Read>(inner: R, stop: &Arc<AtomicBool>) -> Result<PipeReader<R>> {
+    Ok(PipeReader {
+        inner,
+        stop: stop.clone(),
+    })
+}
+
+/// Give EOF a bounded grace after process-tree cleanup, then cancel incomplete captures.
+/// Unix readers observe cancellation without abandoning their threads or descriptors.
+pub fn finish_reader<T>(reader: thread::JoinHandle<T>, stop: &AtomicBool) -> Result<T> {
+    let started = Instant::now();
+    while !reader.is_finished() && started.elapsed() < Duration::from_millis(500) {
+        thread::sleep(Duration::from_millis(5));
+    }
+    if !reader.is_finished() {
+        stop.store(true, Ordering::SeqCst);
+        while !reader.is_finished() && started.elapsed() < Duration::from_millis(1000) {
+            thread::sleep(Duration::from_millis(5));
+        }
+        if !reader.is_finished() {
+            return Err("pipe capture cleanup incomplete".into());
+        }
+    }
+    reader.join().map_err(|_| "pipe reader panicked".into())
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum OutputMode {
@@ -544,7 +619,18 @@ pub fn run_with_helper_logged(
     cap: usize,
     executable: &Path,
 ) -> Result<Outcome> {
-    run_mode(argv, root, timeout_ms, cap, executable, OutputMode::Stderr)
+    run_mode(
+        argv,
+        root,
+        timeout_ms,
+        cap,
+        executable,
+        if interactive_progress() {
+            OutputMode::Stderr
+        } else {
+            OutputMode::Capture
+        },
+    )
 }
 
 fn run_mode(
@@ -568,13 +654,14 @@ fn run_mode(
     )?;
     let child = &mut owned.child;
     let tree = &owned.tree;
+    let stop = Arc::new(AtomicBool::new(false));
     let (out, out_thread) = drain(
-        child.stdout.take().ok_or("missing stdout")?,
+        pipe_reader(child.stdout.take().ok_or("missing stdout")?, &stop)?,
         cap,
         output_mode,
     );
     let (err, err_thread) = drain(
-        child.stderr.take().ok_or("missing stderr")?,
+        pipe_reader(child.stderr.take().ok_or("missing stderr")?, &stop)?,
         cap,
         output_mode,
     );
@@ -625,8 +712,8 @@ fn run_mode(
     // Descendants may retain inherited pipes after the direct process exits. Terminate the tree
     // before joining readers; joining first would make a timeout itself hang indefinitely.
     tree.kill();
-    let out_failure = out_thread.join().is_err();
-    let err_failure = err_thread.join().is_err();
+    let out_failure = finish_reader(out_thread, &stop).is_err();
+    let err_failure = finish_reader(err_thread, &stop).is_err();
     let reader_failure = out_failure || err_failure;
     use sha2::Digest;
     let out = out

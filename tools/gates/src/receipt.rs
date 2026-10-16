@@ -311,7 +311,9 @@ pub fn execute(root: &Path, plan: &Plan, index: usize) -> Receipt {
             return Err("runner OS does not match planned lane".into());
         }
         for action in commands(&receipt.lane, &plan.subject.base)? {
-            eprintln!("[semctx-gates] START {}", action.label);
+            if process::interactive_progress() {
+                eprintln!("[semctx-gates] START {}", action.label);
+            }
             let outcome =
                 process::run_logged(&action.argv, root, action.timeout_ms, action.output_cap)
                     .unwrap_or_else(|error| Outcome {

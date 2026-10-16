@@ -38,6 +38,20 @@ fn main() {
             eprintln!("progress finished");
         }
         Some("live-supervisor") => live_supervisor(),
+        Some("blocked-log-supervisor") | Some("detached-supervisor") => bounded_supervisor(),
+        #[cfg(unix)]
+        Some("detached-parent") => detached_parent(),
+        #[cfg(unix)]
+        Some("detached-holder") => {
+            // SAFETY: this standalone fixture intentionally leaves its inherited process group.
+            assert!(unsafe { libc::setsid() } > 0);
+            std::fs::write(
+                std::env::args().nth(2).unwrap(),
+                std::process::id().to_string(),
+            )
+            .unwrap();
+            thread::sleep(Duration::from_secs(30));
+        }
         Some("malformed") => {
             let _ = std::io::stdout().write_all(&[255]);
         }
@@ -77,6 +91,66 @@ fn main() {
         }
         _ => panic!("unknown fixture mode"),
     }
+}
+
+fn bounded_supervisor() {
+    let helper = std::env::args().nth(2).unwrap();
+    let logged = std::env::args().nth(1).unwrap() == "blocked-log-supervisor";
+    let mut argv = vec![
+        std::env::current_exe()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned(),
+    ];
+    if logged {
+        argv.extend(["suite-output".into(), "2097152".into()]);
+    } else {
+        argv.extend(["detached-parent".into(), std::env::args().nth(3).unwrap()]);
+    }
+    let root = std::env::current_dir().unwrap();
+    let result = if logged {
+        semctx_gates::process::run_with_helper_logged(
+            &argv,
+            &root,
+            1500,
+            4 * 1024 * 1024,
+            std::path::Path::new(&helper),
+        )
+    } else {
+        semctx_gates::process::run_with_helper(
+            &argv,
+            &root,
+            2000,
+            1024,
+            std::path::Path::new(&helper),
+        )
+    }
+    .unwrap();
+    println!(
+        "{}",
+        serde_json::json!({"kind":result.kind,"stdout_bytes":result.stdout_bytes,"stderr_bytes":result.stderr_bytes})
+    );
+}
+
+#[cfg(unix)]
+#[expect(
+    clippy::zombie_processes,
+    reason = "The external test owns the intentionally detached fixture"
+)]
+fn detached_parent() {
+    let marker = std::env::args().nth(2).unwrap();
+    let _child = Command::new(std::env::current_exe().unwrap())
+        .arg("detached-holder")
+        .arg(&marker)
+        .spawn()
+        .unwrap();
+    for _ in 0..200 {
+        if std::path::Path::new(&marker).exists() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+    panic!("detached holder did not start");
 }
 
 fn live_supervisor() {

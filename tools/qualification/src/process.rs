@@ -166,6 +166,7 @@ pub struct Capture {
     failed: Arc<AtomicBool>,
     exceeded: Arc<AtomicBool>,
     reader: thread::JoinHandle<io::Result<Vec<u8>>>,
+    stop: Arc<AtomicBool>,
 }
 impl Capture {
     pub fn check(&self) -> Result<(), Error> {
@@ -187,13 +188,16 @@ impl Capture {
         Ok(bytes)
     }
     pub fn finish(self) -> Result<Vec<u8>, Error> {
-        self.reader
-            .join()
-            .map_err(|_| Error::ReaderPanic(self.stream))?
+        semctx_gates::process::finish_reader(self.reader, &self.stop)
+            .map_err(Error::Supervisor)?
             .map_err(|source| Error::io(self.stream, source))
     }
 }
-pub fn drain(mut stream: impl Read + Send + 'static, name: &'static str) -> Capture {
+pub fn drain(
+    mut stream: impl Read + Send + 'static,
+    name: &'static str,
+    stop: &Arc<AtomicBool>,
+) -> Capture {
     let exceeded = Arc::new(AtomicBool::new(false));
     let failed = Arc::new(AtomicBool::new(false));
     let (reader_exceeded, reader_failed) = (exceeded.clone(), failed.clone());
@@ -216,19 +220,31 @@ pub fn drain(mut stream: impl Read + Send + 'static, name: &'static str) -> Capt
         exceeded,
         failed,
         reader,
+        stop: stop.clone(),
     }
 }
 pub fn run(command: &mut Command, cwd: &Path, budget: Duration) -> Result<Observation, Error> {
     let started = Instant::now();
     let mut owned = spawn(command, cwd)?;
     drop(owned.take_stdin());
+    let stop = Arc::new(AtomicBool::new(false));
     let stdout = drain(
-        owned.take_stdout().ok_or(Error::MissingPipe("stdout"))?,
+        semctx_gates::process::pipe_reader(
+            owned.take_stdout().ok_or(Error::MissingPipe("stdout"))?,
+            &stop,
+        )
+        .map_err(Error::Supervisor)?,
         "stdout",
+        &stop,
     );
     let stderr = drain(
-        owned.take_stderr().ok_or(Error::MissingPipe("stderr"))?,
+        semctx_gates::process::pipe_reader(
+            owned.take_stderr().ok_or(Error::MissingPipe("stderr"))?,
+            &stop,
+        )
+        .map_err(Error::Supervisor)?,
         "stderr",
+        &stop,
     );
     let mut timed_out = false;
     let mut output_exceeded = false;
@@ -305,9 +321,13 @@ mod tests {
     }
     #[test]
     fn partial_capture_is_not_returned_as_complete_after_read_error() {
-        let captured = drain(InterruptedCapture(false), "stdout")
-            .finish()
-            .unwrap_err();
+        let captured = drain(
+            InterruptedCapture(false),
+            "stdout",
+            &Arc::new(AtomicBool::new(false)),
+        )
+        .finish()
+        .unwrap_err();
         assert!(matches!(
             captured,
             Error::Io {

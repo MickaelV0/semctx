@@ -51,6 +51,25 @@ evidence when it cannot complete. Receipts contain their bounded stdout/stderr t
 the receipt directory must contain exactly the planned JSON receipts, with no foreign files.
 Aggregation rechecks source cleanliness, identities, action inventories, outputs and digests.
 
+Live child progress and START/FAIL messages are emitted only when stderr is a terminal.
+With redirected stderr (including CI pipes), the supervisor captures child output exclusively;
+lane receipts retain the bounded bytes, counts and hashes. An unread logging pipe therefore
+cannot prevent the process deadline from being enforced. Interactive terminal writes and a
+consumer which stops reading the final stdout document are outside this guarantee.
+
+After process-tree termination, pipe readers have a 500 ms EOF grace. POSIX read ends are
+nonblocking, so a descendant which calls `setsid()` or changes process group cannot hold a
+reader indefinitely: unfinished captures are cancelled, their readers close, and the result
+is refused as incomplete. The final reader join has a further 500 ms bound. Qualification
+CLI and MCP use the same finalization primitive and refuse incomplete capture. This is
+process lifecycle control, not OS confinement: an escaped POSIX descendant may survive;
+these tools do not claim to terminate arbitrary processes outside their owned group.
+
+MCP validates JSON-RPC envelopes in wire order through shutdown, including output after the
+last useful response and behind a notification backlog. Only the outstanding request's single
+response is accepted; unsolicited or duplicate responses and invalid envelopes refuse
+qualification. Valid notifications remain accepted during final draining.
+
 `rust-test` discovers tracked Cargo manifests for the native product, resolves their workspace
 owners with Cargo, and executes each product member once with its workspace's tracked lock. The two tools above
 are tested separately. New product crates cannot disappear behind a fixed allowlist; an absent

@@ -166,11 +166,15 @@ fn verify_pr(args: &[String]) -> Result<u8> {
         root.to_str().ok_or("non-UTF8 source root")?,
     );
     for action in actions {
-        eprintln!("[verify:pr] START {}", action.label);
+        if process::interactive_progress() {
+            eprintln!("[verify:pr] START {}", action.label);
+        }
         let outcome =
             process::run_logged(&action.argv, &root, action.timeout_ms, action.output_cap)?;
         if outcome.kind != "success" {
-            eprintln!("[verify:pr] FAIL {} ({})", action.label, outcome.kind);
+            if process::interactive_progress() {
+                eprintln!("[verify:pr] FAIL {} ({})", action.label, outcome.kind);
+            }
             return Ok(outcome
                 .exit_code
                 .filter(|c| *c > 0 && *c < 256)
