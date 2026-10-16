@@ -208,17 +208,27 @@ impl Session {
         }
     }
     fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        self.request_with_budget(method, params, process::BUDGET)
+    }
+    fn request_with_budget(
+        &mut self,
+        method: &str,
+        params: Value,
+        budget: Duration,
+    ) -> Result<Value, String> {
+        let started = Instant::now();
         self.check_capture()?;
         self.id += 1;
         let id = self.id;
         self.write(
             &j!({"jsonrpc":"2.0","id":id,"method":method,"params":params}),
-            process::BUDGET,
+            budget
+                .checked_sub(started.elapsed())
+                .ok_or("MCP deadline exceeded")?,
         )?;
-        let started = std::time::Instant::now();
         loop {
             self.check_capture()?;
-            let remaining = process::BUDGET
+            let remaining = budget
                 .checked_sub(started.elapsed())
                 .ok_or("MCP deadline exceeded")?;
             let value = match self
@@ -408,6 +418,29 @@ mod tests {
     #[ignore]
     fn fixture_no_stdin_read() {
         thread::sleep(Duration::from_secs(2));
+    }
+    #[test]
+    fn request_deadline_includes_the_time_spent_writing_stdin() {
+        let params = j!({"padding":"x".repeat(2 * 1024 * 1024)});
+        let root = tempfile::tempdir().unwrap();
+        let executable = std::env::current_exe().unwrap();
+        let fixture = executable.parent().unwrap().parent().unwrap().join(format!(
+            "qualification-mcp-fixture{}",
+            std::env::consts::EXE_SUFFIX
+        ));
+        let mut command = std::process::Command::new(fixture);
+        command.arg("--delayed-request");
+        let mut session = Session::start_command(&mut command, root.path()).unwrap();
+        let ready = session
+            .output
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap()
+            .unwrap();
+        assert_eq!(ready["method"], "notifications/ready");
+        let error = session
+            .request_with_budget("initialize", params, Duration::from_secs(1))
+            .unwrap_err();
+        assert_eq!(error, "MCP deadline exceeded");
     }
     #[test]
     fn blocked_stdin_write_obeys_the_mcp_deadline() {

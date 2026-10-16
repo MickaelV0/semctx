@@ -87,12 +87,23 @@ fn main() {
         }
         _ => {}
     }
+    let mut input = std::io::BufReader::new(std::io::stdin().lock());
+    let delayed = arguments.iter().any(|arg| arg == "--delayed-request");
+    if delayed {
+        println!(
+            "{}",
+            serde_json::json!({"jsonrpc":"2.0","method":"notifications/ready"})
+        );
+        std::io::stdout().flush().unwrap();
+        input.fill_buf().unwrap();
+        thread::sleep(Duration::from_millis(600));
+    }
     let crash = arguments.iter().any(|arg| arg == "--crash");
     let persistent = arguments.iter().any(|arg| arg == "--persist");
     let pipe_holder = arguments.iter().any(|arg| arg == "--pipe-holder");
     let crash_on_eof = arguments.iter().any(|arg| arg == "--crash-on-eof");
     let overflowing = std::env::args().any(|arg| arg == "--overflow");
-    for line in std::io::stdin().lock().lines() {
+    for line in input.lines() {
         let Ok(line) = line else { break };
         let request: serde_json::Value = serde_json::from_str(&line).expect("fixture request JSON");
         if request.get("id").is_none() {
@@ -104,6 +115,9 @@ fn main() {
             b"fixture diagnostic\n".to_vec()
         };
         let _ = std::io::stderr().write_all(&bytes);
+        if delayed {
+            thread::sleep(Duration::from_millis(600));
+        }
         println!(
             "{}",
             serde_json::json!({"jsonrpc":"2.0","id":request["id"],"result":{"protocolVersion":"2025-03-26","serverInfo":{"name":"native-wire-fixture"}}})
