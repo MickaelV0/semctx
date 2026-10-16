@@ -937,7 +937,7 @@ describe("guardDecision — diff-hash gate (ADR 0007)", () => {
 });
 
 describe("guardDecision — verify, commit, push replay", () => {
-  it("reuses an exact pre-commit proof after commit and rejects a partial commit", () => {
+  const createReplayFixture = () => {
     const repo = mkdtempSync(join(tmpdir(), "semctx-guard-replay-"));
     const git = (args: string[]) => execFileSync("git", args, { cwd: repo, stdio: "ignore" });
     try {
@@ -957,41 +957,36 @@ describe("guardDecision — verify, commit, push replay", () => {
       writeFileSync(join(repo, ".semctx", "guard.json"), JSON.stringify({ enabled: true }));
       writeFileSync(join(repo, ".semctx", "verification-state.json"), JSON.stringify(state));
       const guard = resolve(import.meta.dir, "../hooks/semctx-guard.mjs");
-      const guardStatus = (command: string) => spawnSync("node", [guard], {
-        cwd: repo,
-        input: JSON.stringify({ tool_name: "Bash", tool_input: { command }, cwd: repo }),
-        encoding: "utf8",
-      }).status;
-      const preCommit = join(repo, ".git", "hooks", "pre-commit");
+      const guardStatus = (command: string) => {
+        const result = spawnSync("node", [guard], {
+          cwd: repo,
+          input: JSON.stringify({ tool_name: "Bash", tool_input: { command }, cwd: repo }),
+          encoding: "utf8",
+        });
+        const diagnostic = `${command}; signal=${result.signal}; stderr=${result.stderr}`;
+        expect(result.error, diagnostic).toBeUndefined();
+        expect(result.status, diagnostic).not.toBeNull();
+        return result.status;
+      };
+      return { repo, git, verified, state, guardStatus };
+    } catch (error) {
+      rmSync(repo, { recursive: true, force: true });
+      throw error;
+    }
+  };
+
+  const withReplayFixture = (exercise: (fixture: ReturnType<typeof createReplayFixture>) => void) => {
+    const fixture = createReplayFixture();
+    try {
+      exercise(fixture);
+    } finally {
+      rmSync(fixture.repo, { recursive: true, force: true });
+    }
+  };
+
+  it("reuses an exact pre-commit proof after commit", () => {
+    withReplayFixture(({ repo, git, verified, state, guardStatus }) => {
       expect(commitHookSurfaceClear(repo)).toBe(true);
-      writeFileSync(preCommit, "#!/bin/sh\ngit add b.ts\n");
-      expect(commitHookSurfaceClear(repo)).toBe(false);
-      expect(guardStatus("git commit -m hook-restage")).toBe(2);
-      rmSync(preCommit);
-      const configuredHooks = join(repo, ".git", "configured-hooks");
-      mkdirSync(configuredHooks);
-      git(["config", "core.hooksPath", configuredHooks]);
-      const prepareCommitMessage = join(configuredHooks, "prepare-commit-msg");
-      writeFileSync(prepareCommitMessage, "#!/bin/sh\ngit add b.ts\n");
-      expect(commitHookSurfaceClear(repo)).toBe(false);
-      expect(guardStatus("git commit -m configured-hook-restage")).toBe(2);
-      rmSync(prepareCommitMessage);
-      expect(commitHookSurfaceClear(repo)).toBe(true);
-      for (const hookName of ["post-commit", "post-rewrite"]) {
-        const hook = join(configuredHooks, hookName);
-        writeFileSync(hook, "#!/bin/sh\ngit push origin HEAD\n");
-        expect(commitHookSurfaceClear(repo)).toBe(false);
-        expect(guardStatus("git commit -m post-hook")).toBe(2);
-        rmSync(hook);
-      }
-      for (const hookName of ["reference-transaction", "post-index-change", "pre-auto-gc", "future-git-hook"]) {
-        const hook = join(configuredHooks, hookName);
-        writeFileSync(hook, "#!/bin/sh\ngit push attacker HEAD\n");
-        expect(commitHookSurfaceClear(repo)).toBe(false);
-        expect(guardStatus("git commit -m extended-hook")).toBe(2);
-        rmSync(hook);
-      }
-      git(["config", "--unset", "core.hooksPath"]);
       expect(guardStatus("git commit -m exact")).toBe(0);
       expect(guardStatus("git commit -am exact")).toBe(2);
       expect(guardStatus("git commit --fixup=HEAD")).toBe(2);
@@ -1004,22 +999,14 @@ describe("guardDecision — verify, commit, push replay", () => {
       expect(committed.headTreeHash).toBe(verified.repositoryStateHash);
       expect(guardDecision({ enabled: true, terminalVerb: "push", state, currentState: committed }).block)
         .toBe(false);
-      const prePush = join(repo, ".git", "hooks", "pre-push");
       expect(pushHookSurfaceClear(repo)).toBe(true);
       expect(guardStatus("git push . HEAD")).toBe(0);
-      writeFileSync(prePush, "#!/bin/sh\ngit push attacker HEAD\n");
-      expect(pushHookSurfaceClear(repo)).toBe(false);
-      expect(guardStatus("git push . HEAD")).toBe(2);
-      rmSync(prePush);
-      expect(pushHookSurfaceClear(repo)).toBe(true);
-      for (const hookName of ["reference-transaction", "post-index-change", "pre-auto-gc", "future-git-hook"]) {
-        const hook = join(repo, ".git", "hooks", hookName);
-        writeFileSync(hook, "#!/bin/sh\ngit push attacker HEAD\n");
-        expect(pushHookSurfaceClear(repo)).toBe(false);
-        expect(guardStatus("git push . HEAD")).toBe(2);
-        rmSync(hook);
-      }
+    });
+  }, 30_000);
 
+  it("rejects a partial commit and refuses its pre-commit proof for push", () => {
+    withReplayFixture(({ repo, git, guardStatus }) => {
+      git(["-c", "user.name=Semctx Test", "-c", "user.email=semctx@example.invalid", "commit", "-m", "exact"]);
       writeFileSync(join(repo, "a.ts"), "export const a = 3;\n");
       writeFileSync(join(repo, "b.ts"), "export const b = 3;\n");
       git(["add", "a.ts"]);
@@ -1053,9 +1040,48 @@ describe("guardDecision — verify, commit, push replay", () => {
       expect(partial.headTreeHash).not.toBe(partialState.repositoryStateHash);
       expect(guardDecision({ enabled: true, terminalVerb: "push", state: partialState, currentState: partial }).block)
         .toBe(true);
-    } finally {
-      rmSync(repo, { recursive: true, force: true });
-    }
+    });
+  }, 30_000);
+
+  it.each([
+    { hookName: "pre-commit", configured: false },
+    { hookName: "prepare-commit-msg", configured: true },
+    { hookName: "post-commit", configured: true },
+    { hookName: "post-rewrite", configured: true },
+    { hookName: "reference-transaction", configured: true },
+    { hookName: "post-index-change", configured: true },
+    { hookName: "pre-auto-gc", configured: true },
+    { hookName: "future-git-hook", configured: true },
+  ])("refuses commit with $hookName (configured=$configured)", ({ hookName, configured }) => {
+    withReplayFixture(({ repo, git, guardStatus }) => {
+      const hooks = join(repo, ".git", configured ? "configured-hooks" : "hooks");
+      if (configured) {
+        mkdirSync(hooks);
+        git(["config", "core.hooksPath", hooks]);
+      }
+      const hook = join(hooks, hookName);
+      expect(commitHookSurfaceClear(repo)).toBe(true);
+      writeFileSync(hook, "#!/bin/sh\ngit add b.ts\ngit push attacker HEAD\n");
+      expect(commitHookSurfaceClear(repo)).toBe(false);
+      expect(guardStatus("git commit -m hook-restage")).toBe(2);
+      rmSync(hook);
+      expect(commitHookSurfaceClear(repo)).toBe(true);
+    });
+  }, 30_000);
+
+  it.each([
+    "pre-push", "reference-transaction", "post-index-change", "pre-auto-gc", "future-git-hook",
+  ])("refuses push with %s", (hookName) => {
+    withReplayFixture(({ repo, git, guardStatus }) => {
+      git(["-c", "user.name=Semctx Test", "-c", "user.email=semctx@example.invalid", "commit", "-m", "exact"]);
+      const hook = join(repo, ".git", "hooks", hookName);
+      expect(pushHookSurfaceClear(repo)).toBe(true);
+      writeFileSync(hook, "#!/bin/sh\ngit push attacker HEAD\n");
+      expect(pushHookSurfaceClear(repo)).toBe(false);
+      expect(guardStatus("git push . HEAD")).toBe(2);
+      rmSync(hook);
+      expect(pushHookSurfaceClear(repo)).toBe(true);
+    });
   }, 30_000);
 });
 
