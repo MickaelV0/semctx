@@ -29,11 +29,15 @@ parser cost cannot be interpreted as faster feature-equivalent indexing.
 | L whole probe process, s | 2.03 / 2.01 / 1.99 | 2.18 / 2.19 / 2.22 | Initialization, queries, one in-memory edit/query and shutdown. |
 | L outgoing hierarchy, ms | 8.970 / 8.614 / 8.749 | 193.472 / 190.291 / 191.342 | `main` (five targets) versus `Arguments::from_env` (four); different APIs/targets, not equivalent query workload. |
 | L definition query, ms | 0.208 / 0.189 / 0.219 | 0.191 / 0.194 / 0.219 | Cross-crate alias in fixture; real API's configured source position. |
-| L post-edit documentSymbol, ms | 0.313 / 0.313 / 0.303 | 3.203 / 3.290 / 3.186 | Appended LF via didChange version 2; response latency only. No disk write, persisted reindex, whole-workspace generation or completeness claim. |
+| L post-edit documentSymbol, ms | 0.313 / 0.313 / 0.303 | 3.203 / 3.290 / 3.186 | Historical full-text didChange version 2 accepted despite the incremental capability; not negotiated incremental-edit evidence. Response latency only; no disk write, persisted reindex, whole-workspace generation or completeness claim. |
 
 Native parser timing definitions differ: T's language runtime is WASM/JIT; Y's is a compiled native
 parser. No claim of causal engine superiority follows from a sample this small. Large-workspace
 bounded fan-out, real post-image capture and significant edit/add/delete costs remain B06/B07.
+
+The current LSP probe corrects synchronization, explicit UTF-8 source decoding and failure exit
+propagation. The whole-process and post-edit LSP samples above remain observations of the earlier
+probe; the corrected probe has not been remeasured on the native benchmark host.
 
 ## RSS, artifact sizes and query cost
 

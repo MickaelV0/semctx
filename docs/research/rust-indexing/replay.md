@@ -235,6 +235,14 @@ Coordinates are zero-based UTF-16. The probe negotiates readiness, disables buil
 macros/check-on-save, opens the source, queries symbols, a deliberately absent workspace symbol,
 call hierarchy and definition, changes the in-memory document by appending LF, queries symbols
 again, then shuts down. The absent-name result is an observation, never negative completeness.
+The current probe honors the server's synchronization capability: incremental mode appends LF
+at the UTF-16 end position; full mode sends the whole replacement; absent/disabled synchronization
+refuses the edit. Source text is read explicitly as UTF-8. A nonzero server exit preserves the
+diagnostic JSON, including `exitCode`, and makes the probe exit nonzero.
+JSON uses ASCII escapes so Unicode values also survive legacy Windows stdout encodings.
+The retained measurements predate these corrections: their full-text change was accepted by the
+pinned server despite its incremental capability. They do not qualify negotiated incremental
+editing or the corrected probe's latency; that requires a new native measurement series.
 The real API query targets `Arguments::from_env`, with four outgoing navigation targets. First
 pilot coordinates missed a function; retained serial measurements use the corrected coordinates.
 

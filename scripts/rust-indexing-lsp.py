@@ -12,6 +12,17 @@ async def receive(reader):
     return json.loads(body)
 
 
+def newline_change(source, sync):
+    kind = sync.get("change", 0) if isinstance(sync, dict) else sync
+    if kind == 1:
+        return {"text": source + "\n"}
+    if kind != 2:
+        raise ValueError("server does not support document changes")
+    lines = source.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    end = {"line": len(lines) - 1, "character": len(lines[-1].encode("utf-16-le")) // 2}
+    return {"range": {"start": end, "end": end}, "text": "\n"}
+
+
 async def probe(args):
     root = Path(args.workspace).resolve()
     process = await asyncio.create_subprocess_exec(
@@ -85,7 +96,7 @@ async def probe(args):
                     break
         timings["ready"] = (time.monotonic() - started) * 1000
         document = {"uri": (root / args.file).as_uri()}
-        source = (root / args.file).read_text()
+        source = (root / args.file).read_text(encoding="utf-8")
         await send({"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {
             "textDocument": {**document, "languageId": "rust", "version": 1, "text": source},
         }})
@@ -104,7 +115,7 @@ async def probe(args):
         })
         await send({"jsonrpc": "2.0", "method": "textDocument/didChange", "params": {
             "textDocument": {**document, "version": 2},
-            "contentChanges": [{"text": source + "\n"}],
+            "contentChanges": [newline_change(source, initialized["capabilities"].get("textDocumentSync"))],
         }})
         edited_symbols = await request(8, "textDocument/documentSymbol", {"textDocument": document})
         timings["documentSymbolAfterEdit"] = timings.pop("textDocument/documentSymbol")
@@ -137,7 +148,9 @@ def main():
     parser.add_argument("--features", nargs="*", default=[])
     args = parser.parse_args()
     result = asyncio.run(asyncio.wait_for(probe(args), timeout=args.timeout))
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    print(json.dumps(result, ensure_ascii=True, indent=2))
+    if result["exitCode"] != 0:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

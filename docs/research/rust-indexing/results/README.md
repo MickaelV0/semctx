@@ -4,6 +4,10 @@ These are experiment recordings, not loadable Semctx artifacts or test snapshots
 protocol states commands and expected source targets. `serial-measurements.json` records exit,
 wall and max-resident accounting for three sequential processes per corpus/semantic transport;
 matching `.time` and LSP `.stdout` files retain native stderr and JSON-RPC responses.
+These LSP recordings predate the probe's synchronization/UTF-8/exit-propagation corrections.
+In particular, historical full-text edits were accepted by a server advertising incremental
+changes; the recordings do not qualify the corrected edit protocol or its latency. They remain
+unchanged historical observations, as detailed in the performance note.
 
 `tree.jsonl` retains full native CSTs, parse errors and repeated parser intervals. `syn.json` retains
 helper TSV, parser intervals, process wall intervals and exit outcomes. The `.time` single-process
