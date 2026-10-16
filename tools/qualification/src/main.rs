@@ -881,8 +881,14 @@ mod tests {
             let bin = base.join(directory);
             fs::create_dir_all(&bin).unwrap();
             let suffix = if os == "windows-latest" { ".exe" } else { "" };
-            let cli_relative = directory.join(format!("semctx{suffix}"));
-            let mcp_relative = directory.join(format!("semctx-mcp{suffix}"));
+            let cli_relative = directory
+                .join(format!("semctx{suffix}"))
+                .to_string_lossy()
+                .replace('\\', "/");
+            let mcp_relative = directory
+                .join(format!("semctx-mcp{suffix}"))
+                .to_string_lossy()
+                .replace('\\', "/");
             fs::write(
                 base.join(&cli_relative),
                 format!("MZsynthetic cli artifact for {os}"),
@@ -963,7 +969,8 @@ mod tests {
     fn synthetic_three_os_native_records_require_independent_target_artifacts() {
         let root = tempfile::tempdir().unwrap();
         let mut options = native_sample(root.path());
-        assert!(verify_reports(&options).is_ok());
+        let admitted = verify_reports(&options);
+        assert!(admitted.is_ok(), "{admitted:?}");
         options.remove("--native-artifacts");
         assert!(
             verify_reports(&options)
