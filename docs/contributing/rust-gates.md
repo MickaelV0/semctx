@@ -28,6 +28,9 @@ Clippy denies `unwrap` and `expect` in production. The root `clippy.toml` uses
 to permit `unwrap` inside test functions and `cfg(test)` modules or crates. Standalone fixture
 binaries use narrowly scoped `expect` lint attributes with explicit reasons; Clippy reports an
 unfulfilled expectation when an exception becomes unnecessary.
+Both tool manifests also deny `too_many_lines` and `excessive_nesting`: the root configuration
+limits functions to 100 Clippy-counted lines and block nesting to five levels. These targeted
+checks follow [Clippy’s documented alternatives to its complexity score](https://clippy.rust-lang.org/rust-1.95.0/index.html#cognitive_complexity).
 
 ## Plans and lane receipts
 

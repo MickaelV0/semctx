@@ -90,6 +90,10 @@ fn main() {
         }
         _ => {}
     }
+    serve_mcp(&arguments);
+}
+
+fn serve_mcp(arguments: &[String]) {
     let mut input = std::io::BufReader::new(std::io::stdin().lock());
     let delayed = arguments.iter().any(|arg| arg == "--delayed-request");
     if delayed {

@@ -17,6 +17,26 @@ use std::{
     time::{Duration, Instant},
 };
 
+fn deliver_wire_message(
+    sender: &mpsc::SyncSender<Result<Value, String>>,
+    mut message: Result<Value, String>,
+    delivery_stopped: &AtomicBool,
+) -> bool {
+    loop {
+        match sender.try_send(message) {
+            Ok(()) => return true,
+            Err(mpsc::TrySendError::Disconnected(_)) => return false,
+            Err(mpsc::TrySendError::Full(value)) => {
+                if delivery_stopped.load(Ordering::SeqCst) {
+                    return true;
+                }
+                message = value;
+                thread::sleep(Duration::from_millis(5));
+            }
+        }
+    }
+}
+
 struct Session {
     child: process::OwnedChild,
     input: Option<mpsc::Sender<Value>>,
@@ -71,7 +91,7 @@ impl Session {
                     .take(process::LIMIT + 1)
                     .read_until(b'\n', &mut bytes);
                 total += bytes.len() as u64;
-                let mut message = match read {
+                let message = match read {
                     Ok(0) => return Ok(()),
                     Ok(_) if total > process::LIMIT => Err("MCP wire output exceeded".into()),
                     Ok(_) => serde_json::from_slice(&bytes)
@@ -79,18 +99,8 @@ impl Session {
                     Err(error) => Err(format!("MCP stdout read: {error}")),
                 };
                 let failure = message.as_ref().err().cloned();
-                loop {
-                    match tx.try_send(message) {
-                        Ok(()) => break,
-                        Err(mpsc::TrySendError::Disconnected(_)) => return Ok(()),
-                        Err(mpsc::TrySendError::Full(value)) => {
-                            if delivery_stopped.load(Ordering::SeqCst) {
-                                break;
-                            }
-                            message = value;
-                            thread::sleep(Duration::from_millis(5));
-                        }
-                    }
+                if !deliver_wire_message(&tx, message, &delivery_stopped) {
+                    return Ok(());
                 }
                 if let Some(error) = failure {
                     return Err(error);
@@ -291,8 +301,11 @@ fn symbol(value: &Value, name: &str) -> bool {
         .is_some_and(|nodes| nodes.iter().any(|n| n["name"] == name))
 }
 
-pub fn run(runner: &mut Runner, root: &Path) -> Result<(), String> {
-    let mut session = Session::start(runner, root)?;
+fn qualify_initial_mcp_state(
+    runner: &mut Runner,
+    session: &mut Session,
+    root: &Path,
+) -> Result<(), String> {
     let initialized = session.request("initialize",j!({"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"semctx-rust-qualification","version":"1.0.0"}}))?;
     let raw = runner.record("mcp-initialize", &initialized)?;
     runner.case(
@@ -364,6 +377,12 @@ pub fn run(runner: &mut Runner, root: &Path) -> Result<(), String> {
         ExpectedOutcome::UsefulSuccess,
     );
 
+    Ok(())
+}
+
+pub fn run(runner: &mut Runner, root: &Path) -> Result<(), String> {
+    let mut session = Session::start(runner, root)?;
+    qualify_initial_mcp_state(runner, &mut session, root)?;
     // Keep the same child and connection alive while a separate CLI rebuild replaces facts.
     fs::remove_file(root.join("src/symbol.ts")).map_err(|e| e.to_string())?;
     journeys::write(

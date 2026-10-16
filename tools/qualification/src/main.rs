@@ -138,6 +138,139 @@ fn native_expected(
     Runtime::select(Path::new("native"), &cli, &mcp)?;
     Ok((cli, mcp))
 }
+fn verify_candidate_artifacts(
+    report: &Report,
+    expected_entries: (PathBuf, PathBuf),
+    native_root: Option<&Path>,
+    os: &str,
+) -> Result<(), String> {
+    // Candidate checkout is the authority for shipped bundle bytes, not hashes asserted by reports.
+    for (role, selected) in [expected_entries.0, expected_entries.1]
+        .into_iter()
+        .enumerate()
+    {
+        let expected_entry = artifact(&selected)?;
+        let reported_entry = &report.artifacts[role];
+        let reported_path = reported_entry.path.to_string_lossy().replace('\\', "/");
+        let (reported_parent, reported_name) = reported_path
+            .rsplit_once('/')
+            .ok_or("artifact entrypoint has no parent")?;
+        if reported_entry.sha256 != expected_entry.sha256
+            || Some(reported_name) != expected_entry.path.file_name().and_then(|p| p.to_str())
+        {
+            return Err("candidate entrypoint identity mismatch".into());
+        }
+        let base = selected.parent().ok_or("artifact missing parent")?;
+        let mut pending = vec![base.to_path_buf()];
+        while let Some(dir) = pending.pop() {
+            for entry in fs::read_dir(dir).map_err(|e| e.to_string())? {
+                let entry = entry.map_err(|e| e.to_string())?;
+                if entry.file_type().map_err(|e| e.to_string())?.is_symlink() {
+                    return Err("symlink expected artifact dependency".into());
+                }
+                if entry.file_type().map_err(|e| e.to_string())?.is_dir() {
+                    pending.push(entry.path());
+                    continue;
+                }
+                let expected_artifact = artifact(&entry.path())?;
+                if report.runtime.kind() == "native"
+                    && entry.path()
+                        == native_root
+                            .ok_or("required argument --native-artifacts")?
+                            .join(os)
+                            .join("artifact-manifest.json")
+                {
+                    continue;
+                }
+                let relative = entry
+                    .path()
+                    .strip_prefix(base)
+                    .map_err(|e| e.to_string())?
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                let reported_dependency = format!("{reported_parent}/{relative}");
+                let found: Vec<_> = report
+                    .artifacts
+                    .iter()
+                    .filter(|a| a.path.to_string_lossy().replace('\\', "/") == reported_dependency)
+                    .collect();
+                if found.len() != 1 || found[0].sha256 != expected_artifact.sha256 {
+                    return Err(format!(
+                        "candidate bundle mismatch {relative} (role {role}, observed matches {})",
+                        found.len()
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+fn verify_raw_artifacts(report: &Report, value: &Value, dir: &Path) -> Result<(), String> {
+    let raw = value["raw_artifacts"]
+        .as_object()
+        .ok_or("missing raw inventory")?;
+    if raw.is_empty() {
+        return Err("empty raw inventory".into());
+    }
+    let runtime_observation = if report.runtime.kind() == "bun" {
+        "raw/001-runtime-version.json"
+    } else {
+        "raw/001-runtime-identity.json"
+    };
+    if !raw.contains_key(runtime_observation) {
+        return Err("runtime version observation missing".into());
+    }
+    for (relative, expected_hash) in raw {
+        let relative_path = Path::new(relative);
+        if !relative.starts_with("raw/")
+            || relative_path
+                .components()
+                .any(|c| !matches!(c, std::path::Component::Normal(_)))
+        {
+            return Err("unsafe raw reference".into());
+        }
+        let bytes = fs::read(dir.join(relative)).map_err(|e| e.to_string())?;
+        if expected_hash.as_str() != Some(digest(&bytes).as_str()) {
+            return Err(format!("raw evidence modified: {relative}"));
+        }
+        let _: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+        if relative == "raw/001-runtime-version.json" {
+            if report.runtime.kind() != "bun" {
+                return Err("Bun version observation in native report".into());
+            }
+            let observed: semctx_qualification::process::Observation =
+                serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+            if observed.code != Some(0)
+                || observed.timed_out
+                || observed.output_exceeded
+                || observed.stdout.trim() != "1.4.3"
+            {
+                return Err("unqualified Bun adapter runtime".into());
+            }
+        }
+        if relative == "raw/001-runtime-identity.json"
+            && serde_json::from_slice::<Value>(&bytes).map_err(|e| e.to_string())?
+                != serde_json::to_value(&report.runtime).map_err(|e| e.to_string())?
+        {
+            return Err("native runtime identity observation mismatch".into());
+        }
+    }
+    for case in &report.cases {
+        for reference in &case.observations {
+            let (path, hash) = reference
+                .split_once("#sha256=")
+                .ok_or("invalid observation reference")?;
+            if raw.get(path).and_then(Value::as_str) != Some(hash) {
+                return Err("observation not bound to raw artifact".into());
+            }
+            let observation: Value =
+                serde_json::from_slice(&fs::read(dir.join(path)).map_err(|e| e.to_string())?)
+                    .map_err(|e| e.to_string())?;
+            validate_raw_case(&case.id, &observation)?;
+        }
+    }
+    Ok(())
+}
 fn verify_reports(options: &BTreeMap<String, PathBuf>) -> Result<Value, String> {
     let expected = plan_id(&required(options, "--plan")?)?;
     let root = required(options, "--reports")?;
@@ -231,160 +364,26 @@ fn verify_reports(options: &BTreeMap<String, PathBuf>) -> Result<Value, String> 
                     .unwrap_or_else(|| PathBuf::from("plugins/semctx-control/dist/semctx-mcp.js")),
             )
         };
-        // Candidate checkout is the authority for shipped bundle bytes, not hashes asserted by reports.
-        for (role, selected) in [expected_entries.0, expected_entries.1]
-            .into_iter()
-            .enumerate()
-        {
-            let expected_entry = artifact(&selected)?;
-            let reported_entry = &report.artifacts[role];
-            let reported_path = reported_entry.path.to_string_lossy().replace('\\', "/");
-            let (reported_parent, reported_name) = reported_path
-                .rsplit_once('/')
-                .ok_or("artifact entrypoint has no parent")?;
-            if reported_entry.sha256 != expected_entry.sha256
-                || Some(reported_name) != expected_entry.path.file_name().and_then(|p| p.to_str())
-            {
-                return Err("candidate entrypoint identity mismatch".into());
-            }
-            let base = selected.parent().ok_or("artifact missing parent")?;
-            let mut pending = vec![base.to_path_buf()];
-            while let Some(dir) = pending.pop() {
-                for entry in fs::read_dir(dir).map_err(|e| e.to_string())? {
-                    let entry = entry.map_err(|e| e.to_string())?;
-                    if entry.file_type().map_err(|e| e.to_string())?.is_symlink() {
-                        return Err("symlink expected artifact dependency".into());
-                    }
-                    if entry.file_type().map_err(|e| e.to_string())?.is_dir() {
-                        pending.push(entry.path());
-                        continue;
-                    }
-                    let expected_artifact = artifact(&entry.path())?;
-                    if report.runtime.kind() == "native"
-                        && entry.path()
-                            == native_root
-                                .as_ref()
-                                .ok_or("required argument --native-artifacts")?
-                                .join(os)
-                                .join("artifact-manifest.json")
-                    {
-                        continue;
-                    }
-                    let relative = entry
-                        .path()
-                        .strip_prefix(base)
-                        .map_err(|e| e.to_string())?
-                        .to_string_lossy()
-                        .replace('\\', "/");
-                    let reported_dependency = format!("{reported_parent}/{relative}");
-                    let found: Vec<_> = report
-                        .artifacts
-                        .iter()
-                        .filter(|a| {
-                            a.path.to_string_lossy().replace('\\', "/") == reported_dependency
-                        })
-                        .collect();
-                    if found.len() != 1 || found[0].sha256 != expected_artifact.sha256 {
-                        return Err(format!(
-                            "candidate bundle mismatch {relative} (role {role}, observed matches {})",
-                            found.len()
-                        ));
-                    }
-                }
-            }
-        }
-        let raw = value["raw_artifacts"]
-            .as_object()
-            .ok_or("missing raw inventory")?;
-        if raw.is_empty() {
-            return Err("empty raw inventory".into());
-        }
-        let runtime_observation = if report.runtime.kind() == "bun" {
-            "raw/001-runtime-version.json"
-        } else {
-            "raw/001-runtime-identity.json"
-        };
-        if !raw.contains_key(runtime_observation) {
-            return Err("runtime version observation missing".into());
-        }
-        for (relative, expected_hash) in raw {
-            let relative_path = Path::new(relative);
-            if !relative.starts_with("raw/")
-                || relative_path
-                    .components()
-                    .any(|c| !matches!(c, std::path::Component::Normal(_)))
-            {
-                return Err("unsafe raw reference".into());
-            }
-            let bytes = fs::read(dir.join(relative)).map_err(|e| e.to_string())?;
-            if expected_hash.as_str() != Some(digest(&bytes).as_str()) {
-                return Err(format!("raw evidence modified: {relative}"));
-            }
-            let _: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-            if relative == "raw/001-runtime-version.json" {
-                if report.runtime.kind() != "bun" {
-                    return Err("Bun version observation in native report".into());
-                }
-                let observed: semctx_qualification::process::Observation =
-                    serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-                if observed.code != Some(0)
-                    || observed.timed_out
-                    || observed.output_exceeded
-                    || observed.stdout.trim() != "1.4.3"
-                {
-                    return Err("unqualified Bun adapter runtime".into());
-                }
-            }
-            if relative == "raw/001-runtime-identity.json"
-                && serde_json::from_slice::<Value>(&bytes).map_err(|e| e.to_string())?
-                    != serde_json::to_value(&report.runtime).map_err(|e| e.to_string())?
-            {
-                return Err("native runtime identity observation mismatch".into());
-            }
-        }
-        for case in &report.cases {
-            for reference in &case.observations {
-                let (path, hash) = reference
-                    .split_once("#sha256=")
-                    .ok_or("invalid observation reference")?;
-                if raw.get(path).and_then(Value::as_str) != Some(hash) {
-                    return Err("observation not bound to raw artifact".into());
-                }
-                let observation: Value =
-                    serde_json::from_slice(&fs::read(dir.join(path)).map_err(|e| e.to_string())?)
-                        .map_err(|e| e.to_string())?;
-                validate_raw_case(&case.id, &observation)?;
-            }
-        }
+        verify_candidate_artifacts(&report, expected_entries, native_root.as_deref(), os)?;
+        verify_raw_artifacts(&report, &value, &dir)?;
     }
     if seen.len() != 3 {
         return Err("required three OS qualification reports missing".into());
     }
     Ok(json!({"schema_version":1,"status":"qualified","plan_id":expected,"os":seen,"cases":CASES}))
 }
-fn main_run() -> Result<Value, String> {
-    let (verifying, options) = options()?;
-    if verifying {
-        return verify_reports(&options);
-    }
-    // Observe the producer, not the host later aggregating downloaded reports.
-    // Reject a mislabeled lane before reading artifacts or running a product process.
-    let os = observed_lane(
-        options
-            .get("--os")
-            .map(|value| value.to_str().ok_or("non UTF-8 OS lane"))
-            .transpose()?,
-    )?;
-    let cli = required(&options, "--cli")?;
-    let mcp = required(&options, "--mcp")?;
-    let runtime = Runtime::select(&required(&options, "--runtime")?, &cli, &mcp)?;
-    for path in [&cli, &mcp] {
+fn artifact_identities(
+    cli: &Path,
+    mcp: &Path,
+    runtime: &Runtime,
+) -> Result<Vec<semctx_qualification::Artifact>, String> {
+    for path in [cli, mcp] {
         if !path.is_absolute() {
             return Err("artifact paths must be absolute".into());
         }
     }
-    let mut identities = vec![artifact(&cli)?, artifact(&mcp)?];
-    if let Runtime::Bun { identity, .. } = &runtime {
+    let mut identities = vec![artifact(cli)?, artifact(mcp)?];
+    if let Runtime::Bun { identity, .. } = runtime {
         identities.push(identity.clone());
     }
     // Bind portable chunks, workers and compiler libraries as well as entrypoints.
@@ -414,24 +413,14 @@ fn main_run() -> Result<Value, String> {
             }
         }
     }
-    let out = reserve(&required(&options, "--out")?)?;
-    let root = tempfile::Builder::new()
-        .prefix("semctx-rust-qualification-")
-        .tempdir()
-        .map_err(|e| e.to_string())?;
-    let mut runner = Runner {
-        cli,
-        mcp,
-        runtime,
-        out: out.clone(),
-        cases: vec![],
-        next: 0,
-    };
-    let runtime_ready = match runner.runtime.clone() {
+    Ok(identities)
+}
+fn record_runtime(runner: &mut Runner, root: &Path) -> Result<(), String> {
+    match runner.runtime.clone() {
         Runtime::Bun { identity, .. } => {
             let runtime_ob = semctx_qualification::process::run(
                 Command::new(&identity.path).arg("--version"),
-                root.path(),
+                root,
                 semctx_qualification::process::BUDGET,
             )
             .map_err(|e| e.to_string())?;
@@ -450,7 +439,39 @@ fn main_run() -> Result<Value, String> {
             runner.record("runtime-identity", &native)?;
             Ok(())
         }
+    }
+}
+fn main_run() -> Result<Value, String> {
+    let (verifying, options) = options()?;
+    if verifying {
+        return verify_reports(&options);
+    }
+    // Observe the producer, not the host later aggregating downloaded reports.
+    // Reject a mislabeled lane before reading artifacts or running a product process.
+    let os = observed_lane(
+        options
+            .get("--os")
+            .map(|value| value.to_str().ok_or("non UTF-8 OS lane"))
+            .transpose()?,
+    )?;
+    let cli = required(&options, "--cli")?;
+    let mcp = required(&options, "--mcp")?;
+    let runtime = Runtime::select(&required(&options, "--runtime")?, &cli, &mcp)?;
+    let identities = artifact_identities(&cli, &mcp, &runtime)?;
+    let out = reserve(&required(&options, "--out")?)?;
+    let root = tempfile::Builder::new()
+        .prefix("semctx-rust-qualification-")
+        .tempdir()
+        .map_err(|e| e.to_string())?;
+    let mut runner = Runner {
+        cli,
+        mcp,
+        runtime,
+        out: out.clone(),
+        cases: vec![],
+        next: 0,
     };
+    let runtime_ready = record_runtime(&mut runner, root.path());
     let result = runtime_ready.and_then(|_| run(&mut runner, root.path()));
     let final_error = identities
         .iter()

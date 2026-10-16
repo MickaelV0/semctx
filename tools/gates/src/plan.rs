@@ -189,29 +189,36 @@ fn graph(root: &Path) -> Result<BTreeMap<String, BTreeSet<String>>> {
     }
     let mut result = BTreeMap::new();
     for (component, value) in manifests {
-        let mut dependencies = BTreeSet::new();
-        for field in [
-            "dependencies",
-            "devDependencies",
-            "optionalDependencies",
-            "peerDependencies",
-        ] {
-            if let Some(object) = value[field].as_object() {
-                for (name, version) in object {
-                    if let Some(dep) = names.get(name) {
-                        dependencies.insert(dep.clone());
-                    } else if version
-                        .as_str()
-                        .is_some_and(|v| v.starts_with("workspace:"))
-                    {
-                        return Err(format!("unknown workspace dependency {name}"));
-                    }
-                }
-            }
-        }
-        result.insert(component, dependencies);
+        result.insert(component, workspace_dependencies(&value, &names)?);
     }
     Ok(result)
+}
+fn workspace_dependencies(
+    manifest: &serde_json::Value,
+    names: &BTreeMap<String, String>,
+) -> Result<BTreeSet<String>> {
+    let mut dependencies = BTreeSet::new();
+    for field in [
+        "dependencies",
+        "devDependencies",
+        "optionalDependencies",
+        "peerDependencies",
+    ] {
+        let Some(object) = manifest[field].as_object() else {
+            continue;
+        };
+        for (name, version) in object {
+            if let Some(dependency) = names.get(name) {
+                dependencies.insert(dependency.clone());
+            } else if version
+                .as_str()
+                .is_some_and(|value| value.starts_with("workspace:"))
+            {
+                return Err(format!("unknown workspace dependency {name}"));
+            }
+        }
+    }
+    Ok(dependencies)
 }
 fn lane(os: &str, profile: &str, targets: &str, smoke: bool, shard: &str) -> Lane {
     Lane {

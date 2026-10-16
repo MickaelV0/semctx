@@ -71,6 +71,15 @@ enum OutputMode {
     Capture,
     Stderr,
 }
+impl OutputMode {
+    fn forward(self, bytes: &[u8]) -> std::io::Result<()> {
+        if self == Self::Capture {
+            return Ok(());
+        }
+        let mut stderr = std::io::stderr().lock();
+        stderr.write_all(bytes).and_then(|()| stderr.flush())
+    }
+}
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum InputMode {
     Closed,
@@ -157,18 +166,11 @@ fn drain(
                     let keep = n.min(cap.saturating_sub(d.bytes.len()));
                     d.bytes.extend_from_slice(&buffer[..keep]);
                     drop(d);
-                    if output_mode == OutputMode::Stderr {
-                        let mut stderr = std::io::stderr().lock();
-                        if stderr
-                            .write_all(&buffer[..keep])
-                            .and_then(|()| stderr.flush())
-                            .is_err()
-                        {
-                            data.lock()
-                                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                                .error = true;
-                            break;
-                        }
+                    if output_mode.forward(&buffer[..keep]).is_err() {
+                        data.lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .error = true;
+                        break;
                     }
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,

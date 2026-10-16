@@ -141,7 +141,7 @@ fn field(value: &Value, pointer: &str, expected: &Value) -> Result<(), String> {
     }
 }
 
-pub fn run(runner: &mut Runner, root: &Path) -> Result<(), String> {
+fn qualify_cli_changes(runner: &mut Runner, root: &Path) -> Result<(), String> {
     fixture(root)?;
     let (ob, raw) = runner.cli(root, &["setup", "--json"])?;
     runner.case(
@@ -193,6 +193,10 @@ pub fn run(runner: &mut Runner, root: &Path) -> Result<(), String> {
     write(root, "src/cart.ts", BASE)?;
     runner.index(root)?;
 
+    Ok(())
+}
+
+fn qualify_cli_refusals(runner: &mut Runner, root: &Path) -> Result<(), String> {
     let db = root.join(".semctx/semctx.db");
     let backup = root.join(".semctx/held.db");
     fs::rename(&db, &backup).map_err(|e| e.to_string())?;
@@ -226,6 +230,10 @@ pub fn run(runner: &mut Runner, root: &Path) -> Result<(), String> {
     );
     fs::write(&config, bytes).map_err(|e| e.to_string())?;
 
+    Ok(())
+}
+
+fn qualify_cli_recovery(runner: &mut Runner, root: &Path) -> Result<(), String> {
     write(
         root,
         "src/symbol.ts",
@@ -263,6 +271,13 @@ pub fn run(runner: &mut Runner, root: &Path) -> Result<(), String> {
         ExpectedOutcome::UsefulSuccess,
     );
 
+    Ok(())
+}
+
+pub fn run(runner: &mut Runner, root: &Path) -> Result<(), String> {
+    qualify_cli_changes(runner, root)?;
+    qualify_cli_refusals(runner, root)?;
+    qualify_cli_recovery(runner, root)?;
     // Python is explicitly partial: the product reports missing negative completeness.
     // Use a fresh independent v2 workspace: --polyglot must never overwrite a v1 config.
     let partial = tempfile::Builder::new()

@@ -380,122 +380,131 @@ pub fn symbol_absent(value: &Value, name: &str) -> bool {
         && value["matchedNodes"].as_array().is_some_and(Vec::is_empty)
 }
 
+fn raw_field(value: &Value, path: &str, expected: Value) -> Result<(), String> {
+    if value.pointer(path) == Some(&expected) {
+        Ok(())
+    } else {
+        Err(format!("raw oracle {path}: expected {expected}"))
+    }
+}
+fn raw_symbol(value: &Value, name: &str) -> bool {
+    value["matchedNodes"]
+        .as_array()
+        .is_some_and(|a| a.iter().any(|n| n["name"] == name))
+}
+
+fn validate_raw_cli_case(id: &str, raw: &Value) -> Result<(), String> {
+    use serde_json::json as j;
+    let ob: Observation =
+        serde_json::from_value(raw["observation"].clone()).map_err(|e| e.to_string())?;
+    match id {
+        "cli.missing-index" => refusal(&ob, "REPO_NOT_INDEXED"),
+        "cli.invalid-config" => refusal(&ob, "CONFIG_INVALID"),
+        "cli.benign" => verify(&ob, &["src/symbol.ts"], "PASS").map(|_| ()),
+        "cli.contract-risk" => {
+            let value = verify(&ob, &["src/cart.ts"], "WARN")?;
+            if value["findings"].as_array().is_some_and(|a| {
+                a.iter().any(|f| {
+                    f["rule"] == "contract_changed_without_test" && f["severity"] == "warn"
+                })
+            }) {
+                Ok(())
+            } else {
+                Err("missing raw risk discriminant".into())
+            }
+        }
+        "cli.setup" => raw_field(&json(&ob, 0)?, "/setupReady", j!(true)),
+        "cli.repaired" => raw_field(&json(&ob, 0)?, "/verdict", j!("FRESH")),
+        "cli.stale" => {
+            let value = json(&ob, 3)?;
+            raw_field(&value, "/verdict", j!("UNSEALED"))?;
+            raw_field(&value, "/canRunHighRiskControl", j!(false))?;
+            if value["explanation"].as_array().is_some_and(|a| {
+                a.iter().any(|r| {
+                    r["code"] == "EVIDENCE_BASELINE_STALE" && r["remedy"] == "semctx index --record"
+                })
+            }) {
+                Ok(())
+            } else {
+                Err("missing exact stale evidence reason".into())
+            }
+        }
+        "cli.partial-coverage" => {
+            let value = json(&ob, 0)?;
+            raw_field(&value, "/setupReady", j!(true))?;
+            raw_field(&value, "/indexHealth/coverage/status", j!("partial"))?;
+            raw_field(&value, "/selection/selectedByLanguage/python", j!(1))?;
+            if value["indexHealth"]["reasonSummary"]
+                .as_array()
+                .is_some_and(|a| a.contains(&j!("NEGATIVE_COMPLETENESS_MISSING")))
+            {
+                Ok(())
+            } else {
+                Err("missing partial limitation".into())
+            }
+        }
+        _ => Err("unknown CLI oracle".into()),
+    }
+}
+
+fn validate_raw_mcp_case(id: &str, raw: &Value) -> Result<(), String> {
+    use serde_json::json as j;
+    match id {
+        "mcp.initialize" => {
+            if raw["protocolVersion"].is_string() && raw["serverInfo"]["name"].is_string() {
+                Ok(())
+            } else {
+                Err("invalid MCP negotiation".into())
+            }
+        }
+        "mcp.tools" => {
+            if [
+                "semctx_inspect",
+                "semctx_control_status",
+                "semctx_index_health",
+            ]
+            .iter()
+            .all(|name| {
+                raw["tools"]
+                    .as_array()
+                    .is_some_and(|a| a.iter().any(|t| t["name"] == *name))
+            }) {
+                Ok(())
+            } else {
+                Err("missing MCP tools".into())
+            }
+        }
+        "mcp.control-status" => {
+            raw_field(raw, "/verdict", j!("FRESH"))?;
+            raw_field(raw, "/canRunHighRiskControl", j!(true))
+        }
+        "mcp.inspect" => {
+            if raw_symbol(&raw["inspect"], "oldSymbol") {
+                raw_field(raw, "/health/binding/status", j!("valid"))
+            } else {
+                Err("old symbol absent".into())
+            }
+        }
+        "mcp.refresh" => {
+            if symbol_absent(&raw["old"], "oldSymbol")
+                && raw_symbol(&raw["new"], "newSymbol")
+                && raw["pid"].as_u64().is_some()
+            {
+                raw_field(raw, "/health/binding/status", j!("valid"))
+            } else {
+                Err("MCP refresh absent".into())
+            }
+        }
+        _ => Err("unknown MCP oracle".into()),
+    }
+}
+
 /// Re-evaluate observations during aggregate admission: a producer's green label is insufficient.
 pub fn validate_raw_case(id: &str, raw: &Value) -> Result<(), String> {
-    fn eq(value: &Value, path: &str, expected: Value) -> Result<(), String> {
-        if value.pointer(path) == Some(&expected) {
-            Ok(())
-        } else {
-            Err(format!("raw oracle {path}: expected {expected}"))
-        }
-    }
-    fn symbol(value: &Value, name: &str) -> bool {
-        value["matchedNodes"]
-            .as_array()
-            .is_some_and(|a| a.iter().any(|n| n["name"] == name))
-    }
-    use serde_json::json as j;
     if id.starts_with("cli.") {
-        let ob: Observation =
-            serde_json::from_value(raw["observation"].clone()).map_err(|e| e.to_string())?;
-        match id {
-            "cli.missing-index" => refusal(&ob, "REPO_NOT_INDEXED"),
-            "cli.invalid-config" => refusal(&ob, "CONFIG_INVALID"),
-            "cli.benign" => verify(&ob, &["src/symbol.ts"], "PASS").map(|_| ()),
-            "cli.contract-risk" => {
-                let value = verify(&ob, &["src/cart.ts"], "WARN")?;
-                if value["findings"].as_array().is_some_and(|a| {
-                    a.iter().any(|f| {
-                        f["rule"] == "contract_changed_without_test" && f["severity"] == "warn"
-                    })
-                }) {
-                    Ok(())
-                } else {
-                    Err("missing raw risk discriminant".into())
-                }
-            }
-            "cli.setup" => eq(&json(&ob, 0)?, "/setupReady", j!(true)),
-            "cli.repaired" => eq(&json(&ob, 0)?, "/verdict", j!("FRESH")),
-            "cli.stale" => {
-                let value = json(&ob, 3)?;
-                eq(&value, "/verdict", j!("UNSEALED"))?;
-                eq(&value, "/canRunHighRiskControl", j!(false))?;
-                if value["explanation"].as_array().is_some_and(|a| {
-                    a.iter().any(|r| {
-                        r["code"] == "EVIDENCE_BASELINE_STALE"
-                            && r["remedy"] == "semctx index --record"
-                    })
-                }) {
-                    Ok(())
-                } else {
-                    Err("missing exact stale evidence reason".into())
-                }
-            }
-            "cli.partial-coverage" => {
-                let value = json(&ob, 0)?;
-                eq(&value, "/setupReady", j!(true))?;
-                eq(&value, "/indexHealth/coverage/status", j!("partial"))?;
-                eq(&value, "/selection/selectedByLanguage/python", j!(1))?;
-                if value["indexHealth"]["reasonSummary"]
-                    .as_array()
-                    .is_some_and(|a| a.contains(&j!("NEGATIVE_COMPLETENESS_MISSING")))
-                {
-                    Ok(())
-                } else {
-                    Err("missing partial limitation".into())
-                }
-            }
-            _ => Err("unknown CLI oracle".into()),
-        }
+        validate_raw_cli_case(id, raw)
     } else {
-        match id {
-            "mcp.initialize" => {
-                if raw["protocolVersion"].is_string() && raw["serverInfo"]["name"].is_string() {
-                    Ok(())
-                } else {
-                    Err("invalid MCP negotiation".into())
-                }
-            }
-            "mcp.tools" => {
-                if [
-                    "semctx_inspect",
-                    "semctx_control_status",
-                    "semctx_index_health",
-                ]
-                .iter()
-                .all(|name| {
-                    raw["tools"]
-                        .as_array()
-                        .is_some_and(|a| a.iter().any(|t| t["name"] == *name))
-                }) {
-                    Ok(())
-                } else {
-                    Err("missing MCP tools".into())
-                }
-            }
-            "mcp.control-status" => {
-                eq(raw, "/verdict", j!("FRESH"))?;
-                eq(raw, "/canRunHighRiskControl", j!(true))
-            }
-            "mcp.inspect" => {
-                if symbol(&raw["inspect"], "oldSymbol") {
-                    eq(raw, "/health/binding/status", j!("valid"))
-                } else {
-                    Err("old symbol absent".into())
-                }
-            }
-            "mcp.refresh" => {
-                if symbol_absent(&raw["old"], "oldSymbol")
-                    && symbol(&raw["new"], "newSymbol")
-                    && raw["pid"].as_u64().is_some()
-                {
-                    eq(raw, "/health/binding/status", j!("valid"))
-                } else {
-                    Err("MCP refresh absent".into())
-                }
-            }
-            _ => Err("unknown MCP oracle".into()),
-        }
+        validate_raw_mcp_case(id, raw)
     }
 }
 

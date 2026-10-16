@@ -37,27 +37,7 @@ fn main() {
             }
             eprintln!("progress finished");
         }
-        Some("live-supervisor") => {
-            let helper = std::env::args().nth(2).unwrap();
-            let marker = std::env::args().nth(3).unwrap();
-            let argv = vec![
-                std::env::current_exe()
-                    .unwrap()
-                    .to_string_lossy()
-                    .into_owned(),
-                "progress".into(),
-                marker,
-            ];
-            let result = semctx_gates::process::run_with_helper_logged(
-                &argv,
-                &std::env::current_dir().unwrap(),
-                5000,
-                1024,
-                std::path::Path::new(&helper),
-            )
-            .unwrap();
-            println!("{}", serde_json::to_string(&result).unwrap());
-        }
+        Some("live-supervisor") => live_supervisor(),
         Some("malformed") => {
             let _ = std::io::stdout().write_all(&[255]);
         }
@@ -83,36 +63,7 @@ fn main() {
             println!("home={}", std::env::var("USERPROFILE").unwrap_or_default());
         }
         Some("sleep") => thread::sleep(Duration::from_secs(30)),
-        Some("cancel-supervisor") => {
-            semctx_gates::process::install_cancellation();
-            let helper = std::env::args().nth(2).unwrap();
-            thread::spawn(|| {
-                thread::sleep(Duration::from_millis(250));
-                #[cfg(unix)]
-                // SAFETY: POSIX raise accepts SIGINT, handled by the installed cancellation callback.
-                unsafe {
-                    libc::raise(libc::SIGINT);
-                }
-                #[cfg(windows)]
-                semctx_gates::process::request_cancellation();
-            });
-            let argv = vec![
-                std::env::current_exe()
-                    .unwrap()
-                    .to_string_lossy()
-                    .into_owned(),
-                "sleep".into(),
-            ];
-            let result = semctx_gates::process::run_with_helper(
-                &argv,
-                &std::env::current_dir().unwrap(),
-                5000,
-                1024,
-                std::path::Path::new(&helper),
-            )
-            .unwrap();
-            println!("{}", result.kind);
-        }
+        Some("cancel-supervisor") => cancel_supervisor(),
         Some("grandchild") => {
             let mut child = Command::new(std::env::current_exe().unwrap())
                 .arg("sleep")
@@ -126,4 +77,57 @@ fn main() {
         }
         _ => panic!("unknown fixture mode"),
     }
+}
+
+fn live_supervisor() {
+    let helper = std::env::args().nth(2).unwrap();
+    let marker = std::env::args().nth(3).unwrap();
+    let argv = vec![
+        std::env::current_exe()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned(),
+        "progress".into(),
+        marker,
+    ];
+    let result = semctx_gates::process::run_with_helper_logged(
+        &argv,
+        &std::env::current_dir().unwrap(),
+        5000,
+        1024,
+        std::path::Path::new(&helper),
+    )
+    .unwrap();
+    println!("{}", serde_json::to_string(&result).unwrap());
+}
+
+fn cancel_supervisor() {
+    semctx_gates::process::install_cancellation();
+    let helper = std::env::args().nth(2).unwrap();
+    thread::spawn(|| {
+        thread::sleep(Duration::from_millis(250));
+        #[cfg(unix)]
+        // SAFETY: POSIX raise accepts SIGINT, handled by the installed cancellation callback.
+        unsafe {
+            libc::raise(libc::SIGINT);
+        }
+        #[cfg(windows)]
+        semctx_gates::process::request_cancellation();
+    });
+    let argv = vec![
+        std::env::current_exe()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned(),
+        "sleep".into(),
+    ];
+    let result = semctx_gates::process::run_with_helper(
+        &argv,
+        &std::env::current_dir().unwrap(),
+        5000,
+        1024,
+        std::path::Path::new(&helper),
+    )
+    .unwrap();
+    println!("{}", result.kind);
 }

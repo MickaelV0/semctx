@@ -107,98 +107,7 @@ pub fn test(root: &Path) -> Result<Report> {
     if manifests.is_empty() {
         return Ok(report);
     }
-    let mut covered = BTreeSet::new();
-    let mut workspaces: BTreeMap<PathBuf, Vec<String>> = BTreeMap::new();
-    for manifest in &manifests {
-        // Git paths are passed as argv, never interpreted as shell or Cargo options.
-        if Path::new(manifest).is_absolute()
-            || manifest.contains('\\')
-            || manifest.split('/').any(|p| p == ".." || p.is_empty())
-        {
-            return Err("invalid tracked Cargo path".into());
-        }
-        let manifest_path = require_tracked(&root, &root.join(manifest), &tracked)?;
-        if covered.contains(&manifest_path) {
-            continue;
-        }
-        if !has_ancestor_lock(&root, &manifest_path, &tracked) {
-            return Err(format!("missing tracked Cargo.lock for {manifest}"));
-        }
-        let action = command(
-            format!("Cargo workspace discovery: {manifest}"),
-            vec![
-                "cargo".into(),
-                "metadata".into(),
-                "--no-deps".into(),
-                "--locked".into(),
-                "--format-version".into(),
-                "1".into(),
-                "--manifest-path".into(),
-                manifest.clone(),
-            ],
-            60_000,
-        );
-        let outcome = process::run(&action.argv, &root, action.timeout_ms, action.output_cap)?;
-        if outcome.kind != "success" || outcome.exit_code != Some(0) {
-            return Err(format!(
-                "Cargo workspace discovery failed for {manifest}: {}\n{}{}",
-                outcome.kind, outcome.stdout, outcome.stderr
-            ));
-        }
-        let metadata: serde_json::Value = serde_json::from_str(&outcome.stdout)
-            .map_err(|e| format!("malformed cargo metadata for {manifest}: {e}"))?;
-        report.discovery.push(Step { action, outcome });
-        let workspace = metadata["workspace_root"]
-            .as_str()
-            .ok_or("cargo metadata missing workspace_root")?;
-        let owner = require_tracked(&root, &Path::new(workspace).join("Cargo.toml"), &tracked)?;
-        require_tracked(
-            &root,
-            &owner
-                .parent()
-                .ok_or("workspace has no directory")?
-                .join("Cargo.lock"),
-            &tracked,
-        )?;
-        let members = metadata["workspace_members"]
-            .as_array()
-            .ok_or("cargo metadata missing workspace_members")?;
-        let packages = metadata["packages"]
-            .as_array()
-            .ok_or("cargo metadata missing packages")?;
-        let mut product_members = vec![];
-        for member in members {
-            let package = packages
-                .iter()
-                .find(|p| &p["id"] == member)
-                .ok_or("unresolved Cargo workspace member")?;
-            let package_manifest = package["manifest_path"]
-                .as_str()
-                .ok_or("Cargo member missing manifest")?;
-            let path = require_tracked(&root, Path::new(package_manifest), &tracked)?;
-            let relative_path = relative(&root, &path)?;
-            if !TOOL_MANIFESTS.contains(&relative_path.as_str()) {
-                product_members.push(
-                    package["name"]
-                        .as_str()
-                        .ok_or("Cargo product member missing name")?
-                        .to_owned(),
-                );
-            }
-            covered.insert(path);
-        }
-        covered.insert(owner.clone());
-        if !covered.contains(&manifest_path) {
-            return Err(format!("Cargo workspace does not account for {manifest}"));
-        }
-        product_members.sort();
-        if !product_members.is_empty()
-            && let Some(previous) = workspaces.insert(owner, product_members.clone())
-            && previous != product_members
-        {
-            return Err("ambiguous Cargo workspace membership".into());
-        }
-    }
+    let workspaces = discover_workspaces(&root, &tracked, &mut report)?;
     if workspaces.is_empty() {
         return Ok(report);
     }
@@ -249,4 +158,104 @@ pub fn test(root: &Path) -> Result<Report> {
         }
     }
     Ok(report)
+}
+
+fn discover_workspaces(
+    root: &Path,
+    tracked: &BTreeSet<String>,
+    report: &mut Report,
+) -> Result<BTreeMap<PathBuf, Vec<String>>> {
+    let mut covered = BTreeSet::new();
+    let mut workspaces = BTreeMap::new();
+    for manifest in &report.manifests {
+        // Git paths are passed as argv, never interpreted as shell or Cargo options.
+        if Path::new(manifest).is_absolute()
+            || manifest.contains('\\')
+            || manifest.split('/').any(|p| p == ".." || p.is_empty())
+        {
+            return Err("invalid tracked Cargo path".into());
+        }
+        let manifest_path = require_tracked(root, &root.join(manifest), tracked)?;
+        if covered.contains(&manifest_path) {
+            continue;
+        }
+        if !has_ancestor_lock(root, &manifest_path, tracked) {
+            return Err(format!("missing tracked Cargo.lock for {manifest}"));
+        }
+        let action = command(
+            format!("Cargo workspace discovery: {manifest}"),
+            vec![
+                "cargo".into(),
+                "metadata".into(),
+                "--no-deps".into(),
+                "--locked".into(),
+                "--format-version".into(),
+                "1".into(),
+                "--manifest-path".into(),
+                manifest.clone(),
+            ],
+            60_000,
+        );
+        let outcome = process::run(&action.argv, root, action.timeout_ms, action.output_cap)?;
+        if outcome.kind != "success" || outcome.exit_code != Some(0) {
+            return Err(format!(
+                "Cargo workspace discovery failed for {manifest}: {}\n{}{}",
+                outcome.kind, outcome.stdout, outcome.stderr
+            ));
+        }
+        let metadata: serde_json::Value = serde_json::from_str(&outcome.stdout)
+            .map_err(|e| format!("malformed cargo metadata for {manifest}: {e}"))?;
+        report.discovery.push(Step { action, outcome });
+        let workspace = metadata["workspace_root"]
+            .as_str()
+            .ok_or("cargo metadata missing workspace_root")?;
+        let owner = require_tracked(root, &Path::new(workspace).join("Cargo.toml"), tracked)?;
+        require_tracked(
+            root,
+            &owner
+                .parent()
+                .ok_or("workspace has no directory")?
+                .join("Cargo.lock"),
+            tracked,
+        )?;
+        let members = metadata["workspace_members"]
+            .as_array()
+            .ok_or("cargo metadata missing workspace_members")?;
+        let packages = metadata["packages"]
+            .as_array()
+            .ok_or("cargo metadata missing packages")?;
+        let mut product_members = vec![];
+        for member in members {
+            let package = packages
+                .iter()
+                .find(|p| &p["id"] == member)
+                .ok_or("unresolved Cargo workspace member")?;
+            let package_manifest = package["manifest_path"]
+                .as_str()
+                .ok_or("Cargo member missing manifest")?;
+            let path = require_tracked(root, Path::new(package_manifest), tracked)?;
+            let relative_path = relative(root, &path)?;
+            if !TOOL_MANIFESTS.contains(&relative_path.as_str()) {
+                product_members.push(
+                    package["name"]
+                        .as_str()
+                        .ok_or("Cargo product member missing name")?
+                        .to_owned(),
+                );
+            }
+            covered.insert(path);
+        }
+        covered.insert(owner.clone());
+        if !covered.contains(&manifest_path) {
+            return Err(format!("Cargo workspace does not account for {manifest}"));
+        }
+        product_members.sort();
+        if !product_members.is_empty()
+            && let Some(previous) = workspaces.insert(owner, product_members.clone())
+            && previous != product_members
+        {
+            return Err("ambiguous Cargo workspace membership".into());
+        }
+    }
+    Ok(workspaces)
 }
