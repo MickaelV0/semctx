@@ -153,6 +153,7 @@ fn verify_pr(args: &[String]) -> Result<u8> {
             return Err("invalid test shard".into());
         }
     }
+    let root = root.canonicalize().map_err(|error| error.to_string())?;
     if !skip && !plan::git(&root, &["ls-files", "--others", "--exclude-standard", "-z"])?.is_empty()
     {
         return Err("untracked source files must be staged".into());

@@ -75,6 +75,30 @@ impl Repo {
             .output()
             .unwrap()
     }
+    fn verify_pr(&self, root: &Path) -> Output {
+        let tools = self.outer.join("tools");
+        fs::create_dir_all(&tools).unwrap();
+        for tool in ["bun", "python", "cargo"] {
+            fs::copy(
+                env!("CARGO_BIN_EXE_semctx-gates-fixture"),
+                tools.join(format!("{tool}{}", std::env::consts::EXE_SUFFIX)),
+            )
+            .unwrap();
+        }
+        let path = std::env::join_paths(
+            std::iter::once(tools).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+        )
+        .unwrap();
+        Command::new(env!("CARGO_BIN_EXE_semctx-gates"))
+            .current_dir(&self.outer)
+            .args(["verify-pr", "--root"])
+            .arg(root)
+            .args(["--base", &self.base])
+            .env("PATH", path)
+            .env("SEMCTX_TEST_TOOL_LOG", self.outer.join("tools.log"))
+            .output()
+            .unwrap()
+    }
     fn plan(&self) -> Plan {
         let output = self.cli(&[
             "ci-plan",
@@ -262,4 +286,40 @@ fn aggregate_rejects_missing_receipts() {
     ]);
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("missing"));
+}
+
+#[test]
+fn verify_pr_resolves_relative_root_once_for_all_actions() {
+    let repository = Repo::new();
+    let absolute = repository.verify_pr(&repository.root);
+    assert!(
+        absolute.status.success(),
+        "absolute root: {}",
+        String::from_utf8_lossy(&absolute.stderr)
+    );
+    fs::remove_file(repository.outer.join("tools.log")).unwrap();
+    let relative = repository.verify_pr(Path::new("repo"));
+    assert!(
+        relative.status.success(),
+        "relative root exited {:?}: {}",
+        relative.status.code(),
+        String::from_utf8_lossy(&relative.stderr)
+    );
+    assert_eq!(relative.stdout, absolute.stdout);
+    assert_eq!(relative.stdout, b"[verify:pr] PASS  all checks\n");
+    let tools = fs::read_to_string(repository.outer.join("tools.log")).unwrap();
+    for tool in ["bun", "python", "cargo"] {
+        assert!(tools.lines().any(|line| line == tool), "{tools}");
+    }
+}
+
+#[test]
+fn verify_pr_refuses_missing_root_before_launching_tools() {
+    let repository = Repo::new();
+    let output = repository.verify_pr(Path::new("absent"));
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let error: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(error["status"], "refused");
+    assert!(!repository.outer.join("tools.log").exists());
 }

@@ -5,6 +5,9 @@
 use std::{io::Write, process::Command, thread, time::Duration};
 #[allow(clippy::zombie_processes)] // The orphan is intentional: the supervisor must reap/kill its tree.
 fn main() {
+    if verification_tool_stub() {
+        return;
+    }
     match std::env::args().nth(1).as_deref() {
         Some("success") => {
             println!("fixture stdout");
@@ -204,4 +207,19 @@ fn cancel_supervisor() {
     )
     .unwrap();
     println!("{}", result.kind);
+}
+
+fn verification_tool_stub() -> bool {
+    let executable = std::env::current_exe().unwrap();
+    let name = executable.file_stem().unwrap().to_str().unwrap();
+    if !["bun", "python", "cargo"].contains(&name) {
+        return false;
+    }
+    let mut log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(std::env::var_os("SEMCTX_TEST_TOOL_LOG").unwrap())
+        .unwrap();
+    writeln!(log, "{name}").unwrap();
+    true
 }
