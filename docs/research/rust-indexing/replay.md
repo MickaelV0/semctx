@@ -250,8 +250,12 @@ pilot coordinates missed a function; retained serial measurements use the correc
 The probe refuses headers larger than 8 KiB, message bodies larger than 4 MiB, more than
 16 MiB of cumulative wire input (headers included), or more than 10,000 messages. These limits
 bound captured protocol input; they do not measure or cap the server's resident memory.
-The direct RA child is killed and awaited on an interrupted probe; this does not promise isolation
-or termination of an arbitrary Cargo process tree. No product subprocess manager is implemented.
+After sending `exit`, stdout is drained in 64 KiB chunks without retaining further diagnostics,
+so a server's trailing output cannot block its exit behind a full pipe. On cancellation or refusal,
+the direct RA child is killed, stdin is closed, and stdout drainage and child reaping share a
+separate one-second cleanup deadline. Thus `--timeout` bounds the main probe, with up to one
+additional second for cleanup. An exit racing the kill is tolerated. These bounds do not promise
+isolation or termination of an arbitrary Cargo process tree. No product subprocess manager is implemented.
 Responses are retained verbatim apart from documented root/temp prefix normalization. The Python
 probe is intentionally not a production LSP client: it cannot establish a coherent whole-index
 generation or qualify arbitrary server requests.

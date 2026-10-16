@@ -10,6 +10,36 @@ MAX_HEADER_BYTES = 8 * 1024
 MAX_FRAME_BYTES = 4 * 1024 * 1024
 MAX_WIRE_BYTES = 16 * 1024 * 1024
 MAX_MESSAGES = 10_000
+CLEANUP_TIMEOUT = 1.0
+
+
+async def discard_output(reader):
+    # Drain without retaining output after protocol inspection has finished.
+    while await reader.read(64 * 1024):
+        pass
+
+
+async def cleanup_process(process, drain):
+    if process.returncode is None:
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass  # Exit can race the cancellation/refusal path.
+    process.stdin.close()
+    if drain is None:
+        drain = asyncio.create_task(discard_output(process.stdout))
+    waiter = asyncio.create_task(process.wait())
+    tasks = {drain, waiter}
+    try:
+        _, pending = await asyncio.wait(tasks, timeout=CLEANUP_TIMEOUT)
+        if pending:
+            raise TimeoutError("LSP direct-child cleanup deadline exceeded")
+        for task in tasks:
+            task.result()
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def receive(reader, budget=None):
@@ -69,6 +99,7 @@ async def probe(args):
     )
     messages = []
     budget = {"wire_bytes": 0, "messages": 0}
+    drain = None
 
     async def send(message):
         body = json.dumps(message).encode()
@@ -158,6 +189,7 @@ async def probe(args):
         timings["documentSymbolAfterEdit"] = timings.pop("textDocument/documentSymbol")
         await request(7, "shutdown", None)
         await send({"jsonrpc": "2.0", "method": "exit"})
+        drain = asyncio.create_task(discard_output(process.stdout))
         await process.wait()
         return {
             "initialization": initialized, "symbols": symbols, "unknown": unknown,
@@ -166,9 +198,7 @@ async def probe(args):
             "timingsMs": timings, "messages": messages, "exitCode": process.returncode,
         }
     finally:
-        if process.returncode is None:
-            process.kill()
-            await process.wait()
+        await cleanup_process(process, drain)
 
 
 def main():

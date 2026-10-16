@@ -3,6 +3,7 @@ import importlib.util
 import io
 import json
 import tempfile
+import sys
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -64,7 +65,7 @@ class LspTransportTest(unittest.IsolatedAsyncioTestCase):
         reader.feed_data(frames)
         reader.feed_eof()
         process = SimpleNamespace(
-            stdin=SimpleNamespace(write=Mock(), drain=AsyncMock()),
+            stdin=SimpleNamespace(write=Mock(), drain=AsyncMock(), close=Mock()),
             stdout=reader, returncode=None, kill=Mock(),
         )
 
@@ -113,7 +114,7 @@ class LspTransportTest(unittest.IsolatedAsyncioTestCase):
         reader.feed_eof()
         frames = []
         process = SimpleNamespace(
-            stdin=SimpleNamespace(write=frames.append, drain=AsyncMock()),
+            stdin=SimpleNamespace(write=frames.append, drain=AsyncMock(), close=Mock()),
             stdout=reader,
             returncode=None,
             kill=Mock(),
@@ -160,6 +161,98 @@ class LspTransportTest(unittest.IsolatedAsyncioTestCase):
         reader.feed_data(b"Content-Length: 1\r\n\r\nx")
         with self.assertRaises(json.JSONDecodeError):
             await probe.receive(reader)
+
+
+LIFECYCLE_SERVER = r"""
+import json, sys, time
+mode = sys.argv[1]
+def send(message):
+    body = json.dumps(message).encode()
+    sys.stdout.buffer.write(f"Content-Length: {len(body)}\r\n\r\n".encode() + body)
+    sys.stdout.buffer.flush()
+if mode == "refusal":
+    sys.stdout.buffer.write(b"Content-Length: 4194305\r\n\r\n" + b"x" * 1048576)
+    sys.stdout.buffer.flush()
+    time.sleep(60)
+while True:
+    length = None
+    while True:
+        line = sys.stdin.buffer.readline()
+        if not line:
+            sys.exit(0)
+        if line == b"\r\n":
+            break
+        if line.lower().startswith(b"content-length:"):
+            length = int(line.split(b":", 1)[1])
+    message = json.loads(sys.stdin.buffer.read(length))
+    method = message.get("method")
+    if method == "exit":
+        if mode != "quiet":
+            sys.stdout.buffer.write(b"x" * 1048576)
+            sys.stdout.buffer.flush()
+        if mode == "stall":
+            time.sleep(60)
+        sys.exit(0)
+    if "id" in message:
+        result = {"capabilities": {"textDocumentSync": 2}} if method == "initialize" else []
+        send({"id": message["id"], "result": result})
+        if method == "initialize":
+            send({"method": "experimental/serverStatus", "params": {"quiescent": True}})
+"""
+
+
+class LspProcessLifecycleTest(unittest.IsolatedAsyncioTestCase):
+    async def run_server(self, mode, expected_error=None):
+        create = asyncio.create_subprocess_exec
+        children = []
+
+        async def factory(*_args, **kwargs):
+            child = await create(sys.executable, "-u", "-c", LIFECYCLE_SERVER, mode, **kwargs)
+            children.append(child)
+            return child
+
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory, "source.rs").write_text("fn f() {}", encoding="utf-8")
+            args = SimpleNamespace(binary="owned-test-server", workspace=directory, file="source.rs",
+                                   target=None, features=[], line=0, character=0,
+                                   definition_line=0, definition_character=0)
+            with patch.object(probe.asyncio, "create_subprocess_exec", factory):
+                task = asyncio.create_task(asyncio.wait_for(probe.probe(args), timeout=2))
+                done, _ = await asyncio.wait({task}, timeout=4)
+                completed = bool(done)
+                # Watchdog releases only the owned child's pipe; a regression is
+                # an assertion failure rather than a test-runner timeout.
+                if not completed:
+                    for child in children:
+                        if child.returncode is None:
+                            child.kill()
+                        while await child.stdout.read(65536):
+                            pass
+                    task.cancel()
+                outcome = (await asyncio.gather(task, return_exceptions=True))[0]
+                for child in children:
+                    child.stdin.close()
+                await asyncio.sleep(0)
+        self.assertTrue(completed, "LSP direct-child cleanup exceeded its bounded deadline")
+        self.assertTrue(children, "the regression must execute a real OS child")
+        self.assertIsNotNone(children[0].returncode, "owned direct child must be reaped")
+        if expected_error:
+            self.assertIsInstance(outcome, expected_error)
+        else:
+            self.assertIsInstance(outcome, dict)
+            self.assertEqual(outcome["exitCode"], 0)
+
+    async def test_real_exit_flood_is_drained(self):
+        await self.run_server("flood")
+
+    async def test_real_timeout_flood_cleanup_is_bounded(self):
+        await self.run_server("stall", TimeoutError)
+
+    async def test_real_refusal_flood_cleanup_is_bounded(self):
+        await self.run_server("refusal", ValueError)
+
+    async def test_real_quiet_server_exit_is_preserved(self):
+        await self.run_server("quiet")
 
 
 class LspEditTest(unittest.TestCase):
