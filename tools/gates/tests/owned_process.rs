@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 use semctx_gates::process::{spawn_owned, spawn_owned_with_env};
 use std::{
     collections::BTreeMap,
@@ -23,21 +24,17 @@ fn streaming_stdin_keeps_json_bytes_after_ack() {
     .unwrap();
     let input = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}\n{\"id\":2}\n";
     owned
-        .child
-        .stdin
-        .take()
+        .take_stdin()
         .unwrap()
         .write_all(input.as_bytes())
         .unwrap();
     let mut output = String::new();
     owned
-        .child
-        .stdout
-        .take()
+        .take_stdout()
         .unwrap()
         .read_to_string(&mut output)
         .unwrap();
-    assert!(owned.child.wait().unwrap().success());
+    assert!(owned.wait().unwrap().success());
     owned.cleanup().unwrap();
     assert_eq!(output, input);
 }
@@ -57,16 +54,14 @@ fn exact_environment_does_not_import_user_configuration() {
         Path::new(HELPER),
     )
     .unwrap();
-    drop(owned.child.stdin.take());
+    drop(owned.take_stdin());
     let mut out = String::new();
     owned
-        .child
-        .stdout
-        .take()
+        .take_stdout()
         .unwrap()
         .read_to_string(&mut out)
         .unwrap();
-    assert!(owned.child.wait().unwrap().success());
+    assert!(owned.wait().unwrap().success());
     assert_eq!(out, "owned\ngit=explicit-isolated-config\nhome=\n");
 }
 #[test]
@@ -80,7 +75,7 @@ fn timeout_cleanup_kills_streaming_grandchild_before_joining_pipe_readers() {
         Path::new(HELPER),
     )
     .unwrap();
-    let mut stdout = owned.child.stdout.take().unwrap();
+    let mut stdout = owned.take_stdout().unwrap();
     let reader = thread::spawn(move || {
         let mut text = String::new();
         stdout.read_to_string(&mut text).unwrap();
@@ -102,7 +97,13 @@ fn invalid_helper_cannot_launch_the_real_command() {
         None,
         Path::new("missing-semctx-helper-97c950.exe"),
     );
-    assert!(result.is_err());
+    match result {
+        Err(semctx_gates::process::ProcessError::Io { operation, source }) => {
+            assert_eq!(operation, "spawn supervisor");
+            assert_eq!(source.kind(), std::io::ErrorKind::NotFound);
+        }
+        _ => panic!("missing helper must retain its native spawn error"),
+    }
 }
 #[test]
 fn helper_without_valid_ack_never_launches_the_target() {

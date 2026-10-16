@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 use std::process::Command;
 #[test]
 fn valid_mcp_peer_with_bounded_stderr_is_accepted() {
@@ -13,4 +14,37 @@ fn valid_mcp_reply_cannot_hide_stderr_overflow() {
     command.arg("--overflow");
     let error = semctx_qualification::mcp::probe_initialize(&mut command, root.path()).unwrap_err();
     assert!(error.contains("MCP stderr output exceeded"), "{error}");
+}
+
+#[test]
+fn valid_last_reply_cannot_hide_a_nonzero_mcp_exit() {
+    let root = tempfile::tempdir().unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_qualification-mcp-fixture"));
+    command.arg("--crash");
+    let error = semctx_qualification::mcp::probe_initialize(&mut command, root.path()).unwrap_err();
+    assert!(error.contains("42"), "{error}");
+}
+#[test]
+fn mcp_shutdown_observes_the_status_after_stdin_eof() {
+    let root = tempfile::tempdir().unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_qualification-mcp-fixture"));
+    command.arg("--crash-on-eof");
+    let error = semctx_qualification::mcp::probe_initialize(&mut command, root.path()).unwrap_err();
+    assert!(error.contains("42"), "{error}");
+}
+
+#[test]
+fn persistent_mcp_and_inherited_pipe_holders_are_stopped_within_a_bounded_shutdown() {
+    for mode in ["--persist", "--pipe-holder"] {
+        let root = tempfile::tempdir().unwrap();
+        let mut command = Command::new(env!("CARGO_BIN_EXE_qualification-mcp-fixture"));
+        command.arg(mode);
+        let started = std::time::Instant::now();
+        let value = semctx_qualification::mcp::probe_initialize(&mut command, root.path()).unwrap();
+        assert_eq!(value["serverInfo"]["name"], "native-wire-fixture");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "{mode}"
+        );
+    }
 }

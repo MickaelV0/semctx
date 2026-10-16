@@ -1,5 +1,5 @@
 use crate::{
-    Case, artifact, digest, json,
+    Case, ExpectedOutcome, SupportStatus, artifact, digest, json,
     process::{self, Observation},
     refusal, verify,
 };
@@ -35,7 +35,8 @@ impl Runner {
     pub fn cli(&mut self, root: &Path, args: &[&str]) -> Result<(Observation, String), String> {
         let mut command = self.runtime.command(&self.cli);
         command.args(args).arg("--root").arg(root);
-        let observed = process::run(&mut command, root, process::BUDGET)?;
+        let observed =
+            process::run(&mut command, root, process::BUDGET).map_err(|e| e.to_string())?;
         let file = self.record(
             args[0],
             &j!({"argv": args, "root":root, "observation":observed}),
@@ -45,20 +46,18 @@ impl Runner {
     pub fn case(
         &mut self,
         id: &str,
-        support: &str,
+        support: SupportStatus,
         observation: String,
         result: Result<(), String>,
-        refusal: bool,
+        expected: ExpectedOutcome,
     ) {
         self.cases.push(Case {
             id: id.into(),
-            support_status: support.into(),
+            support_status: support.as_str().into(),
             outcome: if result.is_err() {
                 "failure"
-            } else if refusal {
-                "controlled_refusal"
             } else {
-                "useful_success"
+                expected.as_str()
             }
             .into(),
             obligations: vec![id.into()],
@@ -81,7 +80,8 @@ impl Runner {
 }
 
 pub fn git(root: &Path, args: &[&str]) -> Result<(), String> {
-    let observed = process::run(Command::new("git").args(args), root, process::BUDGET)?;
+    let observed = process::run(Command::new("git").args(args), root, process::BUDGET)
+        .map_err(|e| e.to_string())?;
     if observed.code != Some(0) || observed.timed_out || observed.output_exceeded {
         return Err(format!("git {args:?}: {}", observed.stderr));
     }
@@ -146,10 +146,10 @@ pub fn run(runner: &mut Runner, root: &Path) -> Result<(), String> {
     let (ob, raw) = runner.cli(root, &["setup", "--json"])?;
     runner.case(
         "cli.setup",
-        "supported",
+        SupportStatus::Supported,
         raw,
         json(&ob, 0).and_then(|v| field(&v, "/setupReady", &j!(true))),
-        false,
+        ExpectedOutcome::UsefulSuccess,
     );
     // Setup deliberately creates versionable semantic/configuration files; establish their baseline.
     commit(root)?;
@@ -164,10 +164,10 @@ pub fn run(runner: &mut Runner, root: &Path) -> Result<(), String> {
     let (ob, raw) = runner.cli(root, &["verify", "diff", "--json"])?;
     runner.case(
         "cli.benign",
-        "supported",
+        SupportStatus::Supported,
         raw,
         verify(&ob, &["src/symbol.ts"], "PASS").map(|_| ()),
-        false,
+        ExpectedOutcome::UsefulSuccess,
     );
     write(root, "src/symbol.ts", SYMBOL)?;
     write(root, "src/cart.ts", RISK)?;
@@ -175,7 +175,7 @@ pub fn run(runner: &mut Runner, root: &Path) -> Result<(), String> {
     let (ob, raw) = runner.cli(root, &["verify", "diff", "--json"])?;
     runner.case(
         "cli.contract-risk",
-        "supported",
+        SupportStatus::Supported,
         raw,
         verify(&ob, &["src/cart.ts"], "WARN").and_then(|v| {
             if !v["findings"]
@@ -188,7 +188,7 @@ pub fn run(runner: &mut Runner, root: &Path) -> Result<(), String> {
             }
             Ok(())
         }),
-        false,
+        ExpectedOutcome::UsefulSuccess,
     );
     write(root, "src/cart.ts", BASE)?;
     runner.index(root)?;
@@ -199,10 +199,10 @@ pub fn run(runner: &mut Runner, root: &Path) -> Result<(), String> {
     let (ob, raw) = runner.cli(root, &["verify", "diff", "--json"])?;
     runner.case(
         "cli.missing-index",
-        "unsupported",
+        SupportStatus::Unsupported,
         raw,
         refusal(&ob, "REPO_NOT_INDEXED"),
-        true,
+        ExpectedOutcome::ControlledRefusal,
     );
     fs::rename(&backup, &db).map_err(|e| e.to_string())?;
 
@@ -213,7 +213,7 @@ pub fn run(runner: &mut Runner, root: &Path) -> Result<(), String> {
     let unchanged = fs::read(&config).map_err(|e| e.to_string())? == b"{ invalid json";
     runner.case(
         "cli.invalid-config",
-        "unsupported",
+        SupportStatus::Unsupported,
         raw,
         refusal(&ob, "CONFIG_INVALID").and_then(|_| {
             if unchanged {
@@ -222,7 +222,7 @@ pub fn run(runner: &mut Runner, root: &Path) -> Result<(), String> {
                 Err("refusal modified config".into())
             }
         }),
-        true,
+        ExpectedOutcome::ControlledRefusal,
     );
     fs::write(&config, bytes).map_err(|e| e.to_string())?;
 
@@ -234,7 +234,7 @@ pub fn run(runner: &mut Runner, root: &Path) -> Result<(), String> {
     let (ob, raw) = runner.cli(root, &["status", "--json"])?;
     runner.case(
         "cli.stale",
-        "supported",
+        SupportStatus::Supported,
         raw,
         json(&ob, 3).and_then(|v| {
             // Recorded semantic evidence is checked before the freshness seal: source drift
@@ -250,17 +250,17 @@ pub fn run(runner: &mut Runner, root: &Path) -> Result<(), String> {
             }
             Ok(())
         }),
-        true,
+        ExpectedOutcome::ControlledRefusal,
     );
     write(root, "src/symbol.ts", SYMBOL)?;
     runner.index(root)?;
     let (ob, raw) = runner.cli(root, &["status", "--json"])?;
     runner.case(
         "cli.repaired",
-        "supported",
+        SupportStatus::Supported,
         raw,
         json(&ob, 0).and_then(|v| field(&v, "/verdict", &j!("FRESH"))),
-        false,
+        ExpectedOutcome::UsefulSuccess,
     );
 
     // Python is explicitly partial: the product reports missing negative completeness.
@@ -279,7 +279,7 @@ pub fn run(runner: &mut Runner, root: &Path) -> Result<(), String> {
     let (ob, raw) = runner.cli(partial.path(), &["setup", "--polyglot", "--json"])?;
     runner.case(
         "cli.partial-coverage",
-        "partial",
+        SupportStatus::Partial,
         raw,
         json(&ob, 0).and_then(|v| {
             field(&v, "/setupReady", &j!(true))?;
@@ -294,7 +294,7 @@ pub fn run(runner: &mut Runner, root: &Path) -> Result<(), String> {
             }
             Ok(())
         }),
-        false,
+        ExpectedOutcome::UsefulSuccess,
     );
     crate::mcp::run(runner, root)?;
     // Detect modifications to all selected immutable artifacts after the journey.

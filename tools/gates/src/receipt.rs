@@ -8,6 +8,7 @@ use std::{collections::BTreeSet, path::Path};
 
 pub const STEP_BUDGET_MS: u64 = 45 * 60 * 1000;
 pub const OUTPUT_CAP: usize = 1024 * 1024;
+const TEST_OUTPUT_CAP: usize = 16 * 1024 * 1024;
 const ROUTING: &[&str] = &[
     "scripts/test/ci-plan.test.ts",
     "scripts/test/ci-gate.test.ts",
@@ -137,6 +138,7 @@ pub fn verification(base: &str, skip_diff: bool, shard: &str) -> Vec<Action> {
         action("plugin parity", &["bun", "run", "plugin:check"]),
     ]);
     let mut tests = action("tests", &["bun", "run", "test"]);
+    tests.output_cap = TEST_OUTPUT_CAP;
     if !shard.is_empty() {
         tests.argv.extend([
             format!("--shard={shard}"),
@@ -230,6 +232,7 @@ pub fn commands(lane: &Lane, base: &str) -> Result<Vec<Action>> {
                 "affected cross-platform tests",
                 &["bun", "test", "--timeout", "60000"],
             );
+            a.output_cap = TEST_OUTPUT_CAP;
             if !lane.shard.is_empty() {
                 a.argv.extend([
                     format!("--shard={}", lane.shard),
@@ -267,9 +270,10 @@ pub fn expected_os(lane: &Lane) -> &str {
         _ => "unknown",
     }
 }
-fn seal(receipt: &mut Receipt) {
+fn seal(receipt: &mut Receipt) -> Result<()> {
     receipt.receipt_id.clear();
-    receipt.receipt_id = digest(serde_json::to_vec(receipt).expect("serializable receipt"));
+    receipt.receipt_id = digest(serde_json::to_vec(receipt).map_err(|error| error.to_string())?);
+    Ok(())
 }
 pub fn execute(root: &Path, plan: &Plan, index: usize) -> Receipt {
     let lane = plan
@@ -308,19 +312,19 @@ pub fn execute(root: &Path, plan: &Plan, index: usize) -> Receipt {
         }
         for action in commands(&receipt.lane, &plan.subject.base)? {
             eprintln!("[semctx-gates] START {}", action.label);
-            let outcome = process::run(&action.argv, root, action.timeout_ms, action.output_cap)
-                .unwrap_or_else(|error| Outcome {
-                    kind: "infrastructure_error".into(),
-                    exit_code: None,
-                    duration_ms: 0,
-                    stdout: String::new(),
-                    stderr: error.clone(),
-                    stdout_bytes: 0,
-                    stderr_bytes: error.len() as u64,
-                    stdout_hash: digest(""),
-                    stderr_hash: digest(error),
-                });
-            eprint!("{}{}", outcome.stdout, outcome.stderr);
+            let outcome =
+                process::run_logged(&action.argv, root, action.timeout_ms, action.output_cap)
+                    .unwrap_or_else(|error| Outcome {
+                        kind: "infrastructure_error".into(),
+                        exit_code: None,
+                        duration_ms: 0,
+                        stdout: String::new(),
+                        stderr: error.to_string(),
+                        stdout_bytes: 0,
+                        stderr_bytes: error.to_string().len() as u64,
+                        stdout_hash: digest(""),
+                        stderr_hash: digest(error.to_string()),
+                    });
             let passed = outcome.kind == "success" && outcome.exit_code == Some(0);
             receipt.steps.push(Step { action, outcome });
             if !passed {
@@ -334,7 +338,10 @@ pub fn execute(root: &Path, plan: &Plan, index: usize) -> Receipt {
         Ok(()) => receipt.status = "passed".into(),
         Err(e) => receipt.error = Some(e),
     }
-    seal(&mut receipt);
+    if let Err(error) = seal(&mut receipt) {
+        receipt.status = "failed".into();
+        receipt.error = Some(error);
+    }
     receipt
 }
 pub fn admit(plan: &Plan, receipts: &[Receipt]) -> Result<()> {
@@ -350,7 +357,7 @@ pub fn admit(plan: &Plan, receipts: &[Receipt]) -> Result<()> {
             .find(|l| l.id == receipt.lane.id)
             .ok_or("foreign receipt lane")?;
         let mut expected = receipt.clone();
-        seal(&mut expected);
+        seal(&mut expected)?;
         if &expected != receipt || !seen.insert(lane.id.clone()) {
             return Err("tampered or duplicate receipt".into());
         }
@@ -390,6 +397,7 @@ pub fn admit(plan: &Plan, receipts: &[Receipt]) -> Result<()> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     fn fixture() -> (Plan, Vec<Receipt>) {
@@ -449,7 +457,7 @@ mod tests {
             error: None,
             steps,
         };
-        seal(&mut receipt);
+        seal(&mut receipt).unwrap();
         (plan, vec![receipt])
     }
     #[test]
@@ -473,21 +481,21 @@ mod tests {
     fn rejects_foreign_subject_even_resealed() {
         let (p, mut r) = fixture();
         r[0].subject.head = "other".into();
-        seal(&mut r[0]);
+        seal(&mut r[0]).unwrap();
         assert!(admit(&p, &r).unwrap_err().contains("identity"));
     }
     #[test]
     fn rejects_failed_even_resealed() {
         let (p, mut r) = fixture();
         r[0].status = "failed".into();
-        seal(&mut r[0]);
+        seal(&mut r[0]).unwrap();
         assert!(admit(&p, &r).is_err());
     }
     #[test]
     fn rejects_truncated_steps_even_resealed() {
         let (p, mut r) = fixture();
         r[0].steps.pop();
-        seal(&mut r[0]);
+        seal(&mut r[0]).unwrap();
         assert!(admit(&p, &r).unwrap_err().contains("skipped"));
     }
     #[test]
@@ -500,14 +508,14 @@ mod tests {
     fn rejects_bad_trace_hash_even_resealed() {
         let (p, mut r) = fixture();
         r[0].steps[0].outcome.stdout = "no".into();
-        seal(&mut r[0]);
+        seal(&mut r[0]).unwrap();
         assert!(admit(&p, &r).unwrap_err().contains("digest"));
     }
     #[test]
     fn rejects_timeout_masquerading_as_success() {
         let (p, mut r) = fixture();
         r[0].steps[0].outcome.kind = "timeout".into();
-        seal(&mut r[0]);
+        seal(&mut r[0]).unwrap();
         assert!(admit(&p, &r).is_err());
     }
     #[test]

@@ -167,8 +167,8 @@ fn verify_pr(args: &[String]) -> Result<u8> {
     );
     for action in actions {
         eprintln!("[verify:pr] START {}", action.label);
-        let outcome = process::run(&action.argv, &root, action.timeout_ms, action.output_cap)?;
-        eprint!("{}{}", outcome.stdout, outcome.stderr);
+        let outcome =
+            process::run_logged(&action.argv, &root, action.timeout_ms, action.output_cap)?;
         if outcome.kind != "success" {
             eprintln!("[verify:pr] FAIL {} ({})", action.label, outcome.kind);
             return Ok(outcome
@@ -198,6 +198,7 @@ fn main() -> ExitCode {
                 // ExitCode accepts only u8. Preserve Windows NTSTATUS/32-bit failure values
                 // through the internal helper; clamping them can turn a crash into exit 0.
                 #[cfg(windows)]
+                // SAFETY: Win32 ExitProcess accepts the complete child status and never returns.
                 unsafe {
                     windows_sys::Win32::System::Threading::ExitProcess(code as u32);
                 }

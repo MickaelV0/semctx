@@ -27,31 +27,89 @@ pub const CASES: &[&str] = &[
     "mcp.refresh",
 ];
 
-pub fn lane_host_os(lane: &str) -> Option<&'static str> {
-    match lane {
-        "ubuntu-latest" => Some("linux"),
-        "windows-latest" => Some("windows"),
-        "macos-15" => Some("macos"),
-        _ => None,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostLane {
+    Ubuntu,
+    Windows,
+    Macos,
+}
+impl HostLane {
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "ubuntu-latest" => Ok(Self::Ubuntu),
+            "windows-latest" => Ok(Self::Windows),
+            "macos-15" => Ok(Self::Macos),
+            _ => Err(format!("unknown qualification OS {value}")),
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ubuntu => "ubuntu-latest",
+            Self::Windows => "windows-latest",
+            Self::Macos => "macos-15",
+        }
+    }
+    pub fn host_os(self) -> &'static str {
+        match self {
+            Self::Ubuntu => "linux",
+            Self::Windows => "windows",
+            Self::Macos => "macos",
+        }
     }
 }
-pub fn observed_lane(requested: Option<&Path>) -> Result<String, String> {
+pub fn lane_host_os(lane: &str) -> Option<&'static str> {
+    HostLane::parse(lane).ok().map(HostLane::host_os)
+}
+pub fn observed_lane(requested: Option<&str>) -> Result<HostLane, String> {
     let default = match std::env::consts::OS {
-        "linux" => "ubuntu-latest",
-        "windows" => "windows-latest",
-        "macos" => "macos-15",
+        "linux" => HostLane::Ubuntu,
+        "windows" => HostLane::Windows,
+        "macos" => HostLane::Macos,
         _ => return Err("host OS has no qualification lane".into()),
     };
     let lane = requested
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|| default.into());
-    if lane_host_os(&lane) != Some(std::env::consts::OS) {
+        .map(HostLane::parse)
+        .transpose()?
+        .unwrap_or(default);
+    if lane != default {
         return Err(format!(
-            "qualification lane {lane} does not match observed host OS {}",
+            "qualification lane {} does not match observed host OS {}",
+            lane.as_str(),
             std::env::consts::OS
         ));
     }
     Ok(lane)
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum SupportStatus {
+    Supported,
+    Partial,
+    Unsupported,
+    NotQualified,
+}
+impl SupportStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Supported => "supported",
+            Self::Partial => "partial",
+            Self::Unsupported => "unsupported",
+            Self::NotQualified => "not_qualified",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy)]
+pub enum ExpectedOutcome {
+    UsefulSuccess,
+    ControlledRefusal,
+}
+impl ExpectedOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::UsefulSuccess => "useful_success",
+            Self::ControlledRefusal => "controlled_refusal",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -442,6 +500,7 @@ pub fn validate_raw_case(id: &str, raw: &Value) -> Result<(), String> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     fn observed(code: i32, stdout: &str, stderr: &str) -> Observation {

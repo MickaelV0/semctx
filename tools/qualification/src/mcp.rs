@@ -1,4 +1,5 @@
 use crate::{
+    ExpectedOutcome, SupportStatus,
     journeys::{self, Runner},
     json, process,
 };
@@ -7,26 +8,33 @@ use std::{
     fs,
     io::{BufRead, BufReader, Read},
     path::Path,
-    process::ChildStdin,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver},
     },
     thread,
+    time::{Duration, Instant},
 };
 
 struct Session {
     child: process::OwnedChild,
-    input: ChildStdin,
+    input: Option<mpsc::Sender<Value>>,
+    write_result: Receiver<Result<(), process::Error>>,
+    input_writer: Option<thread::JoinHandle<()>>,
     output: Receiver<Result<Value, String>>,
-    stderr_exceeded: Arc<AtomicBool>,
-    stderr_reader: Option<thread::JoinHandle<Vec<u8>>>,
+    wire_reader: Option<thread::JoinHandle<Result<(), String>>>,
+    stop_reader: Arc<AtomicBool>,
+    stderr: Option<process::Capture>,
     id: u64,
+    finished: bool,
 }
 impl Drop for Session {
     fn drop(&mut self) {
-        let _ = self.finish();
+        if !self.finished {
+            drop(self.input.take());
+            let _ = self.cleanup_readers();
+        }
     }
 }
 impl Session {
@@ -35,12 +43,25 @@ impl Session {
         Self::start_command(&mut command, root)
     }
     fn start_command(command: &mut std::process::Command, root: &Path) -> Result<Self, String> {
-        let mut child = process::spawn(command, root)?;
-        let input = child.child.stdin.take().ok_or("missing MCP stdin")?;
-        let stdout = child.child.stdout.take().ok_or("missing MCP stdout")?;
-        let stderr = child.child.stderr.take().ok_or("missing MCP stderr")?;
+        let mut child = process::spawn(command, root).map_err(|error| error.to_string())?;
+        let mut input = child.take_stdin().ok_or("missing MCP stdin")?;
+        let stdout = child.take_stdout().ok_or("missing MCP stdout")?;
+        let stderr = child.take_stderr().ok_or("missing MCP stderr")?;
+        let (input_sender, input_receiver) = mpsc::channel();
+        let (written, write_result) = mpsc::channel();
+        let input_writer = thread::spawn(move || {
+            while let Ok(value) = input_receiver.recv() {
+                let result = process::write_json(&mut input, &value);
+                let failed = result.is_err();
+                if written.send(result).is_err() || failed {
+                    break;
+                }
+            }
+        });
         let (tx, output) = mpsc::sync_channel(32);
-        thread::spawn(move || {
+        let stop_reader = Arc::new(AtomicBool::new(false));
+        let stopped = stop_reader.clone();
+        let wire_reader = thread::spawn(move || {
             let mut reader = BufReader::new(stdout);
             let mut total = 0u64;
             loop {
@@ -50,56 +71,152 @@ impl Session {
                     .take(process::LIMIT + 1)
                     .read_until(b'\n', &mut bytes);
                 total += bytes.len() as u64;
-                let message = match read {
-                    Ok(0) => break,
+                let mut message = match read {
+                    Ok(0) => return Ok(()),
                     Ok(_) if total > process::LIMIT => Err("MCP wire output exceeded".into()),
-                    Ok(_) => {
-                        serde_json::from_slice(&bytes).map_err(|e| format!("MCP invalid JSON: {e}"))
-                    }
-                    Err(e) => Err(e.to_string()),
+                    Ok(_) => serde_json::from_slice(&bytes)
+                        .map_err(|error| format!("MCP invalid JSON: {error}")),
+                    Err(error) => Err(format!("MCP stdout read: {error}")),
                 };
-                let failed = message.is_err();
-                if tx.send(message).is_err() || failed {
-                    break;
+                let failure = message.as_ref().err().cloned();
+                loop {
+                    match tx.try_send(message) {
+                        Ok(()) => break,
+                        Err(mpsc::TrySendError::Disconnected(_)) => return Ok(()),
+                        Err(mpsc::TrySendError::Full(value)) => {
+                            if stopped.load(Ordering::SeqCst) {
+                                return failure.map_or(Ok(()), Err);
+                            }
+                            message = value;
+                            thread::sleep(Duration::from_millis(5));
+                        }
+                    }
+                }
+                if let Some(error) = failure {
+                    return Err(error);
                 }
             }
         });
-        let exceeded = Arc::new(AtomicBool::new(false));
-        let stderr_reader = process::drain(stderr, exceeded.clone());
         Ok(Self {
             child,
-            input,
+            input: Some(input_sender),
+            write_result,
+            input_writer: Some(input_writer),
             output,
-            stderr_exceeded: exceeded,
-            stderr_reader: Some(stderr_reader),
+            wire_reader: Some(wire_reader),
+            stop_reader,
+            stderr: Some(process::drain(stderr, "MCP stderr")),
             id: 0,
+            finished: false,
         })
     }
-    fn check_stderr(&self) -> Result<(), String> {
-        if self.stderr_exceeded.load(Ordering::SeqCst) {
-            Err("MCP stderr output exceeded".into())
-        } else {
-            Ok(())
+    fn check_capture(&self) -> Result<(), String> {
+        if process::cancellation_requested() {
+            return Err(process::Error::Cancelled.to_string());
         }
+        if let Some(stderr) = &self.stderr {
+            stderr.check().map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    }
+    fn cleanup_readers(&mut self) -> Result<(), String> {
+        let cleanup = self.child.cleanup();
+        self.stop_reader.store(true, Ordering::SeqCst);
+        let writer = self
+            .input_writer
+            .take()
+            .map(|writer| {
+                writer
+                    .join()
+                    .map_err(|_| "MCP stdin writer panicked".to_owned())
+            })
+            .unwrap_or(Ok(()));
+        let wire = self
+            .wire_reader
+            .take()
+            .map(|reader| {
+                reader
+                    .join()
+                    .map_err(|_| "MCP stdout reader panicked".to_owned())?
+            })
+            .unwrap_or(Ok(()));
+        let stderr = self
+            .stderr
+            .take()
+            .map(|reader| {
+                reader
+                    .finish_checked()
+                    .map(|_| ())
+                    .map_err(|error| error.to_string())
+            })
+            .unwrap_or(Ok(()));
+        self.finished = true;
+        cleanup.map_err(|error| error.to_string())?;
+        writer?;
+        wire?;
+        stderr
     }
     fn finish(&mut self) -> Result<(), String> {
-        self.child.cleanup()?;
-        if let Some(reader) = self.stderr_reader.take() {
-            reader.join().map_err(|_| "MCP stderr reader panicked")?;
+        if self.finished {
+            return Ok(());
         }
-        self.check_stderr()
+        drop(self.input.take());
+        let started = Instant::now();
+        let status = loop {
+            if let Err(error) = self.check_capture() {
+                break Err(error);
+            }
+            match self.child.try_wait() {
+                Ok(Some(status)) if status.success() => break Ok(()),
+                Ok(Some(status)) => {
+                    break Err(format!("MCP server exited unsuccessfully: {status}"));
+                }
+                Ok(None) => {}
+                Err(error) => break Err(format!("MCP wait: {error}")),
+            }
+            if started.elapsed() >= Duration::from_millis(500) {
+                break Ok(());
+            }
+            thread::sleep(Duration::from_millis(10));
+        };
+        let cleanup = self.cleanup_readers();
+        status?;
+        cleanup
+    }
+    fn write(&mut self, value: &Value, budget: Duration) -> Result<(), String> {
+        let started = Instant::now();
+        self.check_capture()?;
+        self.input
+            .as_ref()
+            .ok_or("MCP stdin closed")?
+            .send(value.clone())
+            .map_err(|error| format!("MCP stdin writer: {error}"))?;
+        loop {
+            self.check_capture()?;
+            let remaining = budget
+                .checked_sub(started.elapsed())
+                .ok_or("MCP write deadline exceeded")?;
+            match self
+                .write_result
+                .recv_timeout(remaining.min(Duration::from_millis(50)))
+            {
+                Ok(result) => return result.map_err(|error| error.to_string()),
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(error) => return Err(format!("MCP stdin writer: {error}")),
+            }
+        }
     }
     fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {
-        self.check_stderr()?;
+        self.check_capture()?;
         self.id += 1;
         let id = self.id;
-        process::write_json(
-            &mut self.input,
+        self.write(
             &j!({"jsonrpc":"2.0","id":id,"method":method,"params":params}),
+            process::BUDGET,
         )?;
         let started = std::time::Instant::now();
         loop {
-            self.check_stderr()?;
+            self.check_capture()?;
             let remaining = process::BUDGET
                 .checked_sub(started.elapsed())
                 .ok_or("MCP deadline exceeded")?;
@@ -110,11 +227,11 @@ impl Session {
                 Ok(value) => value?,
                 Err(mpsc::RecvTimeoutError::Timeout) => continue,
                 Err(error) => {
-                    self.check_stderr()?;
+                    self.check_capture()?;
                     return Err(format!("MCP wire: {error}"));
                 }
             };
-            self.check_stderr()?;
+            self.check_capture()?;
             if value["id"] != id {
                 if value.get("id").is_some() {
                     return Err("unexpected MCP response identity".into());
@@ -169,7 +286,7 @@ pub fn run(runner: &mut Runner, root: &Path) -> Result<(), String> {
     let raw = runner.record("mcp-initialize", &initialized)?;
     runner.case(
         "mcp.initialize",
-        "supported",
+        SupportStatus::Supported,
         raw,
         if initialized["protocolVersion"].is_string()
             && initialized["serverInfo"]["name"].is_string()
@@ -178,18 +295,18 @@ pub fn run(runner: &mut Runner, root: &Path) -> Result<(), String> {
         } else {
             Err("missing MCP negotiation".into())
         },
-        false,
+        ExpectedOutcome::UsefulSuccess,
     );
-    process::write_json(
-        &mut session.input,
+    session.write(
         &j!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+        process::BUDGET,
     )?;
     let tools = session.request("tools/list", j!({}))?;
     let raw = runner.record("mcp-tools", &tools)?;
     let names = tools["tools"].as_array().ok_or("missing tool inventory")?;
     runner.case(
         "mcp.tools",
-        "supported",
+        SupportStatus::Supported,
         raw,
         if [
             "semctx_inspect",
@@ -203,20 +320,20 @@ pub fn run(runner: &mut Runner, root: &Path) -> Result<(), String> {
         } else {
             Err("required functional tools absent".into())
         },
-        false,
+        ExpectedOutcome::UsefulSuccess,
     );
     let status = session.tool("semctx_control_status", j!({"repositoryRoot":root}))?;
     let raw = runner.record("mcp-control-status", &status)?;
     runner.case(
         "mcp.control-status",
-        "supported",
+        SupportStatus::Supported,
         raw,
         if status["verdict"] == "FRESH" && status["canRunHighRiskControl"] == true {
             Ok(())
         } else {
             Err(format!("MCP control not fresh: {status}"))
         },
-        false,
+        ExpectedOutcome::UsefulSuccess,
     );
     let old = session.tool(
         "semctx_inspect",
@@ -226,14 +343,14 @@ pub fn run(runner: &mut Runner, root: &Path) -> Result<(), String> {
     let raw = runner.record("mcp-inspect", &j!({"inspect":old,"health":health}))?;
     runner.case(
         "mcp.inspect",
-        "supported",
+        SupportStatus::Supported,
         raw,
         if symbol(&old, "oldSymbol") && health["binding"]["status"] == "valid" {
             Ok(())
         } else {
             Err("MCP did not inspect frozen indexed symbol".into())
         },
-        false,
+        ExpectedOutcome::UsefulSuccess,
     );
 
     // Keep the same child and connection alive while a separate CLI rebuild replaces facts.
@@ -256,11 +373,11 @@ pub fn run(runner: &mut Runner, root: &Path) -> Result<(), String> {
     let new_health = session.tool("semctx_index_health", j!({"repositoryRoot":root}))?;
     let raw = runner.record(
         "mcp-refresh",
-        &j!({"pid":session.child.child.id(),"old":new_old,"new":new,"health":new_health}),
+        &j!({"pid":session.child.id(),"old":new_old,"new":new,"health":new_health}),
     )?;
     runner.case(
         "mcp.refresh",
-        "supported",
+        SupportStatus::Supported,
         raw,
         if crate::symbol_absent(&new_old, "oldSymbol")
             && symbol(&new, "newSymbol")
@@ -270,7 +387,7 @@ pub fn run(runner: &mut Runner, root: &Path) -> Result<(), String> {
         } else {
             Err("same MCP process retained stale facts".into())
         },
-        false,
+        ExpectedOutcome::UsefulSuccess,
     );
     session.finish()?;
     // Verify a useful CLI query after the same external rebuild as a final transport cross-check.
@@ -280,4 +397,29 @@ pub fn run(runner: &mut Runner, root: &Path) -> Result<(), String> {
         return Err("CLI refresh result lost the new symbol".into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+    #[test]
+    #[ignore]
+    fn fixture_no_stdin_read() {
+        thread::sleep(Duration::from_secs(2));
+    }
+    #[test]
+    fn blocked_stdin_write_obeys_the_mcp_deadline() {
+        let root = tempfile::tempdir().unwrap();
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command.args(["--ignored", "--exact", "mcp::tests::fixture_no_stdin_read"]);
+        let mut session = Session::start_command(&mut command, root.path()).unwrap();
+        let error = session
+            .write(
+                &j!({"padding":"x".repeat(1024 * 1024)}),
+                Duration::from_millis(50),
+            )
+            .unwrap_err();
+        assert!(error.contains("MCP write deadline exceeded"), "{error}");
+    }
 }

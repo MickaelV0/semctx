@@ -1,11 +1,10 @@
 //! Bounded process-tree ownership. This is lifecycle control, not a sandbox.
-use crate::Result;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     io::{Read, Write},
     path::Path,
-    process::{Child, Command, ExitStatus, Stdio},
+    process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -14,9 +13,97 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[derive(Debug)]
+pub enum ProcessError {
+    Invalid(String),
+    Io {
+        operation: &'static str,
+        source: std::io::Error,
+    },
+}
+impl ProcessError {
+    fn io(operation: &'static str, source: std::io::Error) -> Self {
+        Self::Io { operation, source }
+    }
+}
+impl std::fmt::Display for ProcessError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Invalid(message) => formatter.write_str(message),
+            Self::Io { operation, source } => write!(formatter, "{operation}: {source}"),
+        }
+    }
+}
+impl std::error::Error for ProcessError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Invalid(_) => None,
+            Self::Io { source, .. } => Some(source),
+        }
+    }
+}
+impl From<&str> for ProcessError {
+    fn from(message: &str) -> Self {
+        Self::Invalid(message.into())
+    }
+}
+impl From<String> for ProcessError {
+    fn from(message: String) -> Self {
+        Self::Invalid(message)
+    }
+}
+impl From<ProcessError> for String {
+    fn from(error: ProcessError) -> Self {
+        error.to_string()
+    }
+}
+pub type Result<T> = std::result::Result<T, ProcessError>;
+
 static CANCELLED: AtomicBool = AtomicBool::new(false);
 pub fn request_cancellation() {
     CANCELLED.store(true, Ordering::SeqCst);
+}
+pub fn cancellation_requested() -> bool {
+    CANCELLED.load(Ordering::SeqCst)
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OutputMode {
+    Capture,
+    Stderr,
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum InputMode {
+    Closed,
+    Streaming,
+}
+enum Environment<'a> {
+    Inherited(Option<&'a BTreeMap<String, String>>),
+    Exact(&'a BTreeMap<String, String>),
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OutcomeKind {
+    Success,
+    Cancelled,
+    Timeout,
+    OutputLimit,
+    Nonzero,
+    WaitError,
+    CaptureError,
+    MalformedOutput,
+}
+impl OutcomeKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Success => "success",
+            Self::Cancelled => "cancelled",
+            Self::Timeout => "timeout",
+            Self::OutputLimit => "output_limit",
+            Self::Nonzero => "nonzero",
+            Self::WaitError => "wait_error",
+            Self::CaptureError => "capture_error",
+            Self::MalformedOutput => "malformed_output",
+        }
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -51,6 +138,7 @@ impl Capture {
 fn drain(
     mut reader: impl Read + Send + 'static,
     cap: usize,
+    output_mode: OutputMode,
 ) -> (Arc<Mutex<Capture>>, thread::JoinHandle<()>) {
     use sha2::Digest;
     let data = Arc::new(Mutex::new(Capture::new()));
@@ -61,15 +149,33 @@ fn drain(
             match reader.read(&mut buffer) {
                 Ok(0) => break,
                 Ok(n) => {
-                    let mut d = data.lock().unwrap();
+                    let mut d = data
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
                     d.count += n as u64;
                     d.hash.update(&buffer[..n]);
                     let keep = n.min(cap.saturating_sub(d.bytes.len()));
                     d.bytes.extend_from_slice(&buffer[..keep]);
+                    drop(d);
+                    if output_mode == OutputMode::Stderr {
+                        let mut stderr = std::io::stderr().lock();
+                        if stderr
+                            .write_all(&buffer[..keep])
+                            .and_then(|()| stderr.flush())
+                            .is_err()
+                        {
+                            data.lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                .error = true;
+                            break;
+                        }
+                    }
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                 Err(_) => {
-                    data.lock().unwrap().error = true;
+                    data.lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .error = true;
                     break;
                 }
             }
@@ -90,6 +196,7 @@ impl Tree {
         })
     }
     fn kill(&self) {
+        // SAFETY: POSIX kill accepts a negative process-group ID assigned by Command::process_group.
         unsafe {
             libc::kill(-self.group, libc::SIGKILL);
         }
@@ -111,12 +218,13 @@ impl Tree {
     fn attach(child: &Child) -> Result<Self> {
         use std::os::windows::io::AsRawHandle;
         use windows_sys::Win32::{Foundation::CloseHandle, System::JobObjects::*};
+        // SAFETY: Win32 receives live process/job handles and a correctly sized initialized job-info buffer.
         unsafe {
             let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
             if job.is_null() {
-                return Err(format!(
-                    "CreateJobObject: {}",
-                    std::io::Error::last_os_error()
+                return Err(ProcessError::io(
+                    "CreateJobObject",
+                    std::io::Error::last_os_error(),
                 ));
             }
             let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
@@ -131,12 +239,13 @@ impl Tree {
             {
                 let error = std::io::Error::last_os_error();
                 CloseHandle(job);
-                return Err(format!("assign JobObject: {error}"));
+                return Err(ProcessError::io("assign JobObject", error));
             }
             Ok(Self { job })
         }
     }
     fn kill(&self) {
+        // SAFETY: Win32 TerminateJobObject accepts the live job handle retained until Tree::drop.
         unsafe {
             windows_sys::Win32::System::JobObjects::TerminateJobObject(self.job, 124);
         }
@@ -146,6 +255,7 @@ impl Tree {
 impl Drop for Tree {
     fn drop(&mut self) {
         self.kill();
+        // SAFETY: Win32 CloseHandle releases the uniquely owned job handle once, after termination.
         unsafe {
             windows_sys::Win32::Foundation::CloseHandle(self.job);
         }
@@ -154,6 +264,7 @@ impl Drop for Tree {
 
 pub fn install_cancellation() {
     #[cfg(unix)]
+    // SAFETY: libc::signal receives a static C-ABI handler that only stores an AtomicBool.
     unsafe {
         extern "C" fn handler(_: i32) {
             CANCELLED.store(true, Ordering::SeqCst);
@@ -162,6 +273,7 @@ pub fn install_cancellation() {
         libc::signal(libc::SIGTERM, handler as *const () as libc::sighandler_t);
     }
     #[cfg(windows)]
+    // SAFETY: Win32 retains this static system-ABI callback; it only stores an AtomicBool.
     unsafe {
         unsafe extern "system" fn handler(event: u32) -> i32 {
             if event == 0 || event == 1 {
@@ -177,35 +289,35 @@ pub fn install_cancellation() {
 
 // The helper cannot execute the requested command until its parent has assigned its process tree.
 pub fn helper(argv: &[String]) -> Result<i32> {
-    helper_mode(argv, false)
+    helper_mode(argv, InputMode::Closed)
 }
 
 /// Internal executable entrypoint for streaming transports. The parent owns the helper's
 /// process tree before sending the acknowledgement, so no product process can escape the
 /// Windows job assignment race. stdin's persistent buffer retains bytes read with the ACK.
 pub fn helper_stream(argv: &[String]) -> Result<i32> {
-    helper_mode(argv, true)
+    helper_mode(argv, InputMode::Streaming)
 }
 
-fn helper_mode(argv: &[String], streaming: bool) -> Result<i32> {
+fn helper_mode(argv: &[String], input_mode: InputMode) -> Result<i32> {
     let mut ack = [0u8; 1];
     std::io::stdin()
         .read_exact(&mut ack)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| ProcessError::io("read supervisor acknowledgement", e))?;
     if ack != [b'!'] {
         return Err("missing supervisor acknowledgement".into());
     }
     let (program, args) = argv.split_first().ok_or("empty command")?;
     let mut child = Command::new(program)
         .args(args)
-        .stdin(if streaming {
+        .stdin(if input_mode == InputMode::Streaming {
             Stdio::piped()
         } else {
             Stdio::null()
         })
         .spawn()
-        .map_err(|e| e.to_string())?;
-    if streaming {
+        .map_err(|e| ProcessError::io("spawn target", e))?;
+    if input_mode == InputMode::Streaming {
         let mut input = child.stdin.take().ok_or("missing streaming stdin")?;
         // Stdin owns one shared BufReader. Taking its lock in this thread preserves any
         // protocol bytes prefetched while reading the ACK in the calling thread.
@@ -215,7 +327,11 @@ fn helper_mode(argv: &[String], streaming: bool) -> Result<i32> {
         // Do not join an input thread waiting for EOF when the real child has already exited.
         // The helper's exit closes that thread and the owned process tree contains its child.
     }
-    finish_status(child.wait().map_err(|e| e.to_string())?)
+    finish_status(
+        child
+            .wait()
+            .map_err(|e| ProcessError::io("wait target", e))?,
+    )
 }
 
 fn finish_status(status: ExitStatus) -> Result<i32> {
@@ -225,11 +341,12 @@ fn finish_status(status: ExitStatus) -> Result<i32> {
         if let Some(signal) = status.signal() {
             // Preserve signal termination through the helper rather than converting a crash
             // into an ordinary success or expected refusal.
+            // SAFETY: POSIX signal/raise accept the signal returned by ExitStatusExt::signal.
             unsafe {
                 libc::signal(signal, libc::SIG_DFL);
                 libc::raise(signal);
             }
-            return Err(format!("child terminated by signal {signal}"));
+            return Err(format!("child terminated by signal {signal}").into());
         }
     }
     Ok(status.code().unwrap_or(125))
@@ -238,17 +355,38 @@ fn finish_status(status: ExitStatus) -> Result<i32> {
 /// An acknowledged process with lifetime ownership. Call cleanup before joining pipe readers;
 /// a descendant may retain a pipe after the direct child exits. This is not a sandbox.
 pub struct OwnedChild {
-    pub child: Child,
+    child: Child,
     tree: Tree,
 }
 
 impl OwnedChild {
+    pub fn id(&self) -> u32 {
+        self.child.id()
+    }
+    pub fn take_stdin(&mut self) -> Option<ChildStdin> {
+        self.child.stdin.take()
+    }
+    pub fn take_stdout(&mut self) -> Option<ChildStdout> {
+        self.child.stdout.take()
+    }
+    pub fn take_stderr(&mut self) -> Option<ChildStderr> {
+        self.child.stderr.take()
+    }
+    pub fn try_wait(&mut self) -> std::io::Result<Option<ExitStatus>> {
+        self.child.try_wait()
+    }
+    pub fn wait(&mut self) -> std::io::Result<ExitStatus> {
+        self.child.wait()
+    }
     pub fn kill(&self) {
         self.tree.kill();
     }
     pub fn cleanup(&mut self) -> Result<()> {
         self.kill();
-        self.child.wait().map(|_| ()).map_err(|e| e.to_string())
+        self.child
+            .wait()
+            .map(|_| ())
+            .map_err(|e| ProcessError::io("reap owned process", e))
     }
 }
 impl Drop for OwnedChild {
@@ -263,7 +401,13 @@ pub fn spawn_owned(
     env: Option<&BTreeMap<String, String>>,
     helper_path: &Path,
 ) -> Result<OwnedChild> {
-    spawn_owned_mode(argv, root, env, helper_path, true, false)
+    spawn_owned_mode(
+        argv,
+        root,
+        Environment::Inherited(env),
+        helper_path,
+        InputMode::Streaming,
+    )
 }
 
 /// Launch with exactly the supplied environment (plus no inherited variables). The caller
@@ -274,42 +418,53 @@ pub fn spawn_owned_with_env(
     exact_env: &BTreeMap<String, String>,
     helper_path: &Path,
 ) -> Result<OwnedChild> {
-    spawn_owned_mode(argv, root, Some(exact_env), helper_path, true, true)
+    spawn_owned_mode(
+        argv,
+        root,
+        Environment::Exact(exact_env),
+        helper_path,
+        InputMode::Streaming,
+    )
 }
 
 fn spawn_owned_mode(
     argv: &[String],
     root: &Path,
-    env: Option<&BTreeMap<String, String>>,
+    environment: Environment<'_>,
     helper_path: &Path,
-    streaming: bool,
-    exact_env: bool,
+    input_mode: InputMode,
 ) -> Result<OwnedChild> {
     if argv.is_empty() {
         return Err("empty owned command".into());
     }
     let mut command = Command::new(helper_path);
     command
-        .arg(if streaming { "__exec-stream" } else { "__exec" })
+        .arg(if input_mode == InputMode::Streaming {
+            "__exec-stream"
+        } else {
+            "__exec"
+        })
         .args(argv)
         .current_dir(root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    if exact_env {
-        command.env_clear();
-    }
-    if let Some(env) = env {
-        command.envs(env);
-    }
-    let mut keys = std::env::vars_os().map(|(key, _)| key).collect::<Vec<_>>();
-    if let Some(env) = env {
-        keys.extend(env.keys().map(std::ffi::OsString::from));
-    }
-    for key in keys.into_iter().filter(|_| !exact_env) {
-        let name = key.to_string_lossy().to_ascii_uppercase();
-        if name == "GIT" || name.starts_with("GIT_") || name.starts_with("GCM_") {
-            command.env_remove(key);
+    match environment {
+        Environment::Exact(env) => {
+            command.env_clear().envs(env);
+        }
+        Environment::Inherited(env) => {
+            let mut keys = std::env::vars_os().map(|(key, _)| key).collect::<Vec<_>>();
+            if let Some(env) = env {
+                command.envs(env);
+                keys.extend(env.keys().map(std::ffi::OsString::from));
+            }
+            for key in keys {
+                let name = key.to_string_lossy().to_ascii_uppercase();
+                if name == "GIT" || name.starts_with("GIT_") || name.starts_with("GCM_") {
+                    command.env_remove(key);
+                }
+            }
         }
     }
     #[cfg(unix)]
@@ -324,7 +479,7 @@ fn spawn_owned_mode(
     }
     let mut child = command
         .spawn()
-        .map_err(|e| format!("spawn supervisor: {e}"))?;
+        .map_err(|e| ProcessError::io("spawn supervisor", e))?;
     let tree = match Tree::attach(&child) {
         Ok(tree) => tree,
         Err(e) => {
@@ -341,8 +496,8 @@ fn spawn_owned_mode(
         .as_mut()
         .ok_or("missing supervisor stdin")?
         .write_all(b"!")
-        .map_err(|e| format!("supervisor acknowledgement: {e}"))?;
-    if !streaming {
+        .map_err(|e| ProcessError::io("supervisor acknowledgement", e))?;
+    if input_mode == InputMode::Closed {
         drop(owned.child.stdin.take());
     }
     Ok(owned)
@@ -354,7 +509,8 @@ pub fn run(argv: &[String], root: &Path, timeout_ms: u64, cap: usize) -> Result<
         root,
         timeout_ms,
         cap,
-        &std::env::current_exe().map_err(|e| e.to_string())?,
+        &std::env::current_exe()
+            .map_err(|e| ProcessError::io("resolve supervisor executable", e))?,
     )
 }
 
@@ -365,29 +521,85 @@ pub fn run_with_helper(
     cap: usize,
     executable: &Path,
 ) -> Result<Outcome> {
+    run_mode(argv, root, timeout_ms, cap, executable, OutputMode::Capture)
+}
+
+pub fn run_logged(argv: &[String], root: &Path, timeout_ms: u64, cap: usize) -> Result<Outcome> {
+    run_with_helper_logged(
+        argv,
+        root,
+        timeout_ms,
+        cap,
+        &std::env::current_exe()
+            .map_err(|e| ProcessError::io("resolve supervisor executable", e))?,
+    )
+}
+
+pub fn run_with_helper_logged(
+    argv: &[String],
+    root: &Path,
+    timeout_ms: u64,
+    cap: usize,
+    executable: &Path,
+) -> Result<Outcome> {
+    run_mode(argv, root, timeout_ms, cap, executable, OutputMode::Stderr)
+}
+
+fn run_mode(
+    argv: &[String],
+    root: &Path,
+    timeout_ms: u64,
+    cap: usize,
+    executable: &Path,
+    output_mode: OutputMode,
+) -> Result<Outcome> {
     if argv.is_empty() || timeout_ms == 0 || cap == 0 {
         return Err("invalid process budget/command".into());
     }
     let start = Instant::now();
-    let mut owned = spawn_owned_mode(argv, root, None, executable, false, false)?;
+    let mut owned = spawn_owned_mode(
+        argv,
+        root,
+        Environment::Inherited(None),
+        executable,
+        InputMode::Closed,
+    )?;
     let child = &mut owned.child;
     let tree = &owned.tree;
-    let (out, out_thread) = drain(child.stdout.take().ok_or("missing stdout")?, cap);
-    let (err, err_thread) = drain(child.stderr.take().ok_or("missing stderr")?, cap);
-    let mut kind = "success";
+    let (out, out_thread) = drain(
+        child.stdout.take().ok_or("missing stdout")?,
+        cap,
+        output_mode,
+    );
+    let (err, err_thread) = drain(
+        child.stderr.take().ok_or("missing stderr")?,
+        cap,
+        output_mode,
+    );
+    let mut kind = OutcomeKind::Success;
     let exit_code;
     loop {
-        if CANCELLED.load(Ordering::SeqCst) {
-            kind = "cancelled";
+        if cancellation_requested() {
+            kind = OutcomeKind::Cancelled;
             tree.kill();
         } else if start.elapsed() >= Duration::from_millis(timeout_ms) {
-            kind = "timeout";
+            kind = OutcomeKind::Timeout;
             tree.kill();
-        } else if out.lock().unwrap().count > cap as u64 || err.lock().unwrap().count > cap as u64 {
-            kind = "output_limit";
+        } else if out
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .count
+            > cap as u64
+            || err
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .count
+                > cap as u64
+        {
+            kind = OutcomeKind::OutputLimit;
             tree.kill();
         }
-        if kind != "success" {
+        if kind != OutcomeKind::Success {
             exit_code = child.wait().ok().and_then(|s| s.code());
             break;
         }
@@ -395,13 +607,13 @@ pub fn run_with_helper(
             Ok(Some(status)) => {
                 exit_code = status.code();
                 if exit_code != Some(0) {
-                    kind = "nonzero";
+                    kind = OutcomeKind::Nonzero;
                 }
                 break;
             }
             Ok(None) => thread::sleep(Duration::from_millis(5)),
             Err(_) => {
-                kind = "wait_error";
+                kind = OutcomeKind::WaitError;
                 tree.kill();
                 exit_code = child.wait().ok().and_then(|s| s.code());
                 break;
@@ -415,17 +627,21 @@ pub fn run_with_helper(
     let err_failure = err_thread.join().is_err();
     let reader_failure = out_failure || err_failure;
     use sha2::Digest;
-    let out = out.lock().unwrap();
-    let err = err.lock().unwrap();
+    let out = out
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let err = err
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if out.count > cap as u64 || err.count > cap as u64 {
-        kind = "output_limit";
+        kind = OutcomeKind::OutputLimit;
     } else if reader_failure || out.error || err.error {
-        kind = "capture_error";
+        kind = OutcomeKind::CaptureError;
     } else if std::str::from_utf8(&out.bytes).is_err() || std::str::from_utf8(&err.bytes).is_err() {
-        kind = "malformed_output";
+        kind = OutcomeKind::MalformedOutput;
     }
     Ok(Outcome {
-        kind: kind.into(),
+        kind: kind.as_str().into(),
         exit_code,
         duration_ms: start.elapsed().as_millis() as u64,
         stdout: String::from_utf8_lossy(&out.bytes).into_owned(),

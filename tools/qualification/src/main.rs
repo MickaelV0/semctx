@@ -1,5 +1,5 @@
 use semctx_qualification::{
-    CASES, Report, Runtime, artifact, digest,
+    CASES, ExpectedOutcome, Report, Runtime, SupportStatus, artifact, digest,
     journeys::{Runner, run},
     observed_lane, validate_raw_case, validate_report,
 };
@@ -161,6 +161,14 @@ fn verify_reports(options: &BTreeMap<String, PathBuf>) -> Result<Value, String> 
     if runtime_kinds.len() != 1 {
         return Err("mixed native and Bun qualification runtimes".into());
     }
+    let native_root = if runtime_kinds.contains("native") {
+        options
+            .get("--native-artifacts")
+            .map(|root| root.canonicalize().map_err(|e| e.to_string()))
+            .transpose()?
+    } else {
+        None
+    };
     // Discover one report in each downloaded native-OS artifact, never recursively accept extras.
     for entry in fs::read_dir(&root).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
@@ -254,7 +262,9 @@ fn verify_reports(options: &BTreeMap<String, PathBuf>) -> Result<Value, String> 
                     let expected_artifact = artifact(&entry.path())?;
                     if report.runtime.kind() == "native"
                         && entry.path()
-                            == required(options, "--native-artifacts")?
+                            == native_root
+                                .as_ref()
+                                .ok_or("required argument --native-artifacts")?
                                 .join(os)
                                 .join("artifact-manifest.json")
                     {
@@ -359,7 +369,12 @@ fn main_run() -> Result<Value, String> {
     }
     // Observe the producer, not the host later aggregating downloaded reports.
     // Reject a mislabeled lane before reading artifacts or running a product process.
-    let os = observed_lane(options.get("--os").map(PathBuf::as_path))?;
+    let os = observed_lane(
+        options
+            .get("--os")
+            .map(|value| value.to_str().ok_or("non UTF-8 OS lane"))
+            .transpose()?,
+    )?;
     let cli = required(&options, "--cli")?;
     let mcp = required(&options, "--mcp")?;
     let runtime = Runtime::select(&required(&options, "--runtime")?, &cli, &mcp)?;
@@ -418,7 +433,8 @@ fn main_run() -> Result<Value, String> {
                 Command::new(&identity.path).arg("--version"),
                 root.path(),
                 semctx_qualification::process::BUDGET,
-            )?;
+            )
+            .map_err(|e| e.to_string())?;
             runner.record("runtime-version", &runtime_ob)?;
             if runtime_ob.code == Some(0)
                 && !runtime_ob.timed_out
@@ -451,7 +467,13 @@ fn main_run() -> Result<Value, String> {
         let raw = runner.record("runner-failure", &json!({"error":error}))?;
         for id in CASES {
             if !runner.cases.iter().any(|c| c.id == *id) {
-                runner.case(id, "not_qualified", raw.clone(), Err(error.clone()), false);
+                runner.case(
+                    id,
+                    SupportStatus::NotQualified,
+                    raw.clone(),
+                    Err(error.clone()),
+                    ExpectedOutcome::UsefulSuccess,
+                );
             }
         }
         if runner.cases.iter().all(|c| c.outcome != "failure") {
@@ -459,7 +481,25 @@ fn main_run() -> Result<Value, String> {
             runner.cases[0].detail = error;
         }
     }
-    let report=Report{schema_version:1,status:if runner.cases.iter().all(|c|c.outcome!="failure"){"qualified"}else{"failed"}.into(),os,arch:std::env::consts::ARCH.into(),host_os:std::env::consts::OS.into(),host_arch:std::env::consts::ARCH.into(),adapter:runner.runtime.adapter().into(),runtime:runner.runtime,artifacts:identities,cases:runner.cases,host_activation:"not_observed".into(),limitations:vec!["CLI and direct MCP only; installed host activation, background hooks and semantic precision are not qualified by this report".into()]};
+    let status = if runner.cases.iter().all(|case| case.outcome != "failure") {
+        "qualified"
+    } else {
+        "failed"
+    };
+    let report = Report {
+        schema_version: 1,
+        status: status.into(),
+        os: os.as_str().into(),
+        arch: std::env::consts::ARCH.into(),
+        host_os: std::env::consts::OS.into(),
+        host_arch: std::env::consts::ARCH.into(),
+        adapter: runner.runtime.adapter().into(),
+        runtime: runner.runtime,
+        artifacts: identities,
+        cases: runner.cases,
+        host_activation: "not_observed".into(),
+        limitations: vec!["CLI and direct MCP only; installed host activation, background hooks and semantic precision are not qualified by this report".into()],
+    };
     validate_report(&report)?;
     let mut value = serde_json::to_value(report).map_err(|e| e.to_string())?;
     if let Some(plan) = options.get("--plan") {
@@ -503,24 +543,28 @@ fn main() {
         let _ = std::io::stdout().flush();
         let _ = std::io::stderr().flush();
         #[cfg(windows)]
+        // SAFETY: Windows ExitProcess terminates this helper and its stdin forwarding thread.
         unsafe {
             windows_sys::Win32::System::Threading::ExitProcess(code as u32);
         }
         #[cfg(not(windows))]
         std::process::exit(code);
     }
+    semctx_gates::process::install_cancellation();
     let value = main_run()
         .unwrap_or_else(|error| json!({"schema_version":1,"status":"failed","error":error}));
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&value).expect("JSON serializable")
-    );
+    if let Err(error) = serde_json::to_writer_pretty(std::io::stdout().lock(), &value) {
+        eprintln!("qualification output: {error}");
+        std::process::exit(1);
+    }
+    println!();
     if value["status"] != "qualified" {
         std::process::exit(1);
     }
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use semctx_qualification::{Artifact, Case};
@@ -826,17 +870,19 @@ mod tests {
         }
     }
     fn native_sample(root: &Path) -> BTreeMap<String, PathBuf> {
-        // These are synthetic admission records, not executions on three operating systems.
+        native_sample_layout(root, Path::new("bin"))
+    }
+    fn native_sample_layout(root: &Path, directory: &Path) -> BTreeMap<String, PathBuf> {
         let mut options = sample(root);
         let expected_root = root.join("expected-native");
         fs::create_dir(&expected_root).unwrap();
         for os in ["ubuntu-latest", "windows-latest", "macos-15"] {
             let base = expected_root.join(os);
-            let bin = base.join("bin");
+            let bin = base.join(directory);
             fs::create_dir_all(&bin).unwrap();
             let suffix = if os == "windows-latest" { ".exe" } else { "" };
-            let cli_relative = format!("bin/semctx{suffix}");
-            let mcp_relative = format!("bin/semctx-mcp{suffix}");
+            let cli_relative = directory.join(format!("semctx{suffix}"));
+            let mcp_relative = directory.join(format!("semctx-mcp{suffix}"));
             fs::write(
                 base.join(&cli_relative),
                 format!("MZsynthetic cli artifact for {os}"),
@@ -935,6 +981,29 @@ mod tests {
         std::os::unix::fs::symlink(root.path(), &alias).unwrap();
         options.insert("--native-artifacts".into(), alias.join("expected-native"));
         assert!(verify_reports(&options).is_ok());
+    }
+    #[test]
+    #[cfg(unix)]
+    fn native_admission_resolves_aliases_for_direct_and_nested_entrypoints() {
+        for directory in [Path::new(""), Path::new("bin")] {
+            let root = tempfile::tempdir().unwrap();
+            let mut options = native_sample_layout(root.path(), directory);
+            let outer = tempfile::tempdir().unwrap();
+            let alias = outer.path().join("root-alias");
+            std::os::unix::fs::symlink(root.path(), &alias).unwrap();
+            options.insert("--native-artifacts".into(), alias.join("expected-native"));
+            let admitted = verify_reports(&options);
+            assert!(admitted.is_ok(), "layout {directory:?}: {admitted:?}");
+            fs::write(
+                options["--native-artifacts"]
+                    .join("macos-15")
+                    .join(directory)
+                    .join("runtime-support.bin"),
+                "substituted dependency",
+            )
+            .unwrap();
+            assert!(verify_reports(&options).is_err());
+        }
     }
     #[test]
     fn native_admission_rejects_missing_or_wrong_plan_manifest() {
