@@ -52,6 +52,9 @@ impl Repo {
             );
         }
         repo.write("plugins/example.test.ts", "fixture\n");
+        for path in semctx_gates::os_boundaries::TESTS {
+            repo.write(path, "test fixture\n");
+        }
         repo.write("README.md", "baseline\n");
         repo.commit();
         repo.base = git(&repo.root, &["rev-parse", "HEAD"]).trim().into();
@@ -154,19 +157,132 @@ fn docs_keep_contract_and_plan_is_deterministic() {
     );
 }
 #[test]
-fn source_change_selects_transitive_consumers_on_every_os() {
+fn source_change_keeps_linux_complete_and_selects_native_os_boundaries() {
     let r = Repo::new();
     r.write("packages/core/src/index.ts", "export const value = 2;\n");
     r.commit();
     let p = r.plan();
     assert_eq!(p.mode, "affected");
-    assert_eq!(p.matrix.include.len(), 9);
-    for lane in &p.matrix.include {
-        if lane.profile == "focused" {
-            assert!(lane.targets.contains("packages/service/test"));
-            assert!(lane.targets.contains("apps/cli/test"));
-            assert!(lane.targets.contains("plugins"));
+    assert_eq!(p.matrix.include.len(), 8);
+    for (os, count, profile) in [
+        ("ubuntu-latest", 4, "full"),
+        ("windows-latest", 2, "os-boundary"),
+        ("macos-15", 1, "os-boundary"),
+    ] {
+        let lanes = p
+            .matrix
+            .include
+            .iter()
+            .filter(|l| l.os == os && l.profile == profile)
+            .collect::<Vec<_>>();
+        assert_eq!(lanes.len(), count);
+        for (index, lane) in lanes.iter().enumerate() {
+            assert_eq!(lane.shard, format!("{}/{count}", index + 1));
+            if profile == "os-boundary" {
+                for witness in [
+                    "packages/app-services/test/bounded-process.test.ts",
+                    "packages/repository-store/test/store-process-crash.test.ts",
+                    "apps/cli/test/package-runtime.test.ts",
+                    "packages/mcp-server/test/mcp-modern-stdio.test.ts",
+                ] {
+                    assert!(lane.targets.split(',').any(|p| p == witness));
+                }
+                assert!(!lane.targets.contains("packages/service/test"));
+            }
         }
+    }
+}
+#[test]
+fn os_boundary_commands_execute_selected_files_and_surface_failures() {
+    let mut r = Repo::new();
+    let observed = r.outer.join("observed.jsonl");
+    let destination = serde_json::to_string(observed.to_str().unwrap()).unwrap();
+    for path in semctx_gates::os_boundaries::TESTS {
+        let marker = serde_json::to_string(&format!("{path}\n")).unwrap();
+        r.write(path, &format!("import {{ test }} from 'bun:test'; import {{ appendFileSync }} from 'node:fs'; test('native witness', () => appendFileSync({destination}, {marker}));\n"));
+    }
+    r.commit();
+    r.base = git(&r.root, &["rev-parse", "HEAD"]).trim().into();
+    r.write("packages/core/src/index.ts", "export const value = 2;\n");
+    r.commit();
+    let plan = r.plan();
+    let os = if cfg!(windows) {
+        "windows-latest"
+    } else {
+        "macos-15"
+    };
+    let actions = plan
+        .matrix
+        .include
+        .iter()
+        .filter(|lane| lane.os == os)
+        .map(|lane| {
+            semctx_gates::receipt::commands(lane, &r.base)
+                .unwrap()
+                .remove(0)
+        })
+        .collect::<Vec<_>>();
+    assert!(!actions.is_empty());
+    let run = || {
+        actions
+            .iter()
+            .map(|action| {
+                Command::new(&action.argv[0])
+                    .args(&action.argv[1..])
+                    .current_dir(&r.root)
+                    .output()
+                    .unwrap()
+            })
+            .collect::<Vec<_>>()
+    };
+    let results = run();
+    assert!(results.iter().all(|r| r.status.success()), "{results:?}");
+    let mut seen = fs::read_to_string(&observed)
+        .unwrap()
+        .lines()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    seen.sort();
+    let mut expected = semctx_gates::os_boundaries::TESTS
+        .iter()
+        .map(|p| (*p).to_owned())
+        .collect::<Vec<_>>();
+    expected.sort();
+    assert_eq!(seen, expected);
+    let witness = "apps/cli/test/package-runtime.test.ts";
+    let original = fs::read_to_string(r.root.join(witness)).unwrap();
+    r.write(witness, "import { test, expect } from 'bun:test'; test('broken package boundary', () => expect(1).toBe(2));\n");
+    let rejected = run();
+    assert!(rejected.iter().any(|r| !r.status.success()));
+    assert!(
+        rejected
+            .iter()
+            .any(|r| String::from_utf8_lossy(&r.stderr).contains("broken package boundary"))
+    );
+    r.write(witness, &original);
+    assert!(run().iter().all(|r| r.status.success()));
+}
+#[test]
+fn dependency_changes_keep_full_cross_platform_coverage() {
+    let r = Repo::new();
+    r.write(
+        "packages/core/package.json",
+        r#"{"name":"@s/core","dependencies":{"external":"1.0.0"}}"#,
+    );
+    r.commit();
+    assert_eq!(r.plan().mode, "fallback");
+}
+#[test]
+fn absent_or_nonfile_os_witness_keeps_full_cross_platform_coverage() {
+    for replacement in ["deleted", "directory"] {
+        let r = Repo::new();
+        let path = "apps/cli/test/package-runtime.test.ts";
+        fs::remove_file(r.root.join(path)).unwrap();
+        if replacement == "directory" {
+            r.write(&format!("{path}/nested.test.ts"), "nested\n");
+        }
+        r.commit();
+        assert_eq!(r.plan().mode, "fallback", "{replacement}");
     }
 }
 #[test]
@@ -205,7 +321,7 @@ fn unknown_path_and_empty_diff_keep_full_cross_platform_coverage() {
             .iter()
             .filter(|l| l.profile == "full")
             .count(),
-        8
+        10
     );
 }
 #[test]

@@ -133,7 +133,21 @@ integrity checks. The current repository workflow remains part of the trust boun
 an immutable independently hosted verifier. See [ADR 0037](../adr/0037-rust-gates-and-qualified-evidence.md).
 
 Quality runs once in the contract lane. Runtime integration checks and worker equivalence run
-once per applicable OS, while all selected test shards remain required. Consumer closure can
-select more tests than the old changed-folder planner. Compare the actual obligations before
-interpreting runtime: compilation, fixtures, platform coverage and execution costs are distinct.
-No numerical speedup is claimed merely because the engine is written in Rust.
+once per applicable OS, while all selected test shards remain required. Classifiable product
+changes select four full Ubuntu shards and the configured 42 OS-boundary files on two Windows
+shards and one macOS shard. The maintained list lives in
+[`tools/gates/src/os_boundaries.rs`](../../tools/gates/src/os_boundaries.rs); it does not discover
+future OS-sensitive tests automatically. Unknown impact, dependency manifests, missing targets
+and shared plugin changes retain full suites on four Ubuntu, four Windows and two macOS shards.
+Native Rust tests and artifact qualification remain required on all three OSes in either case.
+
+The Ubuntu scheduling weights use `scripts/ci-test-timings-linux.json`; their historical source
+and limits are recorded in [ADR 0031](../adr/0031-change-scoped-ci-gates.md). Refresh that file on
+a Linux runner with Bun's `--timings=scripts/ci-test-timings-linux.json --update-timings` flags
+and the complete `packages apps plugins scripts` test roots. Every shard of one OS must read
+the same committed snapshot. Weights affect scheduling, not membership or result reuse.
+
+Compare the actual obligations before interpreting runtime: compilation, fixtures, platform
+coverage and execution costs are distinct. A change to the gate itself selects full fallback;
+its CI latency does not measure the reduced product profile. No numerical speedup is claimed
+without an observed candidate execution.

@@ -54,6 +54,9 @@ pub fn affected(
         if documentation(path) {
             continue;
         }
+        if path.ends_with("/package.json") {
+            return None;
+        }
         if path.starts_with("plugins/") {
             // Plugin helpers are also imported directly by CLI/services outside workspace
             // manifests. Until that graph is complete, retain all consumers on every OS.
@@ -275,11 +278,21 @@ fn lane(os: &str, profile: &str, targets: &str, smoke: bool, shard: &str) -> Lan
         shard: shard.into(),
     }
 }
-fn suites(os: &str, profile: &str, targets: &str, smoke: bool) -> Vec<Lane> {
-    let count = if os == "windows-latest" { 4 } else { 2 };
-    (1..=count)
+pub fn shard_count(os: &str, profile: &str) -> Result<usize> {
+    match (os, profile) {
+        ("ubuntu-latest", _) => Ok(4),
+        ("windows-latest", "os-boundary") => Ok(2),
+        ("windows-latest", _) => Ok(4),
+        ("macos-15", "os-boundary") => Ok(1),
+        ("macos-15", _) => Ok(2),
+        _ => Err("unknown CI OS".into()),
+    }
+}
+fn suites(os: &str, profile: &str, targets: &str, smoke: bool) -> Result<Vec<Lane>> {
+    let count = shard_count(os, profile)?;
+    Ok((1..=count)
         .map(|i| lane(os, profile, targets, smoke, &format!("{i}/{count}")))
-        .collect()
+        .collect())
 }
 pub fn create(root: &Path, base: &str, head: &str) -> Result<Plan> {
     clean(root)?;
@@ -292,6 +305,7 @@ pub fn create(root: &Path, base: &str, head: &str) -> Result<Plan> {
             include_str!("main.rs"),
             include_str!("lib.rs"),
             include_str!("rust_workspace.rs"),
+            include_str!("os_boundaries.rs"),
             include_str!("../Cargo.toml"),
             include_str!("../Cargo.lock")
         )
@@ -329,22 +343,27 @@ pub fn create(root: &Path, base: &str, head: &str) -> Result<Plan> {
             .ok()
             .and_then(|g| affected(&paths, &g))
             .filter(|t| {
-                !paths.is_empty() && !t.is_empty() && t.iter().all(|t| root.join(t).exists())
+                !paths.is_empty()
+                    && !t.is_empty()
+                    && t.iter().all(|t| root.join(t).exists())
+                    && crate::os_boundaries::TESTS
+                        .iter()
+                        .all(|t| root.join(t).is_file())
             });
         let smoke = true; // Conservative worker equivalence until explicit capability mapping replaces legacy inputs.
-        lanes.extend(suites("ubuntu-latest", "full", "", smoke));
-        if let Some(targets) = targets {
+        lanes.extend(suites("ubuntu-latest", "full", "", smoke)?);
+        if targets.is_some() {
             mode = "affected";
-            reason = "manifest consumer closure plus integrations";
-            let targets = targets.into_iter().collect::<Vec<_>>().join(",");
+            reason = "Linux complete suite and native OS boundaries";
+            let targets = crate::os_boundaries::TESTS.join(",");
             for os in ["windows-latest", "macos-15"] {
-                lanes.extend(suites(os, "focused", &targets, smoke));
+                lanes.extend(suites(os, "os-boundary", &targets, smoke)?);
             }
         } else {
             mode = "fallback";
             reason = "unknown impact, empty diff, or missing target";
             for os in ["windows-latest", "macos-15"] {
-                lanes.extend(suites(os, "full", "", smoke));
+                lanes.extend(suites(os, "full", "", smoke)?);
             }
         }
     }
