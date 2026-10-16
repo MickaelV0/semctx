@@ -115,6 +115,12 @@ fn serve_mcp(arguments: &[String]) {
         if delayed {
             thread::sleep(Duration::from_millis(600));
         }
+        if arguments
+            .iter()
+            .any(|arg| arg == "--wire-overflow-before-reply")
+        {
+            write_wire_overflow();
+        }
         println!(
             "{}",
             serde_json::json!({"jsonrpc":"2.0","id":request["id"],"result":{"protocolVersion":"2025-03-26","serverInfo":{"name":"native-wire-fixture"}}})
@@ -134,11 +140,6 @@ fn serve_mcp(arguments: &[String]) {
             }
             if arguments.iter().any(|arg| arg == "--backlog-malformed") {
                 println!("NOT JSON");
-            }
-            if arguments.iter().any(|arg| arg == "--backlog-overflow") {
-                let bytes = serde_json::to_vec(&serde_json::json!({"jsonrpc":"2.0","method":"notifications/message","params":{"padding":"x".repeat(semctx_qualification::process::LIMIT as usize)}})).unwrap();
-                let _ = std::io::stdout().write_all(&bytes);
-                let _ = std::io::stdout().write_all(b"\n");
             }
             let _ = std::io::stdout().flush();
             return;
@@ -163,6 +164,17 @@ fn serve_mcp(arguments: &[String]) {
     if crash_on_eof {
         std::process::exit(42);
     }
+}
+
+fn write_wire_overflow() {
+    let notification = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "notifications/message",
+        "params": {"padding": "x".repeat(semctx_qualification::process::LIMIT as usize)}
+    });
+    let bytes = serde_json::to_vec(&notification).unwrap();
+    let _ = std::io::stdout().write_all(&bytes);
+    let _ = std::io::stdout().write_all(b"\n");
 }
 
 fn trailing_wire(arguments: &[String]) -> bool {

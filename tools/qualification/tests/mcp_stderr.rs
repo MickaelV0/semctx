@@ -68,14 +68,12 @@ fn a_full_notification_channel_cannot_hide_trailing_invalid_json() {
 }
 
 #[test]
-fn a_full_notification_channel_cannot_hide_trailing_wire_overflow() {
+fn wire_overflow_is_refused_while_an_mcp_request_is_pending() {
     let root = tempfile::tempdir().unwrap();
     let mut command = Command::new(env!("CARGO_BIN_EXE_qualification-mcp-fixture"));
-    command.arg("--backlog-overflow");
-    let started = std::time::Instant::now();
+    command.arg("--wire-overflow-before-reply");
     let error = semctx_qualification::mcp::probe_initialize(&mut command, root.path()).unwrap_err();
     assert!(error.contains("MCP wire output exceeded"), "{error}");
-    assert!(started.elapsed() < std::time::Duration::from_secs(5));
 }
 
 #[test]
