@@ -600,6 +600,7 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
     const launcher = join(bin, "codex.cmd");
     const log = join(root, "argv.jsonl");
     const capture = join(root, "legacy-spawn.json");
+    const trace = join(root, "diagnostic.jsonl");
     const programData = join(root, "program data & literal");
     const snapshot = join(home, ".tmp", "marketplaces", "semctx-stable", "plugins", "semctx-control");
     const cachePath = join(home, "plugins", "cache", "semctx-stable", "semctx-control", packageJson.version);
@@ -643,8 +644,12 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
     const argsUrl = pathToFileURL(join(import.meta.dir, "../src/args.ts")).href;
     const program = `
       import { mock } from "bun:test";
-      import { writeFileSync } from "node:fs";
+      import { appendFileSync, writeFileSync } from "node:fs";
+      const recordTrace = (phase, detail = {}) => appendFileSync(${JSON.stringify(trace)},
+        JSON.stringify({ at: new Date().toISOString(), elapsedMs: performance.now(), pid: process.pid, phase, ...detail }) + "\\n");
+      recordTrace("app-services:import:before");
       const services = await import("@semantic-context/app-services");
+      recordTrace("app-services:import:after");
       const repo = ${JSON.stringify(repo)}, home = ${JSON.stringify(home)}, bin = ${JSON.stringify(bin)};
       const entrypoint = ${JSON.stringify(entrypoint)}, launcher = ${JSON.stringify(launcher)};
       const capture = ${JSON.stringify(capture)}, programData = ${JSON.stringify(programData)};
@@ -663,10 +668,12 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
           { pluginId: "semctx-control@personal", installed: true, enabled: true, version: "0.4.0" },
         ],
       };
+      recordTrace("app-services:mock:before");
       mock.module("@semantic-context/app-services", () => ({
         ...services,
         readCodexPluginMetadataInventory: () => inventory,
       }));
+      recordTrace("app-services:mock:after");
       process.env.CODEX_HOME = home;
       process.env.HOME = ${JSON.stringify(root)};
       process.env.USERPROFILE = process.env.HOME;
@@ -685,20 +692,64 @@ describe("semctx install — no-brain host + repository bootstrap", () => {
         if (argv[0] === "git" && argv.includes("--show-toplevel")) {
           return { exitCode: 0, stdout: Buffer.from(repo), stderr: Buffer.alloc(0) };
         }
-        return originalSpawnSync(argv, options);
+        recordTrace("spawnSync:before", { argv, cwd: options.cwd, timeout: options.timeout });
+        try {
+          const result = originalSpawnSync(argv, options);
+          recordTrace("spawnSync:after", {
+            childPid: result.pid, exitCode: result.exitCode, signalCode: result.signalCode ?? null,
+            exitedDueToTimeout: result.exitedDueToTimeout ?? null,
+            exitedDueToMaxBuffer: result.exitedDueToMaxBuffer ?? null,
+            stdoutBytes: result.stdout?.byteLength, stderrBytes: result.stderr?.byteLength,
+          });
+          return result;
+        } catch (error) {
+          recordTrace("spawnSync:error", error instanceof Error
+            ? { name: error.name, message: error.message }
+            : { message: String(error) });
+          throw error;
+        }
       };
       Bun.spawn = (argv, options) => {
         writeFileSync(capture, JSON.stringify({ argv, cwd: options.cwd }));
         return { pid: 123, unref() {} };
       };
+      recordTrace("install:import:before");
       const { executeInstall } = await import(${JSON.stringify(installUrl)});
+      recordTrace("install:import:after");
+      recordTrace("args:import:before");
       const { parseArgs } = await import(${JSON.stringify(argsUrl)});
+      recordTrace("args:import:after");
+      recordTrace("executeInstall:before");
       const report = executeInstall(repo, parseArgs(["install", "--host", "codex", "--skip-setup"]));
+      recordTrace("executeInstall:after");
+      recordTrace("report:write:before");
       process.stdout.write(JSON.stringify({ report }));
+      recordTrace("report:write:after");
     `;
     try {
       const child = Bun.spawnSync([process.execPath, "-e", program], { stdout: "pipe", stderr: "pipe" });
-      expect(new TextDecoder().decode(child.stderr)).toBe("");
+      const stderr = new TextDecoder().decode(child.stderr);
+      if (child.exitCode !== 0 || stderr !== "") {
+        const diagnosticFile = (path: string): string => {
+          try {
+            return readFileSync(path, "utf8");
+          } catch (error) {
+            return error instanceof Error ? error.message : String(error);
+          }
+        };
+        throw new Error(`Owned npm entrypoint probe failed: ${JSON.stringify({
+          exitCode: child.exitCode,
+          signalCode: child.signalCode ?? null,
+          exitedDueToTimeout: child.exitedDueToTimeout ?? null,
+          exitedDueToMaxBuffer: child.exitedDueToMaxBuffer ?? null,
+          trace: diagnosticFile(trace),
+          argv: diagnosticFile(log),
+          capture: diagnosticFile(capture),
+          stdout: new TextDecoder().decode(child.stdout),
+          stderr,
+        }, null, 2)}`);
+      }
+      expect(stderr).toBe("");
       expect(child.exitCode).toBe(0);
       const result = JSON.parse(new TextDecoder().decode(child.stdout)) as { report: InstallReport };
       expect(result.report.ok).toBe(true);
