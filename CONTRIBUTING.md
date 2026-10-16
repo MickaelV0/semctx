@@ -33,6 +33,10 @@ python -m pip install --requirement requirements-quality.txt # use an activated 
 
 For iteration, run the narrowest relevant checks:
 
+Verification tooling additionally requires the pinned Rust toolchain. The canonical pre-PR
+command now enters the Rust engine; see the [Rust gates guide](docs/contributing/rust-gates.md)
+for native tests, artifact qualification, background coverage and evidence limits.
+
 ```bash
 bun run quality
 bun test packages/app-services

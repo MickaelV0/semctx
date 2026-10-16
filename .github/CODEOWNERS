@@ -11,6 +11,10 @@
 /packages/app-services/package.json @hoklims
 /requirements-quality.txt @hoklims
 /scripts/verify-pr.ts @hoklims
+/tools/gates/ @hoklims
+/tools/qualification/ @hoklims
+/rust-toolchain.toml @hoklims
+/scripts/verify-index-routing.py @hoklims
 /scripts/documentation-integrity.ts @hoklims
 /scripts/build-plugin-runtime.ts @hoklims
 

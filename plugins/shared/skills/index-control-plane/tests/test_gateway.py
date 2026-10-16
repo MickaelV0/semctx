@@ -372,6 +372,7 @@ class GatewayProtocolTests(unittest.TestCase):
             )
 
             result = responses[1]["result"]["structuredContent"]
+            self.assertIn("provider", result, result)
             self.assertEqual(result["provider"], "source")
             self.assertTrue(result["fallback_used"])
             self.assertEqual(result["freshness"], "SOURCE_CURRENT")
@@ -404,6 +405,7 @@ class GatewayProtocolTests(unittest.TestCase):
             )
 
             result = responses[1]["result"]["structuredContent"]
+            self.assertIn("provider", result, result)
             self.assertEqual(result["provider"], "source")
             self.assertEqual(result["recommended_lane"], "source-exact")
             self.assertEqual(result["semantic_capability"], "textual")
@@ -665,6 +667,7 @@ class GatewayProtocolTests(unittest.TestCase):
             (repo / "lease.ts").write_text("export class LeaseRepository {}\n", encoding="utf-8")
             result = self._intent_layer_case(base, repo, "dict(EMPTY)")
 
+            self.assertIn("reason", result, result)
             self.assertTrue(result["fallback_used"])
             self.assertNotEqual(result.get("intent_layer"), "authored_capability")
             self.assertEqual(result["reason"], "SEMCTX_HAS_NO_MATCH")
