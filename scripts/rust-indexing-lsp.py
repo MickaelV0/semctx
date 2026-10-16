@@ -5,10 +5,46 @@ import time
 from pathlib import Path
 
 
-async def receive(reader):
-    headers = (await reader.readuntil(b"\r\n\r\n")).decode("ascii")
-    fields = dict(line.split(":", 1) for line in headers.strip().split("\r\n"))
-    body = await reader.readexactly(int(fields["Content-Length"]))
+# Research probes retain responses for inspection; timeouts alone do not bound memory.
+MAX_HEADER_BYTES = 8 * 1024
+MAX_FRAME_BYTES = 4 * 1024 * 1024
+MAX_WIRE_BYTES = 16 * 1024 * 1024
+MAX_MESSAGES = 10_000
+
+
+async def receive(reader, budget=None):
+    if budget is None:
+        budget = {"wire_bytes": 0, "messages": 0}
+    if budget["messages"] >= MAX_MESSAGES:
+        raise ValueError("LSP message count limit exceeded")
+    header = bytearray()
+    while not header.endswith(b"\r\n\r\n"):
+        if len(header) >= MAX_HEADER_BYTES:
+            raise ValueError("LSP header byte limit exceeded")
+        if budget["wire_bytes"] >= MAX_WIRE_BYTES:
+            raise ValueError("LSP wire byte limit exceeded")
+        header.extend(await reader.readexactly(1))
+        budget["wire_bytes"] += 1
+    lengths = []
+    for line in header.decode("ascii").split("\r\n")[:-2]:
+        name, separator, value = line.partition(":")
+        if not separator:
+            raise ValueError("invalid LSP header")
+        if name.lower() == "content-length":
+            lengths.append(value.strip())
+    if len(lengths) != 1 or not lengths[0] or not all("0" <= char <= "9" for char in lengths[0]):
+        raise ValueError("invalid or duplicate LSP Content-Length")
+    # Compare decimal text first, so even an enormous integer advertisement is refused.
+    length_text = lengths[0].lstrip("0") or "0"
+    maximum = str(MAX_FRAME_BYTES)
+    if len(length_text) > len(maximum) or (len(length_text) == len(maximum) and length_text > maximum):
+        raise ValueError("LSP frame byte limit exceeded")
+    length = int(length_text)
+    if budget["wire_bytes"] + length > MAX_WIRE_BYTES:
+        raise ValueError("LSP wire byte limit exceeded")
+    budget["wire_bytes"] += length
+    budget["messages"] += 1
+    body = await reader.readexactly(length)
     return json.loads(body)
 
 
@@ -32,6 +68,7 @@ async def probe(args):
         stdout=asyncio.subprocess.PIPE,
     )
     messages = []
+    budget = {"wire_bytes": 0, "messages": 0}
 
     async def send(message):
         body = json.dumps(message).encode()
@@ -39,7 +76,7 @@ async def probe(args):
         await process.stdin.drain()
 
     async def next_message():
-        message = await receive(process.stdout)
+        message = await receive(process.stdout, budget)
         messages.append(message)
         if "method" in message and "id" in message:
             if message["method"] in (

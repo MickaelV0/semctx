@@ -247,6 +247,9 @@ The real API query targets `Arguments::from_env`, with four outgoing navigation 
 pilot coordinates missed a function; retained serial measurements use the corrected coordinates.
 
 `--timeout 0.001` produces a real `TimeoutError`; a nonexistent binary produces `FileNotFoundError`.
+The probe refuses headers larger than 8 KiB, message bodies larger than 4 MiB, more than
+16 MiB of cumulative wire input (headers included), or more than 10,000 messages. These limits
+bound captured protocol input; they do not measure or cap the server's resident memory.
 The direct RA child is killed and awaited on an interrupted probe; this does not promise isolation
 or termination of an arbitrary Cargo process tree. No product subprocess manager is implemented.
 Responses are retained verbatim apart from documented root/temp prefix normalization. The Python

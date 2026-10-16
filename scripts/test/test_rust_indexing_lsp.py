@@ -17,6 +17,88 @@ spec.loader.exec_module(probe)
 
 
 class LspTransportTest(unittest.IsolatedAsyncioTestCase):
+    async def test_refuses_oversized_advertisement_before_reading_body(self):
+        class HeaderOnlyReader(asyncio.StreamReader):
+            async def readexactly(self, size):
+                self.assert_body_not_requested(size)
+                return await super().readexactly(size)
+
+            def assert_body_not_requested(self, size):
+                if size > 1:
+                    raise AssertionError("oversized body was requested before refusal")
+
+        reader = HeaderOnlyReader()
+        reader.feed_data(b"Content-Length: 4194305\r\n\r\n")
+        with self.assertRaisesRegex(ValueError, "frame byte limit"):
+            await probe.receive(reader)
+
+    async def test_accepts_exact_frame_byte_limit(self):
+        reader = asyncio.StreamReader()
+        body = b'"' + b"x" * (4 * 1024 * 1024 - 2) + b'"'
+        reader.feed_data(f"Content-Length: {len(body)}\r\n\r\n".encode() + body)
+        self.assertEqual(await probe.receive(reader), "x" * (len(body) - 2))
+
+    async def test_refuses_invalid_or_duplicate_lengths(self):
+        for fields in (b"Content-Length: -1", b"Content-Length: nope",
+                       b"Content-Length: 2\r\ncontent-length: 2"):
+            with self.subTest(fields=fields):
+                reader = asyncio.StreamReader()
+                reader.feed_data(fields + b"\r\n\r\n{}")
+                reader.feed_eof()
+                error = None
+                try:
+                    await probe.receive(reader)
+                except Exception as caught:
+                    error = caught
+                self.assertIsInstance(error, ValueError, "invalid framing must be refused explicitly")
+                self.assertIn("Content-Length", str(error))
+
+    async def test_refuses_header_over_byte_limit(self):
+        reader = asyncio.StreamReader()
+        reader.feed_data(b"X: " + b"x" * 8192 + b"\r\nContent-Length: 2\r\n\r\n{}")
+        with self.assertRaisesRegex(ValueError, "header byte limit"):
+            await probe.receive(reader)
+
+    async def assert_probe_refuses_notifications(self, frames, overrides, reason):
+        reader = asyncio.StreamReader()
+        reader.feed_data(frames)
+        reader.feed_eof()
+        process = SimpleNamespace(
+            stdin=SimpleNamespace(write=Mock(), drain=AsyncMock()),
+            stdout=reader, returncode=None, kill=Mock(),
+        )
+
+        async def wait():
+            process.returncode = -1
+
+        process.wait = AsyncMock(side_effect=wait)
+        with tempfile.TemporaryDirectory() as directory:
+            args = SimpleNamespace(binary="diagnostic-server", workspace=directory,
+                                   target=None, features=[])
+            with patch.object(probe.asyncio, "create_subprocess_exec", AsyncMock(return_value=process)), \
+                    patch.multiple(probe, create=True, **overrides):
+                error = None
+                try:
+                    await probe.probe(args)
+                except Exception as caught:
+                    error = caught
+        self.assertIsInstance(error, ValueError, "probe must refuse the output budget explicitly")
+        self.assertIn(reason, str(error))
+        process.kill.assert_called_once_with()
+        process.wait.assert_awaited_once_with()
+
+    async def test_probe_bounds_cumulative_wire_bytes_and_cleans_up(self):
+        frame = b'Content-Length: 14\r\n\r\n{"method":"n"}'
+        await self.assert_probe_refuses_notifications(
+            frame * 4, {"MAX_WIRE_BYTES": len(frame) * 2}, "wire byte limit",
+        )
+
+    async def test_probe_bounds_message_count_and_cleans_up(self):
+        frame = b'Content-Length: 14\r\n\r\n{"method":"n"}'
+        await self.assert_probe_refuses_notifications(
+            frame * 4, {"MAX_MESSAGES": 2}, "message count limit",
+        )
+
     async def test_probe_sends_negotiated_incremental_edit(self):
         responses = [
             {"id": 1, "result": {"capabilities": {"textDocumentSync": {"change": 2}}}},
