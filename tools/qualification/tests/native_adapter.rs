@@ -1,4 +1,4 @@
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![cfg(test)]
 
 use serde_json::Value;
 use std::{fs, process::Command};

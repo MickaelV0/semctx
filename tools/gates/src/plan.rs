@@ -339,7 +339,6 @@ pub fn validate(root: &Path, plan: &Plan) -> Result<()> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     #[test]

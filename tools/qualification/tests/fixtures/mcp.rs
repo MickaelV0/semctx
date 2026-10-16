@@ -1,5 +1,8 @@
 //! Test-only native wire peer. It deliberately exercises channel limits, not Semctx behavior.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "Standalone test fixture setup must fail immediately"
+)]
 use std::{
     io::{BufRead, Write},
     path::Path,
@@ -105,6 +108,10 @@ fn main() {
     let overflowing = std::env::args().any(|arg| arg == "--overflow");
     for line in input.lines() {
         let Ok(line) = line else { break };
+        #[expect(
+            clippy::expect_used,
+            reason = "The fixture requires a valid JSON request"
+        )]
         let request: serde_json::Value = serde_json::from_str(&line).expect("fixture request JSON");
         if request.get("id").is_none() {
             continue;

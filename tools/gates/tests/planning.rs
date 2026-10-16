@@ -1,4 +1,4 @@
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![cfg(test)]
 use semctx_gates::plan::Plan;
 use std::{
     fs,

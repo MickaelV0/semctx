@@ -1,4 +1,4 @@
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![cfg(test)]
 use semctx_gates::process::{spawn_owned, spawn_owned_with_env};
 use std::{
     collections::BTreeMap,

@@ -290,7 +290,6 @@ pub fn write_json(writer: &mut impl Write, value: &serde_json::Value) -> Result<
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     struct InterruptedCapture(bool);

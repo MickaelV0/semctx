@@ -1,4 +1,4 @@
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![cfg(test)]
 use semctx_gates::process::run_with_helper;
 use std::{path::Path, sync::Mutex, time::Instant};
 

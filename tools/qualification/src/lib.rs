@@ -500,7 +500,6 @@ pub fn validate_raw_case(id: &str, raw: &Value) -> Result<(), String> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     fn observed(code: i32, stdout: &str, stderr: &str) -> Observation {

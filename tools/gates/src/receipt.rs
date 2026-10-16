@@ -397,7 +397,6 @@ pub fn admit(plan: &Plan, receipts: &[Receipt]) -> Result<()> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     fn fixture() -> (Plan, Vec<Receipt>) {

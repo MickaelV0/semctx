@@ -23,6 +23,12 @@ existing contributor integrations; its exported legacy functions remain differen
 Stage intended new files before verification. `--skip-diff` is for the existing release-source
 verification contract and omits only diff hygiene. It does not remove quality or test checks.
 
+Clippy denies `unwrap` and `expect` in production. The root `clippy.toml` uses
+[Clippy's test option](https://doc.rust-lang.org/clippy/lint_configuration.html#allow-unwrap-in-tests)
+to permit `unwrap` inside test functions and `cfg(test)` modules or crates. Standalone fixture
+binaries use narrowly scoped `expect` lint attributes with explicit reasons; Clippy reports an
+unfulfilled expectation when an exception becomes unnecessary.
+
 ## Plans and lane receipts
 
 Build the engine with `cargo build --manifest-path tools/gates/Cargo.toml --locked --release`.

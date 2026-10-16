@@ -1,4 +1,4 @@
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![cfg(test)]
 use std::process::Command;
 #[test]
 fn valid_mcp_peer_with_bounded_stderr_is_accepted() {

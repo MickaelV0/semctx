@@ -1,4 +1,7 @@
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "Standalone test fixture setup must fail immediately"
+)]
 use std::{io::Write, process::Command, thread, time::Duration};
 #[allow(clippy::zombie_processes)] // The orphan is intentional: the supervisor must reap/kill its tree.
 fn main() {
