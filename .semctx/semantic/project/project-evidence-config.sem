@@ -43,7 +43,7 @@ evidence proof.semctx.project-config-native-checks
   tag: test
 
 change change.semctx.project-evidence-config
-  statement: This contract recorded the planned v1-to-v2 candidate-selection migration and bounded project dogfooding evidence. It was superseded in PR #349 because that migration-specific intent did not govern subsequent catalogue work; supersession did not assert completed or verified migration. Current review follow-ups and dogfooding checks are carried by change.semctx.review-349-followups; the governing project policy and unresolved analysis limits remain recorded above.
+  statement: This contract recorded the planned v1-to-v2 candidate-selection migration and bounded project dogfooding evidence. It was superseded in PR #349 because that migration-specific intent did not govern subsequent catalogue work; supersession did not assert completed or verified migration. Subsequent review follow-ups and dogfooding checks were recorded by change.semctx.review-349-followups and integrated in PR #376; that historical contract is now superseded. The governing project policy and unresolved analysis limits remain recorded above.
   status: superseded
   provenance: author
   appliesAtLevel: 1
