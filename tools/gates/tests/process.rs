@@ -193,12 +193,12 @@ fn guarded_supervisor(mode: &str, marker: Option<&Path>) -> (bool, std::process:
         std::thread::sleep(Duration::from_millis(10));
     };
     #[cfg(unix)]
-    if let Some(marker) = marker {
-        if let Ok(pid) = std::fs::read_to_string(marker) {
-            // SAFETY: only the PID written by this test's dedicated fixture is signalled.
-            unsafe {
-                libc::kill(pid.parse().unwrap(), libc::SIGKILL);
-            }
+    if let Some(marker) = marker
+        && let Ok(pid) = std::fs::read_to_string(marker)
+    {
+        // SAFETY: only the PID written by this test's dedicated fixture is signalled.
+        unsafe {
+            libc::kill(pid.parse().unwrap(), libc::SIGKILL);
         }
     }
     (completed, child.wait_with_output().unwrap())
