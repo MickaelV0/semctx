@@ -119,7 +119,7 @@ experimental input, not a new Rust marker convention or authored Semctx invarian
 
 The real snapshot is [`pico-args` 0.5.0](https://github.com/RazrFalcon/pico-args/tree/56e8872fa31f168fd87e84fdc5f24bd60875daea),
 commit `56e8872fa31f168fd87e84fdc5f24bd60875daea`, MIT, edition 2018. The
-[vendored subset](rust-indexing/corpus/pico-args-0.5.0/) contains unchanged `Cargo.toml`, `src/lib.rs`
+[vendored subset](rust-indexing/corpus/pico-args-0.5.0/) contains unchanged manifest bytes (`Cargo.toml.snapshot`), `src/lib.rs`
 and `README.md`, plus `LICENSE` with its final empty line removed for diff hygiene; hashes and the
 archive pin are in the replay protocol. Its single source
 is 808 lines / 26,273 bytes, with no Cargo dependencies or build script. It is deliberately small:

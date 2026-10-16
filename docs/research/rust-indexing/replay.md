@@ -25,28 +25,67 @@ bun --version
 python3 --version
 ```
 
+## Materialize the research workspaces
+
+The eight research manifests are stored as `Cargo.toml.snapshot`, with their original bytes.
+They include intentionally invalid worlds and crates without tests; they are experimental data,
+not native product crates. Keep the repository's automatic product-crate gate unchanged.
+Materialize a fresh sibling layout under `$RUN` before invoking Cargo or rust-analyzer:
+
+```sh
+python3 - <<'PY' || exit 1
+import os
+from pathlib import Path
+import shutil
+
+source = Path("docs/research/rust-indexing")
+destination = Path(os.environ["RUN"]) / "rust-indexing"
+shutil.copytree(source, destination, ignore=shutil.ignore_patterns("target", "__pycache__"))
+for snapshot in sorted(destination.rglob("Cargo.toml.snapshot")):
+    snapshot.rename(snapshot.with_name("Cargo.toml"))
+PY
+export RESEARCH="$RUN/rust-indexing"
+```
+
+The destination must not exist: copying refuses rather than overwriting a previous replay.
+Sources and lockfiles retain their sibling paths, including `syn-probe`'s reference to `fixture`.
+Historical result recordings retain their original checkout paths; this materialization does not
+rebind those observations to a new execution. Run both owned Python suites with
+`python3 -m unittest discover -s scripts/test -p 'test_rust_indexing_*.py'`.
+
 The toolchain and `rust-src` must already be installed. Dependency acquisition is a separate,
 networked preparation step: use `CARGO_NET_OFFLINE=false cargo fetch --locked --manifest-path
-docs/research/rust-indexing/syn-probe/Cargo.toml`, then return to offline operation. Do not infer
+"$RESEARCH/syn-probe/Cargo.toml"`, then return to offline operation. Do not infer
 offline readiness from an empty Cargo cache. Do not run these probes on an unreviewed Cargo config.
 
 macOS arm64 commands used for the binary/parser assets:
 
 ```sh
 curl -fLsS --max-time 60 https://github.com/rust-lang/rust-analyzer/releases/download/2026-10-12/rust-analyzer-aarch64-apple-darwin.gz -o "$RUN/tools/rust-analyzer.gz"
-gzip -dk "$RUN/tools/rust-analyzer.gz"
-chmod +x "$RUN/tools/rust-analyzer"
 curl -fLsS --max-time 60 https://github.com/tree-sitter/tree-sitter-rust/releases/download/v0.24.2/tree-sitter-rust.wasm -o "$RUN/tools/tree-sitter-rust.wasm"
 curl -fLsS --max-time 60 https://registry.npmjs.org/web-tree-sitter/-/web-tree-sitter-0.27.1.tgz -o "$RUN/tools/web-tree-sitter-0.27.1.tgz"
-tar -xzf "$RUN/tools/web-tree-sitter-0.27.1.tgz" -C "$RUN/tools"
 curl -fLsS --max-time 60 https://github.com/scip-code/scip/releases/download/v0.10.0/scip-darwin-arm64.tar.gz -o "$RUN/tools/scip.tar.gz"
+```
+
+Verify all downloads before extracting or executing them. A missing asset or hash mismatch
+stops the replay:
+
+```sh
+shasum -a 256 -c <<EOF || { printf '%s\n' 'Downloaded asset verification failed' >&2; exit 1; }
+a2e45e828b37bfc4b507c2ca456e8b61096e0bdfbae225f3d33295546d1eeacf  $RUN/tools/rust-analyzer.gz
+24c89bd9252255e4aebbcbd7d2d308bd92c86dd95a130fdc80efa49577b8d738  $RUN/tools/tree-sitter-rust.wasm
+7346db659eb870a5284242851ab7aedea41d7397b8c7e95ff8d9ec5b5a80270f  $RUN/tools/web-tree-sitter-0.27.1.tgz
+7ea200390e0790b3da8999b7b1cd4e3597700dcb3d354911872523bfe0090779  $RUN/tools/scip.tar.gz
+EOF
+gzip -dk "$RUN/tools/rust-analyzer.gz"
+chmod +x "$RUN/tools/rust-analyzer"
+tar -xzf "$RUN/tools/web-tree-sitter-0.27.1.tgz" -C "$RUN/tools"
 tar -xzf "$RUN/tools/scip.tar.gz" -C "$RUN/tools"
-shasum -a 256 "$RUN/tools/rust-analyzer.gz" "$RUN/tools/tree-sitter-rust.wasm" "$RUN/tools/web-tree-sitter-0.27.1.tgz" "$RUN/tools/scip.tar.gz"
 "$RUN/tools/rust-analyzer" --version
 "$RUN/tools/scip" --version
 ```
 
-Compare hashes before executing downloaded tools; mismatches invalidate the pin:
+The expected hashes are:
 
 | Asset | SHA-256 |
 | --- | --- |
@@ -65,12 +104,15 @@ Public corpus source: `RazrFalcon/pico-args` commit
 `https://codeload.github.com/RazrFalcon/pico-args/tar.gz/56e8872fa31f168fd87e84fdc5f24bd60875daea`,
 observed SHA-256 `9fc09f5e522a0cc4fd004405dce8b783deecad1bb3cf54e8283eb281676f59af`.
 Compare extracted bytes with the vendored subset, which is authoritative for these trials even if
-GitHub changes archive encoding. Code, manifest and README are unchanged; the vendored license
+GitHub changes archive encoding. Code, manifest bytes (stored as `Cargo.toml.snapshot`) and README are unchanged; the vendored license
 only removes the final empty line for repository diff hygiene. The original license SHA-256 is
 `f71452d91682fdae0ca948b18cfed53a953d1237740dd80371c76a5c1c7bbe91`.
 
 ```sh
-shasum -a 256 docs/research/rust-indexing/corpus/pico-args-0.5.0/{Cargo.toml,LICENSE,README.md,src/lib.rs}
+shasum -a 256 "$RESEARCH/corpus/pico-args-0.5.0/Cargo.toml" \
+  "$RESEARCH/corpus/pico-args-0.5.0/LICENSE" \
+  "$RESEARCH/corpus/pico-args-0.5.0/README.md" \
+  "$RESEARCH/corpus/pico-args-0.5.0/src/lib.rs"
 ```
 
 | Vendored file | SHA-256 |
@@ -83,13 +125,13 @@ shasum -a 256 docs/research/rust-indexing/corpus/pico-args-0.5.0/{Cargo.toml,LIC
 ## Native oracles and owned probe tests
 
 ```sh
-cargo test --locked --offline --all-features --manifest-path docs/research/rust-indexing/fixture/Cargo.toml
-cargo run --locked --offline --manifest-path docs/research/rust-indexing/fixture/Cargo.toml -p indexing-app
-cargo test --locked --offline --manifest-path docs/research/rust-indexing/syn-probe/Cargo.toml
-cargo fmt --all --check --manifest-path docs/research/rust-indexing/fixture/Cargo.toml
-cargo fmt --all --check --manifest-path docs/research/rust-indexing/syn-probe/Cargo.toml
+cargo test --locked --offline --all-features --manifest-path "$RESEARCH/fixture/Cargo.toml"
+cargo run --locked --offline --manifest-path "$RESEARCH/fixture/Cargo.toml" -p indexing-app
+cargo test --locked --offline --manifest-path "$RESEARCH/syn-probe/Cargo.toml"
+cargo fmt --all --check --manifest-path "$RESEARCH/fixture/Cargo.toml"
+cargo fmt --all --check --manifest-path "$RESEARCH/syn-probe/Cargo.toml"
 python3 -m unittest discover -s scripts/test -p test_rust_indexing_lsp.py
-cargo build --release --locked --offline --manifest-path docs/research/rust-indexing/syn-probe/Cargo.toml
+cargo build --release --locked --offline --manifest-path "$RESEARCH/syn-probe/Cargo.toml"
 ```
 
 Fixture tests establish concrete/generic/dynamic positive-amount results, not the behavior of a
@@ -122,14 +164,14 @@ for(const file of process.argv.slice(1)){
   }
   console.log(JSON.stringify({file,bytes:Buffer.byteLength(source),parseMs:samples,hasError,ast}));
 }' \
-docs/research/rust-indexing/fixture/domain/src/model.rs \
-docs/research/rust-indexing/fixture/domain/src/operations.rs \
-docs/research/rust-indexing/fixture/domain/src/lib.rs \
-docs/research/rust-indexing/fixture/domain/tests/dispatch.rs \
-docs/research/rust-indexing/fixture/app/src/main.rs \
-docs/research/rust-indexing/fixture/negative/malformed.rs \
-docs/research/rust-indexing/fixture/negative/unresolved.rs \
-docs/research/rust-indexing/corpus/pico-args-0.5.0/src/lib.rs > "$RUN/raw/tree.jsonl"
+"$RESEARCH/fixture/domain/src/model.rs" \
+"$RESEARCH/fixture/domain/src/operations.rs" \
+"$RESEARCH/fixture/domain/src/lib.rs" \
+"$RESEARCH/fixture/domain/tests/dispatch.rs" \
+"$RESEARCH/fixture/app/src/main.rs" \
+"$RESEARCH/fixture/negative/malformed.rs" \
+"$RESEARCH/fixture/negative/unresolved.rs" \
+"$RESEARCH/corpus/pico-args-0.5.0/src/lib.rs" > "$RUN/raw/tree.jsonl"
 ```
 
 The command imports the pinned downloaded runtime rather than modifying root dependencies.
@@ -141,10 +183,10 @@ after a crab emoji, versus UTF-8 offset 24; native C byte-column assumptions do 
 ## Y — syn helper
 
 ```sh
-"$CARGO_TARGET_DIR/release/semctx-rust-syn-probe" docs/research/rust-indexing/fixture/domain/src/model.rs
-"$CARGO_TARGET_DIR/release/semctx-rust-syn-probe" docs/research/rust-indexing/fixture/domain/src/lib.rs
-"$CARGO_TARGET_DIR/release/semctx-rust-syn-probe" docs/research/rust-indexing/corpus/pico-args-0.5.0/src/lib.rs
-"$CARGO_TARGET_DIR/release/semctx-rust-syn-probe" docs/research/rust-indexing/fixture/negative/malformed.rs
+"$CARGO_TARGET_DIR/release/semctx-rust-syn-probe" "$RESEARCH/fixture/domain/src/model.rs"
+"$CARGO_TARGET_DIR/release/semctx-rust-syn-probe" "$RESEARCH/fixture/domain/src/lib.rs"
+"$CARGO_TARGET_DIR/release/semctx-rust-syn-probe" "$RESEARCH/corpus/pico-args-0.5.0/src/lib.rs"
+"$CARGO_TARGET_DIR/release/semctx-rust-syn-probe" "$RESEARCH/fixture/negative/malformed.rs"
 ```
 
 Each invocation writes TSV on stdout and parser-only nanoseconds on stderr. The malformed invocation
@@ -156,8 +198,8 @@ fixture parsing scope; sum their parser times, not their count of differently de
 
 ```sh
 for n in 1 2 3; do
-  /usr/bin/time -l "$RUN/tools/rust-analyzer" scip docs/research/rust-indexing/fixture --output "$RUN/raw/fixture-$n.scip" --num-threads 4 > "$RUN/raw/fixture-$n.stdout" 2> "$RUN/raw/fixture-$n.time"
-  /usr/bin/time -l "$RUN/tools/rust-analyzer" scip docs/research/rust-indexing/corpus/pico-args-0.5.0 --output "$RUN/raw/pico-$n.scip" --num-threads 4 > "$RUN/raw/pico-$n.stdout" 2> "$RUN/raw/pico-$n.time"
+  /usr/bin/time -l "$RUN/tools/rust-analyzer" scip "$RESEARCH/fixture" --output "$RUN/raw/fixture-$n.scip" --num-threads 4 > "$RUN/raw/fixture-$n.stdout" 2> "$RUN/raw/fixture-$n.time"
+  /usr/bin/time -l "$RUN/tools/rust-analyzer" scip "$RESEARCH/corpus/pico-args-0.5.0" --output "$RUN/raw/pico-$n.scip" --num-threads 4 > "$RUN/raw/pico-$n.stdout" 2> "$RUN/raw/pico-$n.time"
 done
 "$RUN/tools/scip" print --json "$RUN/raw/fixture-1.scip" > "$RUN/raw/fixture-1.json"
 "$RUN/tools/scip" print --json "$RUN/raw/pico-1.scip" > "$RUN/raw/pico-1.json"
@@ -184,8 +226,8 @@ fixture path) exits nonzero without producing an index; the stderr observation i
 
 ```sh
 for n in 1 2 3; do
-  /usr/bin/time -l python3 scripts/rust-indexing-lsp.py "$RUN/tools/rust-analyzer" docs/research/rust-indexing/fixture app/src/main.rs > "$RUN/raw/fixture-lsp-$n.json" 2> "$RUN/raw/fixture-lsp-$n.time"
-  /usr/bin/time -l python3 scripts/rust-indexing-lsp.py "$RUN/tools/rust-analyzer" docs/research/rust-indexing/corpus/pico-args-0.5.0 src/lib.rs --line 124 --character 14 --definition-line 125 --definition-character 14 > "$RUN/raw/pico-lsp-$n.json" 2> "$RUN/raw/pico-lsp-$n.time"
+  /usr/bin/time -l python3 scripts/rust-indexing-lsp.py "$RUN/tools/rust-analyzer" "$RESEARCH/fixture" app/src/main.rs > "$RUN/raw/fixture-lsp-$n.json" 2> "$RUN/raw/fixture-lsp-$n.time"
+  /usr/bin/time -l python3 scripts/rust-indexing-lsp.py "$RUN/tools/rust-analyzer" "$RESEARCH/corpus/pico-args-0.5.0" src/lib.rs --line 124 --character 14 --definition-line 125 --definition-character 14 > "$RUN/raw/pico-lsp-$n.json" 2> "$RUN/raw/pico-lsp-$n.time"
 done
 ```
 
@@ -240,10 +282,10 @@ a build script writing only its Cargo OUT_DIR, declarative expansion, indirect c
 branches and a deliberately invalid module behind the `invalid` feature. Native oracle commands:
 
 ```sh
-cargo test --locked --offline --workspace --manifest-path docs/research/rust-indexing/edge-cases/Cargo.toml
-cargo test --locked --offline --workspace --manifest-path docs/research/rust-indexing/edge-cases/Cargo.toml --features alternate
-cargo check --locked --offline --manifest-path docs/research/rust-indexing/edge-cases/Cargo.toml --features invalid
-cargo check --locked --offline --manifest-path docs/research/rust-indexing/edge-cases/Cargo.toml --target x86_64-pc-windows-msvc
+cargo test --locked --offline --workspace --manifest-path "$RESEARCH/edge-cases/Cargo.toml"
+cargo test --locked --offline --workspace --manifest-path "$RESEARCH/edge-cases/Cargo.toml" --features alternate
+cargo check --locked --offline --manifest-path "$RESEARCH/edge-cases/Cargo.toml" --features invalid
+cargo check --locked --offline --manifest-path "$RESEARCH/edge-cases/Cargo.toml" --target x86_64-pc-windows-msvc
 ```
 
 Default/alternate test results are 40/41 on Unix. The invalid command must fail with E0659 and
@@ -251,7 +293,7 @@ E0425; the local Windows cross-check failed E0463 because target std was absent.
 Windows evidence. Do not run `--all-features` expecting the intentionally invalid world to compile.
 
 For each row call `python3 scripts/rust-indexing-lsp.py "$RUN/tools/rust-analyzer"
-docs/research/rust-indexing/edge-cases FILE --line L --character C --definition-line DL
+"$RESEARCH/edge-cases" FILE --line L --character C --definition-line DL
 --definition-character DC`, with the following zero-based coordinates and optional flags:
 
 | Case | FILE | L:C | DL:DC | Extra arguments | Observed definition |
@@ -300,18 +342,22 @@ Exact acquired images were `rust:1.98.1-slim` manifest digest
 `sha256:4cd829461bd5c4d511c32e269da9cb8929223b666519d8004e35fc8d1d771ab7` and
 `oven/bun:1.4.3` digest
 `sha256:ec06c3b6cea04192ae6770c434f668ca41d343ad19fa6472216c7b48be39c598`.
-Execution used `--network none`, repository mount read-only, and a writable temporary target.
+Recorded execution used `--network none`, a read-only repository mount at `/repo`, and a
+writable temporary target. The replay command below adapts that layout to the materialized
+research tree at `/research`; the retained observations describe the original run.
 
 ```sh
 docker run --rm --network none \
-  --mount "type=bind,source=$ROOT,target=/repo,readonly" \
+  --mount "type=bind,source=$RESEARCH,target=/research,readonly" \
   --mount "type=bind,source=$HOME/.cargo/registry,target=/usr/local/cargo/registry,readonly" \
-  -e CARGO_TARGET_DIR=/target -e CARGO_NET_OFFLINE=true -w /repo \
+  -e CARGO_TARGET_DIR=/target -e CARGO_NET_OFFLINE=true -w /research \
   rust@sha256:4cd829461bd5c4d511c32e269da9cb8929223b666519d8004e35fc8d1d771ab7 \
-  cargo test --locked --offline --manifest-path docs/research/rust-indexing/syn-probe/Cargo.toml
+  cargo test --locked --offline --manifest-path /research/syn-probe/Cargo.toml
 ```
 
-Repeat the native fixture test command in the same container. Seven helper tests (including BOM)
+Repeat with `cargo test --locked --offline --all-features --manifest-path
+/research/fixture/Cargo.toml` in the same container; `$RESEARCH` is a host path, not a container
+path. Seven helper tests (including BOM)
 and two fixture tests passed on Linux aarch64. WASM smoke in the pinned Bun image loaded the same
 runtime/grammar and parsed pico-args without error. Use the replay T command with tool assets
 mounted read-only and their path adjusted to `/tools`; `linux-tree.txt` retains version/platform.
