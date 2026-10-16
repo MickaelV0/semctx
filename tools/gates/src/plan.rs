@@ -151,6 +151,21 @@ fn git_text(root: &Path, args: &[&str]) -> Result<String> {
         .map_err(|e| e.to_string())
 }
 pub fn clean(root: &Path) -> Result<()> {
+    if git(
+        root,
+        &[
+            "--no-optional-locks",
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+            "--no-renames",
+        ],
+    )?
+    .is_empty()
+    {
+        return Ok(());
+    }
     git(root, &["diff", "--quiet", "--no-ext-diff"])?;
     git(root, &["diff", "--cached", "--quiet", "--no-ext-diff"])?;
     if !git(root, &["ls-files", "--others", "--exclude-standard", "-z"])?.is_empty() {
@@ -159,6 +174,35 @@ pub fn clean(root: &Path) -> Result<()> {
         );
     }
     Ok(())
+}
+fn commit_subject(root: &Path, base: &str, head: &str) -> Result<(String, String, String)> {
+    if base.starts_with('-') || head.starts_with('-') {
+        return Err("refs cannot start with '-'".into());
+    }
+    let identities = git_text(
+        root,
+        &[
+            "rev-parse",
+            &format!("{base}^{{commit}}"),
+            &format!("{head}^{{commit}}"),
+            "HEAD",
+        ],
+    )?;
+    let identities = identities.lines().collect::<Vec<_>>();
+    let [base, head, checkout] = identities.as_slice() else {
+        return Err("invalid Git commit identities".into());
+    };
+    if identities
+        .iter()
+        .any(|id| !matches!(id.len(), 40 | 64) || !id.bytes().all(|b| b.is_ascii_hexdigit()))
+    {
+        return Err("invalid Git commit identities".into());
+    }
+    if head != checkout {
+        return Err("checkout is not the requested head".into());
+    }
+    let tree = git_text(root, &["rev-parse", &format!("{head}^{{tree}}")])?;
+    Ok(((*base).into(), (*head).into(), tree))
 }
 fn graph(root: &Path) -> Result<BTreeMap<String, BTreeSet<String>>> {
     let mut names = BTreeMap::new();
@@ -239,21 +283,7 @@ fn suites(os: &str, profile: &str, targets: &str, smoke: bool) -> Vec<Lane> {
 }
 pub fn create(root: &Path, base: &str, head: &str) -> Result<Plan> {
     clean(root)?;
-    if base.starts_with('-') || head.starts_with('-') {
-        return Err("refs cannot start with '-'".into());
-    }
-    let base = git_text(
-        root,
-        &["rev-parse", "--verify", &format!("{base}^{{commit}}")],
-    )?;
-    let head = git_text(
-        root,
-        &["rev-parse", "--verify", &format!("{head}^{{commit}}")],
-    )?;
-    if git_text(root, &["rev-parse", "HEAD"])? != head {
-        return Err("checkout is not the requested head".into());
-    }
-    let tree = git_text(root, &["rev-parse", &format!("{head}^{{tree}}")])?;
+    let (base, head, tree) = commit_subject(root, base, head)?;
     let policy_hash = crate::digest(
         concat!(
             include_str!("plan.rs"),
@@ -289,16 +319,18 @@ pub fn create(root: &Path, base: &str, head: &str) -> Result<Plan> {
         .collect::<Vec<_>>();
     let mut lanes = vec![lane("ubuntu-latest", "contract", "", false, "")];
     let docs = !paths.is_empty() && paths.iter().all(|p| documentation(p));
-    let targets = graph(root).ok().and_then(|g| affected(&paths, &g));
     let mode;
     let reason;
     if docs {
         mode = "docs";
         reason = "documentation only";
     } else {
-        let targets = targets.filter(|t| {
-            !paths.is_empty() && !t.is_empty() && t.iter().all(|t| root.join(t).exists())
-        });
+        let targets = graph(root)
+            .ok()
+            .and_then(|g| affected(&paths, &g))
+            .filter(|t| {
+                !paths.is_empty() && !t.is_empty() && t.iter().all(|t| root.join(t).exists())
+            });
         let smoke = true; // Conservative worker equivalence until explicit capability mapping replaces legacy inputs.
         lanes.extend(suites("ubuntu-latest", "full", "", smoke));
         if let Some(targets) = targets {
