@@ -109,6 +109,24 @@ fn main() {
             serde_json::json!({"jsonrpc":"2.0","id":request["id"],"result":{"protocolVersion":"2025-03-26","serverInfo":{"name":"native-wire-fixture"}}})
         );
         std::io::stdout().flush().unwrap();
+        if arguments.iter().any(|arg| arg.starts_with("--backlog-")) {
+            for sequence in 0..50 {
+                println!(
+                    "{}",
+                    serde_json::json!({"jsonrpc":"2.0","method":"notifications/message","params":{"sequence":sequence}})
+                );
+            }
+            if arguments.iter().any(|arg| arg == "--backlog-malformed") {
+                println!("NOT JSON");
+            }
+            if arguments.iter().any(|arg| arg == "--backlog-overflow") {
+                let bytes = serde_json::to_vec(&serde_json::json!({"jsonrpc":"2.0","method":"notifications/message","params":{"padding":"x".repeat(semctx_qualification::process::LIMIT as usize)}})).unwrap();
+                let _ = std::io::stdout().write_all(&bytes);
+                let _ = std::io::stdout().write_all(b"\n");
+            }
+            let _ = std::io::stdout().flush();
+            return;
+        }
         if crash {
             std::process::exit(42);
         }

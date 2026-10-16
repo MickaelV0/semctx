@@ -24,7 +24,7 @@ struct Session {
     input_writer: Option<thread::JoinHandle<()>>,
     output: Receiver<Result<Value, String>>,
     wire_reader: Option<thread::JoinHandle<Result<(), String>>>,
-    stop_reader: Arc<AtomicBool>,
+    stop_delivery: Arc<AtomicBool>,
     stderr: Option<process::Capture>,
     id: u64,
     finished: bool,
@@ -59,8 +59,8 @@ impl Session {
             }
         });
         let (tx, output) = mpsc::sync_channel(32);
-        let stop_reader = Arc::new(AtomicBool::new(false));
-        let stopped = stop_reader.clone();
+        let stop_delivery = Arc::new(AtomicBool::new(false));
+        let delivery_stopped = stop_delivery.clone();
         let wire_reader = thread::spawn(move || {
             let mut reader = BufReader::new(stdout);
             let mut total = 0u64;
@@ -84,8 +84,8 @@ impl Session {
                         Ok(()) => break,
                         Err(mpsc::TrySendError::Disconnected(_)) => return Ok(()),
                         Err(mpsc::TrySendError::Full(value)) => {
-                            if stopped.load(Ordering::SeqCst) {
-                                return failure.map_or(Ok(()), Err);
+                            if delivery_stopped.load(Ordering::SeqCst) {
+                                break;
                             }
                             message = value;
                             thread::sleep(Duration::from_millis(5));
@@ -104,7 +104,7 @@ impl Session {
             input_writer: Some(input_writer),
             output,
             wire_reader: Some(wire_reader),
-            stop_reader,
+            stop_delivery,
             stderr: Some(process::drain(stderr, "MCP stderr")),
             id: 0,
             finished: false,
@@ -121,7 +121,7 @@ impl Session {
     }
     fn cleanup_readers(&mut self) -> Result<(), String> {
         let cleanup = self.child.cleanup();
-        self.stop_reader.store(true, Ordering::SeqCst);
+        self.stop_delivery.store(true, Ordering::SeqCst);
         let writer = self
             .input_writer
             .take()
@@ -161,6 +161,7 @@ impl Session {
             return Ok(());
         }
         drop(self.input.take());
+        self.stop_delivery.store(true, Ordering::SeqCst);
         let started = Instant::now();
         let status = loop {
             if let Err(error) = self.check_capture() {
