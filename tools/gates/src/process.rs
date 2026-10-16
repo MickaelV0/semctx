@@ -77,6 +77,8 @@ pub fn interactive_progress() -> bool {
 pub struct PipeReader<R> {
     inner: R,
     stop: Arc<AtomicBool>,
+    #[cfg(unix)]
+    fd: std::os::fd::RawFd,
 }
 impl<R: Read> Read for PipeReader<R> {
     fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
@@ -88,11 +90,33 @@ impl<R: Read> Read for PipeReader<R> {
             }
             match self.inner.read(bytes) {
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    #[cfg(unix)]
+                    self.wait_readable()?;
+                    #[cfg(windows)]
                     thread::sleep(Duration::from_millis(5));
                 }
                 result => return result,
             }
         }
+    }
+}
+#[cfg(unix)]
+impl<R> PipeReader<R> {
+    fn wait_readable(&self) -> std::io::Result<()> {
+        let mut descriptor = libc::pollfd {
+            fd: self.fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: fd belongs to inner, which stays alive throughout this call. poll receives
+        // one initialized descriptor and waits at most 5 ms before cancellation is rechecked.
+        if unsafe { libc::poll(&mut descriptor, 1, 5) } < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() != std::io::ErrorKind::Interrupted {
+                return Err(error);
+            }
+        }
+        Ok(())
     }
 }
 #[cfg(unix)]
@@ -113,6 +137,7 @@ pub fn pipe_reader<R: Read + std::os::fd::AsRawFd>(
     Ok(PipeReader {
         inner,
         stop: stop.clone(),
+        fd,
     })
 }
 #[cfg(windows)]

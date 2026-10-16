@@ -80,6 +80,10 @@ fn main() {
 }
 
 fn serve_mcp(arguments: &[String]) {
+    #[cfg(target_os = "linux")]
+    if arguments.iter().any(|arg| arg.ends_with("-small-pipe")) {
+        shrink_stdout_pipe();
+    }
     let mut input = std::io::BufReader::new(std::io::stdin().lock());
     let delayed = arguments.iter().any(|arg| arg == "--delayed-request");
     if delayed {
@@ -141,6 +145,12 @@ fn serve_mcp(arguments: &[String]) {
             if arguments.iter().any(|arg| arg == "--backlog-malformed") {
                 println!("NOT JSON");
             }
+            if arguments
+                .iter()
+                .any(|arg| arg.starts_with("--backlog-overflow"))
+            {
+                write_wire_overflow();
+            }
             let _ = std::io::stdout().flush();
             return;
         }
@@ -175,6 +185,19 @@ fn write_wire_overflow() {
     let bytes = serde_json::to_vec(&notification).unwrap();
     let _ = std::io::stdout().write_all(&bytes);
     let _ = std::io::stdout().write_all(b"\n");
+}
+
+#[cfg(target_os = "linux")]
+fn shrink_stdout_pipe() {
+    use std::os::fd::AsRawFd;
+    unsafe extern "C" {
+        fn fcntl(fd: std::ffi::c_int, command: std::ffi::c_int, ...) -> std::ffi::c_int;
+    }
+    // Linux UAPI linux/fcntl.h: F_SETPIPE_SZ = F_LINUX_SPECIFIC_BASE (1024) + 7.
+    const F_SETPIPE_SZ: std::ffi::c_int = 1031;
+    // SAFETY: stdout is this fixture's live pipe; this only shrinks its kernel buffer.
+    let size = unsafe { fcntl(std::io::stdout().as_raw_fd(), F_SETPIPE_SZ, 4096) };
+    assert_eq!(size, 4096);
 }
 
 fn trailing_wire(arguments: &[String]) -> bool {

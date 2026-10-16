@@ -106,3 +106,26 @@ fn trailing_invalid_envelopes_are_refused_even_behind_notifications() {
         );
     }
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn small_pipe_overflow_is_observed_before_shutdown_without_throughput_throttling() {
+    let root = tempfile::tempdir().unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_qualification-mcp-fixture"));
+    command.arg("--backlog-overflow-small-pipe");
+    let error = semctx_qualification::mcp::probe_initialize(&mut command, root.path()).unwrap_err();
+    assert_eq!(
+        error, "MCP wire output exceeded",
+        "SMALL_PIPE_OVERFLOW_TRUNCATED_BY_SHUTDOWN"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn small_pipe_valid_notification_backlog_remains_accepted() {
+    let root = tempfile::tempdir().unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_qualification-mcp-fixture"));
+    command.arg("--backlog-valid-small-pipe");
+    let result = semctx_qualification::mcp::probe_initialize(&mut command, root.path()).unwrap();
+    assert_eq!(result["serverInfo"]["name"], "native-wire-fixture");
+}
