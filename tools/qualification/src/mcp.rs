@@ -511,6 +511,35 @@ mod tests {
             .unwrap_err();
         assert_eq!(error, "MCP deadline exceeded");
     }
+    struct FailedCaptureRead;
+    impl Read for FailedCaptureRead {
+        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("injected MCP read failure"))
+        }
+    }
+    #[test]
+    fn request_preserves_the_capture_read_failure_in_its_rendered_error() {
+        let root = tempfile::tempdir().unwrap();
+        let executable = std::env::current_exe().unwrap();
+        let fixture = executable.parent().unwrap().parent().unwrap().join(format!(
+            "qualification-mcp-fixture{}",
+            std::env::consts::EXE_SUFFIX
+        ));
+        let mut command = std::process::Command::new(fixture);
+        command.arg("--delayed-request");
+        let mut session = Session::start_command(&mut command, root.path()).unwrap();
+        let capture = process::drain(FailedCaptureRead, "MCP stderr", &session.stop_readers);
+        let started = Instant::now();
+        while capture.check().is_ok() {
+            assert!(started.elapsed() < Duration::from_secs(2));
+            thread::yield_now();
+        }
+        let original = session.stderr.replace(capture).unwrap();
+        let error = session.request("initialize", j!({})).unwrap_err();
+        drop(session);
+        original.finish().unwrap();
+        assert_eq!(error, "MCP stderr: injected MCP read failure");
+    }
     #[test]
     fn blocked_stdin_write_obeys_the_mcp_deadline() {
         let root = tempfile::tempdir().unwrap();

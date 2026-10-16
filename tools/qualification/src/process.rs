@@ -7,7 +7,7 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
     sync::{
-        Arc,
+        Arc, OnceLock,
         atomic::{AtomicBool, Ordering},
     },
     thread,
@@ -32,14 +32,13 @@ pub struct Observation {
 pub enum Error {
     Io {
         operation: &'static str,
-        source: io::Error,
+        source: Arc<io::Error>,
     },
     Supervisor(semctx_gates::process::ProcessError),
     MissingPipe(&'static str),
     InvalidArgument,
     MissingHelper,
     ReaderPanic(&'static str),
-    CaptureFailed(&'static str),
     InvalidUtf8 {
         stream: &'static str,
         source: std::string::FromUtf8Error,
@@ -50,7 +49,10 @@ pub enum Error {
 }
 impl Error {
     pub(crate) fn io(operation: &'static str, source: io::Error) -> Self {
-        Self::Io { operation, source }
+        Self::Io {
+            operation,
+            source: Arc::new(source),
+        }
     }
 }
 impl fmt::Display for Error {
@@ -64,7 +66,6 @@ impl fmt::Display for Error {
                 formatter.write_str("build the qualification binary before process tests")
             }
             Self::ReaderPanic(stream) => write!(formatter, "{stream} reader panicked"),
-            Self::CaptureFailed(stream) => write!(formatter, "{stream} capture failed"),
             Self::InvalidUtf8 { stream, source } => {
                 write!(formatter, "non UTF-8 {stream}: {source}")
             }
@@ -77,7 +78,7 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Io { source, .. } => Some(source),
+            Self::Io { source, .. } => Some(source.as_ref()),
             Self::InvalidUtf8 { source, .. } => Some(source),
             Self::Json(source) => Some(source),
             Self::Supervisor(source) => Some(source),
@@ -163,9 +164,9 @@ pub fn spawn(command: &Command, cwd: &Path) -> Result<OwnedChild, Error> {
 
 pub struct Capture {
     stream: &'static str,
-    failed: Arc<AtomicBool>,
+    failure: Arc<OnceLock<Arc<io::Error>>>,
     exceeded: Arc<AtomicBool>,
-    reader: thread::JoinHandle<io::Result<Vec<u8>>>,
+    reader: thread::JoinHandle<Result<Vec<u8>, Arc<io::Error>>>,
     stop: Arc<AtomicBool>,
 }
 impl Capture {
@@ -173,8 +174,11 @@ impl Capture {
         if self.exceeded.load(Ordering::SeqCst) {
             return Err(Error::OutputExceeded(self.stream));
         }
-        if self.failed.load(Ordering::SeqCst) {
-            return Err(Error::CaptureFailed(self.stream));
+        if let Some(source) = self.failure.get() {
+            return Err(Error::Io {
+                operation: self.stream,
+                source: source.clone(),
+            });
         }
         Ok(())
     }
@@ -190,7 +194,10 @@ impl Capture {
     pub fn finish(self) -> Result<Vec<u8>, Error> {
         semctx_gates::process::finish_reader(self.reader, &self.stop)
             .map_err(Error::Supervisor)?
-            .map_err(|source| Error::io(self.stream, source))
+            .map_err(|source| Error::Io {
+                operation: self.stream,
+                source,
+            })
     }
 }
 pub fn drain(
@@ -199,8 +206,8 @@ pub fn drain(
     stop: &Arc<AtomicBool>,
 ) -> Capture {
     let exceeded = Arc::new(AtomicBool::new(false));
-    let failed = Arc::new(AtomicBool::new(false));
-    let (reader_exceeded, reader_failed) = (exceeded.clone(), failed.clone());
+    let failure = Arc::new(OnceLock::new());
+    let (reader_exceeded, reader_failure) = (exceeded.clone(), failure.clone());
     let reader = thread::spawn(move || {
         let mut bytes = Vec::new();
         let result = stream.by_ref().take(LIMIT + 1).read_to_end(&mut bytes);
@@ -209,16 +216,13 @@ pub fn drain(
         }
         match result {
             Ok(_) => Ok(bytes),
-            Err(error) => {
-                reader_failed.store(true, Ordering::SeqCst);
-                Err(error)
-            }
+            Err(error) => Err(reader_failure.get_or_init(|| Arc::new(error)).clone()),
         }
     });
     Capture {
         stream: name,
         exceeded,
-        failed,
+        failure,
         reader,
         stop: stop.clone(),
     }
@@ -317,6 +321,63 @@ mod tests {
             self.0 = true;
             bytes[..2].copy_from_slice(b"{}");
             Ok(2)
+        }
+    }
+    #[derive(Debug)]
+    struct InjectedFailure;
+    impl fmt::Display for InjectedFailure {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("injected typed read failure")
+        }
+    }
+    impl std::error::Error for InjectedFailure {}
+    struct FailedRead(Option<io::Error>);
+    impl Read for FailedRead {
+        fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+            Err(self.0.take().unwrap())
+        }
+    }
+    #[test]
+    fn live_capture_check_and_finish_preserve_the_same_native_read_error() {
+        for source in [
+            io::Error::from_raw_os_error(5),
+            io::Error::other(InjectedFailure),
+        ] {
+            let raw_code = source.raw_os_error();
+            let capture = drain(
+                FailedRead(Some(source)),
+                "MCP stderr",
+                &Arc::new(AtomicBool::new(false)),
+            );
+            let started = Instant::now();
+            let checked = loop {
+                if let Err(error) = capture.check() {
+                    break error;
+                }
+                assert!(started.elapsed() < Duration::from_secs(2));
+                thread::yield_now();
+            };
+            let finished = capture.finish().unwrap_err();
+            let observed = std::error::Error::source(&checked)
+                .unwrap()
+                .downcast_ref::<io::Error>()
+                .unwrap();
+            let finalized = std::error::Error::source(&finished)
+                .unwrap()
+                .downcast_ref::<io::Error>()
+                .unwrap();
+            assert_eq!(observed.raw_os_error(), raw_code);
+            assert_eq!(finalized.raw_os_error(), raw_code);
+            assert!(std::ptr::eq(observed, finalized));
+            if raw_code.is_none() {
+                assert!(
+                    observed
+                        .get_ref()
+                        .unwrap()
+                        .downcast_ref::<InjectedFailure>()
+                        .is_some()
+                );
+            }
         }
     }
     #[test]
