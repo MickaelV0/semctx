@@ -167,11 +167,12 @@ class LspTransportTest(unittest.IsolatedAsyncioTestCase):
             frame * 4, {"MAX_MESSAGES": 2}, "message count limit",
         )
 
-    async def test_probe_sends_negotiated_incremental_edit(self):
+    async def exercise_edit(self, appended=None, expected=None, edited_symbols=None, check_payload=True):
         responses = [
             {"id": 1, "result": {"capabilities": {"textDocumentSync": {"change": 2}}}},
             {"method": "experimental/serverStatus", "params": {"quiescent": True}},
-            *({"id": identifier, "result": []} for identifier in (2, 3, 4, 6, 8)),
+            *({"id": identifier, "result": []} for identifier in (2, 3, 4, 6)),
+            {"id": 8, "result": edited_symbols or []},
             {"id": 7, "result": None},
         ]
         reader = asyncio.StreamReader()
@@ -198,15 +199,38 @@ class LspTransportTest(unittest.IsolatedAsyncioTestCase):
                 target=None, features=[], line=0, character=0,
                 definition_line=0, definition_character=0,
             )
+            if appended is not None:
+                args.append_text = appended
+                args.expect_added_symbol = expected
             with patch.object(probe.asyncio, "create_subprocess_exec", AsyncMock(return_value=process)):
-                await probe.probe(args)
+                result = await probe.probe(args)
         messages = [json.loads(frame.split(b"\r\n\r\n", 1)[1]) for frame in frames]
         edit = next(message for message in messages if message.get("method") == "textDocument/didChange")
-        self.assertEqual(edit["params"]["contentChanges"], [{
-            "range": {"start": {"line": 1, "character": 5}, "end": {"line": 1, "character": 5}},
-            "text": "\n",
-        }])
+        if check_payload:
+            self.assertEqual(edit["params"]["contentChanges"], [{
+                "range": {"start": {"line": 1, "character": 5}, "end": {"line": 1, "character": 5}},
+                "text": appended if appended is not None else "\n",
+            }])
         process.kill.assert_not_called()
+        return result
+
+    async def test_probe_sends_negotiated_incremental_edit(self):
+        await self.exercise_edit()
+
+    async def test_custom_append_is_sent_and_structured_symbol_is_proven(self):
+        appended = "\npub fn semctx_reindex_probe() -> usize { 17 }\n"
+        result = await self.exercise_edit(appended, "semctx_reindex_probe", [
+            {"name": "container", "children": [{"name": "semctx_reindex_probe"}]},
+        ])
+        self.assertEqual(result["editProof"]["addedSymbol"], "semctx_reindex_probe")
+        self.assertNotEqual(result["editProof"]["beforeSha256"], result["editProof"]["afterSha256"])
+        self.assertGreaterEqual(result["timingsMs"]["changeToDocumentSymbol"], 0)
+
+    async def test_stale_symbols_refuse_custom_append(self):
+        with self.assertRaisesRegex(ValueError, "added symbol"):
+            await self.exercise_edit("\nfn semctx_reindex_probe() {}\n", "semctx_reindex_probe", [
+                {"name": "stale", "detail": "semctx_reindex_probe"},
+            ], check_payload=False)
 
     async def test_reads_utf8_bytes_and_preserves_next_message(self):
         reader = asyncio.StreamReader()
@@ -308,6 +332,9 @@ class LspProcessLifecycleTest(unittest.IsolatedAsyncioTestCase):
         else:
             self.assertIsInstance(outcome, dict)
             self.assertEqual(outcome["exitCode"], 0)
+            if sys.platform == "win32":
+                self.assertIsInstance(outcome["serverPeakRss"]["peakRssBytes"], int, outcome["serverPeakRss"])
+                self.assertGreater(outcome["serverPeakRss"]["peakRssBytes"], 0)
 
     async def test_real_exit_flood_is_drained(self):
         await self.run_server("flood")

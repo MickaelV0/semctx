@@ -2,6 +2,9 @@ import argparse
 import asyncio
 import json
 import math
+import hashlib
+import os
+import ctypes
 import time
 from pathlib import Path
 from email.message import Message
@@ -13,6 +16,33 @@ MAX_FRAME_BYTES = 4 * 1024 * 1024
 MAX_WIRE_BYTES = 16 * 1024 * 1024
 MAX_MESSAGES = 10_000
 CLEANUP_TIMEOUT = 1.0
+
+
+def direct_child_rss(process):
+    """Peak working set of this one native process; never descendant RSS."""
+    result = {"peakRssBytes": None, "scope": "direct process peak working set"}
+    if os.name != "nt":
+        return {**result, "reason": "Windows PSAPI accounting unavailable on this OS"}
+    from ctypes import wintypes
+
+    class Counters(ctypes.Structure):
+        _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD),
+                    *[(name, ctypes.c_size_t) for name in (
+                        "PeakWorkingSetSize", "WorkingSetSize", "QuotaPeakPagedPoolUsage",
+                        "QuotaPagedPoolUsage", "QuotaPeakNonPagedPoolUsage",
+                        "QuotaNonPagedPoolUsage", "PagefileUsage", "PeakPagefileUsage")]]
+
+    counters = Counters()
+    counters.cb = ctypes.sizeof(counters)
+    try:
+        query = ctypes.WinDLL("psapi", use_last_error=True).GetProcessMemoryInfo
+        query.argtypes = [wintypes.HANDLE, ctypes.POINTER(Counters), wintypes.DWORD]
+        query.restype = wintypes.BOOL
+        if not query(wintypes.HANDLE(int(process._handle)), ctypes.byref(counters), counters.cb):
+            return {**result, "win32Error": ctypes.get_last_error(), "reason": "GetProcessMemoryInfo failed"}
+        return {**result, "peakRssBytes": counters.PeakWorkingSetSize}
+    except (AttributeError, OSError, ValueError) as error:
+        return {**result, "reason": f"GetProcessMemoryInfo handle/API unavailable: {error}"}
 
 
 async def discard_output(reader):
@@ -103,15 +133,32 @@ async def receive(reader, budget=None):
     return json.loads(body.decode("utf-8"), parse_constant=reject_json_constant, parse_float=finite_json_float)
 
 
-def newline_change(source, sync):
+def newline_change(source, sync, appended="\n"):
     kind = sync.get("change", 0) if isinstance(sync, dict) else sync
     if kind == 1:
-        return {"text": source + "\n"}
+        return {"text": source + appended}
     if kind != 2:
         raise ValueError("server does not support document changes")
     lines = source.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     end = {"line": len(lines) - 1, "character": len(lines[-1].encode("utf-16-le")) // 2}
-    return {"range": {"start": end, "end": end}, "text": "\n"}
+    return {"range": {"start": end, "end": end}, "text": appended}
+
+
+def symbol_names(symbols):
+    if not isinstance(symbols, list):
+        raise ValueError("document symbols must be a list")
+    names = []
+    for symbol in symbols:
+        if not isinstance(symbol, dict) or not isinstance(symbol.get("name"), str):
+            raise ValueError("invalid document symbol")
+        names.append(symbol["name"])
+        names.extend(symbol_names(symbol.get("children", [])))
+    return names
+
+
+def prove_added_symbol(before, after, expected):
+    if expected in symbol_names(before) or expected not in symbol_names(after):
+        raise ValueError("added symbol absent after edit or already present before edit")
 
 
 async def probe(args):
@@ -122,6 +169,7 @@ async def probe(args):
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
     )
+    native_process = process._transport.get_extra_info("subprocess") if hasattr(process, "_transport") else None
     messages = []
     budget = {"wire_bytes": 0, "messages": 0}
     drain = None
@@ -167,6 +215,11 @@ async def probe(args):
             cargo_options["target"] = args.target
         if args.features:
             cargo_options["features"] = args.features
+        initialization_options = {
+            "cargo": cargo_options, "procMacro": {"enable": False}, "checkOnSave": False,
+        }
+        if os.environ.get("RUST_SRC_PATH"):
+            initialization_options["cargo"]["sysrootSrc"] = os.environ["RUST_SRC_PATH"]
         initialized = await request(1, "initialize", {
             "processId": None,
             "rootUri": root.as_uri(),
@@ -175,12 +228,10 @@ async def probe(args):
                 "textDocument": {"callHierarchy": {"dynamicRegistration": False}},
                 "general": {"positionEncodings": ["utf-16"]},
             },
-            "initializationOptions": {
-                "cargo": cargo_options,
-                "procMacro": {"enable": False},
-                "checkOnSave": False,
-            },
+            "initializationOptions": initialization_options,
         })
+        if initialized["capabilities"].get("positionEncoding", "utf-16") != "utf-16":
+            raise ValueError("server did not negotiate UTF-16 positions")
         await send({"jsonrpc": "2.0", "method": "initialized", "params": {}})
         while True:
             message = await next_message()
@@ -189,11 +240,12 @@ async def probe(args):
                     break
         timings["ready"] = (time.monotonic() - started) * 1000
         document = {"uri": (root / args.file).as_uri()}
-        source = (root / args.file).read_text(encoding="utf-8")
+        source = (root / args.file).read_bytes().decode("utf-8")
         await send({"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {
             "textDocument": {**document, "languageId": "rust", "version": 1, "text": source},
         }})
         symbols = await request(2, "textDocument/documentSymbol", {"textDocument": document})
+        timings["documentSymbolBeforeEdit"] = timings["textDocument/documentSymbol"]
         unknown = await request(3, "workspace/symbol", {"query": "semctx_missing_346"})
         hierarchy = await request(4, "textDocument/prepareCallHierarchy", {
             "textDocument": document,
@@ -206,20 +258,34 @@ async def probe(args):
             "textDocument": document,
             "position": {"line": args.definition_line, "character": args.definition_character},
         })
+        appended = getattr(args, "append_text", "\n")
+        changed_started = time.monotonic()
         await send({"jsonrpc": "2.0", "method": "textDocument/didChange", "params": {
             "textDocument": {**document, "version": 2},
-            "contentChanges": [newline_change(source, initialized["capabilities"].get("textDocumentSync"))],
+            "contentChanges": [newline_change(source, initialized["capabilities"].get("textDocumentSync"), appended)],
         }})
         edited_symbols = await request(8, "textDocument/documentSymbol", {"textDocument": document})
+        timings["changeToDocumentSymbol"] = (time.monotonic() - changed_started) * 1000
         timings["documentSymbolAfterEdit"] = timings.pop("textDocument/documentSymbol")
+        expected = getattr(args, "expect_added_symbol", None)
+        if expected:
+            prove_added_symbol(symbols, edited_symbols, expected)
         await request(7, "shutdown", None)
         await send({"jsonrpc": "2.0", "method": "exit"})
         drain = asyncio.create_task(discard_output(process.stdout))
         await process.wait()
+        rss = direct_child_rss(native_process)
         return {
             "initialization": initialized, "symbols": symbols, "unknown": unknown,
             "hierarchy": hierarchy, "calls": calls, "definition": definition,
             "editedSymbols": edited_symbols,
+            "serverPeakRss": rss,
+            "editProof": {
+                "addedSymbol": expected,
+                "beforeSha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+                "afterSha256": hashlib.sha256((source + appended).encode("utf-8")).hexdigest(),
+                "appendSha256": hashlib.sha256(appended.encode("utf-8")).hexdigest(),
+            },
             "timingsMs": timings, "messages": messages, "exitCode": process.returncode,
         }
     finally:
@@ -238,6 +304,8 @@ def main():
     parser.add_argument("--timeout", type=float, default=90)
     parser.add_argument("--target")
     parser.add_argument("--features", nargs="*", default=[])
+    parser.add_argument("--append-text", default="\n")
+    parser.add_argument("--expect-added-symbol")
     args = parser.parse_args()
     result = asyncio.run(asyncio.wait_for(probe(args), timeout=args.timeout))
     print(json.dumps(result, ensure_ascii=True, indent=2))
