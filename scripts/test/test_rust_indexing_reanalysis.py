@@ -45,7 +45,7 @@ def process_alive(pid):
 
 
 class RunnerCleanupTest(unittest.TestCase):
-    def exercise_timeout(self, real_lsp):
+    def exercise_timeout(self, real_lsp, minimal_env=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             record = root / "pids.json"
@@ -90,8 +90,21 @@ class RunnerCleanupTest(unittest.TestCase):
                 ]
             runner = reanalysis.Runner({}, root, time.monotonic() + 3)
             try:
-                with self.assertRaises(subprocess.TimeoutExpired):
-                    runner.command(argv, root)
+                if minimal_env:
+                    reduced = {
+                        key.upper(): value
+                        for key, value in os.environ.items()
+                        if key.upper() in {"PATH", "SYSTEMROOT", "TEMP", "TMP"}
+                    }
+                    # Restore the host environment before fixture cleanup, even
+                    # when the native timeout path refuses or the mutant fails.
+                    with patch.dict(os.environ, reduced, clear=True):
+                        self.assertNotIn("SYSTEMDRIVE", os.environ)
+                        with self.assertRaises(subprocess.TimeoutExpired):
+                            runner.command(argv, root)
+                else:
+                    with self.assertRaises(subprocess.TimeoutExpired):
+                        runner.command(argv, root)
                 pids = json.loads(record.read_text())
                 self.assertTrue(pids["parentAliveBefore"])
                 self.assertTrue(pids["childAliveBefore"])
@@ -111,11 +124,29 @@ class RunnerCleanupTest(unittest.TestCase):
                     for pid in (pids["launcher"], pids["parent"], pids["child"]):
                         if process_alive(pid):
                             if os.name == "nt":
+                                system = ctypes.create_unicode_buffer(32768)
+                                size = ctypes.WinDLL("kernel32").GetSystemDirectoryW(
+                                    system, len(system)
+                                )
+                                self.assertTrue(0 < size < len(system))
+                                cleanup_env = {
+                                    key.upper(): value
+                                    for key, value in os.environ.items()
+                                }
+                                cleanup_env["SYSTEMDRIVE"] = Path(system.value).drive
                                 subprocess.run(
-                                    ["taskkill", "/PID", str(pid), "/T", "/F"],
+                                    [
+                                        str(Path(system.value) / "taskkill.exe"),
+                                        "/PID",
+                                        str(pid),
+                                        "/T",
+                                        "/F",
+                                    ],
                                     check=True,
                                     stdout=subprocess.PIPE,
                                     stderr=subprocess.PIPE,
+                                    env=cleanup_env,
+                                    timeout=5,
                                 )
                             else:
                                 os.kill(pid, 9)
@@ -133,6 +164,10 @@ class RunnerCleanupTest(unittest.TestCase):
     def test_outer_timeout_reaps_real_lsp_wrapper_server_and_descendant(self):
         self.exercise_timeout(True)
 
+    @unittest.skipUnless(os.name == "nt", "Windows taskkill environment contract")
+    def test_outer_timeout_reaps_descendants_without_inherited_systemdrive(self):
+        self.exercise_timeout(False, minimal_env=True)
+
     def test_cleanup_failure_refuses_tree_guarantee_and_still_reaps_direct_child(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -147,9 +182,7 @@ class RunnerCleanupTest(unittest.TestCase):
             )
             with (
                 failure,
-                self.assertRaisesRegex(
-                    RuntimeError, "cleanup could not be established"
-                ),
+                self.assertRaises((RuntimeError, subprocess.TimeoutExpired)) as caught,
             ):
                 runner.command(
                     [
@@ -160,6 +193,8 @@ class RunnerCleanupTest(unittest.TestCase):
                     ],
                     root,
                 )
+            self.assertIsInstance(caught.exception, RuntimeError)
+            self.assertIn("cleanup could not be established", str(caught.exception))
             timing = json.loads((root / "command-0000.timing.json").read_text())
             self.assertEqual(timing["status"], "CLEANUP_FAILED")
             self.assertIn("cleanup could not be established", timing["cleanupError"])

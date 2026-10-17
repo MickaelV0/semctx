@@ -553,11 +553,16 @@ def stop_command_tree(process):
             taskkill = Path(buffer.value) / "taskkill.exe"
             if not taskkill.is_file():
                 raise RuntimeError("Windows system taskkill is unavailable")
+            cleanup_env = {key.upper(): value for key, value in os.environ.items()}
+            # taskkill can stall when a reduced caller omits SystemDrive. Derive
+            # it from the native system directory, not an inherited spelling.
+            cleanup_env["SYSTEMDRIVE"] = Path(buffer.value).drive
             result = subprocess.run(
                 [str(taskkill), "/PID", str(process.pid), "/T", "/F"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 timeout=max(0.001, deadline - time.monotonic()),
+                env=cleanup_env,
                 check=False,
             )
             if result.returncode:
