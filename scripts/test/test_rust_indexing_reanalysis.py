@@ -335,8 +335,15 @@ class RunnerCleanupTest(unittest.TestCase):
     def test_cleanup_failure_refuses_tree_guarantee_and_still_reaps_direct_child(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            record = root / "direct.pid"
             runner = reanalysis.Runner({}, root, time.monotonic() + 1)
+            native_popen = subprocess.Popen
+            children = []
+
+            def launch_owned_child(*args, **kwargs):
+                process = native_popen(*args, **kwargs)
+                children.append(process)
+                return process
+
             failure = (
                 patch.object(Path, "is_file", return_value=False)
                 if os.name == "nt"
@@ -346,14 +353,16 @@ class RunnerCleanupTest(unittest.TestCase):
             )
             with (
                 failure,
+                patch.object(
+                    reanalysis.subprocess, "Popen", side_effect=launch_owned_child
+                ),
                 self.assertRaises((RuntimeError, subprocess.TimeoutExpired)) as caught,
             ):
                 runner.command(
                     [
                         sys.executable,
                         "-c",
-                        "import os,time; from pathlib import Path; "
-                        f"Path({str(record)!r}).write_text(str(os.getpid())); time.sleep(120)",
+                        "import time; time.sleep(120)",
                     ],
                     root,
                 )
@@ -362,7 +371,8 @@ class RunnerCleanupTest(unittest.TestCase):
             timing = json.loads((root / "command-0000.timing.json").read_text())
             self.assertEqual(timing["status"], "CLEANUP_FAILED")
             self.assertIn("cleanup could not be established", timing["cleanupError"])
-            self.assertFalse(process_alive(int(record.read_text())))
+            self.assertEqual(len(children), 1)
+            self.assertFalse(process_alive(children[0].pid))
 
     def test_success_preserves_native_streams_and_command_provenance(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -383,6 +393,298 @@ class RunnerCleanupTest(unittest.TestCase):
                 json.loads((root / "command-0000.argv.json").read_text()),
                 {"argv": argv, "cwd": str(root)},
             )
+
+
+class DirectoryInputBoundaryTest(unittest.TestCase):
+    def make_config(self, root):
+        marker = root / "engine-observed-config.txt"
+        probe = (
+            "from pathlib import Path\n"
+            f"Path({str(marker)!r}).write_text(Path('.cargo/config.toml').read_text())\n"
+            "raise SystemExit(7)\n"
+        )
+        worlds = []
+        sources = []
+        for name, files in (
+            ("fixture", ["app/src/main.rs", "a.rs", "b.rs", "c.rs", "d.rs"]),
+            ("pico", ["src/lib.rs"]),
+        ):
+            workspace = root / name
+            for relative in files:
+                path = workspace / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(probe, encoding="utf-8")
+                sources.append(path)
+            worlds.append(
+                {
+                    "name": name,
+                    "path": str(workspace),
+                    "files": files,
+                    "target": files[0],
+                }
+            )
+        required = [
+            Path(reanalysis.__file__).resolve(),
+            Path(sys.executable).resolve(),
+            Path(reanalysis.__file__).with_name("rust-indexing-lsp.py").resolve(),
+        ]
+        config = {
+            "pins": [
+                {"path": str(path), "sha256": reanalysis.sha(path.read_bytes())}
+                for path in required + sources
+            ],
+            "Y": {"binary": sys.executable},
+            "workspaces": worlds,
+        }
+        return config, marker
+
+    def link_directory(self, target, link, kind="symlink"):
+        if kind == "junction":
+            import _winapi
+
+            _winapi.CreateJunction(str(target), str(link))
+        else:
+            link.symlink_to(target, target_is_directory=True)
+
+    def make_lsp_config(self, root):
+        config, marker = self.make_config(root)
+        server = root / "server.py"
+        server.write_text(
+            "import json, os, sys\nfrom pathlib import Path\n"
+            "headers = {}\nwhile True:\n"
+            "    line = sys.stdin.buffer.readline()\n"
+            "    if line == b'\\r\\n': break\n"
+            "    key, value = line.decode().split(':', 1)\n"
+            "    headers[key.lower()] = value.strip()\n"
+            "message = json.loads(sys.stdin.buffer.read(int(headers['content-length'])))\n"
+            "selected = message['params']['initializationOptions']['cargo'].get('sysrootSrc')\n"
+            f"Path({str(marker)!r}).write_text(json.dumps({{'sysroot': selected, "
+            "'source': (Path(selected)/'src/lib.rs').read_text(), 'pid': os.getpid()}))\n"
+            "raise SystemExit(7)\n",
+            encoding="utf-8",
+        )
+        executable = root / ("server.cmd" if os.name == "nt" else "server")
+        executable.write_text(
+            f'@"{sys.executable}" -B "{server}"\n'
+            if os.name == "nt"
+            else f'#!{sys.executable}\nexec(compile(open({str(server)!r}).read(), {str(server)!r}, "exec"))\n',
+            encoding="utf-8",
+        )
+        executable.chmod(0o700)
+        for path in (server, executable):
+            config["pins"].append(
+                {"path": str(path), "sha256": reanalysis.sha(path.read_bytes())}
+            )
+        config.update({"python": sys.executable, "L": {"binary": str(executable)}})
+        return config, marker
+
+    def test_cli_refuses_ambient_lsp_sysroot_before_engine(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config, marker = self.make_lsp_config(root)
+            config_path = root / "config.json"
+            reanalysis.save(config_path, config)
+            for name in ("first", "second"):
+                sysroot = root / name
+                (sysroot / "src").mkdir(parents=True)
+                (sysroot / "src/lib.rs").write_text(name)
+                output = root / (name + "-output")
+                env = dict(os.environ, RUST_SRC_PATH=str(sysroot))
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        "-B",
+                        reanalysis.__file__,
+                        "--config",
+                        str(config_path),
+                        "--output",
+                        str(output),
+                        "--engines",
+                        "L",
+                        "--budget-seconds",
+                        "10",
+                    ],
+                    env=env,
+                    capture_output=True,
+                    timeout=15,
+                    check=False,
+                )
+                observed = json.loads(marker.read_text()) if marker.exists() else None
+                if observed:
+                    self.assertFalse(process_alive(observed["pid"]))
+                    marker.unlink()
+                print(
+                    json.dumps(
+                        {
+                            "hostSysroot": str(sysroot),
+                            "configSha256": reanalysis.sha(config_path.read_bytes()),
+                            "exit": result.returncode,
+                            "engineObserved": observed,
+                            "outputExists": output.exists(),
+                            "stdout": result.stdout.decode(errors="replace"),
+                            "stderr": result.stderr.decode(errors="replace"),
+                        }
+                    )
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIsNone(
+                    observed, "native L server consumed ambient unpinned sysroot"
+                )
+                self.assertFalse(output.exists())
+                self.assertIn(b"explicit pinned RUST_SRC_PATH", result.stderr)
+
+    def test_cli_requires_complete_explicit_lsp_sysroot_pins(self):
+        for mode in ("unpinned", "partial", "complete"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                config, marker = self.make_lsp_config(root)
+                sysroot = root / "sysroot"
+                (sysroot / "src").mkdir(parents=True)
+                source = sysroot / "src/lib.rs"
+                source.write_text("benign-pinned-source")
+                extra = sysroot / "src/extra.rs"
+                extra.write_text("second-source")
+                config["env"] = {"RUST_SRC_PATH": str(sysroot)}
+                for path in (
+                    ()
+                    if mode == "unpinned"
+                    else (source,)
+                    if mode == "partial"
+                    else (source, extra)
+                ):
+                    config["pins"].append(
+                        {"path": str(path), "sha256": reanalysis.sha(path.read_bytes())}
+                    )
+                config_path = root / "config.json"
+                reanalysis.save(config_path, config)
+                output = root / "output"
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        "-B",
+                        reanalysis.__file__,
+                        "--config",
+                        str(config_path),
+                        "--output",
+                        str(output),
+                        "--engines",
+                        "L",
+                        "--budget-seconds",
+                        "10",
+                    ],
+                    capture_output=True,
+                    timeout=15,
+                    check=False,
+                )
+                observed = json.loads(marker.read_text()) if marker.exists() else None
+                if observed:
+                    self.assertFalse(process_alive(observed["pid"]))
+                print(
+                    json.dumps(
+                        {
+                            "pinMode": mode,
+                            "exit": result.returncode,
+                            "engineObserved": observed,
+                            "outputExists": output.exists(),
+                            "stdout": result.stdout.decode(errors="replace"),
+                            "stderr": result.stderr.decode(errors="replace"),
+                        }
+                    )
+                )
+                self.assertNotEqual(
+                    result.returncode, 0
+                )  # The benign server deliberately exits 7.
+                if mode == "complete":
+                    self.assertIsNotNone(observed)
+                    self.assertEqual(observed["source"], "benign-pinned-source")
+                    self.assertTrue(output.exists())
+                else:
+                    self.assertIsNone(
+                        observed, "native L server consumed incompletely pinned sysroot"
+                    )
+                    self.assertFalse(output.exists())
+                    self.assertIn(b"L sysroot input", result.stderr)
+
+    def test_cli_refuses_linked_configuration_before_output_copy_or_engine(self):
+        kinds = ("symlink", "junction") if os.name == "nt" else ("symlink",)
+        for kind in kinds:
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                config, marker = self.make_config(root)
+                external = root / "external"
+                external.mkdir()
+                (external / "config.toml").write_text("benign-external-config\n")
+                self.link_directory(external, root / "fixture" / ".cargo", kind)
+                if kind == "junction":
+                    # os.walk already visits junctions on Windows. Pinning the
+                    # target isolates the still-missing link-structure refusal.
+                    path = external / "config.toml"
+                    config["pins"].append(
+                        {"path": str(path), "sha256": reanalysis.sha(path.read_bytes())}
+                    )
+                config_path = root / "config.json"
+                reanalysis.save(config_path, config)
+                output = root / "output"
+                argv = [
+                    sys.executable,
+                    "-B",
+                    reanalysis.__file__,
+                    "--config",
+                    str(config_path),
+                    "--output",
+                    str(output),
+                    "--engines",
+                    "Y",
+                    "--budget-seconds",
+                    "10",
+                ]
+                result = subprocess.run(
+                    argv, capture_output=True, timeout=15, check=False
+                )
+                print(
+                    json.dumps(
+                        {
+                            "linkKind": kind,
+                            "externalConfigPinned": kind == "junction",
+                            "argv": argv,
+                            "exit": result.returncode,
+                            "engineObserved": marker.read_text()
+                            if marker.exists()
+                            else None,
+                            "outputExists": output.exists(),
+                            "stdout": result.stdout.decode(errors="replace"),
+                            "stderr": result.stderr.decode(errors="replace"),
+                        }
+                    )
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(
+                    marker.exists(),
+                    "configured native probe consumed linked config before refusal",
+                )
+                self.assertFalse(
+                    output.exists(),
+                    "refusal must precede output creation and workspace copy",
+                )
+                self.assertIn(b"workspace directory link", result.stderr)
+
+    def test_normal_pinned_directories_and_ignored_cache_links_are_accepted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config, _ = self.make_config(root)
+            cargo = root / "fixture" / ".cargo"
+            cargo.mkdir()
+            path = cargo / "config.toml"
+            path.write_text("benign-pinned-config\n")
+            config["pins"].append(
+                {"path": str(path), "sha256": reanalysis.sha(path.read_bytes())}
+            )
+            external = root / "external"
+            external.mkdir()
+            (external / "unmanaged").write_text("ignored\n")
+            for name in ("target", "__pycache__", ".git"):
+                self.link_directory(external, root / "fixture" / name)
+            self.assertEqual(reanalysis.validate_config(config, ["Y"]), config["pins"])
 
 
 class NativeEvidenceTest(unittest.TestCase):

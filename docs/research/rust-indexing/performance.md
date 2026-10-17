@@ -22,13 +22,15 @@ and decoder unknown-field limitations are retained. This is not portable SCIP ad
 The historical macOS/Bun observations below retain their original source/runtime identities;
 their numbers cannot be merged with or ranked against the Windows series.
 
-The current Runner timeout cleanup and output capture changed after A3. By default, each command retains
+The current Runner's input preflight, timeout cleanup and output capture changed after A3.
+It rejects retained workspace directory links before copying and requires L's RUST_SRC_PATH
+to be explicit and absolute, with every regular source file in that tree pinned. By default, each command retains
 at most 64 MiB across stdout and stderr, refuses overflow and bounds pipe draining by the command
 deadline. Cleanup covers cooperative, non-detached descendants; on Windows it requires the owned
 parent to remain alive. This research supervisor is not an isolation boundary.
 The Windows tables retain the original
 A3 harness hashes and execution identity; read-only compatibility validation of those captures
-is not a remeasurement or evidence of current timing, RSS, timeout cleanup or output capture behavior.
+is not a remeasurement or evidence of current timing, RSS, input preflight, timeout cleanup or output capture behavior.
 
 ## Historical macOS observations (2026-10-15)
 

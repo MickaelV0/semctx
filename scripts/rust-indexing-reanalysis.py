@@ -500,6 +500,27 @@ def validate_config(config, engines):
         raise ValueError("required executable, adapter or configuration is not pinned")
     if set(config.get("env", {})) - ENV_KEYS:
         raise ValueError("environment contains non-allowlisted keys")
+    if "L" in engines:
+        sysroot = config.get("env", {}).get("RUST_SRC_PATH")
+        if (
+            not isinstance(sysroot, str)
+            or not sysroot
+            or not Path(sysroot).is_absolute()
+            or not Path(sysroot).is_dir()
+        ):
+            raise ValueError("L requires an explicit pinned RUST_SRC_PATH directory")
+        root = Path(sysroot)
+        for directory, folders, files in os.walk(root):
+            for path in (
+                Path(directory),
+                *(Path(directory, name) for name in folders + files),
+            ):
+                if path.is_symlink() or getattr(path.lstat(), "st_reparse_tag", 0):
+                    raise ValueError("L sysroot input must not be a link")
+                if not path.is_dir() and (
+                    not path.is_file() or path.resolve() not in pinned
+                ):
+                    raise ValueError("L sysroot input is not a pinned regular file")
     worlds = config["workspaces"]
     if [w["name"] for w in worlds] != ["fixture", "pico"]:
         raise ValueError("expected fixture and pico workspaces in that order")
@@ -524,6 +545,10 @@ def validate_config(config, engines):
                 for name in folders
                 if name not in ("target", "__pycache__", ".git")
             ]
+            for name in folders:
+                path = Path(directory, name)
+                if path.is_symlink() or getattr(path.lstat(), "st_reparse_tag", 0):
+                    raise ValueError("workspace directory link is not permitted")
             for name in files:
                 path = Path(directory, name)
                 if path.name == "Cargo.toml":
