@@ -4,13 +4,14 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
 import { createGlobSelectionConfig, type TaskFrame } from "@semantic-context/core";
+import { digestCanonical } from "@semantic-context/plane-a-internal";
 import { buildClaims, GraphIndex, inspectGraph, prepareContextPack } from "@semantic-context/context-engine";
 import { SAMPLE_RUST_REPO } from "@semantic-context/test-fixtures";
 import { discoverRepository } from "@semantic-context/ts-analyzer";
 import { analyzePlaneARuntime, analyzePlaneARuntimeAsync } from "../src/plane-a-runtime";
-import { fingerprintAnalysisInputs } from "../src/freshness";
-import { dbPath, initWorkspace } from "@semantic-context/repository-store";
-import { checkSemanticState, indexHealth, indexRepository, runChangeImpact, runVerify, verifyAuthoredChange } from "../src";
+import { CONTROL_INDEX_SNAPSHOT_META_KEY, fingerprintAnalysisInputs, PLANE_A_INDEX_SNAPSHOT_META_KEY } from "../src/freshness";
+import { dbPath, initWorkspace, openStore } from "@semantic-context/repository-store";
+import { checkSemanticState, indexHealth, indexRepository, indexRepositoryAsync, runChangeImpact, runVerify, verifyAuthoredChange } from "../src";
 import { newChangeContract, writeChangeFile } from "@semantic-context/semantic-engine";
 import { __setIndexRepositoryCaptureBarrierForTesting } from "../src/indexing";
 import { rustMembershipByPath } from "../src/rust-inputs";
@@ -338,6 +339,59 @@ test("persisted Rust facts are admitted only while source and Cargo inputs remai
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test("index-health refuses an unknown Rust capability despite a valid binding and fresh index", () => {
+  const root = mkdtempSync(join(tmpdir(), "semctx-rust-unknown-capability-"));
+  const git = (...args: string[]) => {
+    const result = Bun.spawnSync(["git", ...args], { cwd: root, stdout: "pipe", stderr: "pipe" });
+    if (result.exitCode !== 0) throw new Error(new TextDecoder().decode(result.stderr));
+  };
+  try {
+    cpSync(SAMPLE_RUST_REPO, root, { recursive: true });
+    writeFileSync(join(root, ".gitignore"), ".semctx/\ntarget/\n");
+    git("init", "-q"); git("add", ".");
+    git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "fixture");
+    initWorkspace(root, { ...createGlobSelectionConfig(root), include: ["**/*.rs"], exclude: ["**/target/**"],
+      languages: { rust: "on" } });
+    indexRepository(root, "2026-10-17T10:00:00.000Z");
+    const store = openStore(root);
+    try {
+      const snapshot = JSON.parse(store.getMeta(PLANE_A_INDEX_SNAPSHOT_META_KEY)!) as {
+        sidecarDigest: string;
+        sidecar: {
+          capabilityProfiles: { profileId: string; factKind: string; scope: { language: string } }[];
+          factBatches: { capabilityProfileIds: string[]; factKinds: string[] }[];
+        };
+      };
+      const profile = snapshot.sidecar.capabilityProfiles.find((candidate) =>
+        candidate.scope.language === "rust" && candidate.factKind === "function");
+      if (profile === undefined) throw new Error("Rust function profile missing");
+      const batch = snapshot.sidecar.factBatches.find((candidate) =>
+        candidate.capabilityProfileIds.includes(profile.profileId) && candidate.factKinds.includes("function"));
+      if (batch === undefined) throw new Error("Rust function batch missing");
+      profile.factKind = "runtime_execution";
+      batch.factKinds = batch.factKinds.map((kind) => kind === "function" ? "runtime_execution" : kind);
+      snapshot.sidecarDigest = digestCanonical(snapshot.sidecar);
+      store.setMeta(PLANE_A_INDEX_SNAPSHOT_META_KEY, JSON.stringify(snapshot));
+      const controlSnapshot = JSON.parse(store.getMeta(CONTROL_INDEX_SNAPSHOT_META_KEY)!) as {
+        planeAIndexSnapshotHash?: string;
+      };
+      controlSnapshot.planeAIndexSnapshotHash = digestCanonical(snapshot);
+      store.setMeta(CONTROL_INDEX_SNAPSHOT_META_KEY, JSON.stringify(controlSnapshot));
+    } finally {
+      store.close();
+    }
+    const health = indexHealth(root);
+    expect(health).toMatchObject({ binding: { status: "valid" }, freshness: { verdict: "FRESH" },
+      coverage: { status: "insufficient" } });
+    expect(health.reasonSummary).toContain("CAPABILITY_MISSING");
+    expect(health.evaluations.decisions).toContainEqual(expect.objectContaining({
+      factKind: "runtime_execution", gates: expect.objectContaining({ capabilityMatch: "failed" }),
+    }));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("Rust authored anchors resolve and report deleted, renamed and ambiguous declarations", () => {
   const root = mkdtempSync(join(tmpdir(), "semctx-rust-authored-links-"));
   const git = (...args: string[]) => {
@@ -597,7 +651,7 @@ test("persisted Rust navigation becomes stale when its pinned analyzer changes",
   } finally { rmSync(root, { recursive: true, force: true }); }
 }, 40_000);
 
-test("Cargo drift during Rust analysis preserves the preceding SQLite snapshot", () => {
+test("Cargo drift during sync and async Rust analysis preserves the preceding SQLite snapshot", async () => {
   const root = mkdtempSync(join(tmpdir(), "semctx-rust-capture-drift-"));
   const git = (...args: string[]) => {
     const result = Bun.spawnSync(["git", ...args], { cwd: root, stdout: "pipe", stderr: "pipe" });
@@ -616,6 +670,15 @@ test("Cargo drift during Rust analysis preserves the preceding SQLite snapshot",
     git("update-index", "--assume-unchanged", "domain/Cargo.toml");
     __setIndexRepositoryCaptureBarrierForTesting(() => writeFileSync(manifest, original.replace("2021", "2024")));
     expect(() => indexRepository(root, "2026-10-17T10:01:00.000Z")).toThrow("repository inputs changed while the index was being built");
+    expect(readFileSync(dbPath(root))).toEqual(prior);
+    writeFileSync(manifest, original);
+    __setIndexRepositoryCaptureBarrierForTesting(() => writeFileSync(manifest, original.replace("2021", "2024")));
+    const failure = await indexRepositoryAsync(root, "2026-10-17T10:02:00.000Z", 1).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    if (!(failure instanceof Error)) throw new Error("async Rust index unexpectedly succeeded");
+    expect(failure.message).toContain("repository inputs changed while the index was being built");
     expect(readFileSync(dbPath(root))).toEqual(prior);
   } finally {
     __setIndexRepositoryCaptureBarrierForTesting(undefined);
