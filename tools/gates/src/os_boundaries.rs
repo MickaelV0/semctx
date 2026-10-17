@@ -4,6 +4,8 @@ pub const TESTS: &[&str] = &[
     "apps/cli/test/package-runtime.test.ts",
     "apps/cli/test/store-lifecycle.test.ts",
     "packages/app-services/test/bounded-process.test.ts",
+    "packages/app-services/test/codex-plugin-metadata.test.ts",
+    "packages/app-services/test/codex-plugin-production-boundary.test.ts",
     "packages/app-services/test/index-lifecycle-concurrency.test.ts",
     "packages/app-services/test/indexing-toctou.test.ts",
     "packages/app-services/test/parallel-indexing.test.ts",

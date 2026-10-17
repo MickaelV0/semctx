@@ -181,11 +181,16 @@ fn source_change_keeps_linux_complete_and_selects_native_os_boundaries() {
             if profile == "os-boundary" {
                 for witness in [
                     "packages/app-services/test/bounded-process.test.ts",
+                    "packages/app-services/test/codex-plugin-metadata.test.ts",
+                    "packages/app-services/test/codex-plugin-production-boundary.test.ts",
                     "packages/repository-store/test/store-process-crash.test.ts",
                     "apps/cli/test/package-runtime.test.ts",
                     "packages/mcp-server/test/mcp-modern-stdio.test.ts",
                 ] {
-                    assert!(lane.targets.split(',').any(|p| p == witness));
+                    assert!(
+                        lane.targets.split(',').any(|p| p == witness),
+                        "{os} missing native boundary witness {witness}"
+                    );
                 }
                 assert!(!lane.targets.contains("packages/service/test"));
             }

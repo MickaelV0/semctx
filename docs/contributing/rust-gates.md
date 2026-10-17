@@ -134,7 +134,7 @@ an immutable independently hosted verifier. See [ADR 0037](../adr/0037-rust-gate
 
 Quality runs once in the contract lane. Runtime integration checks and worker equivalence run
 once per applicable OS, while all selected test shards remain required. Classifiable product
-changes select four full Ubuntu shards and the configured 44 OS-boundary files on two Windows
+changes select four full Ubuntu shards and the configured 46 OS-boundary files on two Windows
 shards and one macOS shard. The maintained list lives in
 [`tools/gates/src/os_boundaries.rs`](../../tools/gates/src/os_boundaries.rs); it does not discover
 future OS-sensitive tests automatically. Unknown impact, dependency manifests, missing targets
