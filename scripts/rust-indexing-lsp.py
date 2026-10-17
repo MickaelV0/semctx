@@ -1,8 +1,10 @@
 import argparse
 import asyncio
 import json
+import math
 import time
 from pathlib import Path
+from email.message import Message
 
 
 # Research probes retain responses for inspection; timeouts alone do not bound memory.
@@ -42,6 +44,17 @@ async def cleanup_process(process, drain):
         await asyncio.gather(*tasks, return_exceptions=True)
 
 
+def reject_json_constant(value):
+    raise ValueError(f"invalid JSON numeric constant: {value}")
+
+
+def finite_json_float(value):
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("JSON number exceeds finite float range")
+    return number
+
+
 async def receive(reader, budget=None):
     if budget is None:
         budget = {"wire_bytes": 0, "messages": 0}
@@ -56,12 +69,24 @@ async def receive(reader, budget=None):
         header.extend(await reader.readexactly(1))
         budget["wire_bytes"] += 1
     lengths = []
+    content_types = []
     for line in header.decode("ascii").split("\r\n")[:-2]:
         name, separator, value = line.partition(":")
         if not separator:
             raise ValueError("invalid LSP header")
         if name.lower() == "content-length":
             lengths.append(value.strip())
+        if name.lower() == "content-type":
+            content_types.append(value.strip())
+    if len(content_types) > 1:
+        raise ValueError("duplicate LSP Content-Type")
+    if content_types:
+        content_type = Message()
+        content_type["Content-Type"] = content_types[0]
+        charsets = [value for name, value in content_type.get_params()[1:] if name.lower() == "charset"]
+        if len(charsets) > 1 or (charsets and (
+                not isinstance(charsets[0], str) or charsets[0].lower() not in ("utf-8", "utf8"))):
+            raise ValueError("unsupported or duplicate LSP charset")
     if len(lengths) != 1 or not lengths[0] or not all("0" <= char <= "9" for char in lengths[0]):
         raise ValueError("invalid or duplicate LSP Content-Length")
     # Compare decimal text first, so even an enormous integer advertisement is refused.
@@ -75,7 +100,7 @@ async def receive(reader, budget=None):
     budget["wire_bytes"] += length
     budget["messages"] += 1
     body = await reader.readexactly(length)
-    return json.loads(body)
+    return json.loads(body.decode("utf-8"), parse_constant=reject_json_constant, parse_float=finite_json_float)
 
 
 def newline_change(source, sync):

@@ -250,6 +250,16 @@ pilot coordinates missed a function; retained serial measurements use the correc
 The probe refuses headers larger than 8 KiB, message bodies larger than 4 MiB, more than
 16 MiB of cumulative wire input (headers included), or more than 10,000 messages. These limits
 bound captured protocol input; they do not measure or cap the server's resident memory.
+Message bodies are decoded strictly as UTF-8 before parsing JSON. UTF-16 and UTF-32 JSON,
+with or without a byte order mark, are refused rather than accepted through encoding detection.
+An omitted charset defaults to UTF-8; an explicit charset accepts `utf-8` or the legacy `utf8`
+alias, case-insensitively, including quoted parameter values. Duplicate Content-Type headers,
+duplicate charset parameters and unsupported charsets are refused. JSON numeric extensions
+`NaN`, `Infinity` and `-Infinity`, and numeric literals that overflow the finite float range,
+are refused so diagnostic JSON does not acquire non-JSON infinities. Finite numbers and strings
+such as `"NaN"` remain valid. Numeric range limits follow [RFC 8259 section 6](https://www.rfc-editor.org/rfc/rfc8259#section-6).
+Encoding checks follow the
+[LSP 3.17 content-part encoding contract](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#contentPart).
 After sending `exit`, stdout is drained in 64 KiB chunks without retaining further diagnostics,
 so a server's trailing output cannot block its exit behind a full pipe. On cancellation or refusal,
 the direct RA child is killed, stdin is closed, and stdout drainage and child reaping share a

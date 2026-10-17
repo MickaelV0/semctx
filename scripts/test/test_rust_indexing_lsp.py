@@ -18,6 +18,73 @@ spec.loader.exec_module(probe)
 
 
 class LspTransportTest(unittest.IsolatedAsyncioTestCase):
+    async def test_refuses_unsupported_or_duplicate_charset(self):
+        accepted = []
+        for content_type in (
+            b"application/vscode-jsonrpc; charset=utf-16",
+            b"application/vscode-jsonrpc; charset=iso-8859-1",
+            b"application/vscode-jsonrpc; charset*=utf-8''utf-16",
+            b"application/vscode-jsonrpc; charset=utf-8; charset=utf8",
+            b"application/vscode-jsonrpc; charset=utf-8\r\nContent-Type: application/vscode-jsonrpc",
+        ):
+            reader = asyncio.StreamReader()
+            reader.feed_data(b"Content-Length: 2\r\nContent-Type: " + content_type + b"\r\n\r\n{}")
+            reader.feed_eof()
+            try:
+                await probe.receive(reader)
+            except ValueError:
+                pass
+            else:
+                accepted.append(content_type)
+        self.assertEqual(accepted, [], "LSP charset must identify UTF-8 unambiguously")
+
+    async def test_refuses_nonfinite_json_constants(self):
+        accepted = []
+        for constant in (b"NaN", b"Infinity", b"-Infinity", b"1e400", b"-1e400"):
+            body = b'{"result":' + constant + b'}'
+            reader = asyncio.StreamReader()
+            reader.feed_data(f"Content-Length: {len(body)}\r\n\r\n".encode() + body)
+            reader.feed_eof()
+            try:
+                await probe.receive(reader)
+            except ValueError:
+                pass
+            else:
+                accepted.append(constant)
+        self.assertEqual(accepted, [], "LSP bodies must contain valid JSON numeric constants")
+
+    async def test_utf8_charset_aliases_and_finite_json_preserve_next_frame(self):
+        reader = asyncio.StreamReader()
+        values = [0, 1.5, "é🦀", {}, 1e20, "NaN", "Infinity"]
+        charsets = (None, "UTF-8", "utf8", '"uTf-8"', None, "UTF-8", "utf8")
+        for charset, value in zip(charsets, values, strict=True):
+            body = json.dumps({"result": value}, ensure_ascii=False).encode("utf-8")
+            header = f"Content-Length: {len(body)}\r\n"
+            if charset:
+                header += f"Content-Type: application/vscode-jsonrpc; charset={charset}\r\n"
+            reader.feed_data(header.encode("ascii") + b"\r\n" + body)
+        for value in values:
+            self.assertEqual(await probe.receive(reader), {"result": value})
+
+    async def test_refuses_utf16_and_utf32_json_bodies(self):
+        accepted = []
+        source = json.dumps({"result": "é🦀"}, ensure_ascii=False)
+        for encoding, bom in (("utf-16-le", b"\xff\xfe"), ("utf-16-be", b"\xfe\xff"),
+                              ("utf-32-le", b"\xff\xfe\x00\x00"),
+                              ("utf-32-be", b"\x00\x00\xfe\xff")):
+            for prefix in (b"", bom):
+                reader = asyncio.StreamReader()
+                body = prefix + source.encode(encoding)
+                reader.feed_data(f"Content-Length: {len(body)}\r\n\r\n".encode() + body)
+                reader.feed_eof()
+                try:
+                    await probe.receive(reader)
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    pass
+                else:
+                    accepted.append((encoding, bool(prefix)))
+        self.assertEqual(accepted, [], "LSP JSON bodies must use UTF-8, without encoding autodetection")
+
     async def test_refuses_oversized_advertisement_before_reading_body(self):
         class HeaderOnlyReader(asyncio.StreamReader):
             async def readexactly(self, size):
