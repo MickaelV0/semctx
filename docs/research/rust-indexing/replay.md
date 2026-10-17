@@ -415,3 +415,6 @@ separate, and Windows SCIP association is explicitly diagnostic because native p
 the protocol. The earlier commands and measurements above retain their historical identity.
 Captured manifests end in `.capture`, so the eight research `Cargo.toml.snapshot` inputs
 remain the only manifests selected by this document's original materializer.
+All current Windows `*/inputs/**` bytes are archived as data. Follow that record's
+hash-check → scratch copy → controlled unpack → `--validate` sequence; do not extract
+captured Rust tests or README files into this repository's active discovery surface.

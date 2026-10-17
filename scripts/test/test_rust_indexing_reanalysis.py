@@ -8,6 +8,7 @@ import sys
 import time
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -16,9 +17,137 @@ SPEC = importlib.util.spec_from_file_location(
 )
 reanalysis = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(reanalysis)
+UNPACK_SPEC = importlib.util.spec_from_file_location(
+    "research_unpack", Path(__file__).parents[1] / "rust-indexing-unpack.py"
+)
+unpack = importlib.util.module_from_spec(UNPACK_SPEC)
+UNPACK_SPEC.loader.exec_module(unpack)
 
 
 class NativeEvidenceTest(unittest.TestCase):
+    def make_input_archive(self, root):
+        payload = b"fn example() {}\n"
+        name = "Y-pico-1/inputs/src/lib.rs"
+        archive = root / "captured-inputs.zip"
+        with zipfile.ZipFile(archive, "w") as bundle:
+            bundle.writestr(name, payload)
+        sha = reanalysis.sha(payload)
+        reanalysis.save(
+            root / "result.json",
+            {
+                "pairs": [
+                    {
+                        "engine": "Y",
+                        "workspace": "pico",
+                        "sample": 1,
+                        "workspaceInputs": [
+                            {"capturePath": "src/lib.rs", "sha256": sha}
+                        ],
+                    }
+                ]
+            },
+        )
+        manifest = {
+            "archive": {
+                "path": archive.name,
+                "sha256": reanalysis.sha(archive.read_bytes()),
+                "bytes": archive.stat().st_size,
+                "uncompressedBytes": len(payload),
+            },
+            "members": [{"path": name, "sha256": sha, "bytes": len(payload)}],
+        }
+        reanalysis.save(root / "CAPTURED-INPUTS.json", manifest)
+        return manifest, name, payload
+
+    def test_input_archive_extracts_verified_bytes_and_refuses_existing_destination(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _, name, payload = self.make_input_archive(root)
+            self.assertEqual(
+                unpack.unpack_inputs(root), {"members": 1, "bytes": len(payload)}
+            )
+            self.assertEqual((root / name).read_bytes(), payload)
+            with self.assertRaisesRegex(ValueError, "already exists"):
+                unpack.unpack_inputs(root)
+
+    def test_input_archive_sha_mismatch_is_refused_before_any_extraction(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest, _, _ = self.make_input_archive(root)
+            manifest["archive"]["sha256"] = "0" * 64
+            reanalysis.save(root / "CAPTURED-INPUTS.json", manifest)
+            with self.assertRaisesRegex(ValueError, "archive SHA-256"):
+                unpack.unpack_inputs(root)
+            self.assertFalse((root / "Y-pico-1/inputs").exists())
+
+    def test_input_archive_refuses_malformed_or_unknown_members_without_writes(self):
+        for kind in ("malformed", "unknown", "symlink", "traversal"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                manifest, name, payload = self.make_input_archive(root)
+                archive = root / "captured-inputs.zip"
+                if kind == "malformed":
+                    archive.write_bytes(b"not-a-zip")
+                else:
+                    with zipfile.ZipFile(archive, "w") as bundle:
+                        item = zipfile.ZipInfo(name)
+                        if kind == "symlink":
+                            item.create_system = 3
+                            item.external_attr = 0o120777 << 16
+                        bundle.writestr(item, payload)
+                        if kind in ("unknown", "traversal"):
+                            bundle.writestr(
+                                "unknown.rs" if kind == "unknown" else "../escape.rs",
+                                b"bad",
+                            )
+                manifest["archive"]["bytes"] = archive.stat().st_size
+                manifest["archive"]["sha256"] = reanalysis.sha(archive.read_bytes())
+                reanalysis.save(root / "CAPTURED-INPUTS.json", manifest)
+                with self.assertRaises(ValueError):
+                    unpack.unpack_inputs(root)
+                self.assertFalse((root / "Y-pico-1/inputs").exists())
+
+    def test_input_archive_refuses_missing_member_before_creating_inputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive = root / "captured-inputs.zip"
+            with zipfile.ZipFile(archive, "w"):
+                pass
+            name = "Y-pico-1/inputs/src/lib.rs"
+            expected = reanalysis.sha(b"fn example() {}\n")
+            reanalysis.save(
+                root / "result.json",
+                {
+                    "pairs": [
+                        {
+                            "engine": "Y",
+                            "workspace": "pico",
+                            "sample": 1,
+                            "workspaceInputs": [
+                                {"capturePath": "src/lib.rs", "sha256": expected}
+                            ],
+                        }
+                    ]
+                },
+            )
+            reanalysis.save(
+                root / "CAPTURED-INPUTS.json",
+                {
+                    "archive": {
+                        "path": archive.name,
+                        "sha256": reanalysis.sha(archive.read_bytes()),
+                        "bytes": archive.stat().st_size,
+                        "uncompressedBytes": 16,
+                    },
+                    "members": [{"path": name, "sha256": expected, "bytes": 16}],
+                },
+            )
+            with self.assertRaisesRegex(ValueError, "inventory"):
+                unpack.unpack_inputs(root)
+            self.assertFalse((root / "Y-pico-1/inputs").exists())
+
     def test_public_reanalysis_series_proves_all_native_postimages_and_portable_custody(
         self,
     ):
@@ -105,9 +234,35 @@ class NativeEvidenceTest(unittest.TestCase):
                 entry["sha256"],
                 entry["path"],
             )
+        logical = catalogue["logicalOriginals"]
+        self.assertEqual(len(logical), 607)
+        self.assertEqual(len({entry["path"] for entry in logical}), 607)
+        physical = {entry["path"]: entry for entry in catalogue["files"]}
+        archived = {
+            entry["path"]: entry
+            for entry in json.loads((public / "CAPTURED-INPUTS.json").read_bytes())[
+                "members"
+            ]
+        }
+        self.assertEqual(len(archived), 204)
+        for entry in logical:
+            storage = entry["storage"]
+            if "member" in storage:
+                self.assertEqual(
+                    storage, {"archive": "captured-inputs.zip", "member": entry["path"]}
+                )
+                stored = archived[entry["path"]]
+            else:
+                self.assertEqual(storage, {"file": entry["path"]})
+                stored = physical[entry["path"]]
+            self.assertEqual(
+                (entry["bytes"], entry["sha256"]), (stored["bytes"], stored["sha256"])
+            )
         with tempfile.TemporaryDirectory() as directory:
             portable = Path(directory) / "copied-records"
             shutil.copytree(public, portable)
+            unpacked = unpack.unpack_inputs(portable)
+            self.assertEqual(unpacked["members"], 204)
             read_bytes = Path.read_bytes
 
             def local_read(path):

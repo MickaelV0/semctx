@@ -7,7 +7,14 @@ The original [result](result.json) is SHA-256
 `a5ee4c82ac815cd285d90dbdebe408f4af90107e97a9b7b23c9b43bed5702560`;
 the original [config](config.json) is
 `88a7466adef45586ab656d02195cb3b4f08e1b481816f6b8da12eec97aeaa67b`.
-[CATALOG.json](CATALOG.json) hashes every retained file except itself.
+[CATALOG.json](CATALOG.json) hashes every physical file except itself and maps the 607
+original logical files to their storage. The 204 original `*/inputs/**` files are stored
+losslessly in [captured-inputs.zip](captured-inputs.zip), SHA-256
+`75b494bd832d4076b5f1201657039724d943f2877b41ddf35714b001bbd00656`.
+[CAPTURED-INPUTS.json](CAPTURED-INPUTS.json) binds the exact member inventory, lengths and
+original A3 hashes. Fixed member order, timestamp and ZIP_STORED serialization are deterministic.
+Captured Rust tests and README files are data inside that archive, not active repository
+test families or additional normative documents. Packing changes storage, not the measurement.
 [MEASUREMENTS.json](MEASUREMENTS.json) is a derived index: each value points to its original
 file, JSON field and SHA-256. Original stream bytes, including CRLF and trailing TSV tabs,
 are preserved; scoped attributes prevent Git newline conversion.
@@ -38,7 +45,8 @@ function-discovery witnesses, not whole-workspace or negative completeness proof
 Input, before/after and append hashes are in each pair. The fixture's same five selected
 normal `.rs` files and pico's one `.rs` file feed T/Y; S/L additionally load the Cargo
 workspace, target configuration and stdlib. Cargo manifest and lockfile bytes are retained
-under `inputs/`; manifests use `.capture` names and cannot become replay/product crates.
+under logical `inputs/` paths inside the archive; manifests use `.capture` names and cannot
+become replay/product crates. Portable validation extracts them only into an explicit scratch copy.
 
 - T: one fresh parser process; native full parse, `oldTree.edit`, incremental parse in that
   same process, retaining original CST S-expressions and structured function nodes.
@@ -116,7 +124,7 @@ Later document/test commits may reuse A3 only through unchanged three measured h
 sources, profile and tool hashes; the A3 subject is never relabelled as a later execution.
 
 These captures exclude materialized workspaces, Cargo targets, caches, tools and binaries.
-They retain only enumerated original primaries, captured inputs and identified receipts.
+They retain only enumerated original primaries, archived captured inputs and identified receipts.
 Absolute host paths are original identity/argv metadata; portable validation reads relative
 capture paths and never opens those original paths or executes engines. Declared local pins
 are not a whole-OS/DLL sandbox, hostile-input or descendant-resource guarantee.
@@ -125,19 +133,29 @@ Historical macOS/Bun and Linux-smoke observations remain separate.
 
 ## Replay
 
-First verify bytes before interpreting a record:
+First verify physical bytes and copy the captures to a fresh absolute directory outside
+the repository. The unpack utility is a publication helper, not a measured A3 input. It
+checks the archive hash before ZIP parsing, exact original member inventory and hashes,
+byte budgets, relative paths and member types; duplicates, symlinks, traversal, stale/missing
+members and existing destinations are refused before creating input files. Never unpack
+into the tracked publication directory.
 
 ```sh
+export CAPTURE_COPY=/absolute/new-capture-copy
 python3 - <<'PY' || exit $?
-import hashlib, json
+import hashlib, json, os, shutil
 from pathlib import Path
 root = Path("docs/research/rust-indexing/results/reanalysis-windows-2026-10-17")
 for entry in json.loads((root / "CATALOG.json").read_bytes())["files"]:
     path = root / entry["path"]
     assert not path.is_symlink() and path.resolve().is_relative_to(root.resolve())
     assert hashlib.sha256(path.read_bytes()).hexdigest() == entry["sha256"], entry["path"]
+destination = Path(os.environ["CAPTURE_COPY"])
+assert destination.is_absolute() and not destination.resolve().is_relative_to(Path.cwd().resolve())
+shutil.copytree(root, destination)
 PY
-python3 -B scripts/rust-indexing-reanalysis.py --validate docs/research/rust-indexing/results/reanalysis-windows-2026-10-17 || exit $?
+python3 -B scripts/rust-indexing-unpack.py --root "$CAPTURE_COPY" || exit $?
+python3 -B scripts/rust-indexing-reanalysis.py --validate "$CAPTURE_COPY" || exit $?
 ```
 
 The [unmodified original invocation](execution/argv.json) retains the exact A3 paths and

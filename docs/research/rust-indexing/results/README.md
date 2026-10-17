@@ -39,3 +39,6 @@ including native CRLF and TSV trailing tabs; scoped data-only attributes prevent
 normalization. Its catalogue binds original fields, inputs, tool/profile pins and build
 transfer. The historical prefix substitutions/trimming described above do not apply to
 that directory. No materialized Cargo workspace, target, executable or cache is published.
+The 204 captured input files are stored losslessly in one deterministic archive; their
+Rust tests and README files remain experimental data rather than additional active
+repository oracles/documents. Hash-check and unpack into a scratch copy before portable validation.

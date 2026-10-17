@@ -14,5 +14,26 @@
   "YBuildTransfer": "Sixteen source bytes matched before A3; original build/READY.json and execution/preparation.json retain their own subjects.",
   "configSha256": "88a7466adef45586ab656d02195cb3b4f08e1b481816f6b8da12eec97aeaa67b",
   "resultSha256": "a5ee4c82ac815cd285d90dbdebe408f4af90107e97a9b7b23c9b43bed5702560",
-  "storage": "Original primaries are byte-exact. Native Windows paths are nonconforming SCIP data; no normalization of original protobuf/JSON. Only explicit diagnostic matching is admitted."
+  "storage": "607 original logical files remain byte-identical: 204 input files are stored as deterministic ZIP members; 403 original files remain physical. No new measurement or A3 subject relabelling.",
+  "capturedInputArchive": {
+    "path": "captured-inputs.zip",
+    "bytes": 439498,
+    "sha256": "75b494bd832d4076b5f1201657039724d943f2877b41ddf35714b001bbd00656",
+    "uncompressedBytes": 408132,
+    "format": "ZIP_STORED",
+    "memberOrder": "lexicographic",
+    "fixedDateTime": [
+      1980,
+      1,
+      1,
+      0,
+      0,
+      0
+    ]
+  },
+  "publicationUnpackHelper": {
+    "path": "scripts/rust-indexing-unpack.py",
+    "sha256": "4916bb91e99aad10a18eca2b24cdffb2b0b10b1035f75061c36942dd34eaabac",
+    "measuredRuntimeInput": false
+  }
 }
