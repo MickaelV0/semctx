@@ -15,6 +15,7 @@ import math
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -22,6 +23,7 @@ from pathlib import Path
 
 APPEND = "\npub fn semctx_reindex_probe() -> usize { 17 }\n"
 SYMBOL = "semctx_reindex_probe"
+CLEANUP_TIMEOUT = 5.0
 WINDOWS_SCIP_LIMIT = "NONCONFORMING_WINDOWS_SCIP_PATHS: diagnostic matching only; native SCIP remains non-portable, without conformance or production admission."
 ENV_KEYS = {
     "PATH",
@@ -532,6 +534,54 @@ def validate_config(config, engines):
     return pins
 
 
+def stop_command_tree(process):
+    """Stop cooperative, non-detached descendants before returning a timeout.
+
+    This research supervisor is not an isolation boundary. On Windows taskkill
+    requires the owned parent to remain alive until tree enumeration.
+    """
+    deadline = time.monotonic() + CLEANUP_TIMEOUT
+    try:
+        if os.name == "nt":
+            import ctypes
+
+            buffer = ctypes.create_unicode_buffer(32768)
+            kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+            size = kernel.GetSystemDirectoryW(buffer, len(buffer))
+            if not 0 < size < len(buffer):
+                raise RuntimeError("cannot resolve Windows system directory")
+            taskkill = Path(buffer.value) / "taskkill.exe"
+            if not taskkill.is_file():
+                raise RuntimeError("Windows system taskkill is unavailable")
+            result = subprocess.run(
+                [str(taskkill), "/PID", str(process.pid), "/T", "/F"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=max(0.001, deadline - time.monotonic()),
+                check=False,
+            )
+            if result.returncode:
+                raise RuntimeError(
+                    f"owned process-tree cleanup failed: taskkill exit {result.returncode}"
+                )
+        else:
+            os.killpg(process.pid, signal.SIGKILL)
+        process.wait(timeout=max(0.001, deadline - time.monotonic()))
+    except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+        # Bound the direct child as well, but do not claim tree cleanup succeeded.
+        try:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=max(0.001, deadline - time.monotonic()))
+        except (OSError, subprocess.TimeoutExpired) as fallback_error:
+            raise RuntimeError(
+                f"owned process-tree cleanup failed ({error}); direct-child fallback failed: {fallback_error}"
+            ) from fallback_error
+        raise RuntimeError(
+            f"owned process-tree cleanup could not be established: {error}"
+        ) from error
+
+
 class Runner:
     def __init__(self, config, output, deadline):
         self.config, self.output, self.deadline = config, output, deadline
@@ -560,23 +610,44 @@ class Runner:
             prefix.with_suffix(".stderr").open("wb") as stderr,
         ):
             try:
-                with subprocess.Popen(
-                    argv, cwd=cwd, env=self.env, stdout=stdout, stderr=stderr
-                ) as process:
+                process = subprocess.Popen(
+                    argv,
+                    cwd=cwd,
+                    env=self.env,
+                    stdout=stdout,
+                    stderr=stderr,
+                    start_new_session=os.name != "nt",
+                )
+                try:
                     try:
                         process.wait(timeout=remaining)
                     except subprocess.TimeoutExpired:
-                        process.kill()
-                        process.wait()
+                        stop_command_tree(process)
                         raise
                     rss = LSP.direct_child_rss(process)
                     exit_code = process.returncode
-            except subprocess.TimeoutExpired:
+                finally:
+                    if process.poll() is None:
+                        try:
+                            process.kill()
+                            process.wait(timeout=CLEANUP_TIMEOUT)
+                        except (OSError, subprocess.TimeoutExpired) as error:
+                            raise RuntimeError(
+                                f"owned direct-child cleanup failed: {error}"
+                            ) from error
+            except (subprocess.TimeoutExpired, RuntimeError) as error:
                 save(
                     prefix.with_suffix(".timing.json"),
                     {
-                        "status": "TIMEOUT",
+                        "status": "TIMEOUT"
+                        if isinstance(error, subprocess.TimeoutExpired)
+                        else "CLEANUP_FAILED",
                         "elapsedMs": (time.monotonic() - started) * 1000,
+                        **(
+                            {"cleanupError": str(error)}
+                            if isinstance(error, RuntimeError)
+                            else {}
+                        ),
                     },
                 )
                 raise

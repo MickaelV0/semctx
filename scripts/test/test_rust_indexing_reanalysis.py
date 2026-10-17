@@ -1,4 +1,5 @@
 import copy
+import ctypes
 import importlib.util
 import json
 import os
@@ -22,6 +23,167 @@ UNPACK_SPEC = importlib.util.spec_from_file_location(
 )
 unpack = importlib.util.module_from_spec(UNPACK_SPEC)
 UNPACK_SPEC.loader.exec_module(unpack)
+
+
+def process_alive(pid):
+    if os.name == "nt":
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.OpenProcess.restype = ctypes.c_void_p
+        handle = kernel.OpenProcess(0x1000 | 0x100000, False, pid)
+        if not handle:
+            return False
+        try:
+            return kernel.WaitForSingleObject(ctypes.c_void_p(handle), 0) == 258
+        finally:
+            kernel.CloseHandle(ctypes.c_void_p(handle))
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    status = Path(f"/proc/{pid}/stat")
+    return not status.exists() or status.read_text().split(")", 1)[1].split()[0] != "Z"
+
+
+class RunnerCleanupTest(unittest.TestCase):
+    def exercise_timeout(self, real_lsp):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            record = root / "pids.json"
+            server = root / "server.py"
+            server.write_text(
+                "import json, os, subprocess, sys, time\n"
+                "from pathlib import Path\n"
+                "child = subprocess.Popen([sys.executable, '-c', "
+                "'import time; time.sleep(120)'], stdout=subprocess.DEVNULL, "
+                "stderr=subprocess.DEVNULL)\n"
+                f"Path({str(record)!r}).write_text(json.dumps("
+                "{'launcher':os.getppid(), 'parent':os.getpid(), 'child':child.pid, "
+                "'parentAliveBefore':True, 'childAliveBefore':child.poll() is None}))\n"
+                "time.sleep(120)\n",
+                encoding="utf-8",
+            )
+            if real_lsp:
+                executable = root / ("server.cmd" if os.name == "nt" else "server")
+                executable.write_text(
+                    f'@"{sys.executable}" -B "{server}"\n'
+                    if os.name == "nt"
+                    else f'#!{sys.executable}\nexec(compile(open({str(server)!r}).read(), {str(server)!r}, "exec"))\n',
+                    encoding="utf-8",
+                )
+                executable.chmod(0o700)
+                (root / "source.rs").write_text("fn main() {}\n")
+                argv = [
+                    sys.executable,
+                    str(Path(reanalysis.__file__).with_name("rust-indexing-lsp.py")),
+                    str(executable),
+                    str(root),
+                    "source.rs",
+                    "--timeout",
+                    "120",
+                ]
+            else:
+                argv = [
+                    sys.executable,
+                    "-c",
+                    "import subprocess,sys,time; "
+                    f"subprocess.Popen([sys.executable, {str(server)!r}]); time.sleep(120)",
+                ]
+            runner = reanalysis.Runner({}, root, time.monotonic() + 3)
+            try:
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    runner.command(argv, root)
+                pids = json.loads(record.read_text())
+                self.assertTrue(pids["parentAliveBefore"])
+                self.assertTrue(pids["childAliveBefore"])
+                self.assertFalse(
+                    process_alive(pids["parent"]),
+                    "owned server survived Runner timeout",
+                )
+                self.assertFalse(
+                    process_alive(pids["child"]),
+                    "owned descendant survived Runner timeout",
+                )
+                timing = json.loads((root / "command-0000.timing.json").read_text())
+                self.assertEqual(timing["status"], "TIMEOUT")
+            finally:
+                if record.exists():
+                    pids = json.loads(record.read_text())
+                    for pid in (pids["launcher"], pids["parent"], pids["child"]):
+                        if process_alive(pid):
+                            if os.name == "nt":
+                                subprocess.run(
+                                    ["taskkill", "/PID", str(pid), "/T", "/F"],
+                                    check=True,
+                                    stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE,
+                                )
+                            else:
+                                os.kill(pid, 9)
+                    deadline = time.monotonic() + 3
+                    while any(
+                        process_alive(pid) for pid in pids.values() if type(pid) is int
+                    ):
+                        if time.monotonic() >= deadline:
+                            raise AssertionError("owned fixture cleanup failed")
+                        time.sleep(0.01)
+
+    def test_outer_timeout_reaps_owned_descendants_before_propagation(self):
+        self.exercise_timeout(False)
+
+    def test_outer_timeout_reaps_real_lsp_wrapper_server_and_descendant(self):
+        self.exercise_timeout(True)
+
+    def test_cleanup_failure_refuses_tree_guarantee_and_still_reaps_direct_child(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            record = root / "direct.pid"
+            runner = reanalysis.Runner({}, root, time.monotonic() + 1)
+            failure = (
+                patch.object(Path, "is_file", return_value=False)
+                if os.name == "nt"
+                else patch.object(
+                    reanalysis.os, "killpg", side_effect=PermissionError("denied")
+                )
+            )
+            with (
+                failure,
+                self.assertRaisesRegex(
+                    RuntimeError, "cleanup could not be established"
+                ),
+            ):
+                runner.command(
+                    [
+                        sys.executable,
+                        "-c",
+                        "import os,time; from pathlib import Path; "
+                        f"Path({str(record)!r}).write_text(str(os.getpid())); time.sleep(120)",
+                    ],
+                    root,
+                )
+            timing = json.loads((root / "command-0000.timing.json").read_text())
+            self.assertEqual(timing["status"], "CLEANUP_FAILED")
+            self.assertIn("cleanup could not be established", timing["cleanupError"])
+            self.assertFalse(process_alive(int(record.read_text())))
+
+    def test_success_preserves_native_streams_and_command_provenance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runner = reanalysis.Runner({}, root, time.monotonic() + 15)
+            argv = [
+                sys.executable,
+                "-c",
+                "import os; os.write(1,b'raw\\x00out'); os.write(2,b'raw\\x00err')",
+            ]
+            stdout, stderr, observation = runner.command(argv, root)
+            self.assertEqual(stdout, b"raw\x00out")
+            self.assertEqual(stderr, b"raw\x00err")
+            self.assertEqual(observation["exitCode"], 0)
+            self.assertEqual(observation["stdoutSha256"], reanalysis.sha(stdout))
+            self.assertEqual(observation["stderrSha256"], reanalysis.sha(stderr))
+            self.assertEqual(
+                json.loads((root / "command-0000.argv.json").read_text()),
+                {"argv": argv, "cwd": str(root)},
+            )
 
 
 class NativeEvidenceTest(unittest.TestCase):
@@ -157,6 +319,26 @@ class NativeEvidenceTest(unittest.TestCase):
         )
         result = json.loads((public / "result.json").read_bytes())
         config = json.loads((public / "config.json").read_bytes())
+        provenance = json.loads((public / "PROVENANCE.json").read_bytes())
+        self.assertEqual(
+            provenance["measuredHead"], "1f08463191369097fe15dda1721324a4c7ab4215"
+        )
+        self.assertEqual(
+            provenance["resultSha256"],
+            reanalysis.sha((public / "result.json").read_bytes()),
+        )
+        self.assertEqual(
+            provenance["configSha256"],
+            reanalysis.sha((public / "config.json").read_bytes()),
+        )
+        self.assertFalse(provenance["publicationTestIsMeasuredRuntimeInput"])
+        for path, digest in provenance["measuredHarnessSha256"].items():
+            matching = [
+                pin["sha256"]
+                for pin in config["pins"]
+                if pin["path"].replace("\\", "/").endswith("/" + path)
+            ]
+            self.assertEqual(matching, [digest], "original measured harness identity")
         self.assertEqual(result["engines"], list("TYSL"))
         self.assertEqual(len(result["pairs"]), 24)
         self.assertEqual(

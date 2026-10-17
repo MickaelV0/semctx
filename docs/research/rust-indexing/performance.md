@@ -22,6 +22,10 @@ and decoder unknown-field limitations are retained. This is not portable SCIP ad
 The historical macOS/Bun observations below retain their original source/runtime identities;
 their numbers cannot be merged with or ranked against the Windows series.
 
+The current Runner timeout cleanup changed after A3. The Windows tables retain the original
+A3 harness hashes and execution identity; read-only compatibility validation of those captures
+is not a remeasurement or evidence of current timing, RSS or timeout cleanup behavior.
+
 ## Historical macOS observations (2026-10-15)
 
 Date: 2026-10-15. Apple M4 Max, 16 cores, 64 GiB, macOS 27.0.1 arm64; Bun 1.4.3, Python 3.15.0,

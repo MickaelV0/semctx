@@ -120,8 +120,12 @@ GNU profile and 4,115,497-byte binary hash. [A3 preparation](execution/preparati
 transfers that binary through sixteen identical Y/fixture input hashes; this is not a rebuild
 at A3. Config pins retain the A3 unit-test version that existed during measurement.
 The subsequently added publication/integration test is not a measured runtime input.
-Later document/test commits may reuse A3 only through unchanged three measured harnesses,
-sources, profile and tool hashes; the A3 subject is never relabelled as a later execution.
+The current Runner received an outer-timeout process-tree cleanup correction after A3.
+The three original measured harness hashes, sources, profile and tool hashes remain historical
+A3 identities in [PROVENANCE.json](PROVENANCE.json); the changed Runner is not a measured A3
+runtime input. Compatible read-only validation of these captures establishes stored fact
+bindings only. It establishes no new engine execution, current timing/RSS or current timeout
+cleanup proof, and the A3 subject is never relabelled as a later execution.
 
 These captures exclude materialized workspaces, Cargo targets, caches, tools and binaries.
 They retain only enumerated original primaries, archived captured inputs and identified receipts.
