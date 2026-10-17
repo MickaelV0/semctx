@@ -198,11 +198,11 @@ fixture parsing scope; sum their parser times, not their count of differently de
 
 ```sh
 for n in 1 2 3; do
-  /usr/bin/time -l "$RUN/tools/rust-analyzer" scip "$RESEARCH/fixture" --output "$RUN/raw/fixture-$n.scip" --num-threads 4 > "$RUN/raw/fixture-$n.stdout" 2> "$RUN/raw/fixture-$n.time"
-  /usr/bin/time -l "$RUN/tools/rust-analyzer" scip "$RESEARCH/corpus/pico-args-0.5.0" --output "$RUN/raw/pico-$n.scip" --num-threads 4 > "$RUN/raw/pico-$n.stdout" 2> "$RUN/raw/pico-$n.time"
+  /usr/bin/time -l "$RUN/tools/rust-analyzer" scip "$RESEARCH/fixture" --output "$RUN/raw/fixture-$n.scip" --num-threads 4 > "$RUN/raw/fixture-$n.stdout" 2> "$RUN/raw/fixture-$n.time" || exit $?
+  /usr/bin/time -l "$RUN/tools/rust-analyzer" scip "$RESEARCH/corpus/pico-args-0.5.0" --output "$RUN/raw/pico-$n.scip" --num-threads 4 > "$RUN/raw/pico-$n.stdout" 2> "$RUN/raw/pico-$n.time" || exit $?
 done
-"$RUN/tools/scip" print --json "$RUN/raw/fixture-1.scip" > "$RUN/raw/fixture-1.json"
-"$RUN/tools/scip" print --json "$RUN/raw/pico-1.scip" > "$RUN/raw/pico-1.json"
+"$RUN/tools/scip" print --json "$RUN/raw/fixture-1.scip" > "$RUN/raw/fixture-1.json" || exit $?
+"$RUN/tools/scip" print --json "$RUN/raw/pico-1.scip" > "$RUN/raw/pico-1.json" || exit $?
 ```
 
 `/usr/bin/time -l` is the macOS measurement tool. On Linux use its native RSS/time equivalent;
@@ -226,8 +226,8 @@ fixture path) exits nonzero without producing an index; the stderr observation i
 
 ```sh
 for n in 1 2 3; do
-  /usr/bin/time -l python3 scripts/rust-indexing-lsp.py "$RUN/tools/rust-analyzer" "$RESEARCH/fixture" app/src/main.rs > "$RUN/raw/fixture-lsp-$n.json" 2> "$RUN/raw/fixture-lsp-$n.time"
-  /usr/bin/time -l python3 scripts/rust-indexing-lsp.py "$RUN/tools/rust-analyzer" "$RESEARCH/corpus/pico-args-0.5.0" src/lib.rs --line 124 --character 14 --definition-line 125 --definition-character 14 > "$RUN/raw/pico-lsp-$n.json" 2> "$RUN/raw/pico-lsp-$n.time"
+  /usr/bin/time -l python3 scripts/rust-indexing-lsp.py "$RUN/tools/rust-analyzer" "$RESEARCH/fixture" app/src/main.rs > "$RUN/raw/fixture-lsp-$n.json" 2> "$RUN/raw/fixture-lsp-$n.time" || exit $?
+  /usr/bin/time -l python3 scripts/rust-indexing-lsp.py "$RUN/tools/rust-analyzer" "$RESEARCH/corpus/pico-args-0.5.0" src/lib.rs --line 124 --character 14 --definition-line 125 --definition-character 14 > "$RUN/raw/pico-lsp-$n.json" 2> "$RUN/raw/pico-lsp-$n.time" || exit $?
 done
 ```
 
