@@ -19,7 +19,7 @@ import signal
 import subprocess
 import sys
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 APPEND = "\npub fn semctx_reindex_probe() -> usize { 17 }\n"
 SYMBOL = "semctx_reindex_probe"
@@ -323,6 +323,24 @@ def validate_pair(result, world, output, config=None):
             raise ValueError("native parser timings missing")
     elif engine == "Y":
         count = len(world["files"])
+        # Captures may be relocated; bind to the recorded scratch workspace
+        # lexically, without resolving original host paths or opening sources.
+        cwd = invocations[0]["cwd"].replace("\\", "/")
+        if (
+            not (PurePosixPath(cwd).is_absolute() or PureWindowsPath(cwd).is_absolute())
+            or any(part in (".", "..") for part in cwd.split("/"))
+            or not cwd.endswith(f"/{folder}/workspace")
+        ):
+            raise ValueError("Y invocation workspace does not match pair")
+        for position, invocation in enumerate(invocations):
+            argv = invocation["argv"]
+            expected = f"{cwd}/{world['files'][position % count]}"
+            if (
+                invocation["cwd"].replace("\\", "/") != cwd
+                or len(argv) != 2
+                or argv[1].replace("\\", "/") != expected
+            ):
+                raise ValueError("Y invocation does not match selected source")
         offset = world["files"].index(world["target"])
         require_added(
             tsv_symbols(outputs[offset][0]), tsv_symbols(outputs[count + offset][0])

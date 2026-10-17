@@ -1386,8 +1386,11 @@ class NativeEvidenceTest(unittest.TestCase):
             reanalysis.save(
                 stem.with_suffix(".argv.json"),
                 {
-                    "argv": ["C:/native-syn.exe", "C:/scratch/src/lib.rs"],
-                    "cwd": "C:/scratch",
+                    "argv": [
+                        "C:/native-syn.exe",
+                        str(root / "Y-pico-1/workspace/src/lib.rs"),
+                    ],
+                    "cwd": str(root / "Y-pico-1/workspace"),
                 },
             )
             command = {
@@ -1403,6 +1406,57 @@ class NativeEvidenceTest(unittest.TestCase):
             reanalysis.save(stem.with_suffix(".timing.json"), command)
             pair["commands"].append(command)
         return root, world, pair
+
+    def test_retained_y_invocation_binding_refuses_hash_consistent_substitution(self):
+        relocated = {
+            "other-pair-workspace": "Y-other-1/workspace",
+            "relative-workspace": "Y-pico-1/workspace",
+            "traversal-workspace": "foreign/../Y-pico-1/workspace",
+        }
+        for mutation in (
+            "foreign-source",
+            "foreign-cwd",
+            "extra-argument",
+            "other-file",
+            *relocated,
+        ):
+            with tempfile.TemporaryDirectory() as directory:
+                root, world, pair = self.make_pair(directory)
+                config = {"Y": {"binary": "C:/native-syn.exe"}}
+                reanalysis.validate_pair(pair, world, root, config)
+                commands = (
+                    pair["commands"] if mutation in relocated else pair["commands"][1:]
+                )
+                for command in commands:
+                    stem = root / command["prefix"]
+                    invocation = json.loads(stem.with_suffix(".argv.json").read_bytes())
+                    if mutation in relocated:
+                        cwd = relocated[mutation]
+                        if mutation != "relative-workspace":
+                            cwd = str(root / cwd)
+                        invocation["cwd"] = cwd
+                        invocation["argv"][1] = cwd + "/src/lib.rs"
+                    elif mutation == "foreign-source":
+                        invocation["argv"][1] = str(root / "foreign/src/lib.rs")
+                    elif mutation == "foreign-cwd":
+                        invocation["cwd"] = str(root / "foreign")
+                    elif mutation == "extra-argument":
+                        invocation["argv"].append("--foreign-profile")
+                    else:
+                        invocation["argv"][1] = str(
+                            root / "Y-pico-1/workspace/src/other.rs"
+                        )
+                    reanalysis.save(stem.with_suffix(".argv.json"), invocation)
+                    command["argvSha256"] = reanalysis.sha(
+                        stem.with_suffix(".argv.json").read_bytes()
+                    )
+                    reanalysis.save(stem.with_suffix(".timing.json"), command)
+                    self.assertEqual(
+                        reanalysis.sha(stem.with_suffix(".argv.json").read_bytes()),
+                        command["argvSha256"],
+                    )
+                with self.assertRaisesRegex(ValueError, "Y invocation"):
+                    reanalysis.validate_pair(pair, world, root, config)
 
     def test_retained_command_argv_mutation_is_refused(self):
         with tempfile.TemporaryDirectory() as directory:
