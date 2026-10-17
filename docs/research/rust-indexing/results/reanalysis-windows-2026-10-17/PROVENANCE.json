@@ -9,7 +9,7 @@
   },
   "measuredUnitTestPin": "ee6976e8464c5a41a6c457cd486a1dfdb0aeaeba7c66b3e0e5fbcdcbf0df0f4b",
   "publicationTestIsMeasuredRuntimeInput": false,
-  "transferRule": "Historical A3 captures retain these original harness and input/tool/profile pins. The current Runner timeout cleanup changed after A3; compatible read-only validation is not a new execution, current performance proof or current cleanup proof. A3 remains the actual measured subject.",
+  "transferRule": "Historical A3 captures retain these original harness and input/tool/profile pins. The current Runner timeout cleanup and bounded output capture changed after A3; compatible read-only validation is not a new execution, current performance proof or current cleanup/output-bound proof. A3 remains the actual measured subject.",
   "YBuildSourceHead": "45015888fb6978e7648ca4b6345623209c6b1526",
   "YBuildTransfer": "Sixteen source bytes matched before A3; original build/READY.json and execution/preparation.json retain their own subjects.",
   "configSha256": "88a7466adef45586ab656d02195cb3b4f08e1b481816f6b8da12eec97aeaa67b",

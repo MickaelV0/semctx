@@ -24,6 +24,7 @@ from pathlib import Path
 APPEND = "\npub fn semctx_reindex_probe() -> usize { 17 }\n"
 SYMBOL = "semctx_reindex_probe"
 CLEANUP_TIMEOUT = 5.0
+OUTPUT_LIMIT = 64 * 1024 * 1024
 WINDOWS_SCIP_LIMIT = "NONCONFORMING_WINDOWS_SCIP_PATHS: diagnostic matching only; native SCIP remains non-portable, without conformance or production admission."
 ENV_KEYS = {
     "PATH",
@@ -535,7 +536,7 @@ def validate_config(config, engines):
 
 
 def stop_command_tree(process):
-    """Stop cooperative, non-detached descendants before returning a timeout.
+    """Stop cooperative, non-detached descendants before propagating a refusal.
 
     This research supervisor is not an isolation boundary. On Windows taskkill
     requires the owned parent to remain alive until tree enumeration.
@@ -570,7 +571,10 @@ def stop_command_tree(process):
                     f"owned process-tree cleanup failed: taskkill exit {result.returncode}"
                 )
         else:
-            os.killpg(process.pid, signal.SIGKILL)
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass  # The owned process group has already exited.
         process.wait(timeout=max(0.001, deadline - time.monotonic()))
     except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
         # Bound the direct child as well, but do not claim tree cleanup succeeded.
@@ -587,8 +591,61 @@ def stop_command_tree(process):
         ) from error
 
 
+class OutputLimitError(RuntimeError):
+    pass
+
+
+def available_output(pipe, maximum):
+    """Read a bounded ready chunk, None while pending, or b'' at EOF.
+
+    Only this supervisor reads the pipes. PeekNamedPipe avoids blocking reads
+    on Windows Python 3.11, which cannot set anonymous pipes nonblocking.
+    """
+    if os.name == "nt":
+        import ctypes
+        import msvcrt
+        from ctypes import wintypes
+
+        available = wintypes.DWORD()
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        peek = kernel.PeekNamedPipe
+        peek.argtypes = [
+            wintypes.HANDLE,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+            ctypes.c_void_p,
+            ctypes.POINTER(wintypes.DWORD),
+            ctypes.c_void_p,
+        ]
+        peek.restype = wintypes.BOOL
+        if not peek(
+            msvcrt.get_osfhandle(pipe.fileno()),
+            None,
+            0,
+            None,
+            ctypes.byref(available),
+            None,
+        ):
+            error = ctypes.get_last_error()
+            if error == 109:  # ERROR_BROKEN_PIPE: every writer closed its handle.
+                return b""
+            raise ctypes.WinError(error)
+        if not available.value:
+            return None
+        maximum = min(maximum, available.value)
+    else:
+        import select
+
+        if not select.select([pipe], [], [], 0)[0]:
+            return None
+    return os.read(pipe.fileno(), maximum)
+
+
 class Runner:
-    def __init__(self, config, output, deadline):
+    def __init__(self, config, output, deadline, output_limit=OUTPUT_LIMIT):
+        if type(output_limit) is not int or output_limit <= 0:
+            raise ValueError("output byte limit must be a positive integer")
+        self.output_limit = output_limit
         self.config, self.output, self.deadline = config, output, deadline
         self.env = {
             key.upper(): value
@@ -619,19 +676,53 @@ class Runner:
                     argv,
                     cwd=cwd,
                     env=self.env,
-                    stdout=stdout,
-                    stderr=stderr,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    bufsize=0,
                     start_new_session=os.name != "nt",
                 )
                 try:
                     try:
-                        process.wait(timeout=remaining)
-                    except subprocess.TimeoutExpired:
-                        stop_command_tree(process)
+                        pipes = {process.stdout: stdout, process.stderr: stderr}
+                        retained = 0
+                        while pipes or process.poll() is None:
+                            if time.monotonic() >= self.deadline:
+                                raise subprocess.TimeoutExpired(argv, remaining)
+                            progressed = False
+                            for pipe, destination in list(pipes.items()):
+                                chunk = available_output(
+                                    pipe,
+                                    min(64 * 1024, self.output_limit - retained + 1),
+                                )
+                                if chunk is None:
+                                    continue
+                                progressed = True
+                                if not chunk:
+                                    del pipes[pipe]
+                                    continue
+                                accepted = chunk[: self.output_limit - retained]
+                                destination.write(accepted)
+                                retained += len(accepted)
+                                if len(accepted) != len(chunk):
+                                    raise OutputLimitError(
+                                        "native command output byte limit exceeded"
+                                    )
+                            if not progressed:
+                                time.sleep(
+                                    min(0.005, max(0, self.deadline - time.monotonic()))
+                                )
+                        process.wait(
+                            timeout=max(0.001, self.deadline - time.monotonic())
+                        )
+                    except BaseException:
+                        if os.name != "nt" or process.poll() is None:
+                            stop_command_tree(process)
                         raise
                     rss = LSP.direct_child_rss(process)
                     exit_code = process.returncode
                 finally:
+                    process.stdout.close()
+                    process.stderr.close()
                     if process.poll() is None:
                         try:
                             process.kill()
@@ -646,11 +737,19 @@ class Runner:
                     {
                         "status": "TIMEOUT"
                         if isinstance(error, subprocess.TimeoutExpired)
+                        else "OUTPUT_LIMIT"
+                        if isinstance(error, OutputLimitError)
                         else "CLEANUP_FAILED",
                         "elapsedMs": (time.monotonic() - started) * 1000,
                         **(
                             {"cleanupError": str(error)}
                             if isinstance(error, RuntimeError)
+                            and not isinstance(error, OutputLimitError)
+                            else {}
+                        ),
+                        **(
+                            {"outputLimitBytes": self.output_limit}
+                            if isinstance(error, OutputLimitError)
                             else {}
                         ),
                     },

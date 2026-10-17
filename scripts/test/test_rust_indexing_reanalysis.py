@@ -45,6 +45,170 @@ def process_alive(pid):
 
 
 class RunnerCleanupTest(unittest.TestCase):
+    def test_output_limit_refuses_one_extra_byte_on_either_or_combined_streams(self):
+        for out_size, err_size in ((129, 0), (0, 129), (64, 65), (131072, 131072)):
+            with self.subTest(stdout=out_size, stderr=err_size):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    runner = reanalysis.Runner({}, root, time.monotonic() + 10)
+                    runner.output_limit = 128
+                    with self.assertRaisesRegex(RuntimeError, "output byte limit"):
+                        runner.command(
+                            [
+                                sys.executable,
+                                "-c",
+                                "import os,time; "
+                                f"os.write(1,b'o'*{out_size}); os.write(2,b'e'*{err_size}); time.sleep(2)",
+                            ],
+                            root,
+                        )
+                    captured = [
+                        (root / f"command-0000.{stream}").read_bytes()
+                        for stream in ("stdout", "stderr")
+                    ]
+                    self.assertEqual(sum(map(len, captured)), 128)
+                    timing = json.loads((root / "command-0000.timing.json").read_text())
+                    self.assertEqual(timing["status"], "OUTPUT_LIMIT")
+                    self.assertEqual(timing["outputLimitBytes"], 128)
+                    self.assertGreaterEqual(timing["elapsedMs"], 0)
+
+    def test_output_limit_accepts_exact_combined_boundary(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runner = reanalysis.Runner({}, root, time.monotonic() + 10)
+            runner.output_limit = 128
+            stdout, stderr, _ = runner.command(
+                [
+                    sys.executable,
+                    "-c",
+                    "import os; os.write(1,b'o'*64); os.write(2,b'e'*64)",
+                ],
+                root,
+            )
+            self.assertEqual((stdout, stderr), (b"o" * 64, b"e" * 64))
+
+    def test_output_limit_requires_positive_integer(self):
+        for value in (True, False, 0, -1, 1.5, float("inf"), "128", None):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                reanalysis.Runner({}, Path("unused"), 0, output_limit=value)
+
+    def test_output_limit_accepts_empty_streams(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runner = reanalysis.Runner({}, root, time.monotonic() + 10, output_limit=1)
+            self.assertEqual(
+                runner.command([sys.executable, "-c", "pass"], root)[:2], (b"", b"")
+            )
+
+    def test_output_overflow_reaps_owned_descendants(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            record = root / "pids.json"
+            runner = reanalysis.Runner({}, root, time.monotonic() + 10)
+            runner.output_limit = 128
+            try:
+                with self.assertRaisesRegex(RuntimeError, "output byte limit"):
+                    runner.command(
+                        [
+                            sys.executable,
+                            "-c",
+                            "import json,os,subprocess,sys,time; from pathlib import Path; "
+                            "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(120)']); "
+                            f"Path({str(record)!r}).write_text(json.dumps([os.getpid(),child.pid])); "
+                            "os.write(2,b'e'*129); time.sleep(120)",
+                        ],
+                        root,
+                    )
+                self.assertEqual(
+                    sum(
+                        (root / f"command-0000.{stream}").stat().st_size
+                        for stream in ("stdout", "stderr")
+                    ),
+                    128,
+                )
+                timing = json.loads((root / "command-0000.timing.json").read_text())
+                self.assertEqual(timing["status"], "OUTPUT_LIMIT")
+                pids = json.loads(record.read_text())
+                deadline = time.monotonic() + 1
+                while (
+                    any(process_alive(pid) for pid in pids)
+                    and time.monotonic() < deadline
+                ):
+                    time.sleep(0.01)
+                self.assertTrue(all(not process_alive(pid) for pid in pids), pids)
+                print(f"overflow owned PIDs dead: {pids}")
+            finally:
+                if record.exists():
+                    for pid in json.loads(record.read_text()):
+                        if process_alive(pid):
+                            os.kill(pid, 9)
+
+    def test_exited_parent_with_inherited_pipe_handles_obeys_deadline(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            record = root / "child.pid"
+            runner = reanalysis.Runner({}, root, time.monotonic() + 1)
+            native_popen = subprocess.Popen
+
+            def launch_exited_parent(*args, **kwargs):
+                process = native_popen(*args, **kwargs)
+                try:
+                    # Establish the precondition before Runner observes pipes.
+                    # Waiting for exit does not drain the inherited handles.
+                    self.assertEqual(process.wait(timeout=3), 0)
+                    self.assertIsNotNone(process.poll())
+                    print(f"pipe fixture parent exited before drain: {process.pid}")
+                    return process
+                except BaseException:
+                    if process.poll() is None:
+                        process.kill()
+                        process.wait(timeout=3)
+                    process.stdout.close()
+                    process.stderr.close()
+                    raise
+
+            started = time.monotonic()
+            try:
+                with (
+                    patch.object(
+                        reanalysis.subprocess, "Popen", side_effect=launch_exited_parent
+                    ),
+                    self.assertRaises(subprocess.TimeoutExpired),
+                ):
+                    runner.command(
+                        [
+                            sys.executable,
+                            "-c",
+                            "import subprocess,sys; from pathlib import Path; "
+                            "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(120)']); "
+                            f"Path({str(record)!r}).write_text(str(child.pid))",
+                        ],
+                        root,
+                    )
+                self.assertLess(
+                    time.monotonic() - started, 1 + reanalysis.CLEANUP_TIMEOUT + 2
+                )
+                if os.name != "nt":
+                    pid = int(record.read_text())
+                    deadline = time.monotonic() + 1
+                    while process_alive(pid) and time.monotonic() < deadline:
+                        time.sleep(0.01)
+                    self.assertFalse(process_alive(pid))
+            finally:
+                if record.exists():
+                    pid = int(record.read_text())
+                    if process_alive(pid):
+                        # Windows taskkill cannot enumerate a tree after its
+                        # parent exits; the fixture owns this exact descendant.
+                        os.kill(pid, 9)
+                    deadline = time.monotonic() + 3
+                    while process_alive(pid) and time.monotonic() < deadline:
+                        time.sleep(0.01)
+                    self.assertFalse(
+                        process_alive(pid), "owned pipe fixture cleanup failed"
+                    )
+                    print(f"inherited pipe fixture PID cleaned: {pid}")
+
     def exercise_timeout(self, real_lsp, minimal_env=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
