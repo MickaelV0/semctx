@@ -45,6 +45,67 @@ def process_alive(pid):
 
 
 class RunnerCleanupTest(unittest.TestCase):
+    @unittest.skipIf(os.name == "nt", "Windows taskkill requires a live parent")
+    def test_failed_exit_reaps_owned_descendant_before_refusal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            record = root / "pids.json"
+            runner = reanalysis.Runner({}, root, time.monotonic() + 10)
+            try:
+                with self.assertRaisesRegex(
+                    RuntimeError, "native command failed: command-0000, exit 7"
+                ):
+                    runner.command(
+                        [
+                            sys.executable,
+                            "-c",
+                            "import json,os,subprocess,sys; from pathlib import Path; "
+                            "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(120)'],"
+                            "stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); "
+                            f"Path({str(record)!r}).write_text(json.dumps({{'parent':os.getpid(),'child':child.pid,'group':os.getpgrp()}})); "
+                            "os.write(1,b'parent-stdout\\n'); os.write(2,b'parent-stderr\\n'); sys.exit(7)",
+                        ],
+                        root,
+                    )
+                pids = json.loads(record.read_text())
+                self.assertEqual(pids["group"], pids["parent"])
+                self.assertNotEqual(pids["group"], os.getpgrp())
+                timing = json.loads((root / "command-0000.timing.json").read_text())
+                self.assertEqual(timing["exitCode"], 7)
+                self.assertEqual(
+                    (root / "command-0000.stdout").read_bytes(), b"parent-stdout\n"
+                )
+                self.assertEqual(
+                    (root / "command-0000.stderr").read_bytes(), b"parent-stderr\n"
+                )
+                deadline = time.monotonic() + 1
+                while process_alive(pids["child"]) and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                print(
+                    f"failed-exit owned PIDs: {pids}; child alive: {process_alive(pids['child'])}"
+                )
+                self.assertFalse(
+                    process_alive(pids["child"]),
+                    "owned descendant survived failed-exit refusal",
+                )
+            finally:
+                if record.exists():
+                    pids = json.loads(record.read_text())
+                    if pids["group"] != pids["parent"] or pids["group"] == os.getpgrp():
+                        raise RuntimeError("owned fixture process-group mismatch")
+                    try:
+                        os.killpg(pids["group"], 9)
+                    except ProcessLookupError:
+                        pass
+                    deadline = time.monotonic() + 3
+                    while any(process_alive(pids[key]) for key in ("parent", "child")):
+                        if time.monotonic() >= deadline:
+                            raise RuntimeError(
+                                "owned failed-exit fixture cleanup failed"
+                            )
+                        time.sleep(0.01)
+                    print(f"failed-exit fixture PIDs dead: {pids}")
+
     def test_output_limit_refuses_one_extra_byte_on_either_or_combined_streams(self):
         for out_size, err_size in ((129, 0), (0, 129), (64, 65), (131072, 131072)):
             with self.subTest(stdout=out_size, stderr=err_size):

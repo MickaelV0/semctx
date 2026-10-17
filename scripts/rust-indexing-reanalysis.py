@@ -743,6 +743,8 @@ class Runner:
                         if os.name != "nt" or process.poll() is None:
                             stop_command_tree(process)
                         raise
+                    if process.returncode != 0 and os.name != "nt":
+                        stop_command_tree(process)
                     rss = LSP.direct_child_rss(process)
                     exit_code = process.returncode
                 finally:
