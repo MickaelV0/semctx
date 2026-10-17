@@ -404,3 +404,14 @@ Decompress then use the pinned native printer to inspect its 983 occurrences / 9
 uncompressed SHA-256 `01b4a3741ed36dfef08ceeac3a1be4906fc66c52e68a8a0ff958fe063dfb9be6`.
 Unlike text recordings, both binary artifacts retain the original `project_root`; they are not a
 source/result attestation.
+
+## Current Windows reanalysis replay
+
+The [2026-10-17 A3 record](results/reanalysis-windows-2026-10-17/README.md) contains the
+completed four-engine, three-repeat function-addition series, original invocation, full
+profile pins and portable validation commands. Hash the retained bytes before reading them.
+This uses Node rather than the historical Bun T driver; S batch and decoder timings are
+separate, and Windows SCIP association is explicitly diagnostic because native paths violate
+the protocol. The earlier commands and measurements above retain their historical identity.
+Captured manifests end in `.capture`, so the eight research `Cargo.toml.snapshot` inputs
+remain the only manifests selected by this document's original materializer.

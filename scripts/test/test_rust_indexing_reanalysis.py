@@ -1,6 +1,8 @@
 import copy
 import importlib.util
+import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -17,6 +19,118 @@ SPEC.loader.exec_module(reanalysis)
 
 
 class NativeEvidenceTest(unittest.TestCase):
+    def test_public_reanalysis_series_proves_all_native_postimages_and_portable_custody(
+        self,
+    ):
+        public = (
+            Path(__file__).parents[2]
+            / "docs/research/rust-indexing/results/reanalysis-windows-2026-10-17"
+        )
+        result = json.loads((public / "result.json").read_bytes())
+        config = json.loads((public / "config.json").read_bytes())
+        self.assertEqual(result["engines"], list("TYSL"))
+        self.assertEqual(len(result["pairs"]), 24)
+        self.assertEqual(
+            {
+                (pair["sample"], pair["workspace"], pair["engine"])
+                for pair in result["pairs"]
+            },
+            {
+                (sample, workspace, engine)
+                for sample in (1, 2, 3)
+                for workspace in ("fixture", "pico")
+                for engine in "TYSL"
+            },
+        )
+        for pair in result["pairs"]:
+            world = next(
+                item
+                for item in config["workspaces"]
+                if item["name"] == pair["workspace"]
+            )
+            commands = pair["commands"]
+            for command in commands:
+                self.assertRegex(command["prefix"], r"^command-[0-9]{4}$")
+
+            def native(index, commands=commands):
+                return (public / (commands[index]["prefix"] + ".stdout")).read_bytes()
+
+            if pair["engine"] == "T":
+                document = next(
+                    item
+                    for item in json.loads(native(0))["files"]
+                    if item["file"] == world["target"]
+                )
+                before = [item["name"] for item in document["before"]["symbols"]]
+                after = [item["name"] for item in document["after"]["symbols"]]
+            elif pair["engine"] == "Y":
+                target_index = world["files"].index(world["target"])
+                before = reanalysis.tsv_symbols(native(target_index))
+                after = reanalysis.tsv_symbols(
+                    native(len(world["files"]) + target_index)
+                )
+            elif pair["engine"] == "S":
+                self.assertEqual(config["S"]["pathMode"], "windows-diagnostic")
+                self.assertEqual(
+                    pair["scipPathLimitation"], reanalysis.WINDOWS_SCIP_LIMIT
+                )
+                before = reanalysis.scip_symbols(
+                    json.loads(native(1)), world["target"], config["S"]["pathMode"]
+                )
+                after = reanalysis.scip_symbols(
+                    json.loads(native(3)), world["target"], config["S"]["pathMode"]
+                )
+            else:
+                document = json.loads(native(0))
+                before = reanalysis.LSP.symbol_names(document["symbols"])
+                after = reanalysis.LSP.symbol_names(document["editedSymbols"])
+            label = f"{pair['engine']}/{pair['workspace']}/{pair['sample']}"
+            self.assertNotIn(
+                reanalysis.SYMBOL, before, label + " baseline must lack probe function"
+            )
+            self.assertIn(
+                reanalysis.SYMBOL,
+                after,
+                label + " native postimage must contain probe function",
+            )
+
+        # Keep native symbol assertions ahead of custody validation, so a stale
+        # well-formed postimage is an assertion failure, not a digest ERROR.
+        catalogue = json.loads((public / "CATALOG.json").read_bytes())
+        for entry in catalogue["files"]:
+            self.assertEqual(
+                reanalysis.sha(
+                    reanalysis.retained_path(public, entry["path"]).read_bytes()
+                ),
+                entry["sha256"],
+                entry["path"],
+            )
+        with tempfile.TemporaryDirectory() as directory:
+            portable = Path(directory) / "copied-records"
+            shutil.copytree(public, portable)
+            read_bytes = Path.read_bytes
+
+            def local_read(path):
+                self.assertTrue(
+                    path.resolve().is_relative_to(portable.resolve()),
+                    "validation attempted an original host/tool read",
+                )
+                return read_bytes(path)
+
+            with (
+                patch.object(Path, "read_bytes", local_read),
+                patch.object(
+                    reanalysis.Runner,
+                    "command",
+                    side_effect=AssertionError("validation must not execute engines"),
+                ),
+            ):
+                validation = reanalysis.validate_series(portable)
+            self.assertEqual(
+                validation,
+                {"status": "VALID", "pairs": 24, "states": 48, "engines": list("TYSL")},
+            )
+
     def test_five_file_syn_timings_sum_native_integer_nanoseconds_once(self):
         # Actual parse_ns from commands 0001..0010 of the interrupted
         # reindex382-measurements-8f3afa1 series. These are unit-test inputs,

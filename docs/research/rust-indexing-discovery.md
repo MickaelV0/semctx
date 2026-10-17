@@ -318,3 +318,14 @@ Linux arm64 container smokes are recorded separately; native Windows remains une
 No authored code comment is introduced by the probes/fixture. The real corpus preserves upstream
 comments/doc comments verbatim as part of the pinned source, and generated Cargo lockfiles retain
 Cargo's generated-file headers; neither records new Semctx behavior.
+
+## 2026-10-17 evidence update: bounded engine reanalysis
+
+The [Windows A3 series](rust-indexing/results/reanalysis-windows-2026-10-17/README.md) adds
+three measured function-addition pairs for each of T/Y/S/L on both pinned inputs. Native
+structured outputs prove the new function appears after the edit; timing, direct-process
+RSS and original digests are retained. This supplies the engine-level cold/reanalysis
+comparison missing from #346, with unequal semantic scope explicitly labelled. It does not
+implement Semctx reindexing, resolve B01–B07, accept the proposed ADR or admit #347/#365.
+Windows SCIP paths remain protocol-nonconforming and are matched only through an explicit
+diagnostic mode; decoder/duplicate-symbol limits and historical observations stay visible.

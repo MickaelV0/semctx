@@ -1,5 +1,29 @@
 # Measured costs and limits
 
+## Current Windows engine reanalysis (2026-10-17)
+
+The completed [A3 native series](results/reanalysis-windows-2026-10-17/README.md) measures
+an actual function addition: 24 cold/edited pairs, 48 states, four engines × two inputs ×
+three repetitions, all 72 commands exit zero. Each structured native baseline lacks
+`semctx_reindex_probe`; every native postimage contains it. This fills the bounded engine
+reanalysis evidence gap for #346; it does not implement Semctx reindexing or establish parity.
+
+The [current time and RSS tables](results/reanalysis-windows-2026-10-17/README.md#three-observed-samples)
+use Node 22.23.2, Python 3.14.7, Rust 1.98.1 GNU and the pinned Windows RA binary.
+Every displayed value links to [original fields and SHA-256](results/reanalysis-windows-2026-10-17/MEASUREMENTS.json).
+T performs old-tree incremental reparse; Y performs new full parses; S repeats full batches
+with separately timed decoding; L measures didChange→new documentSymbol on a persistent server.
+T/Y use the same five/one source files; S/L also load Cargo/stdlib. Direct-process RSS,
+whole-pair versus per-state timing, and warm OS cache limits are explicit in those tables.
+
+Windows SCIP paths are **NONCONFORMING_WINDOWS_SCIP_PATHS**: only explicitly configured
+diagnostic association succeeds. Original backslashes, duplicate/missing-definition warnings
+and decoder unknown-field limitations are retained. This is not portable SCIP admission.
+The historical macOS/Bun observations below retain their original source/runtime identities;
+their numbers cannot be merged with or ranked against the Windows series.
+
+## Historical macOS observations (2026-10-15)
+
 Date: 2026-10-15. Apple M4 Max, 16 cores, 64 GiB, macOS 27.0.1 arm64; Bun 1.4.3, Python 3.15.0,
 Rust/Cargo 1.98.1 + `rust-src`, RA 2026-10-12, grammar 0.24.2 / runtime 0.27.1, syn 3.0.9.
 The [replay](replay.md) pins commands/inputs. [Raw samples](results/) retain outputs, timestamps,
@@ -37,7 +61,8 @@ bounded fan-out, real post-image capture and significant edit/add/delete costs r
 
 The current LSP probe corrects synchronization, explicit UTF-8 source decoding and failure exit
 propagation. The whole-process and post-edit LSP samples above remain observations of the earlier
-probe; the corrected probe has not been remeasured on the native benchmark host.
+probe; the corrected probe has not been remeasured on that original macOS benchmark host. The separate
+Windows A3 series above exercises the corrected protocol with a real function addition.
 
 ## RSS, artifact sizes and query cost
 
@@ -68,8 +93,8 @@ acquisition failures must be visible; no implicit download/fallback is recommend
 Comparative timings above are macOS arm64 only. Later Linux arm64 container smoke passed seven
 helper tests, two fixture tests and the Bun/WASM pico-args parse. Native RA SCIP ran but missing
 rust-src reduced its fixture occurrences to 117; the result remains partial. Exact image/asset pins
-and commands are in the replay. Full Linux LSP/release packaging, native Windows and macOS x86
-packaging remain untested. Docker exposes Linux, not a native Windows executor. Upstream RA
+and commands are in the replay. Full Linux LSP/release packaging and macOS x86 packaging remain untested. Native Windows
+engine reanalysis is now recorded separately above; Windows product/release packaging remains untested. Docker exposes Linux, not a native Windows executor. Upstream RA
 and tree-sitter distribution/CI matrices show possible packaging inputs, not results for Semctx.
 The applicable repository CI targets are `ubuntu-latest`, `windows-latest`, `macos-15`; B05 requires
 separate replay/package evidence there. No result in this document is represented as a CI result.

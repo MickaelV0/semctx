@@ -30,3 +30,12 @@ The initial default-configured edge LSP pilot accidentally inherited the host's 
 without rust-src. Its recording was replaced by an explicit offline `RUSTUP_TOOLCHAIN=1.98.1`
 rerun with rust-src; the command record names the overrides and retains the same definition target.
 Native `.log` oracles are explicitly tracked despite the repository's general log ignore rule.
+
+## Current native Windows reanalysis
+
+[reanalysis-windows-2026-10-17](reanalysis-windows-2026-10-17/README.md) retains a separate
+A3 source identity and 24 actual cold/edited pairs. Its enumerated primaries are byte-exact,
+including native CRLF and TSV trailing tabs; scoped data-only attributes prevent Git
+normalization. Its catalogue binds original fields, inputs, tool/profile pins and build
+transfer. The historical prefix substitutions/trimming described above do not apply to
+that directory. No materialized Cargo workspace, target, executable or cache is published.
