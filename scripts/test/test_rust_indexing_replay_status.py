@@ -163,7 +163,7 @@ class ReplayStatusTests(unittest.TestCase):
                 self.check_replay(section, 0)
 
     def test_failure_stops_and_preserves_status(self):
-        for section, failures in (("L", (1, 3, 6)), ("S", (1, 3, 6, 7, 8))):
+        for section, failures in (("L", range(1, 7)), ("S", range(1, 9))):
             for fail_at in failures:
                 with self.subTest(section=section, fail_at=fail_at):
                     self.check_replay(section, fail_at)
