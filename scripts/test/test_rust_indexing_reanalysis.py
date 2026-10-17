@@ -139,9 +139,17 @@ class RunnerCleanupTest(unittest.TestCase):
                 print(f"overflow owned PIDs dead: {pids}")
             finally:
                 if record.exists():
-                    for pid in json.loads(record.read_text()):
+                    pids = json.loads(record.read_text())
+                    for pid in pids:
                         if process_alive(pid):
                             os.kill(pid, 9)
+                    cleanup_deadline = time.monotonic() + 3
+                    while any(process_alive(pid) for pid in pids):
+                        if time.monotonic() >= cleanup_deadline:
+                            raise RuntimeError(
+                                "owned overflow fixture cleanup could not be established"
+                            )
+                        time.sleep(0.01)
 
     def test_exited_parent_with_inherited_pipe_handles_obeys_deadline(self):
         with tempfile.TemporaryDirectory() as directory:
