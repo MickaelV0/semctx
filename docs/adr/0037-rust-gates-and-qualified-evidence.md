@@ -31,15 +31,22 @@ compilation without a positive test summary refuses qualification. No native pro
 reported explicitly, not as proof that the future Rust product works.
 
 The Rust planner binds the exact base commit, candidate commit, tree and compiled gate policy.
-It discovers workspace dependencies and follows reverse transitive consumers, including CLI,
-MCP, Action and plugin integration boundaries. Unknown paths, missing targets and empty diffs
-select the complete three-OS fallback. A missing immutable Git subject refuses planning.
+It discovers workspace dependencies and follows reverse transitive consumers to establish a
+classifiable scope, including CLI, MCP, Action and plugin integration targets. Under the
+[2026-10-16 amendment to ADR 0031](0031-change-scoped-ci-gates.md),
+that scope selects Linux full tests and the configured Windows/macOS boundary tests. Unknown
+paths, dependency manifests, missing targets and empty diffs select the complete three-OS
+fallback. Shared plugin changes retain the fallback because their consumer graph is incomplete.
+A missing immutable Git subject refuses planning.
 
-The contract lane runs shared static quality once. Full product test files remain partitioned
-across Ubuntu, Windows and macOS; runtime integration checks and the worker equivalence smoke
-run once per OS rather than once per shard. Invalid coordinates and unclassified scope do not
-silently remove tests. The retained TypeScript evaluators are differential references, not CI
-policy owners. Existing `verify-pr.ts` callers use a thin adapter to the Rust verifier.
+The contract lane runs shared static quality once. Classifiable product changes use four full
+Ubuntu shards, two Windows boundary shards and one macOS boundary shard. The boundary list is
+part of the compiled policy hash; an absent/non-file witness selects full fallback. Fallback
+uses four Ubuntu, four Windows and two macOS full shards. Runtime integration checks and the
+worker equivalence smoke remain required once per OS. Invalid coordinates and substituted
+boundary targets are refused. The retained TypeScript evaluators describe the previous policy,
+not the current shard counts or CI policy owner. Existing `verify-pr.ts` callers use a thin
+adapter to the Rust verifier.
 
 Each selected lane produces a versioned receipt containing its subject, plan, commands,
 outcomes, complete bounded outputs and digests. The aggregator recomputes the plan and demands

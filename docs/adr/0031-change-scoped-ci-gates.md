@@ -3,6 +3,8 @@
 - Status: accepted by the maintainer for the September 2026 gate reduction.
 - Supersedes the fixed PR matrix and mandatory local full-gate clauses of ADR 0013 and ADR 0022.
 - Keeps the release-source verification and publication authority of ADR 0013.
+- The 2026-10-16 amendment below replaces the affected cross-OS suites and Ubuntu shard count;
+  ADR 0037 owns their Rust execution and receipt admission.
 
 ## Context
 
@@ -83,3 +85,58 @@ The local `verify:pr` and the release gate still run every test file in one proc
 `--test-shard i/N` option narrows only their test step and is used only by CI lanes. Routing tests
 pin complete shard sets for every planned suite lane, and the gate refuses a malformed shard or a
 count other than its host's. The speedup is measured on the first candidate CI run, not assumed.
+
+## Amendment — native OS boundaries and four Linux shards (2026-10-16)
+
+Accepted through the maintainer's request to implement option C as a child of
+[PR #383](https://github.com/hoklims/semctx/pull/383). The earlier OS selection and Ubuntu
+shard counts above describe the previous policy.
+
+For classifiable product changes, the Rust planner selects the complete Bun suite on four
+Ubuntu shards and the explicitly configured OS-boundary files on two Windows shards and one
+macOS shard. The contract lane remains separate. The list in
+[`tools/gates/src/os_boundaries.rs`](../../tools/gates/src/os_boundaries.rs) contains 72 existing
+files for filesystem paths and links, SQLite, Git/process lifecycle, workers, installation and
+CLI/MCP/plugin transports. It is a maintained selection, not an exhaustive discovery of every
+OS-sensitive behavior. The planner does not add future OS-sensitive tests automatically.
+The complete semantic suite remains a Linux obligation; exhaustive semantic replay on Windows
+and macOS is no longer an obligation for these classifiable changes.
+
+Unknown impact, dependency manifests, toolchain changes, empty diffs, missing consumer targets,
+and missing/non-file boundary targets retain the full fallback: four Ubuntu, four Windows and
+two macOS shards. Shared plugin helpers still have consumers outside the manifest graph, so
+changes under `plugins/` retain that fallback. No new source-path classifier is inferred from
+test filenames. Documentation-only changes retain the contract lane.
+
+Before selecting the reduced profile, every boundary witness must be a committed Git blob
+with mode `100644` or `100755` and a physical regular file according to `symlink_metadata`.
+Every affected consumer target must likewise be a committed Git tree and a physical directory.
+A batched `git ls-tree -z` inspection uses the resolved head commit; an inspection failure or
+malformed result retains full fallback. This rejects leaf symlinks, including Git mode `120000`
+materialized as a regular file by a Windows checkout with `core.symlinks=false`.
+Repository-relative ancestors must also be physical directories without links or Windows
+reparse points, so a regular leaf reached through a substituted parent cannot admit reduction.
+The inventory includes product junction/link witnesses. Demo/proof scripts retain full fallback
+when changed directly; analyzer fixtures form a separate class and are not native product tests.
+
+Runtime integration checks and worker equivalence remain required once per OS. The independent
+three-OS Rust tests and CLI/MCP qualification from ADR 0037 remain required. A shortened or
+substituted boundary target list, missing shard receipt or failed selected test cannot satisfy
+the existing aggregate. The local and release full commands retain the entire suite.
+
+Ubuntu is configured to use `scripts/ci-test-timings-linux.json`; Windows and macOS retain
+`scripts/ci-test-timings.json`. The Linux seed contains 369 whole-file durations from the Ubuntu
+jobs of [run 38745549059](https://github.com/hoklims/semctx/actions/runs/38745549059), at
+`0023d4b0862b5cde314dc2d977462d930ec0eafd` on 2026-10-15, Ubuntu 24.04.5 and Bun 1.4.3.
+Durations were reconstructed between timestamped file headers and the final Bun summary;
+each shard's sum differs from its reported test duration by less than 0.1 second. These are
+historical scheduling weights, not timings measured on the Rust-gate candidate. Missing entries
+retain [Bun's documented median estimate](https://bun.com/docs/test/parallel#balancing-with---timings)
+and do not remove files. All shards of one OS read the same
+committed timing file; no test-result cache or mutable in-flight timing update is introduced.
+
+Validation uses the existing Rust planner/receipt tests and a real Bun subprocess witness:
+configured test files execute, an intentionally failing package-boundary test refuses, and
+restoration passes. Required CI must still run on the exact candidate. The earlier runtime
+simulation predates PR #383's additional Rust build and qualification jobs; it is not a measured
+latency guarantee for this stack or for fallback changes.
