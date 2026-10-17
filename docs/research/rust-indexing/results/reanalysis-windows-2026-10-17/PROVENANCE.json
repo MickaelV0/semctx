@@ -33,7 +33,7 @@
   },
   "publicationUnpackHelper": {
     "path": "scripts/rust-indexing-unpack.py",
-    "sha256": "4916bb91e99aad10a18eca2b24cdffb2b0b10b1035f75061c36942dd34eaabac",
+    "sha256": "faf0c82179076deb82eda4bed52dc890fcb1f8aac5988c8a0c0509705376edad",
     "measuredRuntimeInput": false
   }
 }

@@ -25,14 +25,56 @@ def destination(root, name):
         or any(part in ("", ".", "..") for part in name.split("/"))
     ):
         raise ValueError("invalid captured input path")
+    parts = name.split("/")
     path = root
-    for part in name.split("/"):
+    for index, part in enumerate(parts):
+        if (
+            part.endswith((".", " "))
+            or any(ord(character) < 32 or character in '<>"|?*' for character in part)
+            or re.fullmatch(
+                r"CON|CONIN\$|CONOUT\$|PRN|AUX|NUL|COM[1-9\u00b9\u00b2\u00b3]|LPT[1-9\u00b9\u00b2\u00b3]",
+                part.split(".", 1)[0].rstrip(" ").upper(),
+            )
+        ):
+            raise ValueError("captured input path has nonportable Windows spelling")
         path = path / part
         if path.is_symlink():
             raise ValueError("captured input path contains symlink")
+        if index < len(parts) - 1 and path.exists() and not path.is_dir():
+            raise ValueError("captured input ancestor is not a directory")
     if not path.resolve().is_relative_to(root.resolve()):
         raise ValueError("captured input path escapes copied root")
     return path
+
+
+def validate_destinations(root, names):
+    """Preflight predictable file/ancestor and case aliases before any writes.
+
+    This is a conservative spelling policy, not a filesystem transaction or a
+    defense against concurrent replacement of the copied directory.
+    """
+    files, directories, spellings = set(), set(), {}
+    for name in names:
+        destination(root, name)
+        parts = tuple(name.split("/"))
+        key = tuple(part.upper() for part in parts)
+        ancestors = [key[:index] for index in range(1, len(key))]
+        if (
+            key in files
+            or key in directories
+            or any(parent in files for parent in ancestors)
+        ):
+            raise ValueError(
+                "captured input destinations collide with a file or ancestor"
+            )
+        for index in range(1, len(parts) + 1):
+            prefix = key[:index]
+            spelling = parts[:index]
+            if prefix in spellings and spellings[prefix] != spelling:
+                raise ValueError("captured input destinations contain case aliases")
+            spellings[prefix] = spelling
+        files.add(key)
+        directories.update(ancestors)
 
 
 def unpack_inputs(root):
@@ -78,6 +120,7 @@ def unpack_inputs(root):
         raise ValueError("duplicate or invalid captured input inventory")
     if {item["path"]: item["sha256"] for item in members} != expected:
         raise ValueError("captured input inventory differs from original result")
+    validate_destinations(root, expected)
     declared = {item["path"]: item for item in members}
     payloads = []
     try:

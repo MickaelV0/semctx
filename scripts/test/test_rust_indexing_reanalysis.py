@@ -222,6 +222,98 @@ class RunnerCleanupTest(unittest.TestCase):
 
 
 class NativeEvidenceTest(unittest.TestCase):
+    def make_destination_archive(self, root, names):
+        payload = b"captured input\n"
+        digest = reanalysis.sha(payload)
+        archive = root / "captured-inputs.zip"
+        members = []
+        with zipfile.ZipFile(archive, "w") as bundle:
+            for name in names:
+                path = "Y-pico-1/inputs/" + name
+                bundle.writestr(path, payload)
+                members.append({"path": path, "sha256": digest, "bytes": len(payload)})
+        reanalysis.save(
+            root / "result.json",
+            {
+                "pairs": [
+                    {
+                        "engine": "Y",
+                        "workspace": "pico",
+                        "sample": 1,
+                        "workspaceInputs": [
+                            {"capturePath": name, "sha256": digest} for name in names
+                        ],
+                    }
+                ]
+            },
+        )
+        reanalysis.save(
+            root / "CAPTURED-INPUTS.json",
+            {
+                "archive": {
+                    "path": archive.name,
+                    "sha256": reanalysis.sha(archive.read_bytes()),
+                    "bytes": archive.stat().st_size,
+                    "uncompressedBytes": len(payload) * len(names),
+                },
+                "members": members,
+            },
+        )
+
+    def assert_destination_refused_without_writes(self, names, existing_ancestor=False):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.make_destination_archive(root, names)
+            if existing_ancestor:
+                parent = root / "Y-pico-1/inputs/a"
+                parent.parent.mkdir(parents=True)
+                parent.write_bytes(b"preexisting sentinel")
+
+            def snapshot():
+                return {
+                    path.relative_to(root).as_posix(): reanalysis.sha(path.read_bytes())
+                    if path.is_file()
+                    else "directory"
+                    for path in root.rglob("*")
+                }
+
+            before = snapshot()
+            error = None
+            try:
+                unpack.unpack_inputs(root)
+            except (ValueError, OSError) as caught:
+                error = caught
+            self.assertEqual(
+                snapshot(), before, "invalid destination inventory wrote before refusal"
+            )
+            self.assertIsInstance(
+                error, ValueError, "destination preflight must refuse before extraction"
+            )
+
+    def test_input_archive_refuses_file_ancestor_collisions_before_any_write(self):
+        for names in (("a", "a/b"), ("a/b", "a")):
+            with self.subTest(names=names):
+                self.assert_destination_refused_without_writes(names)
+
+    def test_input_archive_refuses_portable_windows_aliases_before_any_write(self):
+        for names in (
+            ("a", "A"),
+            ("name", "name."),
+            ("name", "name "),
+            ("valid.rs", "NUL"),
+            ("valid.rs", "NUL.txt"),
+            ("valid.rs", "NUL .txt"),
+            ("valid.rs", "bad?"),
+            ("src/a.rs", "SRC/b.rs"),
+        ):
+            with self.subTest(names=names):
+                self.assert_destination_refused_without_writes(names)
+
+    def test_input_archive_refuses_existing_file_ancestor_before_any_write(self):
+        self.assert_destination_refused_without_writes(
+            ("valid.rs", "a/b"), existing_ancestor=True
+        )
+
     def make_input_archive(self, root):
         payload = b"fn example() {}\n"
         name = "Y-pico-1/inputs/src/lib.rs"
@@ -367,6 +459,13 @@ class NativeEvidenceTest(unittest.TestCase):
             reanalysis.sha((public / "config.json").read_bytes()),
         )
         self.assertFalse(provenance["publicationTestIsMeasuredRuntimeInput"])
+        helper = provenance["publicationUnpackHelper"]
+        self.assertEqual(helper["path"], "scripts/rust-indexing-unpack.py")
+        self.assertFalse(helper["measuredRuntimeInput"])
+        self.assertEqual(
+            helper["sha256"],
+            reanalysis.sha((Path(__file__).parents[2] / helper["path"]).read_bytes()),
+        )
         for path, digest in provenance["measuredHarnessSha256"].items():
             matching = [
                 pin["sha256"]
