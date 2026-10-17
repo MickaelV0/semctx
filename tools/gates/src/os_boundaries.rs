@@ -31,6 +31,8 @@ pub const TESTS: &[&str] = &[
     "packages/repository-store/test/workspace.test.ts",
     "packages/semantic-engine/test/gitignore.test.ts",
     "packages/semantic-engine/test/path-safety.test.ts",
+    "packages/semantic-engine/test/reconciliation-read-link-safety.test.ts",
+    "packages/semantic-engine/test/store-link-safety.test.ts",
     "packages/ts-analyzer/test/qualified-git-eligibility.test.ts",
     "packages/ts-analyzer/test/tsconfig-path-mapping.test.ts",
     "packages/ts-analyzer/test/workspace-configuration-links.test.ts",

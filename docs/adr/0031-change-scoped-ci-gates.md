@@ -95,7 +95,7 @@ shard counts above describe the previous policy.
 For classifiable product changes, the Rust planner selects the complete Bun suite on four
 Ubuntu shards and the explicitly configured OS-boundary files on two Windows shards and one
 macOS shard. The contract lane remains separate. The list in
-[`tools/gates/src/os_boundaries.rs`](../../tools/gates/src/os_boundaries.rs) contains 42 existing
+[`tools/gates/src/os_boundaries.rs`](../../tools/gates/src/os_boundaries.rs) contains 44 existing
 files for filesystem paths and links, SQLite, Git/process lifecycle, workers, installation and
 CLI/MCP/plugin transports. It is a maintained selection, not an exhaustive discovery of every
 OS-sensitive behavior. The planner does not add future OS-sensitive tests automatically.
