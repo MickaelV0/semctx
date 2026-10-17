@@ -58,7 +58,8 @@ class RunnerCleanupTest(unittest.TestCase):
                                 sys.executable,
                                 "-c",
                                 "import os,time; "
-                                f"os.write(1,b'o'*{out_size}); os.write(2,b'e'*{err_size}); time.sleep(2)",
+                                # Keep the Windows parent alive through taskkill enumeration.
+                                f"os.write(1,b'o'*{out_size}); os.write(2,b'e'*{err_size}); time.sleep(120)",
                             ],
                             root,
                         )
