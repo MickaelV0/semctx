@@ -22,6 +22,7 @@ from pathlib import Path
 
 APPEND = "\npub fn semctx_reindex_probe() -> usize { 17 }\n"
 SYMBOL = "semctx_reindex_probe"
+WINDOWS_SCIP_LIMIT = "NONCONFORMING_WINDOWS_SCIP_PATHS: diagnostic matching only; native SCIP remains non-portable, without conformance or production admission."
 ENV_KEYS = {
     "PATH",
     "PATHEXT",
@@ -94,11 +95,36 @@ def native_parse_ns(stderr):
     return int(matches[0])
 
 
-def scip_symbols(index, target):
+def scip_document_path(value, path_mode):
+    if path_mode not in ("strict-posix", "windows-diagnostic"):
+        raise ValueError("invalid SCIP path mode")
+    if not isinstance(value, str) or not value or "\x00" in value:
+        raise ValueError("invalid SCIP relative path")
+    if "\\" in value and path_mode != "windows-diagnostic":
+        raise ValueError("nonconforming SCIP path separator")
+    matched = value.replace("\\", "/") if path_mode == "windows-diagnostic" else value
+    if (
+        matched.startswith("/")
+        or re.match(r"^[A-Za-z]:", matched)
+        or any(part in ("", ".", "..") for part in matched.split("/"))
+    ):
+        raise ValueError("invalid SCIP relative path")
+    return matched
+
+
+def scip_symbols(index, target, path_mode="strict-posix"):
     documents = index.get("documents")
     if not isinstance(documents, list):
         raise ValueError("SCIP documents must be a list")
-    matched = [doc for doc in documents if doc.get("relativePath") == target]
+    paths = [
+        scip_document_path(doc.get("relativePath"), path_mode) for doc in documents
+    ]
+    if len(paths) != len(set(paths)):
+        raise ValueError("ambiguous SCIP document paths")
+    target = scip_document_path(target, "strict-posix")
+    matched = [
+        doc for doc, path in zip(documents, paths, strict=True) if path == target
+    ]
     if len(matched) != 1:
         raise ValueError("SCIP target document missing or duplicated")
     names = []
@@ -307,9 +333,18 @@ def validate_pair(result, world, output, config=None):
             "editedFullParse": finite_duration(sum(parsed[count:]) / 1_000_000),
         }
     elif engine == "S":
+        path_mode = (
+            config["S"].get("pathMode", "strict-posix") if config else "strict-posix"
+        )
+        limitation = WINDOWS_SCIP_LIMIT if path_mode == "windows-diagnostic" else None
+        if (
+            result["scipPathMode"] != path_mode
+            or result["scipPathLimitation"] != limitation
+        ):
+            raise ValueError("SCIP path mode or limitation mismatch")
         require_added(
-            scip_symbols(json.loads(outputs[1][0]), world["target"]),
-            scip_symbols(json.loads(outputs[3][0]), world["target"]),
+            scip_symbols(json.loads(outputs[1][0]), world["target"], path_mode),
+            scip_symbols(json.loads(outputs[3][0]), world["target"], path_mode),
         )
         if [a["path"].replace("\\", "/") for a in result["artifacts"]] != [
             f"{folder}/before.scip",
@@ -356,6 +391,12 @@ def validate_series(output):
     config = json.loads(config_path.read_bytes())
     result = json.loads(retained_path(output, "result.json").read_bytes())
     engines = result["engines"]
+    if (
+        "S" in engines
+        and config["S"].get("pathMode", "strict-posix") == "windows-diagnostic"
+        and WINDOWS_SCIP_LIMIT not in result["limitations"]
+    ):
+        raise ValueError("missing nonconforming Windows SCIP limitation")
     if not engines or len(set(engines)) != len(engines) or set(engines) - set("TYSL"):
         raise ValueError("invalid engine inventory")
     worlds = config["workspaces"]
@@ -414,6 +455,11 @@ def validate_series(output):
 
 
 def validate_config(config, engines):
+    if "S" in engines and config["S"].get("pathMode", "strict-posix") not in (
+        "strict-posix",
+        "windows-diagnostic",
+    ):
+        raise ValueError("invalid SCIP path mode")
     pins = config.get("pins", [])
     if not pins or len({str(Path(p["path"]).resolve()) for p in pins}) != len(pins):
         raise ValueError("pins must be nonempty and unique")
@@ -682,6 +728,11 @@ class Runner:
             )
         elif engine == "S":
             symbols = []
+            path_mode = self.config["S"].get("pathMode", "strict-posix")
+            result["scipPathMode"] = path_mode
+            result["scipPathLimitation"] = (
+                WINDOWS_SCIP_LIMIT if path_mode == "windows-diagnostic" else None
+            )
             result["artifacts"] = []
             for state in ("before", "after"):
                 if state == "after":
@@ -715,7 +766,9 @@ class Runner:
                     workspace,
                 )
                 result["commands"].append(decode)
-                symbols.append(scip_symbols(json.loads(raw), world["target"]))
+                symbols.append(
+                    scip_symbols(json.loads(raw), world["target"], path_mode)
+                )
             require_added(*symbols)
         else:
             raw, _, command = self.command(
@@ -806,6 +859,11 @@ def main():
         ],
     }
     runner = Runner(config, output, started + args.budget_seconds)
+    if (
+        "S" in args.engines
+        and config["S"].get("pathMode", "strict-posix") == "windows-diagnostic"
+    ):
+        result["limitations"].append(WINDOWS_SCIP_LIMIT)
     try:
         for sample in range(1, args.samples + 1):
             for world in config["workspaces"]:

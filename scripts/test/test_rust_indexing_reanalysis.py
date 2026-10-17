@@ -167,6 +167,52 @@ class NativeEvidenceTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "target document"):
             reanalysis.scip_symbols(index, "missing.rs")
 
+    def test_scip_windows_diagnostic_is_explicit_and_preserves_native_paths(self):
+        before = {"documents": [{"relativePath": "app\\src\\main.rs", "symbols": []}]}
+        after = copy.deepcopy(before)
+        after["documents"][0]["symbols"] = [
+            {"symbol": "scip-rust cargo fixture 0.1.0 semctx_reindex_probe()."}
+        ]
+        with self.assertRaisesRegex(ValueError, "nonconforming"):
+            reanalysis.scip_symbols(before, "app/src/main.rs")
+        reanalysis.require_added(
+            reanalysis.scip_symbols(before, "app/src/main.rs", "windows-diagnostic"),
+            reanalysis.scip_symbols(after, "app/src/main.rs", "windows-diagnostic"),
+        )
+        self.assertEqual(after["documents"][0]["relativePath"], "app\\src\\main.rs")
+
+    def test_scip_diagnostic_refuses_colliding_or_unsafe_document_paths(self):
+        index = {
+            "documents": [
+                {"relativePath": "app/src/main.rs"},
+                {"relativePath": "app\\src\\main.rs"},
+            ]
+        }
+        with self.assertRaisesRegex(ValueError, "ambiguous"):
+            reanalysis.scip_symbols(index, "app/src/main.rs", "windows-diagnostic")
+        for path in (
+            "",
+            "/src/lib.rs",
+            "C:/src/lib.rs",
+            "C:src/lib.rs",
+            "\\\\server\\src\\lib.rs",
+            "./src/lib.rs",
+            "src/../lib.rs",
+            "src//lib.rs",
+            "src/./lib.rs",
+            "src/",
+            "src\\..\\lib.rs",
+        ):
+            with (
+                self.subTest(path=path),
+                self.assertRaisesRegex(ValueError, "relative path"),
+            ):
+                reanalysis.scip_symbols(
+                    {"documents": [{"relativePath": path}]},
+                    "src/lib.rs",
+                    "windows-diagnostic",
+                )
+
     def test_timings_refuse_nan_infinite_negative_boolean_and_missing(self):
         for value in (float("nan"), float("inf"), -1, True, None, "12"):
             with (
