@@ -95,7 +95,7 @@ shard counts above describe the previous policy.
 For classifiable product changes, the Rust planner selects the complete Bun suite on four
 Ubuntu shards and the explicitly configured OS-boundary files on two Windows shards and one
 macOS shard. The contract lane remains separate. The list in
-[`tools/gates/src/os_boundaries.rs`](../../tools/gates/src/os_boundaries.rs) contains 46 existing
+[`tools/gates/src/os_boundaries.rs`](../../tools/gates/src/os_boundaries.rs) contains 72 existing
 files for filesystem paths and links, SQLite, Git/process lifecycle, workers, installation and
 CLI/MCP/plugin transports. It is a maintained selection, not an exhaustive discovery of every
 OS-sensitive behavior. The planner does not add future OS-sensitive tests automatically.
@@ -107,6 +107,17 @@ and missing/non-file boundary targets retain the full fallback: four Ubuntu, fou
 two macOS shards. Shared plugin helpers still have consumers outside the manifest graph, so
 changes under `plugins/` retain that fallback. No new source-path classifier is inferred from
 test filenames. Documentation-only changes retain the contract lane.
+
+Before selecting the reduced profile, every boundary witness must be a committed Git blob
+with mode `100644` or `100755` and a physical regular file according to `symlink_metadata`.
+Every affected consumer target must likewise be a committed Git tree and a physical directory.
+A batched `git ls-tree -z` inspection uses the resolved head commit; an inspection failure or
+malformed result retains full fallback. This rejects leaf symlinks, including Git mode `120000`
+materialized as a regular file by a Windows checkout with `core.symlinks=false`.
+Repository-relative ancestors must also be physical directories without links or Windows
+reparse points, so a regular leaf reached through a substituted parent cannot admit reduction.
+The inventory includes product junction/link witnesses. Demo/proof scripts retain full fallback
+when changed directly; analyzer fixtures form a separate class and are not native product tests.
 
 Runtime integration checks and worker equivalence remain required once per OS. The independent
 three-OS Rust tests and CLI/MCP qualification from ADR 0037 remain required. A shortened or

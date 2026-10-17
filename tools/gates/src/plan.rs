@@ -294,6 +294,68 @@ fn suites(os: &str, profile: &str, targets: &str, smoke: bool) -> Result<Vec<Lan
         .map(|i| lane(os, profile, targets, smoke, &format!("{i}/{count}")))
         .collect())
 }
+fn committed_targets(root: &Path, head: &str, targets: &BTreeSet<String>) -> Result<bool> {
+    let mut args = vec!["ls-tree", "-r", "-t", "-z", head, "--"];
+    args.extend(targets.iter().map(String::as_str));
+    args.extend(crate::os_boundaries::TESTS.iter().copied());
+    let bytes = git(root, &args)?;
+    let entries = tree_entries(&bytes)?;
+    Ok(targets.iter().all(|path| {
+        entries.get(path.as_str()) == Some(&("040000", "tree")) && physical_target(root, path, true)
+    }) && crate::os_boundaries::TESTS.iter().all(|path| {
+        matches!(entries.get(path), Some(&("100644" | "100755", "blob")))
+            && physical_target(root, path, false)
+    }))
+}
+fn physical_target(root: &Path, path: &str, directory: bool) -> bool {
+    let mut current = root.to_path_buf();
+    let mut parts = path.split('/').peekable();
+    while let Some(part) = parts.next() {
+        current.push(part);
+        let Ok(metadata) = std::fs::symlink_metadata(&current) else {
+            return false;
+        };
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            if metadata.file_attributes() & 0x400 != 0 {
+                return false; // FILE_ATTRIBUTE_REPARSE_POINT includes junctions.
+            }
+        }
+        if if parts.peek().is_some() || directory {
+            !metadata.file_type().is_dir()
+        } else {
+            !metadata.file_type().is_file()
+        } {
+            return false;
+        }
+    }
+    true
+}
+fn tree_entries(bytes: &[u8]) -> Result<BTreeMap<&str, (&str, &str)>> {
+    if !bytes.is_empty() && bytes.last() != Some(&0) {
+        return Err("malformed Git tree list".into());
+    }
+    let text = std::str::from_utf8(bytes).map_err(|e| e.to_string())?;
+    let mut entries = BTreeMap::new();
+    for entry in text.split_terminator('\0') {
+        let (header, path) = entry.split_once('\t').ok_or("malformed Git tree entry")?;
+        let fields = header.split(' ').collect::<Vec<_>>();
+        let [mode, kind, object] = fields.as_slice() else {
+            return Err("malformed Git tree header".into());
+        };
+        if !matches!(*mode, "040000" | "100644" | "100755" | "120000" | "160000")
+            || !matches!(*kind, "tree" | "blob" | "commit")
+            || !matches!(object.len(), 40 | 64)
+            || !object.bytes().all(|b| b.is_ascii_hexdigit())
+            || !valid_path(path)
+            || entries.insert(path, (*mode, *kind)).is_some()
+        {
+            return Err("malformed Git tree entry".into());
+        }
+    }
+    Ok(entries)
+}
 pub fn create(root: &Path, base: &str, head: &str) -> Result<Plan> {
     clean(root)?;
     let (base, head, tree) = commit_subject(root, base, head)?;
@@ -345,10 +407,7 @@ pub fn create(root: &Path, base: &str, head: &str) -> Result<Plan> {
             .filter(|t| {
                 !paths.is_empty()
                     && !t.is_empty()
-                    && t.iter().all(|t| root.join(t).exists())
-                    && crate::os_boundaries::TESTS
-                        .iter()
-                        .all(|t| root.join(t).is_file())
+                    && committed_targets(root, &head, t).unwrap_or(false)
             });
         let smoke = true; // Conservative worker equivalence until explicit capability mapping replaces legacy inputs.
         lanes.extend(suites("ubuntu-latest", "full", "", smoke)?);
@@ -399,6 +458,20 @@ pub fn validate(root: &Path, plan: &Plan) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn malformed_tree_inspection_is_refused() {
+        for bytes in [
+            b"100644 blob 0123456789012345678901234567890123456789\tfile".as_slice(),
+            b"100644 blob invalid\tfile\0",
+            b"100644 blob 0123456789012345678901234567890123456789\t../file\0",
+            b"invalid\0",
+            b"100644 blob 0123456789012345678901234567890123456789\tfile\0\0",
+            b"100644 blob 0123456789012345678901234567890123456789\tfile\0\
+              100644 blob 0123456789012345678901234567890123456789\tfile\0",
+        ] {
+            assert!(tree_entries(bytes).is_err(), "accepted {bytes:?}");
+        }
+    }
     #[test]
     fn closes_transitive_consumers_and_integrations() {
         let graph = BTreeMap::from([

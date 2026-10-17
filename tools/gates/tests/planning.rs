@@ -158,6 +158,12 @@ fn docs_keep_contract_and_plan_is_deterministic() {
 }
 #[test]
 fn source_change_keeps_linux_complete_and_selects_native_os_boundaries() {
+    assert_eq!(semctx_gates::os_boundaries::TESTS.len(), 72);
+    assert!(
+        semctx_gates::os_boundaries::TESTS
+            .windows(2)
+            .all(|pair| pair[0] < pair[1])
+    );
     let r = Repo::new();
     r.write("packages/core/src/index.ts", "export const value = 2;\n");
     r.commit();
@@ -180,12 +186,38 @@ fn source_change_keeps_linux_complete_and_selects_native_os_boundaries() {
             assert_eq!(lane.shard, format!("{}/{count}", index + 1));
             if profile == "os-boundary" {
                 for witness in [
+                    "packages/app-services/test/cli-compatibility.test.ts",
+                    "packages/app-services/test/verify-base-tree.test.ts",
+                    "packages/ts-analyzer/test/parallel-extraction.test.ts",
                     "packages/app-services/test/bounded-process.test.ts",
                     "packages/app-services/test/codex-plugin-metadata.test.ts",
                     "packages/app-services/test/codex-plugin-production-boundary.test.ts",
                     "packages/repository-store/test/store-process-crash.test.ts",
                     "apps/cli/test/package-runtime.test.ts",
                     "packages/mcp-server/test/mcp-modern-stdio.test.ts",
+                    "apps/cli/test/init-preset.test.ts",
+                    "apps/cli/test/local-reports.test.ts",
+                    "apps/cli/test/ordinary-reserved-report.test.ts",
+                    "apps/cli/test/plugin-status-attestation.test.ts",
+                    "apps/cli/test/qualified-output.test.ts",
+                    "apps/cli/test/setup-dry-run.test.ts",
+                    "packages/app-services/test/config-migration.test.ts",
+                    "packages/app-services/test/control-handoff-v2.test.ts",
+                    "packages/app-services/test/plugin-delivery.test.ts",
+                    "packages/app-services/test/qualified-analysis.test.ts",
+                    "packages/app-services/test/readiness-link-safety.test.ts",
+                    "packages/app-services/test/setup-scope.test.ts",
+                    "packages/app-services/test/setup.test.ts",
+                    "packages/app-services/test/qualified-build-directory-probe.test.ts",
+                    "packages/mcp-server/test/mcp-2026-contract.test.ts",
+                    "packages/mcp-server/test/setup-scope-tools.test.ts",
+                    "packages/semantic-engine/test/anchor-migration.test.ts",
+                    "packages/semantic-engine/test/targets.test.ts",
+                    "packages/ts-analyzer/test/discovery-missing-import-alias.test.ts",
+                    "packages/ts-analyzer/test/discovery-selection.test.ts",
+                    "packages/ts-analyzer/test/retained-directory-alias.test.ts",
+                    "packages/ts-analyzer/test/semantic-context-memory.test.ts",
+                    "packages/change-authorization-verifier/test/architecture.test.ts",
                 ] {
                     assert!(
                         lane.targets.split(',').any(|p| p == witness),
@@ -196,6 +228,139 @@ fn source_change_keeps_linux_complete_and_selects_native_os_boundaries() {
             }
         }
     }
+}
+#[test]
+fn git_symlink_witness_materialized_as_regular_file_keeps_full_coverage() {
+    let r = Repo::new();
+    let path = "apps/cli/test/package-runtime.test.ts";
+    git(&r.root, &["config", "core.symlinks", "false"]);
+    r.write(path, "../../../README.md");
+    git(&r.root, &["add", path]);
+    let blob = git(&r.root, &["rev-parse", &format!(":{path}")]);
+    git(
+        &r.root,
+        &[
+            "update-index",
+            "--cacheinfo",
+            &format!("120000,{},{}", blob.trim(), path),
+        ],
+    );
+    git(
+        &r.root,
+        &["commit", "-qm", "tracked symlink with regular checkout"],
+    );
+    assert!(
+        fs::symlink_metadata(r.root.join(path))
+            .unwrap()
+            .file_type()
+            .is_file()
+    );
+    assert_eq!(r.plan().mode, "fallback");
+}
+#[test]
+fn physical_symlink_witness_keeps_full_coverage() {
+    let r = Repo::new();
+    let path = "apps/cli/test/package-runtime.test.ts";
+    fs::remove_file(r.root.join(path)).unwrap();
+    #[cfg(windows)]
+    let result = std::os::windows::fs::symlink_file(r.root.join("README.md"), r.root.join(path));
+    #[cfg(unix)]
+    let result = std::os::unix::fs::symlink(r.root.join("README.md"), r.root.join(path));
+    if let Err(error) = result {
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        eprintln!("native symlink unavailable: {error}");
+        return;
+    }
+    git(&r.root, &["update-index", "--assume-unchanged", path]);
+    r.write("packages/core/src/index.ts", "changed\n");
+    r.commit();
+    assert_eq!(r.plan().mode, "fallback");
+}
+#[test]
+fn affected_target_must_be_a_committed_physical_directory() {
+    let r = Repo::new();
+    fs::remove_dir_all(r.root.join("packages/service/test")).unwrap();
+    r.write("packages/service/test", "not a test directory\n");
+    r.write("packages/core/src/index.ts", "changed\n");
+    r.commit();
+    assert_eq!(r.plan().mode, "fallback");
+}
+#[test]
+fn physical_symlink_affected_directory_keeps_full_coverage() {
+    let r = Repo::new();
+    let path = "packages/service/test";
+    let destination = r.outer.join("external-tests");
+    fs::rename(r.root.join(path), &destination).unwrap();
+    #[cfg(windows)]
+    let result = std::os::windows::fs::symlink_dir(&destination, r.root.join(path));
+    #[cfg(unix)]
+    let result = std::os::unix::fs::symlink(&destination, r.root.join(path));
+    if let Err(error) = result {
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        eprintln!("native directory symlink unavailable: {error}");
+        return;
+    }
+    git(
+        &r.root,
+        &[
+            "update-index",
+            "--assume-unchanged",
+            "packages/service/test/example.test.ts",
+        ],
+    );
+    r.write("packages/core/src/index.ts", "changed\n");
+    r.commit();
+    assert_eq!(r.plan().mode, "fallback");
+}
+#[test]
+fn physical_symlink_witness_parent_keeps_full_coverage() {
+    linked_witness_parent_keeps_full_coverage(false);
+}
+#[cfg(windows)]
+#[test]
+fn physical_junction_witness_parent_keeps_full_coverage() {
+    linked_witness_parent_keeps_full_coverage(true);
+}
+fn linked_witness_parent_keeps_full_coverage(junction: bool) {
+    let r = Repo::new();
+    let path = "packages/ts-analyzer/test";
+    let tracked = git(&r.root, &["ls-files", path]);
+    let destination = r.outer.join("external-witnesses");
+    fs::rename(r.root.join(path), &destination).unwrap();
+    #[cfg(windows)]
+    let result = if junction {
+        let output = Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(r.root.join(path).to_str().unwrap().replace('/', "\\"))
+            .arg(&destination)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        Ok(())
+    } else {
+        std::os::windows::fs::symlink_dir(&destination, r.root.join(path))
+    };
+    #[cfg(unix)]
+    let result = {
+        assert!(!junction);
+        std::os::unix::fs::symlink(&destination, r.root.join(path))
+    };
+    if let Err(error) = result {
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        eprintln!("native parent symlink unavailable: {error}");
+        return;
+    }
+    let mut args = vec!["update-index", "--assume-unchanged"];
+    args.extend(tracked.lines());
+    git(&r.root, &args);
+    r.write(".git/info/exclude", &format!("{path}\n"));
+    r.write("packages/core/src/index.ts", "changed\n");
+    git(&r.root, &["add", "packages/core/src/index.ts"]);
+    git(
+        &r.root,
+        &["commit", "-qm", "source change with physical parent link"],
+    );
+    assert_eq!(r.plan().mode, "fallback");
 }
 #[test]
 fn os_boundary_commands_execute_selected_files_and_surface_failures() {

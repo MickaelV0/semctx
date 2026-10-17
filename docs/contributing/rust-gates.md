@@ -134,11 +134,17 @@ an immutable independently hosted verifier. See [ADR 0037](../adr/0037-rust-gate
 
 Quality runs once in the contract lane. Runtime integration checks and worker equivalence run
 once per applicable OS, while all selected test shards remain required. Classifiable product
-changes select four full Ubuntu shards and the configured 46 OS-boundary files on two Windows
+changes select four full Ubuntu shards and the configured 72 OS-boundary files on two Windows
 shards and one macOS shard. The maintained list lives in
 [`tools/gates/src/os_boundaries.rs`](../../tools/gates/src/os_boundaries.rs); it does not discover
 future OS-sensitive tests automatically. Unknown impact, dependency manifests, missing targets
 and shared plugin changes retain full suites on four Ubuntu, four Windows and two macOS shards.
+Boundary files must be committed regular blobs (`100644`/`100755`) and physical regular files;
+affected consumer targets must be committed trees and physical directories. Symlinks, missing
+entries and failed or malformed Git tree inspection retain full fallback, including Git symlinks
+materialized as regular files on Windows. Repository-relative ancestors must also be physical
+directories without links or reparse points. Product junction/link tests belong to the inventory;
+demo/proof scripts and analyzer fixtures are separate classes.
 Native Rust tests and artifact qualification remain required on all three OSes in either case.
 
 The Ubuntu scheduling weights use `scripts/ci-test-timings-linux.json`; their historical source
