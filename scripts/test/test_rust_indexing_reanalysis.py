@@ -3,6 +3,7 @@ import importlib.util
 import os
 import subprocess
 import sys
+import time
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,6 +17,90 @@ SPEC.loader.exec_module(reanalysis)
 
 
 class NativeEvidenceTest(unittest.TestCase):
+    def test_five_file_syn_timings_sum_native_integer_nanoseconds_once(self):
+        # Actual parse_ns from commands 0001..0010 of the interrupted
+        # reindex382-measurements-8f3afa1 series. These are unit-test inputs,
+        # not fresh native executions or a replacement campaign receipt.
+        values = [
+            347700,
+            234600,
+            206400,
+            316400,
+            198200,
+            225800,
+            217200,
+            182100,
+            290900,
+            194600,
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            original = root / "original"
+            files = [
+                "app/src/main.rs",
+                "domain/src/lib.rs",
+                "domain/src/model.rs",
+                "domain/src/operations.rs",
+                "domain/tests/dispatch.rs",
+            ]
+            for file in files:
+                path = original / file
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"fn existing() {}\n")
+            output = root / "captures"
+            output.mkdir()
+            world = {
+                "name": "fixture",
+                "path": str(original),
+                "files": files,
+                "target": files[0],
+            }
+            runner = reanalysis.Runner(
+                {"Y": {"binary": "C:/native-syn.exe"}}, output, time.monotonic() + 10
+            )
+
+            def capture(argv, cwd):
+                index = runner.sequence
+                runner.sequence += 1
+                name = (
+                    reanalysis.SYMBOL
+                    if reanalysis.SYMBOL.encode() in Path(argv[1]).read_bytes()
+                    else "existing"
+                )
+                raw = f"symbol\tfn\t{name}\t0\t16\t\n".encode()
+                stderr = f"timing\tparse_ns\t{values[index]}\n".encode()
+                stem = output / f"command-{index:04d}"
+                stem.with_suffix(".stdout").write_bytes(raw)
+                stem.with_suffix(".stderr").write_bytes(stderr)
+                reanalysis.save(
+                    stem.with_suffix(".argv.json"), {"argv": argv, "cwd": str(cwd)}
+                )
+                observation = {
+                    "prefix": stem.name,
+                    "exitCode": 0,
+                    "elapsedMs": 1,
+                    "stdoutSha256": reanalysis.sha(raw),
+                    "stderrSha256": reanalysis.sha(stderr),
+                    "argvSha256": reanalysis.sha(
+                        stem.with_suffix(".argv.json").read_bytes()
+                    ),
+                }
+                reanalysis.save(stem.with_suffix(".timing.json"), observation)
+                return raw, stderr, observation
+
+            with patch.object(runner, "command", side_effect=capture):
+                pair = runner.pair("Y", world, 1)
+            self.assertEqual(
+                pair["nativeTimingsMs"],
+                {
+                    "coldFullParse": sum(values[:5]) / 1_000_000,
+                    "editedFullParse": sum(values[5:]) / 1_000_000,
+                },
+            )
+            pair["nativeTimingsMs"]["editedFullParse"] += 0.0001
+            with self.assertRaisesRegex(ValueError, "timing projection mismatch"):
+                reanalysis.validate_pair(pair, world, output, runner.config)
+
     def test_captured_manifests_cannot_be_rediscovered_as_replay_inputs(self):
         names = (
             "Cargo.toml.snapshot",

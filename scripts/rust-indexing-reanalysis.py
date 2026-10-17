@@ -87,6 +87,13 @@ def tsv_symbols(stdout):
     return names
 
 
+def native_parse_ns(stderr):
+    matches = re.findall(rb"(?m)^timing\tparse_ns\t([0-9]+)\r?$", stderr)
+    if len(matches) != 1:
+        raise ValueError("missing or invalid syn parse timing")
+    return int(matches[0])
+
+
 def scip_symbols(index, target):
     documents = index.get("documents")
     if not isinstance(documents, list):
@@ -294,13 +301,10 @@ def validate_pair(result, world, output, config=None):
         parsed = []
         for raw, stderr in outputs:
             tsv_symbols(raw)
-            matches = re.findall(rb"(?m)^timing\tparse_ns\t([0-9]+)\r?$", stderr)
-            if len(matches) != 1:
-                raise ValueError("missing or invalid syn parse timing")
-            parsed.append(finite_duration(int(matches[0]) / 1_000_000))
+            parsed.append(native_parse_ns(stderr))
         timings = {
-            "coldFullParse": sum(parsed[:count]),
-            "editedFullParse": sum(parsed[count:]),
+            "coldFullParse": finite_duration(sum(parsed[:count]) / 1_000_000),
+            "editedFullParse": finite_duration(sum(parsed[count:]) / 1_000_000),
         }
     elif engine == "S":
         require_added(
@@ -657,7 +661,7 @@ class Runner:
             for state in ("before", "after"):
                 if state == "after":
                     target.write_bytes(after)
-                state_symbols, parse_ms = [], 0
+                state_symbols, parse_ns = [], 0
                 for file in world["files"]:
                     raw, errors, command = self.command(
                         [
@@ -667,16 +671,11 @@ class Runner:
                         workspace,
                     )
                     result["commands"].append(command)
-                    matches = re.findall(
-                        rb"(?m)^timing\tparse_ns\t([0-9]+)\r?$", errors
-                    )
-                    if len(matches) != 1:
-                        raise ValueError("missing or invalid syn parse timing")
-                    parse_ms += finite_duration(int(matches[0]) / 1_000_000)
+                    parse_ns += native_parse_ns(errors)
                     if file == world["target"]:
                         state_symbols = tsv_symbols(raw)
                 symbols.append(state_symbols)
-                native_times.append(parse_ms)
+                native_times.append(finite_duration(parse_ns / 1_000_000))
             require_added(*symbols)
             result["nativeTimingsMs"] = dict(
                 zip(("coldFullParse", "editedFullParse"), native_times, strict=True)
