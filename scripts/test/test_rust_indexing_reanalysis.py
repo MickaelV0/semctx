@@ -1580,6 +1580,91 @@ class NativeEvidenceTest(unittest.TestCase):
                     for path, raw in original.items():
                         path.write_bytes(raw)
 
+        for engine, name in (
+            ("T", "rust-indexing-reanalysis.mjs"),
+            ("L", "rust-indexing-lsp.py"),
+            ("T+L", None),
+        ):
+            with (
+                self.subTest(coherent_helper=engine),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = Path(directory) / "copied-records"
+                shutil.copytree(public, root)
+                unpack.unpack_inputs(root)
+                self.assertEqual(reanalysis.validate_series(root)["status"], "VALID")
+                series = json.loads((root / "result.json").read_bytes())
+                if name is not None:
+                    series["engines"] = [engine]
+                    series["pairs"] = [
+                        row for row in series["pairs"] if row["engine"] == engine
+                    ]
+                reanalysis.save(root / "result.json", series)
+                self.assertEqual(reanalysis.validate_series(root)["status"], "VALID")
+                names = (
+                    [name]
+                    if name is not None
+                    else ["rust-indexing-reanalysis.mjs", "rust-indexing-lsp.py"]
+                )
+                self.rewrite_retained_helpers(
+                    root, {helper: f"E:/foreign/{helper}" for helper in names}
+                )
+                with self.assertRaisesRegex(ValueError, "invocation.*pin"):
+                    reanalysis.validate_series(root)
+
+    def rewrite_retained_helpers(self, root, replacements):
+        series = json.loads((root / "result.json").read_bytes())
+        for pair in series["pairs"]:
+            for command in pair["commands"]:
+                stem = root / command["prefix"]
+                invocation = json.loads(stem.with_suffix(".argv.json").read_bytes())
+                name = invocation["argv"][1].replace("\\", "/").rsplit("/", 1)[-1]
+                if name not in replacements:
+                    continue
+                invocation["argv"][1] = replacements[name]
+                reanalysis.save(stem.with_suffix(".argv.json"), invocation)
+                command["argvSha256"] = reanalysis.sha(
+                    stem.with_suffix(".argv.json").read_bytes()
+                )
+                reanalysis.save(stem.with_suffix(".timing.json"), command)
+            reanalysis.save(
+                root / f"{pair['engine']}-{pair['workspace']}-{pair['sample']}/pair.json",
+                pair,
+            )
+        reanalysis.save(root / "result.json", series)
+
+    def test_retained_helper_pins_validate_without_original_host_paths(self):
+        public = (
+            Path(__file__).parents[2]
+            / "docs/research/rust-indexing/results/reanalysis-windows-2026-10-17"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "copied-records"
+            shutil.copytree(public, root)
+            unpack.unpack_inputs(root)
+            replacements = {
+                name: f"/historical-unavailable-host/scripts/{name}"
+                for name in ("rust-indexing-reanalysis.mjs", "rust-indexing-lsp.py")
+            }
+            self.rewrite_retained_helpers(root, replacements)
+            config = json.loads((root / "config.json").read_bytes())
+            for pin in config["pins"]:
+                name = pin["path"].replace("\\", "/").rsplit("/", 1)[-1]
+                if name in replacements:
+                    pin["path"] = replacements[name]
+            reanalysis.save(root / "config.json", config)
+            series = json.loads((root / "result.json").read_bytes())
+            series["configSha256"] = reanalysis.sha((root / "config.json").read_bytes())
+            reanalysis.save(root / "result.json", series)
+            read_bytes = Path.read_bytes
+
+            def retained_read_bytes(path):
+                self.assertTrue(path.is_relative_to(root), path)
+                return read_bytes(path)
+
+            with patch.object(Path, "read_bytes", retained_read_bytes):
+                self.assertEqual(reanalysis.validate_series(root)["status"], "VALID")
+
     def test_retained_command_argv_mutation_is_refused(self):
         with tempfile.TemporaryDirectory() as directory:
             root, world, pair = self.make_pair(directory)

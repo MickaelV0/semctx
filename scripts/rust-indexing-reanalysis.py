@@ -233,6 +233,11 @@ def validate_invocation_plan(result, world, invocations, config=None):
             )
             if not absolute(script) or PurePosixPath(script).name != name:
                 raise ValueError("native invocation helper script mismatch")
+            if config is not None and sum(
+                path(pin["path"]).casefold() == script.casefold()
+                for pin in config["pins"]
+            ) != 1:
+                raise ValueError("native invocation helper differs from declared pin")
             helper_parent = script.rsplit("/", 1)[0]
         if engine == "T":
             valid = len(argv) == 3 and path(argv[2]) == pair_folder + "/adapter.json"
