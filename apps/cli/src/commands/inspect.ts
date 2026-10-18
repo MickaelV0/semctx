@@ -1,5 +1,5 @@
 import { SemctxError } from "@semantic-context/core";
-import { withStore } from "../store";
+import { withReader } from "../store";
 import { inspectGraph, type InspectKind } from "@semantic-context/context-engine";
 import type { ParsedArgs } from "../args";
 import { flagBool } from "../args";
@@ -19,7 +19,7 @@ export function runInspect(root: string, args: ParsedArgs): number {
     warn(`unknown inspect kind "${kindArg}", searching all kinds`);
   }
 
-  const result = withStore(root, (store) => {
+  const result = withReader(root, (store) => {
     if (!store.isIndexed()) {
       throw new SemctxError("REPO_NOT_INDEXED", "repository is not indexed; run 'semctx index' first");
     }

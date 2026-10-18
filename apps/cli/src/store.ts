@@ -1,11 +1,24 @@
 import { attachSuppressedError } from "@semantic-context/core";
-import { openStore, type RepositoryStore } from "@semantic-context/repository-store";
+import { openReader, openStore, type ReadonlyRepositoryStore, type RepositoryStore } from "@semantic-context/repository-store";
 
-function closeStore(store: RepositoryStore, failure: { error: unknown } | undefined): void {
+function closeStore(store: { close(): void }, failure: { error: unknown } | undefined): void {
   try {
     store.close();
   } catch (error) {
     throw failure === undefined ? error : attachSuppressedError(failure.error, error);
+  }
+}
+
+export function withReader<T>(root: string, operation: (store: ReadonlyRepositoryStore) => T): T {
+  const store = openReader(root);
+  let failure: { error: unknown } | undefined;
+  try {
+    return operation(store);
+  } catch (error) {
+    failure = { error };
+    throw error;
+  } finally {
+    closeStore(store, failure);
   }
 }
 

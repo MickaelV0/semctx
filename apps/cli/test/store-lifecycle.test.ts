@@ -55,6 +55,45 @@ function corruptClaims(root: string): void {
 }
 
 describe("CLI writer lifecycle", () => {
+  it("serves inspect while another connection holds a read lock", () => {
+    const root = workspace();
+    const blocker = new Database(dbPath(root), { readonly: true });
+    try {
+      blocker.exec("BEGIN;");
+      blocker.query("SELECT value FROM meta WHERE key = ?").get("schema_version");
+      const cli = join(import.meta.dir, "../src/index.ts");
+      const result = Bun.spawnSync([process.execPath, cli, "inspect", "any", "probe", "--root", root, "--json"], {
+        stdout: "pipe", stderr: "pipe",
+      });
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(new TextDecoder().decode(result.stdout))).toMatchObject({
+        matchedNodes: [expect.objectContaining({ name: "probe.ts" })],
+      });
+      expect(new TextDecoder().decode(result.stderr)).toBe("");
+    } finally {
+      blocker.exec("ROLLBACK;");
+      blocker.close();
+    }
+    assertReadable(root);
+  });
+
+  it("refuses inspect while a writer has active WAL sidecars", () => {
+    const root = workspace();
+    const writer = openStore(root);
+    try {
+      writer.setMeta("uncommitted_inspect_probe", "present");
+      const cli = join(import.meta.dir, "../src/index.ts");
+      const result = Bun.spawnSync([process.execPath, cli, "inspect", "any", "probe", "--root", root, "--json"], {
+        stdout: "pipe", stderr: "pipe",
+      });
+      expect(result.exitCode).toBe(1);
+      expect(new TextDecoder().decode(result.stderr)).toContain("active WAL sidecars");
+    } finally {
+      writer.close();
+    }
+    assertReadable(root);
+  });
+
   it("closes context preparation after an available provider fails, before the process exits", () => {
     const root = workspace();
     saveConfig(root, { ...loadConfig(root), semanticProvider: "cocoindex" });
