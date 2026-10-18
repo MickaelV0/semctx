@@ -12,7 +12,7 @@ This is a local performance observation for the accepted bounded Rust profile, n
 
 The 17,924 upstream source lines are unchanged; the recipe gives their tree hashes and license files. The workspace adds a small consumer with exact local `path` dependencies. Offline Cargo metadata found six packages, all active dependencies local, and `cargo test --locked --offline -p b06-probe` passed. Optional and dev dependencies from upstream manifests are outside this bounded projection. In particular, running upstream `byteorder` inline tests with `cargo test --workspace` fails because `quickcheck` and `rand` are not part of this profile. The probe does not assert upstream build or test equivalence.
 
-The recorded host was macOS 27.0.1 on Apple M4 Max, 16 cores, 64 GiB RAM, Bun 1.4.3, Rust 1.98.1 (`48a229ceaefd4985c50990b14116b6d856af0985`), target `aarch64-apple-darwin`, and rust-analyzer release `2026-10-12`, binary SHA-256 `c863e967a7244fa3687d7bd6235ac7abae5a7ce44bcbf8307eb1dc80aa85f397`. The bound toolchain identity was `sha256:3e56cc83e0a58f53ff7d578cac48ffc2ea44486a1c9a8a58677c82dc725eda7a`. The measured Semctx code commit was `deadf208c33c67c9d7ad91af45615d7bf5669b09`. No disk cache was cleared; repetitions ran sequentially.
+The recorded host was macOS 27.0.1 on Apple M4 Max, 16 cores, 64 GiB RAM, Bun 1.4.3, Rust 1.98.1 (`48a229ceaefd4985c50990b14116b6d856af0985`), target `aarch64-apple-darwin`, and rust-analyzer release `2026-10-12`, binary SHA-256 `c863e967a7244fa3687d7bd6235ac7abae5a7ce44bcbf8307eb1dc80aa85f397`. The bound toolchain identity was `sha256:3e56cc83e0a58f53ff7d578cac48ffc2ea44486a1c9a8a58677c82dc725eda7a`. The measured Semctx code commit was `7e6daa388537d1800e6cba2cde4704e1a7c94006`. No disk cache was cleared; repetitions ran sequentially. An earlier series was discarded because four unrelated test shards overlapped two repetitions. This series started after those shards ended; other host activity was not controlled.
 
 ## Admission and observations
 
@@ -24,13 +24,13 @@ Each repetition used a fresh Git clone of the same pinned workspace. `cold` inde
 
 | Index operation | Three wall samples, ms | Median, ms | Largest descendant process RSS, bytes |
 | --- | --- | ---: | ---: |
-| Cold | 5,858.7 / 7,522.9 / 6,206.5 | 6,206.5 | 668,893,184 |
-| Stable | 5,868.8 / 7,958.1 / 6,152.1 | 6,152.1 | 649,609,216 |
-| Edit | 6,152.8 / 9,315.9 / 6,170.1 | 6,170.1 | 610,844,672 |
-| Add | 6,498.3 / 8,707.1 / 6,153.7 | 6,498.3 | 662,913,024 |
-| Delete | 5,935.3 / 7,571.6 / 6,178.7 | 6,178.7 | 640,040,960 |
+| Cold | 4,174.6 / 4,084.6 / 4,140.7 | 4,140.7 | 702,922,752 |
+| Stable | 4,104.0 / 4,134.4 / 4,068.3 | 4,104.0 | 666,304,512 |
+| Edit | 4,112.5 / 4,103.5 / 4,334.4 | 4,112.5 | 679,641,088 |
+| Add | 4,122.2 / 4,253.6 / 4,110.5 | 4,122.2 | 680,378,368 |
+| Delete | 4,127.7 / 4,090.7 / 4,327.4 | 4,127.7 | 640,008,192 |
 
-The 30 sequential CLI queries took 181.8–253.1 ms, median 201.4 ms. One `identifier_start` query exceeded the proposed 250 ms foreground budget. The three four-process fan-outs completed in 650.1 / 617.0 / 635.4 ms, with 30 successful queries and a maximum individual response of 230.7 ms. The largest observed descendant process RSS across index stages was 668,893,184 bytes, below the proposed 1 GiB per-child target. The 60 s cold deadline was not approached. These are observations of this host and workload, not a p95, SLO or cross-platform guarantee; the 250 ms proposal is not established as a hard CLI cap.
+The 30 sequential CLI queries took 127.6–136.3 ms, median 130.1 ms. The three four-process fan-outs completed in 461.4 / 430.1 / 429.7 ms, with 30 successful queries and a maximum individual response of 182.5 ms. The largest observed descendant process RSS across index stages was 702,922,752 bytes, below the proposed 1 GiB per-child target. The 60 s cold deadline was not approached. These are observations of this host and workload, not a p95, SLO or cross-platform guarantee; the 250 ms proposal is not established as a hard CLI cap.
 
 Wall time uses `time.perf_counter_ns` around each public CLI process. A fresh Python supervisor per index command records macOS `RUSAGE_CHILDREN.ru_maxrss`, which observed a test grandchild in a separate local probe. This is a maximum for a descendant process, not the sum of concurrent RSS. The fan-out measurements use a four-worker thread pool to launch separate CLI processes. No Linux or native Windows performance run was made for these local commits.
 

@@ -1,6 +1,6 @@
 {
   "boundedFanout": {
-    "productCommit": "deadf208c33c67c9d7ad91af45615d7bf5669b09",
+    "productCommit": "7e6daa388537d1800e6cba2cde4704e1a7c94006",
     "runs": [
       {
         "concurrency": 4,
@@ -14,7 +14,7 @@
             "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "stdoutBytes": 3640,
             "stdoutSha256": "a106a3e2af11900c4cec5c1f6917e12877d178cfc2c0c48466f81fa2ac11eb77",
-            "wallMs": 229.840292
+            "wallMs": 156.025875
           },
           {
             "exitCode": 0,
@@ -25,7 +25,7 @@
             "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "stdoutBytes": 2029,
             "stdoutSha256": "4f6ece7159a76c784e333a994f468045309a57eb54ba3cb74cb48a0dcbd1f0d2",
-            "wallMs": 229.980166
+            "wallMs": 157.644416
           },
           {
             "exitCode": 0,
@@ -36,7 +36,7 @@
             "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "stdoutBytes": 2254,
             "stdoutSha256": "b4a0ab701bbbd30d6d5fedb3d0ac931837a143abd7b185b5b8f4fbaae6fab9ce",
-            "wallMs": 229.958167
+            "wallMs": 156.197542
           },
           {
             "exitCode": 0,
@@ -47,7 +47,7 @@
             "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "stdoutBytes": 67765,
             "stdoutSha256": "69b3a9ba59f2c5fd2474160a073904ce7d9935f897fc8486610763d5fedf502d",
-            "wallMs": 230.688458
+            "wallMs": 155.28875
           },
           {
             "exitCode": 0,
@@ -58,7 +58,7 @@
             "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "stdoutBytes": 64525,
             "stdoutSha256": "3b7246e25436017ae7fa66cb38ea8a189a6bd1761b25cc3dcb5745198ea91f81",
-            "wallMs": 216.55275
+            "wallMs": 166.605375
           },
           {
             "exitCode": 0,
@@ -69,7 +69,7 @@
             "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "stdoutBytes": 35394,
             "stdoutSha256": "2d343bdc81dea0bfea257d084891f99af7c8abf85c7d495726ff8be7a14a717b",
-            "wallMs": 213.353916
+            "wallMs": 176.400625
           },
           {
             "exitCode": 0,
@@ -80,7 +80,7 @@
             "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "stdoutBytes": 73274,
             "stdoutSha256": "e5c76ad66cc7a7af6c7f2ecf879c936dad894a9a5ad8400533e359d2cb32478a",
-            "wallMs": 219.606875
+            "wallMs": 182.452875
           },
           {
             "exitCode": 0,
@@ -91,7 +91,7 @@
             "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "stdoutBytes": 2739,
             "stdoutSha256": "2fe283ec64eae99d7bf5f0996435540d1b974c37ef0ba2e48d82fc6ce617b740",
-            "wallMs": 211.479959
+            "wallMs": 159.371958
           },
           {
             "exitCode": 0,
@@ -102,7 +102,7 @@
             "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "stdoutBytes": 15419,
             "stdoutSha256": "15b3cf799afab5e12e4ab8dce4c8ef654636e92197aa355882db16d7f2a5171c",
-            "wallMs": 204.925833
+            "wallMs": 137.926333
           },
           {
             "exitCode": 0,
@@ -113,11 +113,11 @@
             "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "stdoutBytes": 7488,
             "stdoutSha256": "00f2550a8f73d763867fbb4b52143762288d7409cb8823b15dffce12eafd89bd",
-            "wallMs": 202.650833
+            "wallMs": 136.254917
           }
         ],
         "repetition": 1,
-        "totalWallMs": 650.079334
+        "totalWallMs": 461.419375
       },
       {
         "concurrency": 4,
@@ -131,7 +131,7 @@
             "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "stdoutBytes": 3640,
             "stdoutSha256": "a106a3e2af11900c4cec5c1f6917e12877d178cfc2c0c48466f81fa2ac11eb77",
-            "wallMs": 206.011042
+            "wallMs": 147.613167
           },
           {
             "exitCode": 0,
@@ -142,7 +142,7 @@
             "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "stdoutBytes": 2029,
             "stdoutSha256": "4f6ece7159a76c784e333a994f468045309a57eb54ba3cb74cb48a0dcbd1f0d2",
-            "wallMs": 206.425708
+            "wallMs": 149.400458
           },
           {
             "exitCode": 0,
@@ -153,7 +153,7 @@
             "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "stdoutBytes": 2254,
             "stdoutSha256": "b4a0ab701bbbd30d6d5fedb3d0ac931837a143abd7b185b5b8f4fbaae6fab9ce",
-            "wallMs": 206.905125
+            "wallMs": 148.826208
           },
           {
             "exitCode": 0,
@@ -164,7 +164,7 @@
             "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "stdoutBytes": 67765,
             "stdoutSha256": "69b3a9ba59f2c5fd2474160a073904ce7d9935f897fc8486610763d5fedf502d",
-            "wallMs": 206.928625
+            "wallMs": 146.876833
           },
           {
             "exitCode": 0,
@@ -175,7 +175,7 @@
             "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "stdoutBytes": 64525,
             "stdoutSha256": "3b7246e25436017ae7fa66cb38ea8a189a6bd1761b25cc3dcb5745198ea91f81",
-            "wallMs": 208.914416
+            "wallMs": 145.797583
           },
           {
             "exitCode": 0,
@@ -186,7 +186,7 @@
             "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "stdoutBytes": 35394,
             "stdoutSha256": "2d343bdc81dea0bfea257d084891f99af7c8abf85c7d495726ff8be7a14a717b",
-            "wallMs": 210.757667
+            "wallMs": 144.163666
           },
           {
             "exitCode": 0,
@@ -197,7 +197,7 @@
             "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "stdoutBytes": 73274,
             "stdoutSha256": "e5c76ad66cc7a7af6c7f2ecf879c936dad894a9a5ad8400533e359d2cb32478a",
-            "wallMs": 208.985375
+            "wallMs": 147.843125
           },
           {
             "exitCode": 0,
@@ -208,7 +208,7 @@
             "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "stdoutBytes": 2739,
             "stdoutSha256": "2fe283ec64eae99d7bf5f0996435540d1b974c37ef0ba2e48d82fc6ce617b740",
-            "wallMs": 205.222
+            "wallMs": 144.80725
           },
           {
             "exitCode": 0,
@@ -219,7 +219,7 @@
             "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "stdoutBytes": 15419,
             "stdoutSha256": "15b3cf799afab5e12e4ab8dce4c8ef654636e92197aa355882db16d7f2a5171c",
-            "wallMs": 199.057791
+            "wallMs": 135.920625
           },
           {
             "exitCode": 0,
@@ -230,11 +230,11 @@
             "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "stdoutBytes": 7488,
             "stdoutSha256": "00f2550a8f73d763867fbb4b52143762288d7409cb8823b15dffce12eafd89bd",
-            "wallMs": 199.272042
+            "wallMs": 135.912541
           }
         ],
         "repetition": 2,
-        "totalWallMs": 617.000792
+        "totalWallMs": 430.089583
       },
       {
         "concurrency": 4,
@@ -248,7 +248,7 @@
             "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "stdoutBytes": 3640,
             "stdoutSha256": "a106a3e2af11900c4cec5c1f6917e12877d178cfc2c0c48466f81fa2ac11eb77",
-            "wallMs": 206.148292
+            "wallMs": 149.43625
           },
           {
             "exitCode": 0,
@@ -259,7 +259,7 @@
             "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "stdoutBytes": 2029,
             "stdoutSha256": "4f6ece7159a76c784e333a994f468045309a57eb54ba3cb74cb48a0dcbd1f0d2",
-            "wallMs": 209.899667
+            "wallMs": 149.734
           },
           {
             "exitCode": 0,
@@ -270,7 +270,7 @@
             "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "stdoutBytes": 2254,
             "stdoutSha256": "b4a0ab701bbbd30d6d5fedb3d0ac931837a143abd7b185b5b8f4fbaae6fab9ce",
-            "wallMs": 210.296916
+            "wallMs": 147.935542
           },
           {
             "exitCode": 0,
@@ -281,7 +281,7 @@
             "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "stdoutBytes": 67765,
             "stdoutSha256": "69b3a9ba59f2c5fd2474160a073904ce7d9935f897fc8486610763d5fedf502d",
-            "wallMs": 209.649208
+            "wallMs": 152.318292
           },
           {
             "exitCode": 0,
@@ -292,7 +292,7 @@
             "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "stdoutBytes": 64525,
             "stdoutSha256": "3b7246e25436017ae7fa66cb38ea8a189a6bd1761b25cc3dcb5745198ea91f81",
-            "wallMs": 211.279416
+            "wallMs": 143.686333
           },
           {
             "exitCode": 0,
@@ -303,7 +303,7 @@
             "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "stdoutBytes": 35394,
             "stdoutSha256": "2d343bdc81dea0bfea257d084891f99af7c8abf85c7d495726ff8be7a14a717b",
-            "wallMs": 209.145833
+            "wallMs": 143.239125
           },
           {
             "exitCode": 0,
@@ -314,7 +314,7 @@
             "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "stdoutBytes": 73274,
             "stdoutSha256": "e5c76ad66cc7a7af6c7f2ecf879c936dad894a9a5ad8400533e359d2cb32478a",
-            "wallMs": 208.868166
+            "wallMs": 144.877792
           },
           {
             "exitCode": 0,
@@ -325,7 +325,7 @@
             "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "stdoutBytes": 2739,
             "stdoutSha256": "2fe283ec64eae99d7bf5f0996435540d1b974c37ef0ba2e48d82fc6ce617b740",
-            "wallMs": 210.282709
+            "wallMs": 142.192125
           },
           {
             "exitCode": 0,
@@ -336,7 +336,7 @@
             "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "stdoutBytes": 15419,
             "stdoutSha256": "15b3cf799afab5e12e4ab8dce4c8ef654636e92197aa355882db16d7f2a5171c",
-            "wallMs": 216.943959
+            "wallMs": 136.420917
           },
           {
             "exitCode": 0,
@@ -347,20 +347,19 @@
             "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "stdoutBytes": 7488,
             "stdoutSha256": "00f2550a8f73d763867fbb4b52143762288d7409cb8823b15dffce12eafd89bd",
-            "wallMs": 213.739542
+            "wallMs": 134.721458
           }
         ],
         "repetition": 3,
-        "totalWallMs": 635.380958
+        "totalWallMs": 429.704625
       }
-    ],
-    "schemaVersion": 1
+    ]
   },
   "corpusRecipeSha256": "6255b3561200c2d8503bc991da6e1e9d47ea9d4a902fff563d300d8e8aab3a49",
   "environment": {
     "bun": "1.4.3",
-    "platform": "macOS-27.0.1-arm64-arm-64bit",
-    "python": "3.9.6",
+    "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+    "python": "3.15.0",
     "rust": "1.98.1",
     "rustAnalyzerRelease": "2026-10-12"
   },
@@ -370,13 +369,13 @@
       "maxWorkers": 4,
       "queries": 10
     },
-    "osCache": "not cleared; repetitions sequential",
+    "osCache": "not cleared; repetitions sequential; earlier pilot discarded after unrelated four-shard test overlap",
     "repetitions": 3,
     "resident": "macOS resource.getrusage(RUSAGE_CHILDREN).ru_maxrss in a fresh Python supervisor per index command; maximum descendant process RSS, not concurrent aggregate",
     "sequentialQueryFanout": 10,
     "transport": "stdout/stderr pipes captured as bytes"
   },
-  "productCommit": "deadf208c33c67c9d7ad91af45615d7bf5669b09",
+  "productCommit": "7e6daa388537d1800e6cba2cde4704e1a7c94006",
   "runs": [
     {
       "queries": [
@@ -388,21 +387,19 @@
             "symbol",
             "decode_and_count",
             "--root",
-            "/tmp/semctx-347-b06-measure-20261018-v4/workspace-1",
+            "/tmp/semctx-347-b06-measure-20261018-v5/workspace-1",
             "--json"
           ],
-          "descendantMaxRssBytes": 118374400,
-          "descendantSystemSeconds": 0.052015,
-          "descendantUserSeconds": 0.19272499999999998,
+          "descendantMaxRssBytes": 120782848,
+          "descendantSystemSeconds": 0.042369,
+          "descendantUserSeconds": 0.136881,
           "exitCode": 0,
           "matchedNodes": 1,
           "relations": 8,
           "sourceSha256": "c3b9e1bfa05d866a2d8f8297952fc78f5b5a8cdf28818d07b3f044a02f48d1af",
           "stderrBytes": 0,
-          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdoutBytes": 3640,
-          "stdoutSha256": "a106a3e2af11900c4cec5c1f6917e12877d178cfc2c0c48466f81fa2ac11eb77",
-          "wallMs": 183.536917
+          "wallMs": 130.3655
         },
         {
           "command": [
@@ -412,21 +409,19 @@
             "symbol",
             "formatted_once",
             "--root",
-            "/tmp/semctx-347-b06-measure-20261018-v4/workspace-1",
+            "/tmp/semctx-347-b06-measure-20261018-v5/workspace-1",
             "--json"
           ],
-          "descendantMaxRssBytes": 120406016,
-          "descendantSystemSeconds": 0.05158,
-          "descendantUserSeconds": 0.192687,
+          "descendantMaxRssBytes": 118996992,
+          "descendantSystemSeconds": 0.04434,
+          "descendantUserSeconds": 0.135186,
           "exitCode": 0,
           "matchedNodes": 1,
           "relations": 2,
           "sourceSha256": "c3b9e1bfa05d866a2d8f8297952fc78f5b5a8cdf28818d07b3f044a02f48d1af",
           "stderrBytes": 0,
-          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdoutBytes": 2029,
-          "stdoutSha256": "4f6ece7159a76c784e333a994f468045309a57eb54ba3cb74cb48a0dcbd1f0d2",
-          "wallMs": 181.8295
+          "wallMs": 129.930208
         },
         {
           "command": [
@@ -436,21 +431,19 @@
             "symbol",
             "identifier_start",
             "--root",
-            "/tmp/semctx-347-b06-measure-20261018-v4/workspace-1",
+            "/tmp/semctx-347-b06-measure-20261018-v5/workspace-1",
             "--json"
           ],
-          "descendantMaxRssBytes": 116211712,
-          "descendantSystemSeconds": 0.057770999999999996,
-          "descendantUserSeconds": 0.194037,
+          "descendantMaxRssBytes": 120766464,
+          "descendantSystemSeconds": 0.043482,
+          "descendantUserSeconds": 0.13588799999999998,
           "exitCode": 0,
           "matchedNodes": 1,
           "relations": 4,
           "sourceSha256": "c3b9e1bfa05d866a2d8f8297952fc78f5b5a8cdf28818d07b3f044a02f48d1af",
           "stderrBytes": 0,
-          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdoutBytes": 2254,
-          "stdoutSha256": "b4a0ab701bbbd30d6d5fedb3d0ac931837a143abd7b185b5b8f4fbaae6fab9ce",
-          "wallMs": 183.860375
+          "wallMs": 130.012
         },
         {
           "command": [
@@ -460,21 +453,19 @@
             "symbol",
             "BigEndian",
             "--root",
-            "/tmp/semctx-347-b06-measure-20261018-v4/workspace-1",
+            "/tmp/semctx-347-b06-measure-20261018-v5/workspace-1",
             "--json"
           ],
-          "descendantMaxRssBytes": 127139840,
-          "descendantSystemSeconds": 0.051885,
-          "descendantUserSeconds": 0.193149,
+          "descendantMaxRssBytes": 123322368,
+          "descendantSystemSeconds": 0.04122,
+          "descendantUserSeconds": 0.135079,
           "exitCode": 0,
           "matchedNodes": 31,
           "relations": 51,
           "sourceSha256": "c3b9e1bfa05d866a2d8f8297952fc78f5b5a8cdf28818d07b3f044a02f48d1af",
           "stderrBytes": 0,
-          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdoutBytes": 67765,
-          "stdoutSha256": "69b3a9ba59f2c5fd2474160a073904ce7d9935f897fc8486610763d5fedf502d",
-          "wallMs": 184.212792
+          "wallMs": 130.106416
         },
         {
           "command": [
@@ -484,21 +475,19 @@
             "symbol",
             "TokenStream",
             "--root",
-            "/tmp/semctx-347-b06-measure-20261018-v4/workspace-1",
+            "/tmp/semctx-347-b06-measure-20261018-v5/workspace-1",
             "--json"
           ],
-          "descendantMaxRssBytes": 124682240,
-          "descendantSystemSeconds": 0.050203,
-          "descendantUserSeconds": 0.191166,
+          "descendantMaxRssBytes": 121749504,
+          "descendantSystemSeconds": 0.037882,
+          "descendantUserSeconds": 0.133793,
           "exitCode": 0,
           "matchedNodes": 37,
           "relations": 57,
           "sourceSha256": "c3b9e1bfa05d866a2d8f8297952fc78f5b5a8cdf28818d07b3f044a02f48d1af",
           "stderrBytes": 0,
-          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdoutBytes": 64525,
-          "stdoutSha256": "3b7246e25436017ae7fa66cb38ea8a189a6bd1761b25cc3dcb5745198ea91f81",
-          "wallMs": 182.23325
+          "wallMs": 128.656708
         },
         {
           "command": [
@@ -508,21 +497,19 @@
             "symbol",
             "Buffer",
             "--root",
-            "/tmp/semctx-347-b06-measure-20261018-v4/workspace-1",
+            "/tmp/semctx-347-b06-measure-20261018-v5/workspace-1",
             "--json"
           ],
-          "descendantMaxRssBytes": 118013952,
-          "descendantSystemSeconds": 0.050406,
-          "descendantUserSeconds": 0.191832,
+          "descendantMaxRssBytes": 125583360,
+          "descendantSystemSeconds": 0.038378999999999996,
+          "descendantUserSeconds": 0.136159,
           "exitCode": 0,
           "matchedNodes": 19,
           "relations": 21,
           "sourceSha256": "c3b9e1bfa05d866a2d8f8297952fc78f5b5a8cdf28818d07b3f044a02f48d1af",
           "stderrBytes": 0,
-          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdoutBytes": 35394,
-          "stdoutSha256": "2d343bdc81dea0bfea257d084891f99af7c8abf85c7d495726ff8be7a14a717b",
-          "wallMs": 182.868292
+          "wallMs": 131.078
         },
         {
           "command": [
@@ -532,21 +519,19 @@
             "symbol",
             "OnceCell",
             "--root",
-            "/tmp/semctx-347-b06-measure-20261018-v4/workspace-1",
+            "/tmp/semctx-347-b06-measure-20261018-v5/workspace-1",
             "--json"
           ],
-          "descendantMaxRssBytes": 122241024,
-          "descendantSystemSeconds": 0.051699999999999996,
-          "descendantUserSeconds": 0.19208999999999998,
+          "descendantMaxRssBytes": 122191872,
+          "descendantSystemSeconds": 0.052729,
+          "descendantUserSeconds": 0.14085,
           "exitCode": 0,
           "matchedNodes": 27,
           "relations": 71,
           "sourceSha256": "c3b9e1bfa05d866a2d8f8297952fc78f5b5a8cdf28818d07b3f044a02f48d1af",
           "stderrBytes": 0,
-          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdoutBytes": 73274,
-          "stdoutSha256": "e5c76ad66cc7a7af6c7f2ecf879c936dad894a9a5ad8400533e359d2cb32478a",
-          "wallMs": 183.046584
+          "wallMs": 134.89325
         },
         {
           "command": [
@@ -556,21 +541,19 @@
             "symbol",
             "is_xid_start",
             "--root",
-            "/tmp/semctx-347-b06-measure-20261018-v4/workspace-1",
+            "/tmp/semctx-347-b06-measure-20261018-v5/workspace-1",
             "--json"
           ],
-          "descendantMaxRssBytes": 117882880,
-          "descendantSystemSeconds": 0.144065,
-          "descendantUserSeconds": 0.19321,
+          "descendantMaxRssBytes": 122961920,
+          "descendantSystemSeconds": 0.037766,
+          "descendantUserSeconds": 0.133626,
           "exitCode": 0,
           "matchedNodes": 1,
           "relations": 3,
           "sourceSha256": "c3b9e1bfa05d866a2d8f8297952fc78f5b5a8cdf28818d07b3f044a02f48d1af",
           "stderrBytes": 0,
-          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdoutBytes": 2739,
-          "stdoutSha256": "2fe283ec64eae99d7bf5f0996435540d1b974c37ef0ba2e48d82fc6ce617b740",
-          "wallMs": 191.289917
+          "wallMs": 129.384708
         },
         {
           "command": [
@@ -580,21 +563,19 @@
             "symbol",
             "read_u32",
             "--root",
-            "/tmp/semctx-347-b06-measure-20261018-v4/workspace-1",
+            "/tmp/semctx-347-b06-measure-20261018-v5/workspace-1",
             "--json"
           ],
-          "descendantMaxRssBytes": 118554624,
-          "descendantSystemSeconds": 0.060011999999999996,
-          "descendantUserSeconds": 0.19300599999999998,
+          "descendantMaxRssBytes": 119898112,
+          "descendantSystemSeconds": 0.037092,
+          "descendantUserSeconds": 0.136691,
           "exitCode": 0,
           "matchedNodes": 6,
           "relations": 16,
           "sourceSha256": "c3b9e1bfa05d866a2d8f8297952fc78f5b5a8cdf28818d07b3f044a02f48d1af",
           "stderrBytes": 0,
-          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdoutBytes": 15419,
-          "stdoutSha256": "15b3cf799afab5e12e4ab8dce4c8ef654636e92197aa355882db16d7f2a5171c",
-          "wallMs": 183.066084
+          "wallMs": 129.548417
         },
         {
           "command": [
@@ -604,21 +585,19 @@
             "symbol",
             "from_str",
             "--root",
-            "/tmp/semctx-347-b06-measure-20261018-v4/workspace-1",
+            "/tmp/semctx-347-b06-measure-20261018-v5/workspace-1",
             "--json"
           ],
-          "descendantMaxRssBytes": 121503744,
-          "descendantSystemSeconds": 0.051384,
-          "descendantUserSeconds": 0.19408899999999998,
+          "descendantMaxRssBytes": 122994688,
+          "descendantSystemSeconds": 0.046814999999999996,
+          "descendantUserSeconds": 0.139867,
           "exitCode": 0,
           "matchedNodes": 3,
           "relations": 11,
           "sourceSha256": "c3b9e1bfa05d866a2d8f8297952fc78f5b5a8cdf28818d07b3f044a02f48d1af",
           "stderrBytes": 0,
-          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdoutBytes": 7488,
-          "stdoutSha256": "00f2550a8f73d763867fbb4b52143762288d7409cb8823b15dffce12eafd89bd",
-          "wallMs": 183.848416
+          "wallMs": 132.299375
         }
       ],
       "repetition": 1,
@@ -629,12 +608,12 @@
             "/Users/sebastien/.herdr/worktrees/semctx/issue-347-rust-indexing/apps/cli/src/index.ts",
             "index",
             "--root",
-            "/tmp/semctx-347-b06-measure-20261018-v4/workspace-1",
+            "/tmp/semctx-347-b06-measure-20261018-v5/workspace-1",
             "--json"
           ],
-          "descendantMaxRssBytes": 594427904,
-          "descendantSystemSeconds": 2.147088,
-          "descendantUserSeconds": 9.104661,
+          "descendantMaxRssBytes": 613892096,
+          "descendantSystemSeconds": 1.456005,
+          "descendantUserSeconds": 6.049628,
           "exitCode": 0,
           "graph": {
             "edges": 1087,
@@ -664,14 +643,12 @@
               "PRODUCER_FAILED",
               "NEGATIVE_COMPLETENESS_MISSING"
             ],
-            "sidecarDigest": "sha256:f7c90ce6c9bd64ccc4643f2a6403edefbdc2bc68faa94fffbf55e28787174800"
+            "sidecarDigest": "sha256:ef394284d8e40707219b7ca6d09dba1c756a397a7105b5d76462f50c5be80f27"
           },
           "sourceSha256": "80352a6de2487537c1479c24e99491ca62c0db9f42cbd028312743a634e38843",
           "stderrBytes": 0,
-          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdoutBytes": 2211,
-          "stdoutSha256": "9140982bc88bbcc8bd22a1a7ae892ee0d567190731db4fea2d68a5ef5465443f",
-          "wallMs": 6498.332208
+          "wallMs": 4122.208083
         },
         "cold": {
           "command": [
@@ -679,12 +656,12 @@
             "/Users/sebastien/.herdr/worktrees/semctx/issue-347-rust-indexing/apps/cli/src/index.ts",
             "index",
             "--root",
-            "/tmp/semctx-347-b06-measure-20261018-v4/workspace-1",
+            "/tmp/semctx-347-b06-measure-20261018-v5/workspace-1",
             "--json"
           ],
-          "descendantMaxRssBytes": 668893184,
-          "descendantSystemSeconds": 2.148057,
-          "descendantUserSeconds": 9.43995,
+          "descendantMaxRssBytes": 702922752,
+          "descendantSystemSeconds": 1.515321,
+          "descendantUserSeconds": 6.96309,
           "exitCode": 0,
           "graph": {
             "edges": 1082,
@@ -712,14 +689,12 @@
               "PRODUCER_FAILED",
               "NEGATIVE_COMPLETENESS_MISSING"
             ],
-            "sidecarDigest": "sha256:58d3ab707d23b861e8d7db62f8e38f940fd4c595da7a47352f5620bea7706335"
+            "sidecarDigest": "sha256:0386b703eeb04f921cc0d50e1778ce77db3b84447e488e76fbf76f88eb0a587c"
           },
           "sourceSha256": "f4c53e41c6eee7276a09a49d09cf158c5e4093b229fd7b1234514545b86bce80",
           "stderrBytes": 0,
-          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdoutBytes": 2211,
-          "stdoutSha256": "359fbb5628b54dcc4db74e5223511aefdd1e87db737d56182542e73b92c7e57f",
-          "wallMs": 5858.71875
+          "wallMs": 4174.648459
         },
         "delete": {
           "command": [
@@ -727,12 +702,12 @@
             "/Users/sebastien/.herdr/worktrees/semctx/issue-347-rust-indexing/apps/cli/src/index.ts",
             "index",
             "--root",
-            "/tmp/semctx-347-b06-measure-20261018-v4/workspace-1",
+            "/tmp/semctx-347-b06-measure-20261018-v5/workspace-1",
             "--json"
           ],
-          "descendantMaxRssBytes": 601653248,
-          "descendantSystemSeconds": 2.145226,
-          "descendantUserSeconds": 9.936748,
+          "descendantMaxRssBytes": 612466688,
+          "descendantSystemSeconds": 1.444742,
+          "descendantUserSeconds": 6.8965,
           "exitCode": 0,
           "graph": {
             "edges": 1083,
@@ -762,14 +737,12 @@
               "PRODUCER_FAILED",
               "NEGATIVE_COMPLETENESS_MISSING"
             ],
-            "sidecarDigest": "sha256:40821dda36bf6cfd579ec789c3d27fe0a13a9b5d4bb733a8cd890837e131ef82"
+            "sidecarDigest": "sha256:a212b00a8497d3b37ee33e779af4d3f091a886b76601b4e4d39ff3814c19f83c"
           },
           "sourceSha256": "c3b9e1bfa05d866a2d8f8297952fc78f5b5a8cdf28818d07b3f044a02f48d1af",
           "stderrBytes": 0,
-          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdoutBytes": 2211,
-          "stdoutSha256": "1f501e2dd8333682cb905fd3c5fe2d163c90c7756d833686ff82d8358c82d528",
-          "wallMs": 5935.337291
+          "wallMs": 4127.715625
         },
         "edit": {
           "command": [
@@ -777,12 +750,12 @@
             "/Users/sebastien/.herdr/worktrees/semctx/issue-347-rust-indexing/apps/cli/src/index.ts",
             "index",
             "--root",
-            "/tmp/semctx-347-b06-measure-20261018-v4/workspace-1",
+            "/tmp/semctx-347-b06-measure-20261018-v5/workspace-1",
             "--json"
           ],
-          "descendantMaxRssBytes": 607027200,
-          "descendantSystemSeconds": 2.096784,
-          "descendantUserSeconds": 10.019105,
+          "descendantMaxRssBytes": 679641088,
+          "descendantSystemSeconds": 1.418105,
+          "descendantUserSeconds": 6.532771,
           "exitCode": 0,
           "graph": {
             "edges": 1083,
@@ -812,14 +785,12 @@
               "PRODUCER_FAILED",
               "NEGATIVE_COMPLETENESS_MISSING"
             ],
-            "sidecarDigest": "sha256:40821dda36bf6cfd579ec789c3d27fe0a13a9b5d4bb733a8cd890837e131ef82"
+            "sidecarDigest": "sha256:a212b00a8497d3b37ee33e779af4d3f091a886b76601b4e4d39ff3814c19f83c"
           },
           "sourceSha256": "c3b9e1bfa05d866a2d8f8297952fc78f5b5a8cdf28818d07b3f044a02f48d1af",
           "stderrBytes": 0,
-          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdoutBytes": 2211,
-          "stdoutSha256": "7a2725caef3982f8632819e520a24f8fc8f7f3378d8e7327cac0e9b8535ea0ec",
-          "wallMs": 6152.817125
+          "wallMs": 4112.450708
         },
         "stable": {
           "command": [
@@ -827,12 +798,12 @@
             "/Users/sebastien/.herdr/worktrees/semctx/issue-347-rust-indexing/apps/cli/src/index.ts",
             "index",
             "--root",
-            "/tmp/semctx-347-b06-measure-20261018-v4/workspace-1",
+            "/tmp/semctx-347-b06-measure-20261018-v5/workspace-1",
             "--json"
           ],
-          "descendantMaxRssBytes": 616775680,
-          "descendantSystemSeconds": 2.038266,
-          "descendantUserSeconds": 8.845512,
+          "descendantMaxRssBytes": 633503744,
+          "descendantSystemSeconds": 1.4297929999999999,
+          "descendantUserSeconds": 6.729407,
           "exitCode": 0,
           "graph": {
             "edges": 1082,
@@ -860,17 +831,15 @@
               "PRODUCER_FAILED",
               "NEGATIVE_COMPLETENESS_MISSING"
             ],
-            "sidecarDigest": "sha256:58d3ab707d23b861e8d7db62f8e38f940fd4c595da7a47352f5620bea7706335"
+            "sidecarDigest": "sha256:0386b703eeb04f921cc0d50e1778ce77db3b84447e488e76fbf76f88eb0a587c"
           },
           "sourceSha256": "f4c53e41c6eee7276a09a49d09cf158c5e4093b229fd7b1234514545b86bce80",
           "stderrBytes": 0,
-          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdoutBytes": 2211,
-          "stdoutSha256": "c7366f4b1970b0bba4914e5df2f0a0ffcb6fa86c4c45609fc3a2eae806d08217",
-          "wallMs": 5868.771916
+          "wallMs": 4103.952833
         }
       },
-      "workspace": "/tmp/semctx-347-b06-measure-20261018-v4/workspace-1"
+      "workspace": "/tmp/semctx-347-b06-measure-20261018-v5/workspace-1"
     },
     {
       "queries": [
@@ -882,21 +851,19 @@
             "symbol",
             "decode_and_count",
             "--root",
-            "/tmp/semctx-347-b06-measure-20261018-v4/workspace-2",
+            "/tmp/semctx-347-b06-measure-20261018-v5/workspace-2",
             "--json"
           ],
-          "descendantMaxRssBytes": 113262592,
-          "descendantSystemSeconds": 0.067309,
-          "descendantUserSeconds": 0.25704,
+          "descendantMaxRssBytes": 119128064,
+          "descendantSystemSeconds": 0.041278999999999996,
+          "descendantUserSeconds": 0.136347,
           "exitCode": 0,
           "matchedNodes": 1,
           "relations": 8,
           "sourceSha256": "c3b9e1bfa05d866a2d8f8297952fc78f5b5a8cdf28818d07b3f044a02f48d1af",
           "stderrBytes": 0,
-          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdoutBytes": 3640,
-          "stdoutSha256": "a106a3e2af11900c4cec5c1f6917e12877d178cfc2c0c48466f81fa2ac11eb77",
-          "wallMs": 241.128042
+          "wallMs": 130.542041
         },
         {
           "command": [
@@ -906,21 +873,19 @@
             "symbol",
             "formatted_once",
             "--root",
-            "/tmp/semctx-347-b06-measure-20261018-v4/workspace-2",
+            "/tmp/semctx-347-b06-measure-20261018-v5/workspace-2",
             "--json"
           ],
-          "descendantMaxRssBytes": 115310592,
-          "descendantSystemSeconds": 0.062467999999999996,
-          "descendantUserSeconds": 0.22838,
+          "descendantMaxRssBytes": 117522432,
+          "descendantSystemSeconds": 0.038493,
+          "descendantUserSeconds": 0.135618,
           "exitCode": 0,
           "matchedNodes": 1,
           "relations": 2,
           "sourceSha256": "c3b9e1bfa05d866a2d8f8297952fc78f5b5a8cdf28818d07b3f044a02f48d1af",
           "stderrBytes": 0,
-          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdoutBytes": 2029,
-          "stdoutSha256": "4f6ece7159a76c784e333a994f468045309a57eb54ba3cb74cb48a0dcbd1f0d2",
-          "wallMs": 214.237208
+          "wallMs": 129.363166
         },
         {
           "command": [
@@ -930,21 +895,19 @@
             "symbol",
             "identifier_start",
             "--root",
-            "/tmp/semctx-347-b06-measure-20261018-v4/workspace-2",
+            "/tmp/semctx-347-b06-measure-20261018-v5/workspace-2",
             "--json"
           ],
-          "descendantMaxRssBytes": 123191296,
-          "descendantSystemSeconds": 0.06253,
-          "descendantUserSeconds": 0.26752,
+          "descendantMaxRssBytes": 122093568,
+          "descendantSystemSeconds": 0.041089,
+          "descendantUserSeconds": 0.135346,
           "exitCode": 0,
           "matchedNodes": 1,
           "relations": 4,
           "sourceSha256": "c3b9e1bfa05d866a2d8f8297952fc78f5b5a8cdf28818d07b3f044a02f48d1af",
           "stderrBytes": 0,
-          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdoutBytes": 2254,
-          "stdoutSha256": "b4a0ab701bbbd30d6d5fedb3d0ac931837a143abd7b185b5b8f4fbaae6fab9ce",
-          "wallMs": 253.103917
+          "wallMs": 129.135
         },
         {
           "command": [
@@ -954,21 +917,19 @@
             "symbol",
             "BigEndian",
             "--root",
-            "/tmp/semctx-347-b06-measure-20261018-v4/workspace-2",
+            "/tmp/semctx-347-b06-measure-20261018-v5/workspace-2",
             "--json"
           ],
-          "descendantMaxRssBytes": 118915072,
-          "descendantSystemSeconds": 0.06487799999999999,
-          "descendantUserSeconds": 0.232596,
+          "descendantMaxRssBytes": 124289024,
+          "descendantSystemSeconds": 0.047757999999999995,
+          "descendantUserSeconds": 0.135348,
           "exitCode": 0,
           "matchedNodes": 31,
           "relations": 51,
           "sourceSha256": "c3b9e1bfa05d866a2d8f8297952fc78f5b5a8cdf28818d07b3f044a02f48d1af",
           "stderrBytes": 0,
-          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdoutBytes": 67765,
-          "stdoutSha256": "69b3a9ba59f2c5fd2474160a073904ce7d9935f897fc8486610763d5fedf502d",
-          "wallMs": 219.366042
+          "wallMs": 129.944
         },
         {
           "command": [
@@ -978,21 +939,19 @@
             "symbol",
             "TokenStream",
             "--root",
-            "/tmp/semctx-347-b06-measure-20261018-v4/workspace-2",
+            "/tmp/semctx-347-b06-measure-20261018-v5/workspace-2",
             "--json"
           ],
-          "descendantMaxRssBytes": 117915648,
-          "descendantSystemSeconds": 0.064896,
-          "descendantUserSeconds": 0.23882199999999998,
+          "descendantMaxRssBytes": 116572160,
+          "descendantSystemSeconds": 0.038345,
+          "descendantUserSeconds": 0.134332,
           "exitCode": 0,
           "matchedNodes": 37,
           "relations": 57,
           "sourceSha256": "c3b9e1bfa05d866a2d8f8297952fc78f5b5a8cdf28818d07b3f044a02f48d1af",
           "stderrBytes": 0,
-          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdoutBytes": 64525,
-          "stdoutSha256": "3b7246e25436017ae7fa66cb38ea8a189a6bd1761b25cc3dcb5745198ea91f81",
-          "wallMs": 228.433542
+          "wallMs": 127.561167
         },
         {
           "command": [
@@ -1002,21 +961,19 @@
             "symbol",
             "Buffer",
             "--root",
-            "/tmp/semctx-347-b06-measure-20261018-v4/workspace-2",
+            "/tmp/semctx-347-b06-measure-20261018-v5/workspace-2",
             "--json"
           ],
-          "descendantMaxRssBytes": 120553472,
-          "descendantSystemSeconds": 0.066103,
-          "descendantUserSeconds": 0.2072,
+          "descendantMaxRssBytes": 118980608,
+          "descendantSystemSeconds": 0.040861,
+          "descendantUserSeconds": 0.135376,
           "exitCode": 0,
           "matchedNodes": 19,
           "relations": 21,
           "sourceSha256": "c3b9e1bfa05d866a2d8f8297952fc78f5b5a8cdf28818d07b3f044a02f48d1af",
           "stderrBytes": 0,
-          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdoutBytes": 35394,
-          "stdoutSha256": "2d343bdc81dea0bfea257d084891f99af7c8abf85c7d495726ff8be7a14a717b",
-          "wallMs": 204.134333
+          "wallMs": 129.032208
         },
         {
           "command": [
@@ -1026,21 +983,19 @@
             "symbol",
             "OnceCell",
             "--root",
-            "/tmp/semctx-347-b06-measure-20261018-v4/workspace-2",
+            "/tmp/semctx-347-b06-measure-20261018-v5/workspace-2",
             "--json"
           ],
-          "descendantMaxRssBytes": 120963072,
-          "descendantSystemSeconds": 0.062955,
-          "descendantUserSeconds": 0.20349299999999998,
+          "descendantMaxRssBytes": 123617280,
+          "descendantSystemSeconds": 0.049312999999999996,
+          "descendantUserSeconds": 0.13538999999999998,
           "exitCode": 0,
           "matchedNodes": 27,
           "relations": 71,
           "sourceSha256": "c3b9e1bfa05d866a2d8f8297952fc78f5b5a8cdf28818d07b3f044a02f48d1af",
           "stderrBytes": 0,
-          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdoutBytes": 73274,
-          "stdoutSha256": "e5c76ad66cc7a7af6c7f2ecf879c936dad894a9a5ad8400533e359d2cb32478a",
-          "wallMs": 192.874334
+          "wallMs": 131.232125
         },
         {
           "command": [
@@ -1050,21 +1005,19 @@
             "symbol",
             "is_xid_start",
             "--root",
-            "/tmp/semctx-347-b06-measure-20261018-v4/workspace-2",
+            "/tmp/semctx-347-b06-measure-20261018-v5/workspace-2",
             "--json"
           ],
-          "descendantMaxRssBytes": 122028032,
-          "descendantSystemSeconds": 0.072906,
-          "descendantUserSeconds": 0.206837,
+          "descendantMaxRssBytes": 119193600,
+          "descendantSystemSeconds": 0.036934,
+          "descendantUserSeconds": 0.132515,
           "exitCode": 0,
           "matchedNodes": 1,
           "relations": 3,
           "sourceSha256": "c3b9e1bfa05d866a2d8f8297952fc78f5b5a8cdf28818d07b3f044a02f48d1af",
           "stderrBytes": 0,
-          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdoutBytes": 2739,
-          "stdoutSha256": "2fe283ec64eae99d7bf5f0996435540d1b974c37ef0ba2e48d82fc6ce617b740",
-          "wallMs": 196.218375
+          "wallMs": 127.756042
         },
         {
           "command": [
@@ -1074,21 +1027,19 @@
             "symbol",
             "read_u32",
             "--root",
-            "/tmp/semctx-347-b06-measure-20261018-v4/workspace-2",
+            "/tmp/semctx-347-b06-measure-20261018-v5/workspace-2",
             "--json"
           ],
-          "descendantMaxRssBytes": 126156800,
-          "descendantSystemSeconds": 0.15908799999999998,
-          "descendantUserSeconds": 0.206194,
+          "descendantMaxRssBytes": 122978304,
+          "descendantSystemSeconds": 0.037482,
+          "descendantUserSeconds": 0.137107,
           "exitCode": 0,
           "matchedNodes": 6,
           "relations": 16,
           "sourceSha256": "c3b9e1bfa05d866a2d8f8297952fc78f5b5a8cdf28818d07b3f044a02f48d1af",
           "stderrBytes": 0,
-          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdoutBytes": 15419,
-          "stdoutSha256": "15b3cf799afab5e12e4ab8dce4c8ef654636e92197aa355882db16d7f2a5171c",
-          "wallMs": 202.988459
+          "wallMs": 130.855709
         },
         {
           "command": [
@@ -1098,21 +1049,19 @@
             "symbol",
             "from_str",
             "--root",
-            "/tmp/semctx-347-b06-measure-20261018-v4/workspace-2",
+            "/tmp/semctx-347-b06-measure-20261018-v5/workspace-2",
             "--json"
           ],
-          "descendantMaxRssBytes": 122699776,
-          "descendantSystemSeconds": 0.17748699999999998,
-          "descendantUserSeconds": 0.20318699999999998,
+          "descendantMaxRssBytes": 118636544,
+          "descendantSystemSeconds": 0.15942699999999999,
+          "descendantUserSeconds": 0.134676,
           "exitCode": 0,
           "matchedNodes": 3,
           "relations": 11,
           "sourceSha256": "c3b9e1bfa05d866a2d8f8297952fc78f5b5a8cdf28818d07b3f044a02f48d1af",
           "stderrBytes": 0,
-          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdoutBytes": 7488,
-          "stdoutSha256": "00f2550a8f73d763867fbb4b52143762288d7409cb8823b15dffce12eafd89bd",
-          "wallMs": 200.48225
+          "wallMs": 136.316
         }
       ],
       "repetition": 2,
@@ -1123,12 +1072,12 @@
             "/Users/sebastien/.herdr/worktrees/semctx/issue-347-rust-indexing/apps/cli/src/index.ts",
             "index",
             "--root",
-            "/tmp/semctx-347-b06-measure-20261018-v4/workspace-2",
+            "/tmp/semctx-347-b06-measure-20261018-v5/workspace-2",
             "--json"
           ],
-          "descendantMaxRssBytes": 603766784,
-          "descendantSystemSeconds": 2.740274,
-          "descendantUserSeconds": 11.261237,
+          "descendantMaxRssBytes": 680378368,
+          "descendantSystemSeconds": 1.483003,
+          "descendantUserSeconds": 6.861689,
           "exitCode": 0,
           "graph": {
             "edges": 1087,
@@ -1158,14 +1107,12 @@
               "PRODUCER_FAILED",
               "NEGATIVE_COMPLETENESS_MISSING"
             ],
-            "sidecarDigest": "sha256:467620af97db6e177c71f62e11cb1b8051e811db1ed57dbc4a50b43307c77317"
+            "sidecarDigest": "sha256:2701ca8833703c12ffad903416a9950d713cc0dab670504f7cac6e5f82419851"
           },
           "sourceSha256": "80352a6de2487537c1479c24e99491ca62c0db9f42cbd028312743a634e38843",
           "stderrBytes": 0,
-          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdoutBytes": 2211,
-          "stdoutSha256": "94828c5f68ef314cd1c50cae4aa565bddf62030727feffa59966e852a9661768",
-          "wallMs": 8707.07225
+          "wallMs": 4253.612542
         },
         "cold": {
           "command": [
@@ -1173,12 +1120,12 @@
             "/Users/sebastien/.herdr/worktrees/semctx/issue-347-rust-indexing/apps/cli/src/index.ts",
             "index",
             "--root",
-            "/tmp/semctx-347-b06-measure-20261018-v4/workspace-2",
+            "/tmp/semctx-347-b06-measure-20261018-v5/workspace-2",
             "--json"
           ],
-          "descendantMaxRssBytes": 627064832,
-          "descendantSystemSeconds": 2.389457,
-          "descendantUserSeconds": 9.03908,
+          "descendantMaxRssBytes": 667500544,
+          "descendantSystemSeconds": 1.435692,
+          "descendantUserSeconds": 6.279454,
           "exitCode": 0,
           "graph": {
             "edges": 1082,
@@ -1206,14 +1153,12 @@
               "PRODUCER_FAILED",
               "NEGATIVE_COMPLETENESS_MISSING"
             ],
-            "sidecarDigest": "sha256:8f63283225d94efd7c406301ca8cf3260983f0f917781123b44942ef944d95a5"
+            "sidecarDigest": "sha256:b08590e4ea76f73ef4acf6224dc456b1154e92e4e712a6d054c6a95030e60ba0"
           },
           "sourceSha256": "f4c53e41c6eee7276a09a49d09cf158c5e4093b229fd7b1234514545b86bce80",
           "stderrBytes": 0,
-          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdoutBytes": 2211,
-          "stdoutSha256": "95d8ddba80ba26446e8e9d273c379dae8d74fa6cfc71545fe8ad05f5e27cb20c",
-          "wallMs": 7522.945417
+          "wallMs": 4084.593708
         },
         "delete": {
           "command": [
@@ -1221,12 +1166,12 @@
             "/Users/sebastien/.herdr/worktrees/semctx/issue-347-rust-indexing/apps/cli/src/index.ts",
             "index",
             "--root",
-            "/tmp/semctx-347-b06-measure-20261018-v4/workspace-2",
+            "/tmp/semctx-347-b06-measure-20261018-v5/workspace-2",
             "--json"
           ],
-          "descendantMaxRssBytes": 597295104,
-          "descendantSystemSeconds": 2.503853,
-          "descendantUserSeconds": 10.641596,
+          "descendantMaxRssBytes": 640008192,
+          "descendantSystemSeconds": 1.4323839999999999,
+          "descendantUserSeconds": 6.496363,
           "exitCode": 0,
           "graph": {
             "edges": 1083,
@@ -1256,14 +1201,12 @@
               "PRODUCER_FAILED",
               "NEGATIVE_COMPLETENESS_MISSING"
             ],
-            "sidecarDigest": "sha256:81ddda7e80d9adb79f97d0def0e3b844b0e590bdef77230d54feb24b8792c476"
+            "sidecarDigest": "sha256:1d2ebb1b5cd0a96f95cd893e5252a0b00da3fbe124b09aefcd07d0cbb5a08abc"
           },
           "sourceSha256": "c3b9e1bfa05d866a2d8f8297952fc78f5b5a8cdf28818d07b3f044a02f48d1af",
           "stderrBytes": 0,
-          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdoutBytes": 2211,
-          "stdoutSha256": "0f737d3ffcf17bce75d4cfd3352514095f40b618d2d26b3a5773eaa3f12799b0",
-          "wallMs": 7571.621333
+          "wallMs": 4090.665208
         },
         "edit": {
           "command": [
@@ -1271,12 +1214,12 @@
             "/Users/sebastien/.herdr/worktrees/semctx/issue-347-rust-indexing/apps/cli/src/index.ts",
             "index",
             "--root",
-            "/tmp/semctx-347-b06-measure-20261018-v4/workspace-2",
+            "/tmp/semctx-347-b06-measure-20261018-v5/workspace-2",
             "--json"
           ],
-          "descendantMaxRssBytes": 610844672,
-          "descendantSystemSeconds": 2.683943,
-          "descendantUserSeconds": 10.290609,
+          "descendantMaxRssBytes": 611778560,
+          "descendantSystemSeconds": 1.436596,
+          "descendantUserSeconds": 6.390799,
           "exitCode": 0,
           "graph": {
             "edges": 1083,
@@ -1306,14 +1249,12 @@
               "PRODUCER_FAILED",
               "NEGATIVE_COMPLETENESS_MISSING"
             ],
-            "sidecarDigest": "sha256:81ddda7e80d9adb79f97d0def0e3b844b0e590bdef77230d54feb24b8792c476"
+            "sidecarDigest": "sha256:1d2ebb1b5cd0a96f95cd893e5252a0b00da3fbe124b09aefcd07d0cbb5a08abc"
           },
           "sourceSha256": "c3b9e1bfa05d866a2d8f8297952fc78f5b5a8cdf28818d07b3f044a02f48d1af",
           "stderrBytes": 0,
-          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdoutBytes": 2211,
-          "stdoutSha256": "b3d5c908750df2d58cc1e97514c6a86a1de54630f71a41322a955f900cd85ab6",
-          "wallMs": 9315.873209
+          "wallMs": 4103.466166
         },
         "stable": {
           "command": [
@@ -1321,12 +1262,12 @@
             "/Users/sebastien/.herdr/worktrees/semctx/issue-347-rust-indexing/apps/cli/src/index.ts",
             "index",
             "--root",
-            "/tmp/semctx-347-b06-measure-20261018-v4/workspace-2",
+            "/tmp/semctx-347-b06-measure-20261018-v5/workspace-2",
             "--json"
           ],
-          "descendantMaxRssBytes": 634486784,
-          "descendantSystemSeconds": 2.653526,
-          "descendantUserSeconds": 10.555871,
+          "descendantMaxRssBytes": 600375296,
+          "descendantSystemSeconds": 1.420517,
+          "descendantUserSeconds": 6.936298,
           "exitCode": 0,
           "graph": {
             "edges": 1082,
@@ -1354,17 +1295,15 @@
               "PRODUCER_FAILED",
               "NEGATIVE_COMPLETENESS_MISSING"
             ],
-            "sidecarDigest": "sha256:8f63283225d94efd7c406301ca8cf3260983f0f917781123b44942ef944d95a5"
+            "sidecarDigest": "sha256:b08590e4ea76f73ef4acf6224dc456b1154e92e4e712a6d054c6a95030e60ba0"
           },
           "sourceSha256": "f4c53e41c6eee7276a09a49d09cf158c5e4093b229fd7b1234514545b86bce80",
           "stderrBytes": 0,
-          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdoutBytes": 2211,
-          "stdoutSha256": "b99ab47ea6490dd7abd7adf5f8d6e63da9d6bd464fb71eb812fa0b88abfd8295",
-          "wallMs": 7958.135083
+          "wallMs": 4134.413625
         }
       },
-      "workspace": "/tmp/semctx-347-b06-measure-20261018-v4/workspace-2"
+      "workspace": "/tmp/semctx-347-b06-measure-20261018-v5/workspace-2"
     },
     {
       "queries": [
@@ -1376,21 +1315,19 @@
             "symbol",
             "decode_and_count",
             "--root",
-            "/tmp/semctx-347-b06-measure-20261018-v4/workspace-3",
+            "/tmp/semctx-347-b06-measure-20261018-v5/workspace-3",
             "--json"
           ],
-          "descendantMaxRssBytes": 125681664,
-          "descendantSystemSeconds": 0.25615,
-          "descendantUserSeconds": 0.203183,
+          "descendantMaxRssBytes": 119734272,
+          "descendantSystemSeconds": 0.09472,
+          "descendantUserSeconds": 0.136243,
           "exitCode": 0,
           "matchedNodes": 1,
           "relations": 8,
           "sourceSha256": "c3b9e1bfa05d866a2d8f8297952fc78f5b5a8cdf28818d07b3f044a02f48d1af",
           "stderrBytes": 0,
-          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdoutBytes": 3640,
-          "stdoutSha256": "a106a3e2af11900c4cec5c1f6917e12877d178cfc2c0c48466f81fa2ac11eb77",
-          "wallMs": 210.801709
+          "wallMs": 132.860917
         },
         {
           "command": [
@@ -1400,21 +1337,19 @@
             "symbol",
             "formatted_once",
             "--root",
-            "/tmp/semctx-347-b06-measure-20261018-v4/workspace-3",
+            "/tmp/semctx-347-b06-measure-20261018-v5/workspace-3",
             "--json"
           ],
-          "descendantMaxRssBytes": 121683968,
-          "descendantSystemSeconds": 0.191655,
-          "descendantUserSeconds": 0.203343,
+          "descendantMaxRssBytes": 123928576,
+          "descendantSystemSeconds": 0.046507,
+          "descendantUserSeconds": 0.134926,
           "exitCode": 0,
           "matchedNodes": 1,
           "relations": 2,
           "sourceSha256": "c3b9e1bfa05d866a2d8f8297952fc78f5b5a8cdf28818d07b3f044a02f48d1af",
           "stderrBytes": 0,
-          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdoutBytes": 2029,
-          "stdoutSha256": "4f6ece7159a76c784e333a994f468045309a57eb54ba3cb74cb48a0dcbd1f0d2",
-          "wallMs": 202.093125
+          "wallMs": 130.231542
         },
         {
           "command": [
@@ -1424,21 +1359,19 @@
             "symbol",
             "identifier_start",
             "--root",
-            "/tmp/semctx-347-b06-measure-20261018-v4/workspace-3",
+            "/tmp/semctx-347-b06-measure-20261018-v5/workspace-3",
             "--json"
           ],
-          "descendantMaxRssBytes": 118767616,
-          "descendantSystemSeconds": 0.17149799999999998,
-          "descendantUserSeconds": 0.20577299999999998,
+          "descendantMaxRssBytes": 121503744,
+          "descendantSystemSeconds": 0.040480999999999996,
+          "descendantUserSeconds": 0.135956,
           "exitCode": 0,
           "matchedNodes": 1,
           "relations": 4,
           "sourceSha256": "c3b9e1bfa05d866a2d8f8297952fc78f5b5a8cdf28818d07b3f044a02f48d1af",
           "stderrBytes": 0,
-          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdoutBytes": 2254,
-          "stdoutSha256": "b4a0ab701bbbd30d6d5fedb3d0ac931837a143abd7b185b5b8f4fbaae6fab9ce",
-          "wallMs": 207.381875
+          "wallMs": 129.804875
         },
         {
           "command": [
@@ -1448,21 +1381,19 @@
             "symbol",
             "BigEndian",
             "--root",
-            "/tmp/semctx-347-b06-measure-20261018-v4/workspace-3",
+            "/tmp/semctx-347-b06-measure-20261018-v5/workspace-3",
             "--json"
           ],
-          "descendantMaxRssBytes": 119635968,
-          "descendantSystemSeconds": 0.105519,
-          "descendantUserSeconds": 0.207835,
+          "descendantMaxRssBytes": 120684544,
+          "descendantSystemSeconds": 0.037677999999999996,
+          "descendantUserSeconds": 0.13513,
           "exitCode": 0,
           "matchedNodes": 31,
           "relations": 51,
           "sourceSha256": "c3b9e1bfa05d866a2d8f8297952fc78f5b5a8cdf28818d07b3f044a02f48d1af",
           "stderrBytes": 0,
-          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdoutBytes": 67765,
-          "stdoutSha256": "69b3a9ba59f2c5fd2474160a073904ce7d9935f897fc8486610763d5fedf502d",
-          "wallMs": 203.387916
+          "wallMs": 129.417959
         },
         {
           "command": [
@@ -1472,21 +1403,19 @@
             "symbol",
             "TokenStream",
             "--root",
-            "/tmp/semctx-347-b06-measure-20261018-v4/workspace-3",
+            "/tmp/semctx-347-b06-measure-20261018-v5/workspace-3",
             "--json"
           ],
-          "descendantMaxRssBytes": 121241600,
-          "descendantSystemSeconds": 0.20213,
-          "descendantUserSeconds": 0.20224399999999998,
+          "descendantMaxRssBytes": 119865344,
+          "descendantSystemSeconds": 0.043302,
+          "descendantUserSeconds": 0.135132,
           "exitCode": 0,
           "matchedNodes": 37,
           "relations": 57,
           "sourceSha256": "c3b9e1bfa05d866a2d8f8297952fc78f5b5a8cdf28818d07b3f044a02f48d1af",
           "stderrBytes": 0,
-          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdoutBytes": 64525,
-          "stdoutSha256": "3b7246e25436017ae7fa66cb38ea8a189a6bd1761b25cc3dcb5745198ea91f81",
-          "wallMs": 207.438167
+          "wallMs": 129.860208
         },
         {
           "command": [
@@ -1496,21 +1425,19 @@
             "symbol",
             "Buffer",
             "--root",
-            "/tmp/semctx-347-b06-measure-20261018-v4/workspace-3",
+            "/tmp/semctx-347-b06-measure-20261018-v5/workspace-3",
             "--json"
           ],
-          "descendantMaxRssBytes": 118439936,
-          "descendantSystemSeconds": 0.16024,
-          "descendantUserSeconds": 0.20282,
+          "descendantMaxRssBytes": 126582784,
+          "descendantSystemSeconds": 0.040978,
+          "descendantUserSeconds": 0.136651,
           "exitCode": 0,
           "matchedNodes": 19,
           "relations": 21,
           "sourceSha256": "c3b9e1bfa05d866a2d8f8297952fc78f5b5a8cdf28818d07b3f044a02f48d1af",
           "stderrBytes": 0,
-          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdoutBytes": 35394,
-          "stdoutSha256": "2d343bdc81dea0bfea257d084891f99af7c8abf85c7d495726ff8be7a14a717b",
-          "wallMs": 215.628167
+          "wallMs": 131.1975
         },
         {
           "command": [
@@ -1520,21 +1447,19 @@
             "symbol",
             "OnceCell",
             "--root",
-            "/tmp/semctx-347-b06-measure-20261018-v4/workspace-3",
+            "/tmp/semctx-347-b06-measure-20261018-v5/workspace-3",
             "--json"
           ],
-          "descendantMaxRssBytes": 120848384,
-          "descendantSystemSeconds": 0.173946,
-          "descendantUserSeconds": 0.20338599999999998,
+          "descendantMaxRssBytes": 119357440,
+          "descendantSystemSeconds": 0.049409999999999996,
+          "descendantUserSeconds": 0.14007,
           "exitCode": 0,
           "matchedNodes": 27,
           "relations": 71,
           "sourceSha256": "c3b9e1bfa05d866a2d8f8297952fc78f5b5a8cdf28818d07b3f044a02f48d1af",
           "stderrBytes": 0,
-          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdoutBytes": 73274,
-          "stdoutSha256": "e5c76ad66cc7a7af6c7f2ecf879c936dad894a9a5ad8400533e359d2cb32478a",
-          "wallMs": 202.854917
+          "wallMs": 133.831542
         },
         {
           "command": [
@@ -1544,21 +1469,19 @@
             "symbol",
             "is_xid_start",
             "--root",
-            "/tmp/semctx-347-b06-measure-20261018-v4/workspace-3",
+            "/tmp/semctx-347-b06-measure-20261018-v5/workspace-3",
             "--json"
           ],
-          "descendantMaxRssBytes": 124862464,
-          "descendantSystemSeconds": 0.190465,
-          "descendantUserSeconds": 0.201592,
+          "descendantMaxRssBytes": 124534784,
+          "descendantSystemSeconds": 0.048532,
+          "descendantUserSeconds": 0.139004,
           "exitCode": 0,
           "matchedNodes": 1,
           "relations": 3,
           "sourceSha256": "c3b9e1bfa05d866a2d8f8297952fc78f5b5a8cdf28818d07b3f044a02f48d1af",
           "stderrBytes": 0,
-          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdoutBytes": 2739,
-          "stdoutSha256": "2fe283ec64eae99d7bf5f0996435540d1b974c37ef0ba2e48d82fc6ce617b740",
-          "wallMs": 200.757708
+          "wallMs": 131.779166
         },
         {
           "command": [
@@ -1568,21 +1491,19 @@
             "symbol",
             "read_u32",
             "--root",
-            "/tmp/semctx-347-b06-measure-20261018-v4/workspace-3",
+            "/tmp/semctx-347-b06-measure-20261018-v5/workspace-3",
             "--json"
           ],
-          "descendantMaxRssBytes": 125403136,
-          "descendantSystemSeconds": 0.230646,
-          "descendantUserSeconds": 0.20688099999999998,
+          "descendantMaxRssBytes": 125501440,
+          "descendantSystemSeconds": 0.051831999999999996,
+          "descendantUserSeconds": 0.136275,
           "exitCode": 0,
           "matchedNodes": 6,
           "relations": 16,
           "sourceSha256": "c3b9e1bfa05d866a2d8f8297952fc78f5b5a8cdf28818d07b3f044a02f48d1af",
           "stderrBytes": 0,
-          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdoutBytes": 15419,
-          "stdoutSha256": "15b3cf799afab5e12e4ab8dce4c8ef654636e92197aa355882db16d7f2a5171c",
-          "wallMs": 211.422875
+          "wallMs": 131.677042
         },
         {
           "command": [
@@ -1592,21 +1513,19 @@
             "symbol",
             "from_str",
             "--root",
-            "/tmp/semctx-347-b06-measure-20261018-v4/workspace-3",
+            "/tmp/semctx-347-b06-measure-20261018-v5/workspace-3",
             "--json"
           ],
-          "descendantMaxRssBytes": 119881728,
-          "descendantSystemSeconds": 0.08601199999999999,
-          "descendantUserSeconds": 0.202757,
+          "descendantMaxRssBytes": 122208256,
+          "descendantSystemSeconds": 0.048375999999999995,
+          "descendantUserSeconds": 0.133846,
           "exitCode": 0,
           "matchedNodes": 3,
           "relations": 11,
           "sourceSha256": "c3b9e1bfa05d866a2d8f8297952fc78f5b5a8cdf28818d07b3f044a02f48d1af",
           "stderrBytes": 0,
-          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdoutBytes": 7488,
-          "stdoutSha256": "00f2550a8f73d763867fbb4b52143762288d7409cb8823b15dffce12eafd89bd",
-          "wallMs": 195.905166
+          "wallMs": 129.76225
         }
       ],
       "repetition": 3,
@@ -1617,12 +1536,12 @@
             "/Users/sebastien/.herdr/worktrees/semctx/issue-347-rust-indexing/apps/cli/src/index.ts",
             "index",
             "--root",
-            "/tmp/semctx-347-b06-measure-20261018-v4/workspace-3",
+            "/tmp/semctx-347-b06-measure-20261018-v5/workspace-3",
             "--json"
           ],
-          "descendantMaxRssBytes": 662913024,
-          "descendantSystemSeconds": 2.327012,
-          "descendantUserSeconds": 8.78145,
+          "descendantMaxRssBytes": 621428736,
+          "descendantSystemSeconds": 1.437342,
+          "descendantUserSeconds": 6.489173,
           "exitCode": 0,
           "graph": {
             "edges": 1087,
@@ -1652,14 +1571,12 @@
               "PRODUCER_FAILED",
               "NEGATIVE_COMPLETENESS_MISSING"
             ],
-            "sidecarDigest": "sha256:262f4c041820ad67379f1e912961dc01688540249510a8a156f1e3aa89cfc21a"
+            "sidecarDigest": "sha256:0ce70d10b85ebd374361255fc48e1a8f5e448f8fb523bc813902fffebf41143e"
           },
           "sourceSha256": "80352a6de2487537c1479c24e99491ca62c0db9f42cbd028312743a634e38843",
           "stderrBytes": 0,
-          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdoutBytes": 2211,
-          "stdoutSha256": "4f25dbef9c04daac40feb9bb480a57a067e51e4090c0f2f836fef4fc4dcd190e",
-          "wallMs": 6153.657917
+          "wallMs": 4110.532041
         },
         "cold": {
           "command": [
@@ -1667,12 +1584,12 @@
             "/Users/sebastien/.herdr/worktrees/semctx/issue-347-rust-indexing/apps/cli/src/index.ts",
             "index",
             "--root",
-            "/tmp/semctx-347-b06-measure-20261018-v4/workspace-3",
+            "/tmp/semctx-347-b06-measure-20261018-v5/workspace-3",
             "--json"
           ],
-          "descendantMaxRssBytes": 639254528,
-          "descendantSystemSeconds": 2.3400279999999998,
-          "descendantUserSeconds": 8.948992,
+          "descendantMaxRssBytes": 612679680,
+          "descendantSystemSeconds": 1.464798,
+          "descendantUserSeconds": 6.33779,
           "exitCode": 0,
           "graph": {
             "edges": 1082,
@@ -1700,14 +1617,12 @@
               "PRODUCER_FAILED",
               "NEGATIVE_COMPLETENESS_MISSING"
             ],
-            "sidecarDigest": "sha256:7c63a936f857f41eb3d751b61876651273f136c45aba7ff8b89b2a23e9615938"
+            "sidecarDigest": "sha256:649dc22163632820583ae282d1897c3fd5ae76cbacefb934a4c439bdf86d708b"
           },
           "sourceSha256": "f4c53e41c6eee7276a09a49d09cf158c5e4093b229fd7b1234514545b86bce80",
           "stderrBytes": 0,
-          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdoutBytes": 2211,
-          "stdoutSha256": "04a180de129ec28f401840e34a4f5669a77486b48edc16cdd4fced002ffc6ced",
-          "wallMs": 6206.485042
+          "wallMs": 4140.739167
         },
         "delete": {
           "command": [
@@ -1715,12 +1630,12 @@
             "/Users/sebastien/.herdr/worktrees/semctx/issue-347-rust-indexing/apps/cli/src/index.ts",
             "index",
             "--root",
-            "/tmp/semctx-347-b06-measure-20261018-v4/workspace-3",
+            "/tmp/semctx-347-b06-measure-20261018-v5/workspace-3",
             "--json"
           ],
-          "descendantMaxRssBytes": 640040960,
-          "descendantSystemSeconds": 2.441014,
-          "descendantUserSeconds": 8.281751,
+          "descendantMaxRssBytes": 592068608,
+          "descendantSystemSeconds": 1.502566,
+          "descendantUserSeconds": 7.043165,
           "exitCode": 0,
           "graph": {
             "edges": 1083,
@@ -1750,14 +1665,12 @@
               "PRODUCER_FAILED",
               "NEGATIVE_COMPLETENESS_MISSING"
             ],
-            "sidecarDigest": "sha256:fcae924f2e2c267e913ab14c0007251b1701a0b3058d92399a5d185461d42f9f"
+            "sidecarDigest": "sha256:192d2e735a977ca618cd2b02bbb8284c51a4591c040e1312c91565235a2b0b09"
           },
           "sourceSha256": "c3b9e1bfa05d866a2d8f8297952fc78f5b5a8cdf28818d07b3f044a02f48d1af",
           "stderrBytes": 0,
-          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdoutBytes": 2211,
-          "stdoutSha256": "ac623c06066c9e91f12b402a56ac2332c0d95abb122fcbe21c45e7b970b9b317",
-          "wallMs": 6178.65575
+          "wallMs": 4327.4025
         },
         "edit": {
           "command": [
@@ -1765,12 +1678,12 @@
             "/Users/sebastien/.herdr/worktrees/semctx/issue-347-rust-indexing/apps/cli/src/index.ts",
             "index",
             "--root",
-            "/tmp/semctx-347-b06-measure-20261018-v4/workspace-3",
+            "/tmp/semctx-347-b06-measure-20261018-v5/workspace-3",
             "--json"
           ],
-          "descendantMaxRssBytes": 606371840,
-          "descendantSystemSeconds": 2.338406,
-          "descendantUserSeconds": 9.468215,
+          "descendantMaxRssBytes": 616808448,
+          "descendantSystemSeconds": 1.579399,
+          "descendantUserSeconds": 6.802619,
           "exitCode": 0,
           "graph": {
             "edges": 1083,
@@ -1800,14 +1713,12 @@
               "PRODUCER_FAILED",
               "NEGATIVE_COMPLETENESS_MISSING"
             ],
-            "sidecarDigest": "sha256:fcae924f2e2c267e913ab14c0007251b1701a0b3058d92399a5d185461d42f9f"
+            "sidecarDigest": "sha256:192d2e735a977ca618cd2b02bbb8284c51a4591c040e1312c91565235a2b0b09"
           },
           "sourceSha256": "c3b9e1bfa05d866a2d8f8297952fc78f5b5a8cdf28818d07b3f044a02f48d1af",
           "stderrBytes": 0,
-          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdoutBytes": 2211,
-          "stdoutSha256": "d0982a7ef75748b3d57d1dc9392d7467dd2f07208e035d22ebc5403ff4570fee",
-          "wallMs": 6170.070542
+          "wallMs": 4334.383166
         },
         "stable": {
           "command": [
@@ -1815,12 +1726,12 @@
             "/Users/sebastien/.herdr/worktrees/semctx/issue-347-rust-indexing/apps/cli/src/index.ts",
             "index",
             "--root",
-            "/tmp/semctx-347-b06-measure-20261018-v4/workspace-3",
+            "/tmp/semctx-347-b06-measure-20261018-v5/workspace-3",
             "--json"
           ],
-          "descendantMaxRssBytes": 649609216,
-          "descendantSystemSeconds": 2.277144,
-          "descendantUserSeconds": 8.960132,
+          "descendantMaxRssBytes": 666304512,
+          "descendantSystemSeconds": 1.440826,
+          "descendantUserSeconds": 6.069279,
           "exitCode": 0,
           "graph": {
             "edges": 1082,
@@ -1848,17 +1759,15 @@
               "PRODUCER_FAILED",
               "NEGATIVE_COMPLETENESS_MISSING"
             ],
-            "sidecarDigest": "sha256:7c63a936f857f41eb3d751b61876651273f136c45aba7ff8b89b2a23e9615938"
+            "sidecarDigest": "sha256:649dc22163632820583ae282d1897c3fd5ae76cbacefb934a4c439bdf86d708b"
           },
           "sourceSha256": "f4c53e41c6eee7276a09a49d09cf158c5e4093b229fd7b1234514545b86bce80",
           "stderrBytes": 0,
-          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdoutBytes": 2211,
-          "stdoutSha256": "ca97905cc16dc1b0770484ce0895e726dba3a6be7fa34867eff7e6d9533d50c9",
-          "wallMs": 6152.143916
+          "wallMs": 4068.250042
         }
       },
-      "workspace": "/tmp/semctx-347-b06-measure-20261018-v4/workspace-3"
+      "workspace": "/tmp/semctx-347-b06-measure-20261018-v5/workspace-3"
     }
   ],
   "sourceFixtureCommit": "06f98733349a3cba707d76ed5cace21d79ec12ad"
