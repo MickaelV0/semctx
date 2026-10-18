@@ -1,8 +1,9 @@
 import { expect, test } from "bun:test";
 import { rejects } from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { extractRust } from "../src/index";
 import { resolveRustNavigation } from "../src/navigation";
 import type { RustNavigationConfig } from "@semantic-context/core";
@@ -70,4 +71,27 @@ test("rejects external dependencies and escaping workspace members before Cargo 
   const manifest = '[package]\nname="bounded"\nversion="0.1.0"\nedition="2021"\n';
   await rejects(resolveRustNavigation({ files, extraction, config: nativeConfig(), metadata: [{ relPath: "Cargo.toml", source: manifest + '[dependencies]\nexternal="1"\n' }] }), /RUST_EXTERNAL_DEPENDENCY_UNQUALIFIED/);
   await rejects(resolveRustNavigation({ files, extraction, config: nativeConfig(), metadata: [{ relPath: "Cargo.toml", source: manifest + '[workspace]\nmembers=["../escape"]\n' }] }), /RUST_PATH_OUTSIDE_REPOSITORY/);
+}, 40_000);
+
+test("refuses Cargo configuration planted above the temporary navigation workspace", async () => {
+  const files = [{ relPath: "src/lib.rs", source: "pub fn value() -> u32 { 1 }" }];
+  const extraction = await extractRust(files);
+  const config = nativeConfig();
+  const parent = mkdtempSync(join(tmpdir(), "semctx-rust-ambient-"));
+  const saved = { TMPDIR: process.env.TMPDIR, TEMP: process.env.TEMP, TMP: process.env.TMP };
+  try {
+    mkdirSync(join(parent, ".cargo"));
+    writeFileSync(join(parent, ".cargo", "config.toml"), '[build]\nrustc-wrapper = "semctx-planted-wrapper"\n');
+    process.env.TMPDIR = parent;
+    process.env.TEMP = parent;
+    process.env.TMP = parent;
+    await rejects(resolveRustNavigation({ files, extraction, config,
+      metadata: [{ relPath: "Cargo.toml", source: '[package]\nname="ambient"\nversion="0.1.0"\nedition="2021"\n' }] }), /RUST_CARGO_CONFIGURATION_UNSUPPORTED/);
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    rmSync(parent, { recursive: true, force: true });
+  }
 }, 40_000);

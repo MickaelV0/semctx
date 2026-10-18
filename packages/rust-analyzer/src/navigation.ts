@@ -49,6 +49,15 @@ function directoryDigest(directory: string): string {
   return digest(JSON.stringify(entries));
 }
 
+export function assertNoAmbientCargoConfiguration(directory: string): void {
+  for (let current = resolve(directory); ; current = dirname(current)) {
+    if (["config", "config.toml"].some((name) => existsSync(join(current, ".cargo", name)))) {
+      throw new Error("RUST_CARGO_CONFIGURATION_UNSUPPORTED");
+    }
+    if (dirname(current) === current) return;
+  }
+}
+
 function confined(root: string, path: string): string {
   const local = relative(root, path).replaceAll("\\", "/");
   if (local === ".." || local.startsWith("../") || isAbsolute(local)) throw new Error("RUST_PATH_OUTSIDE_REPOSITORY");
@@ -85,6 +94,7 @@ export async function resolveRustNavigation(input: {
   try {
     const root = join(directory, "workspace");
     mkdirSync(root);
+    assertNoAmbientCargoConfiguration(root);
     const retained = new Map<string, string>();
     for (const file of [...input.files, ...input.metadata]) {
       RustSourceSchema.parse(file);
@@ -109,7 +119,7 @@ export async function resolveRustNavigation(input: {
       PATH: `${bin}${process.platform === "win32" ? ";" : ":"}${process.env.PATH ?? ""}`,
       HOME: directory, USERPROFILE: directory, CARGO_HOME: join(directory, "cargo-home"),
       XDG_CONFIG_HOME: join(directory, "config"), CARGO_NET_OFFLINE: "true", CARGO_TARGET_DIR: join(directory, "target"),
-      RUSTC: join(bin, `rustc${executable}`),
+      RUSTC: join(bin, `rustc${executable}`), RUSTC_WRAPPER: "", RUSTC_WORKSPACE_WRAPPER: "",
       ...(process.env.SystemRoot === undefined ? {} : { SystemRoot: process.env.SystemRoot }),
       ...(process.env.TEMP === undefined ? {} : { TEMP: process.env.TEMP }),
     };
