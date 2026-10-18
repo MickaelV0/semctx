@@ -214,15 +214,16 @@ async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   try {
     const code = await dispatch(args);
-    process.exit(code);
+    process.exitCode = code;
   } catch (err) {
     if (isSemctxError(err)) {
       fail(`[${err.code}] ${err.message}`);
       if (Object.keys(err.details).length > 0) info(c.dim(JSON.stringify(err.details, null, 2)));
-      process.exit(err.code === "CONTROL_INPUTS_UNSAFE" ? 3 : 1);
+      process.exitCode = err.code === "CONTROL_INPUTS_UNSAFE" ? 3 : 1;
+      return;
     }
     fail(describeError(err));
-    process.exit(1);
+    process.exitCode = 1;
   }
 }
 
