@@ -1407,7 +1407,7 @@ class NativeEvidenceTest(unittest.TestCase):
             pair["commands"].append(command)
         return root, world, pair
 
-    def test_retained_y_invocation_binding_refuses_hash_consistent_substitution(self):
+    def test_retained_invocation_binding_refuses_hash_consistent_substitution(self):
         relocated = {
             "other-pair-workspace": "Y-other-1/workspace",
             "relative-workspace": "Y-pico-1/workspace",
@@ -1455,8 +1455,70 @@ class NativeEvidenceTest(unittest.TestCase):
                         reanalysis.sha(stem.with_suffix(".argv.json").read_bytes()),
                         command["argvSha256"],
                     )
-                with self.assertRaisesRegex(ValueError, "Y invocation"):
+                with self.assertRaisesRegex(ValueError, "invocation"):
                     reanalysis.validate_pair(pair, world, root, config)
+
+        public = (
+            Path(__file__).parents[2]
+            / "docs/research/rust-indexing/results/reanalysis-windows-2026-10-17"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "copied-records"
+            shutil.copytree(public, root)
+            unpack.unpack_inputs(root)
+            self.assertEqual(reanalysis.validate_series(root)["status"], "VALID")
+            baseline = json.loads((root / "result.json").read_bytes())
+            config = json.loads((root / "config.json").read_bytes())
+            for engine, position, index, replacement in (
+                ("T", 0, 1, "E:/foreign/rust-indexing-reanalysis.mjs"),
+                ("S", 1, 2, "E:/foreign/after.scip"),
+                ("L", 0, 2, "E:/foreign/rust-analyzer.exe"),
+                ("S", 0, 8, "E:/foreign/scip-config.json"),
+                ("L", 0, 4, "foreign.rs"),
+                ("L", 0, 8, "\npub fn foreign_probe() {}\n"),
+            ):
+                series = copy.deepcopy(baseline)
+                pair = next(
+                    row
+                    for row in series["pairs"]
+                    if row["engine"] == engine
+                    and row["workspace"] == "fixture"
+                    and row["sample"] == 1
+                )
+                command = pair["commands"][position]
+                stem = root / command["prefix"]
+                original = {
+                    path: path.read_bytes()
+                    for path in (
+                        stem.with_suffix(".argv.json"),
+                        stem.with_suffix(".timing.json"),
+                        root / f"{engine}-fixture-1/pair.json",
+                        root / "result.json",
+                    )
+                }
+                try:
+                    invocation = json.loads(original[stem.with_suffix(".argv.json")])
+                    invocation["argv"][index] = replacement
+                    reanalysis.save(stem.with_suffix(".argv.json"), invocation)
+                    command["argvSha256"] = reanalysis.sha(
+                        stem.with_suffix(".argv.json").read_bytes()
+                    )
+                    reanalysis.save(stem.with_suffix(".timing.json"), command)
+                    reanalysis.save(root / f"{engine}-fixture-1/pair.json", pair)
+                    reanalysis.save(root / "result.json", series)
+                    with self.assertRaisesRegex(ValueError, "invocation"):
+                        if engine == "T":
+                            reanalysis.validate_series(root)
+                        else:
+                            world = next(
+                                row
+                                for row in config["workspaces"]
+                                if row["name"] == "fixture"
+                            )
+                            reanalysis.validate_pair(pair, world, root, config)
+                finally:
+                    for path, raw in original.items():
+                        path.write_bytes(raw)
 
     def test_retained_command_argv_mutation_is_refused(self):
         with tempfile.TemporaryDirectory() as directory:

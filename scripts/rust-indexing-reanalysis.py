@@ -188,6 +188,113 @@ def capture_path(relative):
     )
 
 
+def validate_invocation_plan(result, world, invocations, config=None):
+    """Bind observable Runner argv plans without resolving original host paths."""
+    engine = result["engine"]
+    folder = f"{engine}-{world['name']}-{result['sample']}"
+
+    def path(value):
+        return value.replace("\\", "/")
+
+    def absolute(value):
+        return (
+            PurePosixPath(value).is_absolute() or PureWindowsPath(value).is_absolute()
+        ) and not any(part in (".", "..") for part in value.split("/"))
+
+    cwd = path(invocations[0]["cwd"])
+    if not absolute(cwd) or not cwd.endswith(f"/{folder}/workspace"):
+        raise ValueError("native invocation workspace does not match pair")
+    pair_folder = cwd.rsplit("/", 1)[0]
+    helper_parent = None
+    for position, invocation in enumerate(invocations):
+        argv = invocation["argv"]
+        if path(invocation["cwd"]) != cwd:
+            raise ValueError("native invocation workspaces differ")
+        if config is not None:
+            executable = {
+                "T": config.get("node"),
+                "Y": config.get("Y", {}).get("binary"),
+                "S": config.get("S", {}).get("binary")
+                if position % 2 == 0
+                else config.get("node"),
+                "L": config.get("python"),
+            }[engine]
+            if (
+                not isinstance(executable, str)
+                or path(argv[0]).casefold() != path(executable).casefold()
+            ):
+                raise ValueError("native executable differs from configured engine")
+        if engine in ("T", "L"):
+            script = path(argv[1]) if len(argv) > 1 else ""
+            name = (
+                "rust-indexing-reanalysis.mjs"
+                if engine == "T"
+                else "rust-indexing-lsp.py"
+            )
+            if not absolute(script) or PurePosixPath(script).name != name:
+                raise ValueError("native invocation helper script mismatch")
+            helper_parent = script.rsplit("/", 1)[0]
+        if engine == "T":
+            valid = len(argv) == 3 and path(argv[2]) == pair_folder + "/adapter.json"
+        elif engine == "Y":
+            source = world["files"][position % len(world["files"])]
+            valid = len(argv) == 2 and path(argv[1]) == f"{cwd}/{source}"
+        elif engine == "S":
+            if config is None:
+                raise ValueError("native invocation tool profile required")
+            state = "before" if position < 2 else "after"
+            artifact = f"{pair_folder}/{state}.scip"
+            if position % 2:
+                valid = len(argv) == 3 and [path(value) for value in argv[1:]] == [
+                    path(config["S"]["decoder"]),
+                    artifact,
+                ]
+            else:
+                expected = [
+                    "scip",
+                    cwd,
+                    "--output",
+                    artifact,
+                    "--num-threads",
+                    "4",
+                    "--config-path",
+                    path(config["S"]["config"]),
+                ]
+                observed = argv[1:].copy()
+                if len(observed) == len(expected):
+                    for index in (1, 3, 7):
+                        observed[index] = path(observed[index])
+                valid = observed == expected
+        else:
+            if config is None:
+                raise ValueError("native invocation tool profile required")
+            tail = [
+                world["target"],
+                "--timeout",
+                argv[6] if len(argv) > 6 else "",
+                "--append-text",
+                APPEND,
+                "--expect-added-symbol",
+                SYMBOL,
+                *world.get("lsp_args", []),
+            ]
+            valid = (
+                len(argv) == 11 + len(world.get("lsp_args", []))
+                and [path(value) for value in argv[2:4]]
+                == [path(config["L"]["binary"]), cwd]
+                and argv[4:] == tail
+            )
+            if valid:
+                try:
+                    timeout = finite_duration(float(argv[6]))
+                    valid = timeout > 0
+                except ValueError:
+                    valid = False
+        if not valid:
+            raise ValueError("native invocation does not match configured plan")
+    return helper_parent
+
+
 def validate_pair(result, world, output, config=None):
     """Reinspect original native output, not a copied success flag."""
     engine = result["engine"]
@@ -226,7 +333,7 @@ def validate_pair(result, world, output, config=None):
         raise ValueError("native command count mismatch")
     outputs = []
     invocations = []
-    for position, command in enumerate(commands):
+    for command in commands:
         prefix = command["prefix"]
         if not re.fullmatch(r"command-[0-9]{4}", prefix):
             raise ValueError("invalid native command identity")
@@ -249,21 +356,6 @@ def validate_pair(result, world, output, config=None):
             or not isinstance(invocation["cwd"], str)
         ):
             raise ValueError("invalid native argv capture")
-        if config is not None:
-            executable = {
-                "T": config.get("node"),
-                "Y": config.get("Y", {}).get("binary"),
-                "S": config.get("S", {}).get("binary")
-                if position % 2 == 0
-                else config.get("node"),
-                "L": config.get("python"),
-            }[engine]
-            if (
-                not isinstance(executable, str)
-                or argv[0].replace("\\", "/").casefold()
-                != executable.replace("\\", "/").casefold()
-            ):
-                raise ValueError("native executable differs from configured engine")
         invocations.append(invocation)
         raw, stderr = (
             retained_path(output, prefix + ".stdout").read_bytes(),
@@ -275,6 +367,7 @@ def validate_pair(result, world, output, config=None):
         ):
             raise ValueError("native output digest mismatch")
         outputs.append((raw, stderr))
+    helper_parent = validate_invocation_plan(result, world, invocations, config)
     if engine == "T":
         capture = result["adapterInput"]
         if capture["path"] != f"{folder}/adapter.json":
@@ -283,15 +376,6 @@ def validate_pair(result, world, output, config=None):
         if sha(adapter_raw) != capture["sha256"]:
             raise ValueError("native adapter input digest mismatch")
         adapter = json.loads(adapter_raw)
-        referenced_adapter = (
-            invocations[0]["cwd"].replace("\\", "/").rsplit("/", 1)[0] + "/adapter.json"
-        )
-        if (
-            len(invocations[0]["argv"]) != 3
-            or invocations[0]["argv"][2].replace("\\", "/").casefold()
-            != referenced_adapter.casefold()
-        ):
-            raise ValueError("native argv does not reference captured adapter input")
         if (
             adapter["files"] != world["files"]
             or adapter["target"] != world["target"]
@@ -323,24 +407,6 @@ def validate_pair(result, world, output, config=None):
             raise ValueError("native parser timings missing")
     elif engine == "Y":
         count = len(world["files"])
-        # Captures may be relocated; bind to the recorded scratch workspace
-        # lexically, without resolving original host paths or opening sources.
-        cwd = invocations[0]["cwd"].replace("\\", "/")
-        if (
-            not (PurePosixPath(cwd).is_absolute() or PureWindowsPath(cwd).is_absolute())
-            or any(part in (".", "..") for part in cwd.split("/"))
-            or not cwd.endswith(f"/{folder}/workspace")
-        ):
-            raise ValueError("Y invocation workspace does not match pair")
-        for position, invocation in enumerate(invocations):
-            argv = invocation["argv"]
-            expected = f"{cwd}/{world['files'][position % count]}"
-            if (
-                invocation["cwd"].replace("\\", "/") != cwd
-                or len(argv) != 2
-                or argv[1].replace("\\", "/") != expected
-            ):
-                raise ValueError("Y invocation does not match selected source")
         offset = world["files"].index(world["target"])
         require_added(
             tsv_symbols(outputs[offset][0]), tsv_symbols(outputs[count + offset][0])
@@ -405,6 +471,7 @@ def validate_pair(result, world, output, config=None):
             finite_duration(value)
         if timings != result["nativeTimingsMs"]:
             raise ValueError("native timing projection mismatch")
+    return helper_parent
 
 
 def validate_series(output):
@@ -445,9 +512,12 @@ def validate_series(output):
     ] != expected:
         raise ValueError("series sample, workspace or engine coverage mismatch")
     commands = []
+    helper_parents = set()
     for pair in result["pairs"]:
         world = next(w for w in config["workspaces"] if w["name"] == pair["workspace"])
-        validate_pair(pair, world, output, config)
+        helper_parent = validate_pair(pair, world, output, config)
+        if helper_parent is not None:
+            helper_parents.add(helper_parent)
         prefix = world["path"].replace("\\", "/").rstrip("/") + "/"
         declared = {
             pin["path"].replace("\\", "/")[len(prefix) :]: pin["sha256"]
@@ -467,6 +537,8 @@ def validate_series(output):
         commands.extend(command["prefix"] for command in pair["commands"])
     if len(commands) != len(set(commands)):
         raise ValueError("native command reused across pairs")
+    if len(helper_parents) > 1:
+        raise ValueError("native invocation helper parents differ")
     return {
         "status": "VALID",
         "pairs": len(expected),
