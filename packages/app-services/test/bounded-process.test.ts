@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,6 +16,15 @@ function alive(pid: number): boolean {
   }
 }
 
+function killFixture(pid: number | undefined): void {
+  if (pid === undefined) return;
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | null)?.code !== "ESRCH") throw error;
+  }
+}
+
 /**
  * A just-killed tree can hold its cwd for a moment on Windows. Cleanup retries and never throws, so it
  * cannot replace the assertion that failed.
@@ -30,6 +39,39 @@ async function removeDirectory(path: string): Promise<void> {
     }
   }
 }
+
+test("fixture cleanup ignores only already-gone processes", () => {
+  const kill = spyOn(process, "kill");
+  try {
+    const gone = Object.assign(new Error("process already gone"), { code: "ESRCH" });
+    kill.mockImplementation((_pid, signal) => {
+      if (signal === 0) return true;
+      throw gone;
+    });
+    expect(() => killFixture(123)).not.toThrow();
+    expect(kill).toHaveBeenCalledWith(123, "SIGKILL");
+
+    kill.mockClear();
+    killFixture(undefined);
+    expect(kill).not.toHaveBeenCalled();
+
+    for (const failure of [Object.assign(new Error("permission denied"), { code: "EPERM" }), new Error("unexpected signal failure")]) {
+      kill.mockClear();
+      kill.mockImplementation(() => { throw failure; });
+      let observed: unknown;
+      try { killFixture(123); } catch (error) { observed = error; }
+      expect(observed).toBe(failure);
+    }
+
+    kill.mockClear();
+    kill.mockImplementation(() => true);
+    killFixture(123);
+    expect(kill).toHaveBeenCalledTimes(1);
+    expect(kill).toHaveBeenCalledWith(123, "SIGKILL");
+  } finally {
+    kill.mockRestore();
+  }
+});
 
 describe("runProcessWithinBudget", () => {
   test.skipIf(process.platform === "win32").each(["invalid", "blocked", "overflow"])(
@@ -95,7 +137,7 @@ describe("runProcessWithinBudget", () => {
       expect(outcome).toMatchObject({ kind: "exited", exitCode: 1, stdout: "" });
       expect(outcome.stderr).toContain("PROCESS_TERMINATION_FAILED: operation not permitted");
     } finally {
-      if (pid !== undefined && alive(pid)) process.kill(pid, "SIGKILL");
+      killFixture(pid);
       rmSync(directory, { recursive: true, force: true });
     }
   });
@@ -144,7 +186,7 @@ describe("runProcessWithinBudget", () => {
         expect(alive(pid)).toBe(false);
       }
     } finally {
-      if (pid !== undefined && alive(pid)) process.kill(pid, "SIGKILL");
+      killFixture(pid);
       rmSync(directory, { recursive: true, force: true });
     }
   }, 10_000);
@@ -185,7 +227,7 @@ describe("runProcessWithinBudget", () => {
       while (alive(pid) && performance.now() < deadline) await Bun.sleep(20);
       expect(alive(pid)).toBe(false);
     } finally {
-      if (pid !== undefined && alive(pid)) process.kill(pid, "SIGKILL");
+      killFixture(pid);
       rmSync(directory, { recursive: true, force: true });
     }
   });
