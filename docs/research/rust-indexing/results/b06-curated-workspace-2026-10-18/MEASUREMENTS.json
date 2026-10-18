@@ -367,7 +367,9 @@
     "clock": "Python time.perf_counter_ns around each public CLI process",
     "concurrentQueryFanout": {
       "maxWorkers": 4,
-      "queries": 10
+      "outputRetention": "hashes and byte counts only; distinct output bytes not archived; all match corresponding sequential outputs",
+      "queries": 10,
+      "resident": "not measured per process or as aggregate"
     },
     "osCache": "not cleared; repetitions sequential; earlier pilot discarded after unrelated four-shard test overlap",
     "repetitions": 3,
