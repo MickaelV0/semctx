@@ -738,6 +738,66 @@ class DirectoryInputBoundaryTest(unittest.TestCase):
                 )
                 self.assertIn(b"workspace directory link", result.stderr)
 
+    def test_cli_refuses_linked_workspace_root_before_output_copy_or_engine(self):
+        kinds = ("symlink", "junction") if os.name == "nt" else ("symlink",)
+        for kind in kinds:
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                config, marker = self.make_config(root)
+                workspace = root / "fixture"
+                cargo = workspace / ".cargo" / "config.toml"
+                cargo.parent.mkdir()
+                cargo.write_text("benign-pinned-config\n")
+                config["pins"].append(
+                    {"path": str(cargo), "sha256": reanalysis.sha(cargo.read_bytes())}
+                )
+                self.assertEqual(
+                    reanalysis.validate_config(config, ["Y"]), config["pins"]
+                )
+                before = {
+                    path: path.read_bytes()
+                    for path in workspace.rglob("*")
+                    if path.is_file()
+                }
+                link = root / "linked-fixture"
+                self.link_directory(workspace, link, kind)
+                try:
+                    config["workspaces"][0]["path"] = str(link)
+                    config_path = root / "config.json"
+                    reanalysis.save(config_path, config)
+                    output = root / "output"
+                    result = subprocess.run(
+                        [
+                            sys.executable,
+                            "-B",
+                            reanalysis.__file__,
+                            "--config",
+                            str(config_path),
+                            "--output",
+                            str(output),
+                            "--engines",
+                            "Y",
+                            "--budget-seconds",
+                            "10",
+                        ],
+                        capture_output=True,
+                        timeout=15,
+                        check=False,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(b"workspace directory link", result.stderr)
+                    self.assertFalse(marker.exists(), "native engine must not run")
+                    self.assertFalse(
+                        output.exists(), "refusal must precede output creation"
+                    )
+                finally:
+                    if kind == "junction":
+                        link.rmdir()
+                    else:
+                        link.unlink()
+                    self.assertTrue(workspace.is_dir())
+                    self.assertEqual({path: path.read_bytes() for path in before}, before)
+
     def test_normal_pinned_directories_and_ignored_cache_links_are_accepted(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

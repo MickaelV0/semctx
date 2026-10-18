@@ -627,6 +627,9 @@ def validate_config(config, engines):
             raise ValueError(
                 "target must belong to selected files in an absolute workspace"
             )
+        root = Path(world["path"])
+        if root.is_symlink() or getattr(root.lstat(), "st_reparse_tag", 0):
+            raise ValueError("workspace directory link is not permitted")
         for file in world["files"]:
             checked_source(Path(world["path"]), file).read_bytes().decode("utf-8")
         for directory, folders, files in os.walk(world["path"]):
