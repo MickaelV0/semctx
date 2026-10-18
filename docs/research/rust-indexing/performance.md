@@ -118,3 +118,9 @@ The BOM correction changed the helper's source-coordinate conversion after parse
 the measured parser call and ASCII corpus inputs are unchanged, and the rebuilt release binary
 still measures 2,215,024 bytes. Edge-case timings were collected under concurrency and deliberately
 excluded from the comparative table.
+
+## #347 bounded workspace observation (2026-10-18)
+
+The [B06 curated workspace record](results/b06-curated-workspace-2026-10-18/README.md) pins five real upstream source trees, exact local Cargo dependencies, Rust 1.98.1 and rust-analyzer `2026-10-12`. On macOS arm64, 23 files and 10,672 lines produced retained Rust facts and positive cross-crate LSP calls. Twenty files were unsupported and one failed parsing, so `index-health` stayed insufficient. Three cold/stable/edit/add/delete reindex series, 30 sequential public inspect queries and three ten-query fan-outs with concurrency four are recorded with raw sample metadata.
+
+The longest cold index took 4.18 s and the largest observed descendant process RSS was 702,922,752 bytes. Sequential CLI queries took at most 136.3 ms; all bounded concurrent queries returned successfully within 182.5 ms each. An earlier series overlapped unrelated test shards and was discarded before this replay. These samples do not approve a budget, certify aggregate memory, or transfer to native Linux and Windows. The record also identifies CLI output and SQLite reader fixes required before a complete piped report and concurrent query fan-out were observable.
