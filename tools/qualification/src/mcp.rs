@@ -536,9 +536,38 @@ mod tests {
         }
         let original = session.stderr.replace(capture).unwrap();
         let error = session.request("initialize", j!({})).unwrap_err();
-        drop(session);
-        original.finish().unwrap();
         assert_eq!(error, "MCP stderr: injected MCP read failure");
+        let failed = session.stderr.replace(original).unwrap();
+        assert_eq!(failed.finish().unwrap_err().to_string(), error);
+        drop(session);
+    }
+    #[test]
+    fn cancelled_pipe_reader_refuses_even_ready_eof() {
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--list")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut stderr = child.stderr.take().unwrap();
+        assert!(child.wait().unwrap().success());
+        assert_eq!(stderr.read(&mut [0]).unwrap(), 0);
+        let stop = Arc::new(AtomicBool::new(false));
+        let mut reader = semctx_gates::process::pipe_reader(stderr, &stop).unwrap();
+        let (ready, waiting) = mpsc::channel();
+        let (release, released) = mpsc::channel();
+        let reader = thread::spawn(move || {
+            ready.send(()).unwrap();
+            released.recv().unwrap();
+            reader.read(&mut [0])
+        });
+        waiting.recv().unwrap();
+        stop.store(true, Ordering::SeqCst);
+        release.send(()).unwrap();
+        assert_eq!(
+            reader.join().unwrap().unwrap_err().to_string(),
+            "pipe capture finalization deadline exceeded"
+        );
     }
     #[test]
     fn blocked_stdin_write_obeys_the_mcp_deadline() {
