@@ -184,10 +184,22 @@ describe("CI governance", () => {
       matrix: "${{ fromJSON(needs.plan.outputs.matrix) }}",
     });
     expect(gates["runs-on"]).toBe("${{ matrix.os }}");
-    expect(checkout?.with).toMatchObject({
+    expect(checkout?.with).toEqual({
       ref: "${{ github.event.pull_request.head.sha || github.sha }}",
+      "fetch-depth": 1,
       "persist-credentials": false,
     });
+    const fetchIndex = plan.steps.findIndex((step) => step.name === "Fetch complete plan subjects");
+    const fetch = plan.steps[fetchIndex];
+    expect(fetchIndex).toBeGreaterThan(plan.steps.indexOf(checkout!));
+    expect(fetchIndex).toBeLessThan(
+      plan.steps.findIndex((step) => step.name === "Select required verification lanes"),
+    );
+    expect(fetch?.env).toEqual({ GH_TOKEN: "${{ github.token }}" });
+    expect(fetch?.run).toContain("--unshallow");
+    expect(fetch?.run).toContain('"+${SEMCTX_VERIFY_BASE}:refs/semctx/base"');
+    expect(fetch?.run).toContain('"+${SEMCTX_VERIFY_HEAD}:refs/semctx/head"');
+    expect(fetch?.run).not.toContain("git config");
     expect(python?.with?.["python-version"]).toBe("3.10");
     expect(bun?.with?.["bun-version"]).toBe("1.4.3");
     expect(ci).toContain("bun install --frozen-lockfile");
