@@ -721,7 +721,18 @@ export function extractTypeScript(
   const calls: ExtractedCall[] = [];
 
   const canonicalRoot = canonicalFilesystemPath(repoRoot);
-  const relOf = (abs: string): string => normalizePath(relative(canonicalRoot, canonicalFilesystemPath(abs)));
+  // Each call target asks for the path of its declaration file, and canonicalizing it is a
+  // filesystem round trip. One extraction pass labels a given path once; confinement checks above
+  // keep their own uncached calls.
+  const relPaths = new Map<string, string>();
+  const relOf = (abs: string): string => {
+    let relPath = relPaths.get(abs);
+    if (relPath === undefined) {
+      relPath = normalizePath(relative(canonicalRoot, canonicalFilesystemPath(abs)));
+      relPaths.set(abs, relPath);
+    }
+    return relPath;
+  };
 
   for (const sf of program.getSourceFiles()) {
     if (sf.isDeclarationFile) continue;
