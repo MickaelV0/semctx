@@ -52,6 +52,9 @@ impl Repo {
             );
         }
         repo.write("plugins/example.test.ts", "fixture\n");
+        for path in semctx_gates::os_boundaries::TESTS {
+            repo.write(path, "test fixture\n");
+        }
         repo.write("README.md", "baseline\n");
         repo.commit();
         repo.base = git(&repo.root, &["rev-parse", "HEAD"]).trim().into();
@@ -154,19 +157,302 @@ fn docs_keep_contract_and_plan_is_deterministic() {
     );
 }
 #[test]
-fn source_change_selects_transitive_consumers_on_every_os() {
+fn source_change_keeps_linux_complete_and_selects_native_os_boundaries() {
+    assert_eq!(semctx_gates::os_boundaries::TESTS.len(), 72);
+    assert!(
+        semctx_gates::os_boundaries::TESTS
+            .windows(2)
+            .all(|pair| pair[0] < pair[1])
+    );
     let r = Repo::new();
     r.write("packages/core/src/index.ts", "export const value = 2;\n");
     r.commit();
     let p = r.plan();
     assert_eq!(p.mode, "affected");
-    assert_eq!(p.matrix.include.len(), 9);
-    for lane in &p.matrix.include {
-        if lane.profile == "focused" {
-            assert!(lane.targets.contains("packages/service/test"));
-            assert!(lane.targets.contains("apps/cli/test"));
-            assert!(lane.targets.contains("plugins"));
+    assert_eq!(p.matrix.include.len(), 8);
+    for (os, count, profile) in [
+        ("ubuntu-latest", 4, "full"),
+        ("windows-latest", 2, "os-boundary"),
+        ("macos-15", 1, "os-boundary"),
+    ] {
+        let lanes = p
+            .matrix
+            .include
+            .iter()
+            .filter(|l| l.os == os && l.profile == profile)
+            .collect::<Vec<_>>();
+        assert_eq!(lanes.len(), count);
+        for (index, lane) in lanes.iter().enumerate() {
+            assert_eq!(lane.shard, format!("{}/{count}", index + 1));
+            if profile == "os-boundary" {
+                for witness in [
+                    "packages/app-services/test/cli-compatibility.test.ts",
+                    "packages/app-services/test/verify-base-tree.test.ts",
+                    "packages/ts-analyzer/test/parallel-extraction.test.ts",
+                    "packages/app-services/test/bounded-process.test.ts",
+                    "packages/app-services/test/codex-plugin-metadata.test.ts",
+                    "packages/app-services/test/codex-plugin-production-boundary.test.ts",
+                    "packages/repository-store/test/store-process-crash.test.ts",
+                    "apps/cli/test/package-runtime.test.ts",
+                    "packages/mcp-server/test/mcp-modern-stdio.test.ts",
+                    "apps/cli/test/init-preset.test.ts",
+                    "apps/cli/test/local-reports.test.ts",
+                    "apps/cli/test/ordinary-reserved-report.test.ts",
+                    "apps/cli/test/plugin-status-attestation.test.ts",
+                    "apps/cli/test/qualified-output.test.ts",
+                    "apps/cli/test/setup-dry-run.test.ts",
+                    "packages/app-services/test/config-migration.test.ts",
+                    "packages/app-services/test/control-handoff-v2.test.ts",
+                    "packages/app-services/test/plugin-delivery.test.ts",
+                    "packages/app-services/test/qualified-analysis.test.ts",
+                    "packages/app-services/test/readiness-link-safety.test.ts",
+                    "packages/app-services/test/setup-scope.test.ts",
+                    "packages/app-services/test/setup.test.ts",
+                    "packages/app-services/test/qualified-build-directory-probe.test.ts",
+                    "packages/mcp-server/test/mcp-2026-contract.test.ts",
+                    "packages/mcp-server/test/setup-scope-tools.test.ts",
+                    "packages/semantic-engine/test/anchor-migration.test.ts",
+                    "packages/semantic-engine/test/targets.test.ts",
+                    "packages/ts-analyzer/test/discovery-missing-import-alias.test.ts",
+                    "packages/ts-analyzer/test/discovery-selection.test.ts",
+                    "packages/ts-analyzer/test/retained-directory-alias.test.ts",
+                    "packages/ts-analyzer/test/semantic-context-memory.test.ts",
+                    "packages/change-authorization-verifier/test/architecture.test.ts",
+                ] {
+                    assert!(
+                        lane.targets.split(',').any(|p| p == witness),
+                        "{os} missing native boundary witness {witness}"
+                    );
+                }
+                assert!(!lane.targets.contains("packages/service/test"));
+            }
         }
+    }
+}
+#[test]
+fn git_symlink_witness_materialized_as_regular_file_keeps_full_coverage() {
+    let r = Repo::new();
+    let path = "apps/cli/test/package-runtime.test.ts";
+    git(&r.root, &["config", "core.symlinks", "false"]);
+    r.write(path, "../../../README.md");
+    git(&r.root, &["add", path]);
+    let blob = git(&r.root, &["rev-parse", &format!(":{path}")]);
+    git(
+        &r.root,
+        &[
+            "update-index",
+            "--cacheinfo",
+            &format!("120000,{},{}", blob.trim(), path),
+        ],
+    );
+    git(
+        &r.root,
+        &["commit", "-qm", "tracked symlink with regular checkout"],
+    );
+    assert!(
+        fs::symlink_metadata(r.root.join(path))
+            .unwrap()
+            .file_type()
+            .is_file()
+    );
+    assert_eq!(r.plan().mode, "fallback");
+}
+#[test]
+fn physical_symlink_witness_keeps_full_coverage() {
+    let r = Repo::new();
+    let path = "apps/cli/test/package-runtime.test.ts";
+    fs::remove_file(r.root.join(path)).unwrap();
+    #[cfg(windows)]
+    let result = std::os::windows::fs::symlink_file(r.root.join("README.md"), r.root.join(path));
+    #[cfg(unix)]
+    let result = std::os::unix::fs::symlink(r.root.join("README.md"), r.root.join(path));
+    if let Err(error) = result {
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        eprintln!("native symlink unavailable: {error}");
+        return;
+    }
+    git(&r.root, &["update-index", "--assume-unchanged", path]);
+    r.write("packages/core/src/index.ts", "changed\n");
+    r.commit();
+    assert_eq!(r.plan().mode, "fallback");
+}
+#[test]
+fn affected_target_must_be_a_committed_physical_directory() {
+    let r = Repo::new();
+    fs::remove_dir_all(r.root.join("packages/service/test")).unwrap();
+    r.write("packages/service/test", "not a test directory\n");
+    r.write("packages/core/src/index.ts", "changed\n");
+    r.commit();
+    assert_eq!(r.plan().mode, "fallback");
+}
+#[test]
+fn physical_symlink_affected_directory_keeps_full_coverage() {
+    let r = Repo::new();
+    let path = "packages/service/test";
+    let destination = r.outer.join("external-tests");
+    fs::rename(r.root.join(path), &destination).unwrap();
+    #[cfg(windows)]
+    let result = std::os::windows::fs::symlink_dir(&destination, r.root.join(path));
+    #[cfg(unix)]
+    let result = std::os::unix::fs::symlink(&destination, r.root.join(path));
+    if let Err(error) = result {
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        eprintln!("native directory symlink unavailable: {error}");
+        return;
+    }
+    git(
+        &r.root,
+        &[
+            "update-index",
+            "--assume-unchanged",
+            "packages/service/test/example.test.ts",
+        ],
+    );
+    r.write("packages/core/src/index.ts", "changed\n");
+    r.commit();
+    assert_eq!(r.plan().mode, "fallback");
+}
+#[test]
+fn physical_symlink_witness_parent_keeps_full_coverage() {
+    linked_witness_parent_keeps_full_coverage(false);
+}
+#[cfg(windows)]
+#[test]
+fn physical_junction_witness_parent_keeps_full_coverage() {
+    linked_witness_parent_keeps_full_coverage(true);
+}
+fn linked_witness_parent_keeps_full_coverage(junction: bool) {
+    let r = Repo::new();
+    let path = "packages/ts-analyzer/test";
+    let tracked = git(&r.root, &["ls-files", path]);
+    let destination = r.outer.join("external-witnesses");
+    fs::rename(r.root.join(path), &destination).unwrap();
+    #[cfg(windows)]
+    let result = if junction {
+        let output = Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(r.root.join(path).to_str().unwrap().replace('/', "\\"))
+            .arg(&destination)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        Ok(())
+    } else {
+        std::os::windows::fs::symlink_dir(&destination, r.root.join(path))
+    };
+    #[cfg(unix)]
+    let result = {
+        assert!(!junction);
+        std::os::unix::fs::symlink(&destination, r.root.join(path))
+    };
+    if let Err(error) = result {
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        eprintln!("native parent symlink unavailable: {error}");
+        return;
+    }
+    let mut args = vec!["update-index", "--assume-unchanged"];
+    args.extend(tracked.lines());
+    git(&r.root, &args);
+    r.write(".git/info/exclude", &format!("{path}\n"));
+    r.write("packages/core/src/index.ts", "changed\n");
+    git(&r.root, &["add", "packages/core/src/index.ts"]);
+    git(
+        &r.root,
+        &["commit", "-qm", "source change with physical parent link"],
+    );
+    assert_eq!(r.plan().mode, "fallback");
+}
+#[test]
+fn os_boundary_commands_execute_selected_files_and_surface_failures() {
+    let mut r = Repo::new();
+    let observed = r.outer.join("observed.jsonl");
+    let destination = serde_json::to_string(observed.to_str().unwrap()).unwrap();
+    for path in semctx_gates::os_boundaries::TESTS {
+        let marker = serde_json::to_string(&format!("{path}\n")).unwrap();
+        r.write(path, &format!("import {{ test }} from 'bun:test'; import {{ appendFileSync }} from 'node:fs'; test('native witness', () => appendFileSync({destination}, {marker}));\n"));
+    }
+    r.commit();
+    r.base = git(&r.root, &["rev-parse", "HEAD"]).trim().into();
+    r.write("packages/core/src/index.ts", "export const value = 2;\n");
+    r.commit();
+    let plan = r.plan();
+    let os = if cfg!(windows) {
+        "windows-latest"
+    } else {
+        "macos-15"
+    };
+    let actions = plan
+        .matrix
+        .include
+        .iter()
+        .filter(|lane| lane.os == os)
+        .map(|lane| {
+            semctx_gates::receipt::commands(lane, &r.base)
+                .unwrap()
+                .remove(0)
+        })
+        .collect::<Vec<_>>();
+    assert!(!actions.is_empty());
+    let run = || {
+        actions
+            .iter()
+            .map(|action| {
+                Command::new(&action.argv[0])
+                    .args(&action.argv[1..])
+                    .current_dir(&r.root)
+                    .output()
+                    .unwrap()
+            })
+            .collect::<Vec<_>>()
+    };
+    let results = run();
+    assert!(results.iter().all(|r| r.status.success()), "{results:?}");
+    let mut seen = fs::read_to_string(&observed)
+        .unwrap()
+        .lines()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    seen.sort();
+    let mut expected = semctx_gates::os_boundaries::TESTS
+        .iter()
+        .map(|p| (*p).to_owned())
+        .collect::<Vec<_>>();
+    expected.sort();
+    assert_eq!(seen, expected);
+    let witness = "apps/cli/test/package-runtime.test.ts";
+    let original = fs::read_to_string(r.root.join(witness)).unwrap();
+    r.write(witness, "import { test, expect } from 'bun:test'; test('broken package boundary', () => expect(1).toBe(2));\n");
+    let rejected = run();
+    assert!(rejected.iter().any(|r| !r.status.success()));
+    assert!(
+        rejected
+            .iter()
+            .any(|r| String::from_utf8_lossy(&r.stderr).contains("broken package boundary"))
+    );
+    r.write(witness, &original);
+    assert!(run().iter().all(|r| r.status.success()));
+}
+#[test]
+fn dependency_changes_keep_full_cross_platform_coverage() {
+    let r = Repo::new();
+    r.write(
+        "packages/core/package.json",
+        r#"{"name":"@s/core","dependencies":{"external":"1.0.0"}}"#,
+    );
+    r.commit();
+    assert_eq!(r.plan().mode, "fallback");
+}
+#[test]
+fn absent_or_nonfile_os_witness_keeps_full_cross_platform_coverage() {
+    for replacement in ["deleted", "directory"] {
+        let r = Repo::new();
+        let path = "apps/cli/test/package-runtime.test.ts";
+        fs::remove_file(r.root.join(path)).unwrap();
+        if replacement == "directory" {
+            r.write(&format!("{path}/nested.test.ts"), "nested\n");
+        }
+        r.commit();
+        assert_eq!(r.plan().mode, "fallback", "{replacement}");
     }
 }
 #[test]
@@ -205,7 +491,7 @@ fn unknown_path_and_empty_diff_keep_full_cross_platform_coverage() {
             .iter()
             .filter(|l| l.profile == "full")
             .count(),
-        8
+        10
     );
 }
 #[test]

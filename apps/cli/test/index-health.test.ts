@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { cpSync, mkdtempSync, rmSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -191,6 +191,29 @@ beforeAll(() => {
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
 describe("index-health CLI", () => {
+  it("returns complete large JSON through a pipe", () => {
+    const largeRoot = mkdtempSync(join(tmpdir(), "semctx-index-health-large-pipe-"));
+    try {
+      mkdirSync(join(largeRoot, "src"));
+      writeFileSync(join(largeRoot, ".gitignore"), ".semctx/\n");
+      for (let index = 0; index < 400; index += 1) {
+        writeFileSync(join(largeRoot, "src", `module${index}.ts`), `export const value${index} = ${index};\n`);
+      }
+      git(largeRoot, "init", "-q");
+      git(largeRoot, "add", ".");
+      git(largeRoot, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "fixture");
+      initWorkspace(largeRoot);
+      indexRepository(largeRoot, CAPTURED_AT);
+      const expected = indexHealth(largeRoot);
+      expect(JSON.stringify(expected).length).toBeGreaterThan(128 * 1024);
+
+      const result = run(["index-health", "--root", largeRoot, "--json"]);
+      expect(JSON.parse(result.out)).toEqual(expected);
+    } finally {
+      rmSync(largeRoot, { recursive: true, force: true });
+    }
+  });
+
   it("lists the additive command in help without changing status routing", () => {
     const result = run(["--help"]);
     expect(result.code).toBe(0);
