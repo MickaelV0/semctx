@@ -172,6 +172,8 @@ path because the TypeScript profile sets `negativeEvidenceEligible` to false.
   so nothing is withdrawn by upgrading. A repository that declares one has a new identity once, and
   its index is stale until it is rebuilt: that rebuild is what adds the alias edges.
 - **Not claimed.** Version 1 does not gain live configuration inspection or its diagnostics
-  (`SOURCE_CONFIGURATION_*`), and it does not read `module` or `moduleResolution`. A tsconfig
-  created closer to a selected file than the one read is not an input until some bound file changes,
-  as in version 2.
+  (`SOURCE_CONFIGURATION_*`), and it does not read `module` or `moduleResolution`.
+- **Configuration discovery.** While any selected file is governed by a mapping, version 1 also
+  binds missing tsconfig probes made by the nearest-configuration search. Creating a closer
+  configuration therefore changes its analysis input identity. Without a governing mapping, the
+  historical identity remains unchanged as described above.
