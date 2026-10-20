@@ -221,4 +221,31 @@ describe("tsconfig path aliases in a version 1 configuration", () => {
     expect(identity(BASE_URL_TSCONFIG(ALIAS_PATHS))).not.toBe(identity(BASE_URL_TSCONFIG({ "@/*": ["./elsewhere/*"] })));
     expect(identity(BASE_URL_TSCONFIG(ALIAS_PATHS))).not.toBe(identity(plain));
   });
+
+  it.each([false, true])("binds every selected package configuration (inherited: %s)", (inherited) => {
+    const { root } = v1Repository(JSON.stringify({ compilerOptions: { strict: true } }), false);
+    const mapping = BASE_URL_TSCONFIG({ "@local/*": ["./impl/*"] });
+    const changedMapping = BASE_URL_TSCONFIG({ "@local/*": ["./other/*"] });
+    write(root, {
+      "src/a/tsconfig.json": mapping,
+      "src/a/impl/guard.ts": "export function localGuard(): boolean { return true; }\n",
+      "src/a/guard.test.ts": 'import { localGuard } from "@local/guard";\nexport const result = localGuard();\n',
+      "src/b/tsconfig.json": inherited ? JSON.stringify({ extends: "./tsconfig.base.json" }) : mapping,
+      ...(inherited ? { "src/b/tsconfig.base.json": mapping } : {}),
+      "src/b/impl/guard.ts": "export function localGuard(): boolean { return true; }\n",
+      "src/b/other/guard.ts": "export function localGuard(): boolean { return false; }\n",
+      "src/b/guard.test.ts": 'import { localGuard } from "@local/guard";\nexport const result = localGuard();\n',
+    });
+    git(root, "add", ".");
+    git(root, "commit", "-q", "-m", "independent package configurations");
+    indexRepository(root, "2026-10-20T10:00:00.000Z");
+    expect(controlStatus(root).verdict).toBe("FRESH");
+    const mappingPath = inherited ? "src/b/tsconfig.base.json" : "src/b/tsconfig.json";
+    write(root, { [mappingPath]: changedMapping });
+    const stale = controlStatus(root);
+    expect(stale.verdict).toBe("STALE");
+    expect(stale.reasons).toContain("ANALYSIS_INPUT_MISMATCH");
+    write(root, { [mappingPath]: mapping });
+    expect(controlStatus(root).verdict).toBe("FRESH");
+  });
 });

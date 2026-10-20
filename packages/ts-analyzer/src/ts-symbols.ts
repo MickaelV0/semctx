@@ -480,7 +480,13 @@ export function pathMappingInputs(
 ): ReadonlyMap<string, string | undefined> {
   const workspaceLinks = createWorkspaceLinkResolver();
   const pass = createPathMappingPassFor([...rootAbsPaths], repositoryRoot, undefined, { tsconfigPathMapping: true }, workspaceLinks);
-  return pass !== undefined && pass.governsAnyRoot() ? workspaceLinks.inputs : new Map();
+  if (pass === undefined) return new Map();
+  let governsAnyRoot = false;
+  // Visit every root: a short-circuiting probe would leave later packages' configurations unbound.
+  for (const path of rootAbsPaths) {
+    if (governingPathMapping(pass, dirname(path)) !== null) governsAnyRoot = true;
+  }
+  return governsAnyRoot ? workspaceLinks.inputs : new Map();
 }
 
 function governingPathMapping(pass: PathMappingPass, directory: string): PathMapping | null {
@@ -738,7 +744,18 @@ export function extractTypeScript(
   const calls: ExtractedCall[] = [];
 
   const canonicalRoot = canonicalFilesystemPath(repoRoot);
-  const relOf = (abs: string): string => normalizePath(relative(canonicalRoot, canonicalFilesystemPath(abs)));
+  // Each call target asks for the path of its declaration file, and canonicalizing it is a
+  // filesystem round trip. One extraction pass labels a given path once; confinement checks above
+  // keep their own uncached calls.
+  const relPaths = new Map<string, string>();
+  const relOf = (abs: string): string => {
+    let relPath = relPaths.get(abs);
+    if (relPath === undefined) {
+      relPath = normalizePath(relative(canonicalRoot, canonicalFilesystemPath(abs)));
+      relPaths.set(abs, relPath);
+    }
+    return relPath;
+  };
 
   for (const sf of program.getSourceFiles()) {
     if (sf.isDeclarationFile) continue;

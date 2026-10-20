@@ -61,7 +61,7 @@ pub fn local_verification(
     gate: &str,
     root: &str,
 ) -> Vec<Action> {
-    let mut actions = verification(base, skip_diff, shard);
+    let mut actions = verification(base, skip_diff, shard, std::env::consts::OS);
     for manifest in ["tools/gates/Cargo.toml", "tools/qualification/Cargo.toml"] {
         actions.extend([
             action(
@@ -94,7 +94,7 @@ pub fn local_verification(
     ));
     actions
 }
-pub fn verification(base: &str, skip_diff: bool, shard: &str) -> Vec<Action> {
+pub fn verification(base: &str, skip_diff: bool, shard: &str, os: &str) -> Vec<Action> {
     let mut actions = vec![];
     if !skip_diff {
         actions.push(action(
@@ -114,6 +114,13 @@ pub fn verification(base: &str, skip_diff: bool, shard: &str) -> Vec<Action> {
             &["bun", "scripts/documentation-integrity.ts"],
         ),
         action("quality", &["bun", "run", "quality"]),
+    ]);
+    actions.extend(runtime_checks());
+    actions.push(test_action("tests", &["bun", "run", "test"], shard, os));
+    actions
+}
+fn runtime_checks() -> Vec<Action> {
+    vec![
         action(
             "Python compileall",
             &[
@@ -136,17 +143,46 @@ pub fn verification(base: &str, skip_diff: bool, shard: &str) -> Vec<Action> {
             &["python", "scripts/verify-index-routing.py"],
         ),
         action("plugin parity", &["bun", "run", "plugin:check"]),
-    ]);
-    let mut tests = action("tests", &["bun", "run", "test"]);
+    ]
+}
+fn test_action(label: &str, argv: &[&str], shard: &str, os: &str) -> Action {
+    let mut tests = action(label, argv);
     tests.output_cap = TEST_OUTPUT_CAP;
     if !shard.is_empty() {
         tests.argv.extend([
             format!("--shard={shard}"),
-            "--timings=scripts/ci-test-timings.json".into(),
+            format!(
+                "--timings=scripts/ci-test-timings{}.json",
+                if matches!(os, "linux" | "ubuntu-latest") {
+                    "-linux"
+                } else {
+                    ""
+                }
+            ),
         ]);
     }
-    actions.push(tests);
-    actions
+    tests
+}
+fn boundary_commands(lane: &Lane, first_shard: bool) -> Result<Vec<Action>> {
+    if lane.os == "ubuntu-latest" || lane.targets != crate::os_boundaries::TESTS.join(",") {
+        return Err("invalid OS boundary targets".into());
+    }
+    let mut tests = test_action(
+        "OS boundary tests",
+        &["bun", "test", "--timeout", "60000"],
+        &lane.shard,
+        &lane.os,
+    );
+    tests.argv.extend(
+        crate::os_boundaries::TESTS
+            .iter()
+            .map(|path| format!("./{path}")),
+    );
+    let mut actions = vec![tests];
+    if first_shard {
+        actions.extend(runtime_checks());
+    }
+    Ok(actions)
 }
 fn valid_shard(lane: &Lane) -> bool {
     if lane.shard.is_empty() {
@@ -158,7 +194,9 @@ fn valid_shard(lane: &Lane) -> bool {
     let (Ok(index), Ok(count)) = (index.parse::<usize>(), count.parse::<usize>()) else {
         return false;
     };
-    index > 0 && index <= count && count == if lane.os == "windows-latest" { 4 } else { 2 }
+    index > 0
+        && index <= count
+        && Some(count) == crate::plan::shard_count(&lane.os, &lane.profile).ok()
 }
 pub fn commands(lane: &Lane, base: &str) -> Result<Vec<Action>> {
     if !["ubuntu-latest", "windows-latest", "macos-15"].contains(&lane.os.as_str())
@@ -203,7 +241,7 @@ pub fn commands(lane: &Lane, base: &str) -> Result<Vec<Action>> {
             }
             // The contract lane owns quality/documentation/hygiene once. Runtime integration
             // checks run once per OS; the union of shards preserves the complete test suite.
-            verification(base, true, &lane.shard)
+            verification(base, true, &lane.shard, &lane.os)
                 .into_iter()
                 .filter(|a| {
                     a.label == "tests"
@@ -213,45 +251,7 @@ pub fn commands(lane: &Lane, base: &str) -> Result<Vec<Action>> {
                 })
                 .collect()
         }
-        "focused" => {
-            if lane.os == "ubuntu-latest" {
-                return Err("focused lane must be cross-platform".into());
-            }
-            let targets = lane.targets.split(',').collect::<Vec<_>>();
-            if targets.is_empty()
-                || targets.iter().any(|s| {
-                    s.is_empty()
-                        || s.starts_with('-')
-                        || s.contains(['\\', '\n', '\r'])
-                        || s.split('/').any(|p| p == "..")
-                })
-            {
-                return Err("invalid focused targets".into());
-            }
-            let mut a = action(
-                "affected cross-platform tests",
-                &["bun", "test", "--timeout", "60000"],
-            );
-            a.output_cap = TEST_OUTPUT_CAP;
-            if !lane.shard.is_empty() {
-                a.argv.extend([
-                    format!("--shard={}", lane.shard),
-                    "--timings=scripts/ci-test-timings.json".into(),
-                ]);
-            }
-            a.argv.extend(targets.iter().map(|s| (*s).to_owned()));
-            let mut actions = vec![a];
-            if targets.contains(&"plugins") && first_shard {
-                actions.extend([
-                    action("plugin parity", &["bun", "run", "plugin:check"]),
-                    action(
-                        "index routing regressions",
-                        &["python", "scripts/verify-index-routing.py"],
-                    ),
-                ]);
-            }
-            actions
-        }
+        "os-boundary" => boundary_commands(lane, first_shard)?,
         _ => return Err("unknown lane profile".into()),
     };
     if lane.smoke == "true" && first_shard {
@@ -565,8 +565,109 @@ mod tests {
         }
     }
     #[test]
+    fn boundary_receipts_refuse_omitted_tests_even_when_resealed() {
+        let (mut p, mut receipts) = fixture();
+        let mut lane = p.matrix.include[0].clone();
+        lane.os = "macos-15".into();
+        lane.profile = "os-boundary".into();
+        lane.targets = crate::os_boundaries::TESTS.join(",");
+        lane.shard = "1/1".into();
+        p.matrix.include[0] = lane.clone();
+        let receipt = &mut receipts[0];
+        receipt.lane = lane.clone();
+        receipt.host_os = "macos".into();
+        let outcome = receipt.steps[0].outcome.clone();
+        receipt.steps = commands(&lane, "base")
+            .unwrap()
+            .into_iter()
+            .map(|action| Step {
+                action,
+                outcome: outcome.clone(),
+            })
+            .collect();
+        seal(receipt).unwrap();
+        assert!(admit(&p, &receipts).is_ok());
+        receipts[0].steps[0]
+            .action
+            .argv
+            .retain(|arg| arg != "./apps/cli/test/package-runtime.test.ts");
+        seal(&mut receipts[0]).unwrap();
+        assert!(admit(&p, &receipts).unwrap_err().contains("invalid step"));
+    }
+    #[test]
+    fn boundary_commands_refuse_substituted_targets_and_foreign_shard_counts() {
+        let mut lane = fixture().0.matrix.include[0].clone();
+        lane.os = "windows-latest".into();
+        lane.profile = "os-boundary".into();
+        lane.shard = "1/2".into();
+        for targets in [
+            String::new(),
+            "packages".into(),
+            crate::os_boundaries::TESTS[1..].join(","),
+        ] {
+            lane.targets = targets;
+            assert!(commands(&lane, "base").is_err());
+        }
+        lane.targets = crate::os_boundaries::TESTS.join(",");
+        for shard in ["0/2", "3/2", "1/4", "1/1", "1/2/3"] {
+            lane.shard = shard.into();
+            assert!(commands(&lane, "base").is_err(), "{shard}");
+        }
+    }
+    #[test]
+    fn os_boundary_lanes_keep_runtime_checks_and_explicit_tests() {
+        for (os, count) in [("windows-latest", 2), ("macos-15", 1)] {
+            let mut all = vec![];
+            for index in 1..=count {
+                let mut lane = fixture().0.matrix.include[0].clone();
+                lane.os = os.into();
+                lane.profile = "os-boundary".into();
+                lane.targets = crate::os_boundaries::TESTS.join(",");
+                lane.smoke = "true".into();
+                lane.shard = format!("{index}/{count}");
+                let actions = commands(&lane, "base").unwrap();
+                let tests = actions
+                    .iter()
+                    .find(|a| a.label == "OS boundary tests")
+                    .unwrap();
+                assert!(
+                    tests
+                        .argv
+                        .contains(&"./packages/app-services/test/bounded-process.test.ts".into())
+                );
+                assert!(
+                    tests
+                        .argv
+                        .contains(&"./apps/cli/test/package-runtime.test.ts".into())
+                );
+                assert!(!tests.argv.contains(&"packages".into()));
+                assert!(!tests.argv.contains(&"plugins".into()));
+                all.extend(actions);
+            }
+            assert_eq!(
+                all.iter()
+                    .filter(|a| a.label == "OS boundary tests")
+                    .count(),
+                count
+            );
+            for label in [
+                "Python compileall",
+                "Python smoke",
+                "index routing regressions",
+                "plugin parity",
+                "worker equivalence smoke",
+            ] {
+                assert_eq!(
+                    all.iter().filter(|a| a.label == label).count(),
+                    1,
+                    "{os} {label}"
+                );
+            }
+        }
+    }
+    #[test]
     fn factoring_preserves_runtime_checks_once_per_os_and_tests_every_shard() {
-        for (os, count) in [("ubuntu-latest", 2), ("windows-latest", 4), ("macos-15", 2)] {
+        for (os, count) in [("ubuntu-latest", 4), ("windows-latest", 4), ("macos-15", 2)] {
             let mut all = vec![];
             for index in 1..=count {
                 let mut lane = fixture().0.matrix.include[0].clone();
